@@ -133,6 +133,12 @@ cd claude-code-plugins
 /plugin install vlad-tools@vladolaru-plugins
 ```
 
+## Credits
+
+The following components were adapted from [solatis/claude-config](https://github.com/solatis/claude-config):
+- **prompt-optimizer** skill
+- All **agents** (architect, developer, debugger, quality-reviewer, technical-writer, adr-writer)
+
 ## Resources
 
 - [Claude Code Documentation](https://docs.claude.com/en/docs/claude-code/overview)
