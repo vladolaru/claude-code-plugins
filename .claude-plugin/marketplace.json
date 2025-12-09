@@ -7,7 +7,7 @@
   },
   "plugins": [
     {
-      "name": "vlad-tools",
+      "name": "pirategoat-tools",
       "description": "Personal Claude Code tools: image optimization, prompt engineering, WordPress backend development, and project management workflows.",
       "version": "1.0.0",
       "source": "./",

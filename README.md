@@ -13,7 +13,7 @@ My personal Claude Code plugins featuring specialized skills and commands for de
 ### Install the Plugin
 
 ```bash
-/plugin install vlad-tools@vladolaru-plugins
+/plugin install pirategoat-tools@vladolaru-plugins
 ```
 
 Then restart Claude Code.
@@ -130,7 +130,7 @@ cd claude-code-plugins
 /plugin marketplace add /path/to/claude-code-plugins
 
 # Install from local
-/plugin install vlad-tools@vladolaru-plugins
+/plugin install pirategoat-tools@vladolaru-plugins
 ```
 
 ## Credits
