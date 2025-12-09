@@ -35,6 +35,19 @@ Then restart Claude Code.
 | `/fix-github-issue <number>` | Analyze and fix a GitHub issue end-to-end |
 | `/execute-plan <plan>` | Execute an implementation plan through delegation and quality assurance |
 
+### Agents
+
+Specialized subagents for the Task tool:
+
+| Agent | Description |
+|-------|-------------|
+| **architect** | Lead architect - analyzes code, designs solutions, writes ADRs |
+| **developer** | Implements specs with tests - delegate for writing code |
+| **debugger** | Analyzes bugs through systematic evidence gathering |
+| **quality-reviewer** | Reviews code for real issues (security, data loss, performance) |
+| **technical-writer** | Creates documentation after feature completion |
+| **adr-writer** | Creates ADR documents according to standardized structure |
+
 ## Skills Detail
 
 ### image-optimizer
