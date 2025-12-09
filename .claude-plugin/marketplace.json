@@ -1,0 +1,19 @@
+{
+  "name": "vladolaru-plugins",
+  "description": "Vlad Olaru's Claude Code plugins marketplace",
+  "owner": {
+    "name": "Vlad Olaru",
+    "url": "https://github.com/vladolaru"
+  },
+  "plugins": [
+    {
+      "name": "vlad-tools",
+      "description": "Personal Claude Code tools: image optimization, prompt engineering, WordPress backend development, and project management workflows.",
+      "version": "1.0.0",
+      "source": "./",
+      "author": {
+        "name": "Vlad Olaru"
+      }
+    }
+  ]
+}
