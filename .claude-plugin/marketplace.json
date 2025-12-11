@@ -11,12 +11,35 @@
   "plugins": [
     {
       "name": "pirategoat-tools",
-      "source": {
-        "source": "url",
-        "url": "https://github.com/vladolaru/claude-code-plugins.git"
-      },
+      "source": "./plugins/pirategoat-tools",
       "description": "Personal Claude Code tools: image optimization, prompt engineering, WordPress backend development, and project management workflows.",
-      "version": "1.0.0"
+      "version": "1.0.0",
+      "author": {
+        "name": "Vlad Olaru"
+      },
+      "repository": "https://github.com/vladolaru/claude-code-plugins",
+      "license": "MIT",
+      "keywords": ["image-optimization", "prompt-engineering", "wordpress", "project-management", "code-review"],
+      "category": "development-tools",
+      "strict": true,
+      "skills": [
+        "./skills/image-optimizer",
+        "./skills/prompt-optimizer",
+        "./skills/wordpress-backend-dev"
+      ],
+      "commands": [
+        "./commands/execute-plan.md",
+        "./commands/fix-github-issue.md",
+        "./commands/optimize-prompt.md"
+      ],
+      "agents": [
+        "./agents/architect.md",
+        "./agents/developer.md",
+        "./agents/debugger.md",
+        "./agents/quality-reviewer.md",
+        "./agents/technical-writer.md",
+        "./agents/adr-writer.md"
+      ]
     }
   ]
 }

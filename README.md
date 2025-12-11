@@ -1,6 +1,6 @@
 # vladolaru/claude-code-plugins
 
-My personal Claude Code plugins featuring specialized skills and commands for development workflows.
+My personal Claude Code plugins marketplace featuring specialized skills and commands for development workflows.
 
 ## Installation
 
@@ -18,9 +18,15 @@ My personal Claude Code plugins featuring specialized skills and commands for de
 
 Then restart Claude Code.
 
-## Contents
+## Plugins
 
-### Skills
+### pirategoat-tools
+
+Personal Claude Code tools: image optimization, prompt engineering, WordPress backend development, and project management workflows.
+
+See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for version history.
+
+#### Skills
 
 | Skill | Description |
 |-------|-------------|
@@ -28,14 +34,15 @@ Then restart Claude Code.
 | **prompt-optimizer** | Optimize Claude Code agent prompts using proven prompt engineering patterns with explicit attribution |
 | **wordpress-backend-dev** | WordPress plugin/theme PHP development - WPCS coding standards, security patterns, i18n, hooks API, REST API |
 
-### Commands
+#### Commands
 
 | Command | Description |
 |---------|-------------|
 | `/fix-github-issue <number>` | Analyze and fix a GitHub issue end-to-end |
 | `/execute-plan <plan>` | Execute an implementation plan through delegation and quality assurance |
+| `/optimize-prompt` | Quick access to prompt optimization |
 
-### Agents
+#### Agents
 
 Specialized subagents for the Task tool:
 
@@ -115,6 +122,23 @@ Project manager mode for executing implementation plans:
 **Usage:**
 ```
 /execute-plan Read the plan from ./docs/implementation-plan.md and execute it
+```
+
+## Repository Structure
+
+```text
+vladolaru-claude-code-plugins/
+├── .claude-plugin/
+│   └── marketplace.json          # Plugin registry
+├── plugins/
+│   └── pirategoat-tools/
+│       ├── CHANGELOG.md          # Version history
+│       ├── agents/               # Subagent definitions
+│       ├── commands/             # Slash commands
+│       └── skills/               # Skills with SKILL.md files
+├── CLAUDE.md                     # Development instructions
+├── LICENSE
+└── README.md
 ```
 
 ## Development
