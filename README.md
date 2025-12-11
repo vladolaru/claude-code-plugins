@@ -15,6 +15,7 @@ My personal Claude Code plugins marketplace featuring specialized skills and com
 ```bash
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
 /plugin install image-optimizer@vladolaru-claude-code-plugins
+/plugin install prompt-optimizer@vladolaru-claude-code-plugins
 ```
 
 Then restart Claude Code.
@@ -23,7 +24,7 @@ Then restart Claude Code.
 
 ### pirategoat-tools
 
-Personal Claude Code tools: prompt engineering, WordPress backend development, and project management workflows.
+Personal Claude Code tools: WordPress backend development and project management workflows.
 
 See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for version history.
 
@@ -31,7 +32,6 @@ See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for vers
 
 | Skill | Description |
 |-------|-------------|
-| **prompt-optimizer** | Optimize Claude Code agent prompts using proven prompt engineering patterns with explicit attribution |
 | **wordpress-backend-dev** | WordPress plugin/theme PHP development - WPCS coding standards, security patterns, i18n, hooks API, REST API |
 
 #### Commands
@@ -40,7 +40,6 @@ See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for vers
 |---------|-------------|
 | `/fix-github-issue <number>` | Analyze and fix a GitHub issue end-to-end |
 | `/execute-plan <plan>` | Execute an implementation plan through delegation and quality assurance |
-| `/optimize-prompt` | Quick access to prompt optimization |
 
 #### Agents
 
@@ -73,17 +72,25 @@ npm install -g svgo            # SVG
 
 ---
 
-## Skills Detail
-
 ### prompt-optimizer
 
-Two-phase prompt optimization:
+Two-phase prompt optimization with pattern attribution using proven prompt engineering patterns.
+
+See [prompt-optimizer CHANGELOG](plugins/prompt-optimizer/CHANGELOG.md) for version history.
+
+**Features:**
 1. Section-by-section analysis with pattern attribution
 2. Full-pass integration for global coherence
 
 Every change is justified with explicit pattern references from the embedded prompt engineering guide.
 
-**Usage:** Provide a prompt and ask Claude to "optimize this prompt using the prompt-optimizer skill."
+**Usage:**
+- Use the skill: Ask Claude to "optimize this prompt using the prompt-optimizer skill"
+- Use the command: `/optimize-prompt`
+
+---
+
+## Skills Detail
 
 ### wordpress-backend-dev
 
@@ -142,8 +149,12 @@ vladolaru-claude-code-plugins/
 │   │   ├── agents/               # Subagent definitions
 │   │   ├── commands/             # Slash commands
 │   │   └── skills/               # Skills with SKILL.md files
-│   └── image-optimizer/
+│   ├── image-optimizer/
+│   │   ├── CHANGELOG.md          # Version history
+│   │   └── skills/               # Skills with SKILL.md files
+│   └── prompt-optimizer/
 │       ├── CHANGELOG.md          # Version history
+│       ├── commands/             # Slash commands
 │       └── skills/               # Skills with SKILL.md files
 ├── CLAUDE.md                     # Development instructions
 ├── LICENSE
@@ -165,6 +176,7 @@ cd claude-code-plugins
 # Install from local
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
 /plugin install image-optimizer@vladolaru-claude-code-plugins
+/plugin install prompt-optimizer@vladolaru-claude-code-plugins
 ```
 
 ## Credits

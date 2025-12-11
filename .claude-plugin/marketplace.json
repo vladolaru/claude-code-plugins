@@ -12,24 +12,22 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Personal Claude Code tools: prompt engineering, WordPress backend development, and project management workflows.",
-      "version": "1.1.0",
+      "description": "Personal Claude Code tools: WordPress backend development and project management workflows.",
+      "version": "1.2.0",
       "author": {
         "name": "Vlad Olaru"
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["prompt-engineering", "wordpress", "project-management", "code-review"],
+      "keywords": ["wordpress", "project-management", "code-review"],
       "category": "development-tools",
       "strict": true,
       "skills": [
-        "./skills/prompt-optimizer",
         "./skills/wordpress-backend-dev"
       ],
       "commands": [
         "./commands/execute-plan.md",
-        "./commands/fix-github-issue.md",
-        "./commands/optimize-prompt.md"
+        "./commands/fix-github-issue.md"
       ],
       "agents": [
         "./agents/architect.md",
@@ -55,6 +53,26 @@
       "strict": true,
       "skills": [
         "./skills/image-optimizer"
+      ]
+    },
+    {
+      "name": "prompt-optimizer",
+      "source": "./plugins/prompt-optimizer",
+      "description": "Two-phase prompt optimization with pattern attribution using proven prompt engineering patterns.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Vlad Olaru"
+      },
+      "repository": "https://github.com/vladolaru/claude-code-plugins",
+      "license": "MIT",
+      "keywords": ["prompt-engineering", "optimization", "claude", "ai-prompts"],
+      "category": "productivity",
+      "strict": true,
+      "skills": [
+        "./skills/prompt-optimizer"
+      ],
+      "commands": [
+        "./commands/optimize-prompt.md"
       ]
     }
   ]
