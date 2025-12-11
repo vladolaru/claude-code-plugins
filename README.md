@@ -68,7 +68,7 @@ npm install -g imageoptim-cli  # PNG, JPEG, GIF (requires ImageOptim.app on macO
 npm install -g svgo            # SVG
 ```
 
-**Usage:** Ask Claude to "optimize images in ./assets" and follow the interactive workflow.
+**Usage:** `/optimize-images ./assets`
 
 ---
 

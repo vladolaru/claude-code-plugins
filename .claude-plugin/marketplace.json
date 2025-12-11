@@ -42,7 +42,7 @@
       "name": "image-optimizer",
       "source": "./plugins/image-optimizer",
       "description": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -51,8 +51,8 @@
       "keywords": ["image-optimization", "imageoptim", "svgo", "compression", "lossless"],
       "category": "productivity",
       "strict": true,
-      "skills": [
-        "./skills/image-optimizer"
+      "commands": [
+        "./commands/optimize-images.md"
       ]
     },
     {
