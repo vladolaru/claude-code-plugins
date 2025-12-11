@@ -10,10 +10,11 @@ My personal Claude Code plugins marketplace featuring specialized skills and com
 /plugin marketplace add vladolaru/claude-code-plugins
 ```
 
-### Install the Plugin
+### Install Plugins
 
 ```bash
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
+/plugin install image-optimizer@vladolaru-claude-code-plugins
 ```
 
 Then restart Claude Code.
@@ -22,7 +23,7 @@ Then restart Claude Code.
 
 ### pirategoat-tools
 
-Personal Claude Code tools: image optimization, prompt engineering, WordPress backend development, and project management workflows.
+Personal Claude Code tools: prompt engineering, WordPress backend development, and project management workflows.
 
 See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for version history.
 
@@ -30,7 +31,6 @@ See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for vers
 
 | Skill | Description |
 |-------|-------------|
-| **image-optimizer** | Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow |
 | **prompt-optimizer** | Optimize Claude Code agent prompts using proven prompt engineering patterns with explicit attribution |
 | **wordpress-backend-dev** | WordPress plugin/theme PHP development - WPCS coding standards, security patterns, i18n, hooks API, REST API |
 
@@ -55,11 +55,13 @@ Specialized subagents for the Task tool:
 | **technical-writer** | Creates documentation after feature completion |
 | **adr-writer** | Creates ADR documents according to standardized structure |
 
-## Skills Detail
+---
 
 ### image-optimizer
 
-Losslessly reduces image file sizes with a safe review-before-apply workflow.
+Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.
+
+See [image-optimizer CHANGELOG](plugins/image-optimizer/CHANGELOG.md) for version history.
 
 **Prerequisites:**
 ```bash
@@ -68,6 +70,10 @@ npm install -g svgo            # SVG
 ```
 
 **Usage:** Ask Claude to "optimize images in ./assets" and follow the interactive workflow.
+
+---
+
+## Skills Detail
 
 ### prompt-optimizer
 
@@ -131,10 +137,13 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   └── pirategoat-tools/
+│   ├── pirategoat-tools/
+│   │   ├── CHANGELOG.md          # Version history
+│   │   ├── agents/               # Subagent definitions
+│   │   ├── commands/             # Slash commands
+│   │   └── skills/               # Skills with SKILL.md files
+│   └── image-optimizer/
 │       ├── CHANGELOG.md          # Version history
-│       ├── agents/               # Subagent definitions
-│       ├── commands/             # Slash commands
 │       └── skills/               # Skills with SKILL.md files
 ├── CLAUDE.md                     # Development instructions
 ├── LICENSE
@@ -155,6 +164,7 @@ cd claude-code-plugins
 
 # Install from local
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
+/plugin install image-optimizer@vladolaru-claude-code-plugins
 ```
 
 ## Credits

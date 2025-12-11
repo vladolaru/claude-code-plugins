@@ -12,18 +12,17 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Personal Claude Code tools: image optimization, prompt engineering, WordPress backend development, and project management workflows.",
-      "version": "1.0.0",
+      "description": "Personal Claude Code tools: prompt engineering, WordPress backend development, and project management workflows.",
+      "version": "1.1.0",
       "author": {
         "name": "Vlad Olaru"
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["image-optimization", "prompt-engineering", "wordpress", "project-management", "code-review"],
+      "keywords": ["prompt-engineering", "wordpress", "project-management", "code-review"],
       "category": "development-tools",
       "strict": true,
       "skills": [
-        "./skills/image-optimizer",
         "./skills/prompt-optimizer",
         "./skills/wordpress-backend-dev"
       ],
@@ -39,6 +38,23 @@
         "./agents/quality-reviewer.md",
         "./agents/technical-writer.md",
         "./agents/adr-writer.md"
+      ]
+    },
+    {
+      "name": "image-optimizer",
+      "source": "./plugins/image-optimizer",
+      "description": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Vlad Olaru"
+      },
+      "repository": "https://github.com/vladolaru/claude-code-plugins",
+      "license": "MIT",
+      "keywords": ["image-optimization", "imageoptim", "svgo", "compression", "lossless"],
+      "category": "productivity",
+      "strict": true,
+      "skills": [
+        "./skills/image-optimizer"
       ]
     }
   ]
