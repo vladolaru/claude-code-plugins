@@ -12,7 +12,7 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Personal Claude Code tools: WordPress backend development and project management workflows.",
+      "description": "Vlad Olaru's personal public Claude Code tools - experimental features that may eventually be extracted into standalone plugins.",
       "version": "1.2.0",
       "author": {
         "name": "Vlad Olaru"

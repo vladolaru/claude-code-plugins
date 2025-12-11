@@ -24,7 +24,7 @@ Then restart Claude Code.
 
 ### pirategoat-tools
 
-Personal Claude Code tools: WordPress backend development and project management workflows.
+Vlad Olaru's personal public Claude Code tools - experimental features that may eventually be extracted into standalone plugins.
 
 See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for version history.
 
