@@ -9,6 +9,12 @@ Lossless image optimization with review -> confirm -> apply workflow.
 
 **Target:** $ARGUMENTS (directory or image file to optimize)
 
+## How It Works
+
+**Raster images (PNG, JPEG, GIF):** Optimizations are fully lossless - file sizes are reduced without any loss in image quality. Uses ImageOptim which applies multiple optimization techniques while preserving every pixel.
+
+**SVG files:** Uses [svgo](https://github.com/svg/svgo), the same optimizer powering [SVGOMG](https://svgomg.net/). The bundled configuration uses web-safe default techniques that safely reduce file size without breaking SVG rendering.
+
 ## Prerequisites
 
 ```bash
@@ -73,7 +79,7 @@ Both commands clean up the temp directory. The `--cleanup` flag ensures cleanup 
 
 ## SVGO Configuration
 
-Bundled config at `${CLAUDE_PLUGIN_ROOT}/scripts/svgo.config.mjs`:
+Bundled config at `${CLAUDE_PLUGIN_ROOT}/scripts/svgo.config.mjs` uses web-safe defaults aligned with [SVGOMG](https://svgomg.net/):
 - Uses `preset-default` with standard optimizations
 - Preserves `viewBox` for responsive SVGs
 - `multipass: true` for better compression

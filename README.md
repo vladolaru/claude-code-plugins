@@ -58,7 +58,10 @@ Specialized subagents for the Task tool:
 
 ### image-optimizer
 
-Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.
+Lossless image optimization with review/confirm workflow.
+
+- **Raster (PNG, JPEG, GIF):** Fully lossless optimization using ImageOptim - reduces file size without any quality loss
+- **SVG:** Uses [svgo](https://github.com/svg/svgo), the same optimizer powering [SVGOMG](https://svgomg.net/), with web-safe default techniques
 
 See [image-optimizer CHANGELOG](plugins/image-optimizer/CHANGELOG.md) for version history.
 
