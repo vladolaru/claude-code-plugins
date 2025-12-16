@@ -58,8 +58,8 @@
     {
       "name": "prompt-optimizer",
       "source": "./plugins/prompt-optimizer",
-      "description": "Two-phase prompt optimization with pattern attribution using proven prompt engineering patterns.",
-      "version": "1.0.0",
+      "description": "Human-in-the-loop prompt optimization with evidence-grounded pattern attribution using proven prompt engineering patterns.",
+      "version": "1.1.0",
       "author": {
         "name": "Vlad Olaru"
       },

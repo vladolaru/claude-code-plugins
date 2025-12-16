@@ -5,223 +5,457 @@ description: Optimize system prompts for Claude Code agents using proven prompt 
 
 # Prompt Optimizer
 
-This skill optimizes system prompts for Claude Code agents by applying proven prompt engineering patterns from production systems.
+Optimizes system prompts by applying research-backed prompt engineering patterns. This skill operates through human-in-the-loop phases: understand, plan, propose changes, receive approval, then integrate.
+
+## Purpose and Success Criteria
+
+A well-optimized prompt achieves three things:
+
+1. **Behavioral clarity**: The agent knows exactly what to do in common cases and how to handle edge cases.
+2. **Appropriate scope**: Complex tasks get systematic decomposition; simple tasks don't trigger overthinking.
+3. **Grounded changes**: Every modification traces to a specific pattern with documented behavioral impact.
+
+Optimization is complete when:
+
+- Every change has explicit pattern attribution from the reference document
+- No section contradicts another section
+- The prompt matches its operating context (tool-use vs. conversational, token constraints, failure modes)
+- Human has approved both section-level changes and full integration
 
 ## When to Use This Skill
 
-Use this skill when:
-- User provides a prompt and requests optimization
-- User asks for prompt improvement or refinement
-- User wants to apply best practices to agent instructions
-- User needs help with tool-use prompts or workflow automation
+Use when the user provides a prompt and wants it improved, refined, or reviewed for best practices.
 
-## Process Overview
+Do NOT use for:
 
-This skill uses a two-phase optimization approach:
-
-**Phase 1: Section-by-Section Analysis**
-- Decompose the prompt into logical sections
-- Analyze each section independently
-- Apply relevant patterns with explicit attribution
-- Present findings per section
-
-**Phase 2: Full-Pass Integration**
-- Review the complete optimized prompt holistically
-- Ensure cross-section coherence
-- Eliminate redundancies
-- Verify global consistency
+- Writing prompts from scratch (different skill)
+- Prompts that are already working well and user just wants validation (say so, don't force changes)
+- Non-prompt content (documentation, code, etc.)
 
 ## Required Resources
 
-Before beginning optimization, ALWAYS read:
+Before ANY analysis, read the pattern reference:
+
 ```
 references/prompt-engineering.md
 ```
 
-This file contains the complete catalog of prompt engineering patterns that MUST be applied during optimization.
+This contains the complete catalog of applicable patterns, including:
 
-## Phase 1: Section-by-Section Optimization
+- The **Technique Selection Guide** table (maps domains, trigger conditions, stacking compatibility, conflicts, and expected effects)
+- The **Quick Reference: Key Principles** (numbered list of foundational techniques)
+- Domain-organized technique sections with research citations and examples
+- The **Anti-Patterns to Avoid** section documenting common failure modes
 
-### Step 1: Decompose the Prompt
+All technique selection decisions must be grounded in this reference. Do not apply patterns from memory or general knowledge—consult the reference to ensure accuracy and to surface stacking/conflict information.
 
-Break the prompt into logical sections. Common sections include:
+---
 
-- **Role Definition**: Who/what the agent is
-- **Core Capabilities**: What the agent can do
-- **Tool Instructions**: How to use specific tools
-- **Constraints**: What the agent must not do
-- **Output Format**: How to structure responses
-- **Safety Instructions**: Security and safety guidelines
-- **Workflow Automation**: Multi-step procedures
-- **Examples**: Demonstrations of correct behavior
-- **Error Handling**: How to handle failures
+## Phase 0: Triage
 
-Not all prompts will have all sections. Identify what exists in the provided prompt.
+Not every prompt needs the full optimization process. Before proceeding, assess complexity.
 
-### Step 2: Analyze Each Section
+**Simple prompts** (use lightweight process):
 
-For each section identified:
+- Under 20 lines
+- Single clear purpose (one tool, one behavior)
+- No conditional logic or branching
+- No inter-section dependencies
 
-1. **State the section name and current content**
-2. **Identify applicable patterns** from prompt-engineering.md
-3. **For EACH proposed change:**
-   - Pattern name (e.g., "Progressive Disclosure")
-   - Why this pattern applies here
-   - Expected behavioral impact
-   - Show the specific change (before/after)
+**Complex prompts** (use full process):
 
-**CRITICAL**: Every change must have explicit pattern attribution. Changes without attribution are incomplete.
+- Multiple sections serving different functions
+- Conditional behaviors or rule hierarchies
+- Tool orchestration or multi-step workflows
+- Known failure modes that need addressing
 
-### Step 3: Present Section Analysis
+### Lightweight Process (Simple Prompts)
 
-Present findings in this format:
+For simple prompts, skip section decomposition. Instead:
+
+1. Read the prompt once, identify its purpose
+2. Consult the reference's Anti-Patterns section to check for obvious problems
+3. Consult the Technique Selection Guide to identify 1-3 applicable patterns
+4. Propose targeted changes with pattern attribution
+5. Present the optimized prompt directly
+
+Do not over-engineer simple prompts.
+
+### Full Process (Complex Prompts)
+
+Proceed to Phase 1.
+
+---
+
+## Phase 1: Understand the Prompt
+
+Before decomposing or modifying anything, understand what the prompt is trying to accomplish and the context in which it operates. This understanding phase is essential—without it, technique selection becomes guesswork.
+
+Answer these questions (internally, not presented to user unless clarification needed):
+
+### 1.1 Operating Context
+
+- **Interaction model**: Is this single-shot (tool description, one-time instruction) or conversational (back-and-forth with user)?
+- **Agent type**: Tool-use agent, coding agent, analysis agent, or general assistant?
+- **Token constraints**: Is brevity critical, or is thoroughness more important?
+- **Failure modes**: What goes wrong when this prompt fails? What behaviors is it trying to prevent?
+
+### 1.2 Current State Assessment
+
+- **What's working**: Which parts of the prompt are clear and effective? (Preserve these.)
+- **What's unclear**: Which instructions are ambiguous or could be misinterpreted?
+- **What's missing**: Are there obvious gaps—edge cases unhandled, examples absent, priorities unclear?
+
+### 1.3 Document Observations
+
+Before consulting the reference, write down specific observations about problems in the prompt. Examples of observable problems:
+
+- "Lines 12-15 use hedging language ('might want to', 'could try')"
+- "No examples provided for the expected output format"
+- "Multiple rules marked CRITICAL with no clear precedence"
+- "Instructions say what NOT to do but don't specify what TO do"
+
+These observations become the input to technique selection in Phase 2.
+
+---
+
+## Phase 2: Plan — Select Techniques from Reference
+
+With the prompt understood and problems documented, consult the reference to devise a plan.
+
+### 2.1 Ground Technique Selection in the Reference
+
+For each problem identified in Phase 1.3, locate the relevant technique in the reference document and **quote the specific text** that justifies applying it. This grounding step prevents pattern-shopping and ensures accurate application.
+
+**For each candidate technique, extract from the reference:**
 
 ```markdown
-## Section: [Section Name]
+### Technique: [Name]
 
-### Current Content
+**Quoted trigger condition**: "[exact text from Technique Selection Guide]"
+
+**Quoted effect**: "[exact text describing behavioral impact]"
+
+**Stacks with**: [list from reference]
+**Conflicts with**: [list from reference]
+
+**Problem this addresses**: [your observation from Phase 1.3]
+
+**Why this matches**: [explain how the trigger condition matches the observed problem]
+```
+
+This quote-first approach forces commitment to specific evidence before reasoning about application. If you cannot quote a trigger condition that matches your observed problem, do not apply the technique.
+
+### 2.2 Verify Technique Selection
+
+Before finalizing the plan, verify each selection by asking yourself open verification questions (not yes/no questions, which bias toward confirmation):
+
+- "What specific text in the prompt matches this technique's trigger condition?"
+- "What is the expected behavioral change from applying this technique?"
+- "Which other techniques does this conflict with, and am I applying any of them?"
+- "What does the Anti-Patterns section say about related failure modes?"
+
+If you cannot answer these questions by pointing to specific text in the reference or the prompt, reconsider the technique selection.
+
+### 2.3 Present the Plan for User Approval
+
+Present the optimization plan to the user and **wait for explicit approval** before proceeding to Phase 3.
+
+```markdown
+## Optimization Plan
+
+**Problems identified in the prompt**:
+
+1. [Problem]: "[quoted text from prompt showing the problem]"
+2. [Problem]: "[quoted text from prompt showing the problem]"
+   ...
+
+**Proposed techniques** (with reference grounding):
+
+### Problem 1 → Technique: [name]
+
+- **Reference says apply when**: "[quoted trigger condition]"
+- **This prompt shows**: "[quoted problematic text]"
+- **Expected improvement**: "[quoted effect from reference]"
+
+### Problem 2 → Technique: [name]
+
+- **Reference says apply when**: "[quoted trigger condition]"
+- **This prompt shows**: "[quoted problematic text]"
+- **Expected improvement**: "[quoted effect from reference]"
+
+**Compatibility check**:
+
+- [Note any stacking opportunities]
+- [Note any conflicts and how to resolve]
+
+**Anti-patterns verified**: [Confirm you checked the Anti-Patterns section]
+
+---
+
+Does this plan look reasonable? I'll proceed with section-by-section changes once you confirm.
+```
+
+Do not proceed to Phase 3 without user confirmation.
+
+---
+
+## Phase 3: Execute — Section-by-Section Optimization
+
+With the plan approved, apply techniques to the prompt systematically.
+
+### 3.1 Decompose the Prompt
+
+Decompose the prompt into functional sections. Sections are defined by **what function they serve**, not by formatting or headers in the original. Common section functions include:
+
+- Identity establishment
+- Capability descriptions
+- Tool instructions
+- Constraints and prohibitions
+- Priority rules
+- Output format requirements
+- Examples
+
+### 3.2 Apply Techniques with Evidence
+
+For each change, ground both the problem AND the solution in quoted text. This prevents drift from the reference and ensures changes are justified.
+
+```markdown
+#### Change N
+
+**Section**: [Which functional section]
+
+**Problem observed**:
+
+> "[Quoted text from the prompt showing the issue]"
+
+**Technique**: [Name from reference]
+
+**Reference justification**:
+
+> "[Quoted trigger condition from reference that matches this problem]"
+> "[Quoted expected effect from reference]"
+
+**Before**:
+```
+
 [Original text]
 
-### Applied Patterns
-
-#### Change 1
-**Pattern**: [Pattern Name from prompt-engineering.md]
-**Rationale**: [Why this pattern applies]
-**Impact**: [Expected behavioral change]
-**Change**:
-Before: [original text]
-After: [optimized text]
-
-#### Change 2
-[Same structure...]
 ```
 
-### Step 4: Handle Pattern Conflicts
+**After**:
+```
 
-When multiple patterns could apply to the same text, present options:
+[Modified text]
+
+```
+
+**Why this improves quality**: [Specific behavioral improvement expected, grounded in the reference's stated effect]
+```
+
+### 3.3 Verify Each Change
+
+Before presenting changes, verify each one with open questions:
+
+- "What specific problem does this solve?" (must point to quoted prompt text)
+- "What does the reference say this technique does?" (must point to quoted reference text)
+- "Could this change introduce any anti-patterns?" (check the Anti-Patterns section)
+- "Does the modified text actually implement the technique correctly?"
+
+If you cannot answer these questions with specific textual evidence, reconsider the change.
+
+### 3.4 Present Changes for User Approval
+
+Present changes one section at a time (or in logical groups) and **wait for user approval** before proceeding to the next section. This prevents wasted effort if the user disagrees with early changes.
 
 ```markdown
-### Pattern Conflict Detected
+## Section: [Name]
 
-**Context**: [Section and text in question]
+[Present changes using the format from 3.2]
 
-**Option A**: [Pattern Name]
-- Application: [How it would be applied]
-- Benefits: [What it achieves]
-- Trade-offs: [What you might lose]
+---
 
-**Option B**: [Pattern Name]
-- Application: [How it would be applied]
-- Benefits: [What it achieves]
-- Trade-offs: [What you might lose]
-
-**Recommendation**: [Which option and why]
+Do these changes look correct? I'll continue to the next section once you confirm, or revise if you have concerns.
 ```
 
-Ask the user which approach they prefer before proceeding.
+### 3.5 Handle Conflicts
 
-## Phase 2: Full-Pass Integration
-
-After completing section-by-section optimization and receiving user approval:
-
-### Step 1: Assemble the Optimized Prompt
-
-Combine all optimized sections into a complete prompt.
-
-### Step 2: Global Analysis
-
-Review the complete prompt for:
-
-1. **Cross-section coherence**: Do sections work together harmoniously?
-2. **Redundancy elimination**: Are any instructions repeated unnecessarily?
-3. **Consistency**: Do all sections use consistent terminology and style?
-4. **Flow**: Does the prompt follow a logical progression?
-5. **Completeness**: Are there gaps between sections?
-
-### Step 3: Apply Global Patterns
-
-Identify and apply patterns that only become apparent at the full-prompt level:
-
-- **Emphasis Hierarchy**: Are the most critical instructions properly emphasized?
-- **Progressive Disclosure**: Does complexity increase appropriately?
-- **Rule Hierarchies**: Are there conflicting priorities that need ordering?
-- **Default Behaviors**: Are failure modes and edge cases handled?
-
-### Step 4: Present Final Optimization
-
-Present the complete optimized prompt with:
+When multiple techniques could apply to the same text but suggest different approaches, present the conflict to the user:
 
 ```markdown
-## Final Optimized Prompt
+### Conflict: [Section Name]
 
-[Complete optimized prompt]
+**Context**:
 
-## Global Changes Applied
+> "[Quoted text in question]"
 
-### Change 1
-**Pattern**: [Pattern Name]
-**Rationale**: [Why this global pattern was needed]
-**Impact**: [Expected improvement]
-**Sections Affected**: [Which sections were modified]
+**Option A: [Technique Name]**
 
-[Additional global changes...]
+- Reference says: "[quoted justification]"
+- Would change text to: [proposed modification]
+- Improves: [what aspect]
+- Trade-off: [what you might lose]
 
-## Summary
+**Option B: [Technique Name]**
 
-**Total Changes**: [Number]
-**Patterns Applied**: [List of unique patterns used]
-**Key Improvements**: [3-5 bullet points of major improvements]
+- Reference says: "[quoted justification]"
+- Would change text to: [proposed modification]
+- Improves: [what aspect]
+- Trade-off: [what you might lose]
+
+**My recommendation**: [Which option and why, based on the prompt's operating context]
+
+Which approach would you prefer?
 ```
 
-## Quality Checklist
+Wait for user decision before proceeding.
 
-Before presenting the final optimized prompt, verify:
+---
 
-- [ ] Every change has explicit pattern attribution
+## Phase 4: Integrate and Verify Quality
+
+After section-by-section changes are approved, assemble the complete prompt and verify quality holistically.
+
+### 4.1 Integration Checks
+
+1. **Cross-section coherence**: Do sections reference each other correctly? Are there dangling references to removed content?
+
+2. **Terminology consistency**: Does the prompt use the same terms throughout? (e.g., don't switch between "user", "human", and "person")
+
+3. **Priority consistency**: If multiple sections establish priorities, do they align?
+
+4. **Emphasis audit**: Count emphasis markers (CRITICAL, IMPORTANT, NEVER, ALWAYS). Per the reference's anti-patterns section, if more than 2-3 items use highest-level emphasis, reconsider.
+
+5. **Flow and ordering**: Does the prompt follow logical progression?
+
+### 4.2 Quality Verification
+
+Verify the optimized prompt by asking open verification questions about each major change:
+
+```markdown
+## Quality Verification
+
+For each significant change, verify it achieves the intended effect:
+
+### Change: [brief description]
+
+- **Intended effect**: "[quoted from reference]"
+- **Verification question**: "[open question to check if the change works]"
+- **Assessment**: [Does the modified text actually achieve this?]
+```
+
+**Example verification questions** (use open questions, not yes/no):
+
+- "What behavior will this instruction produce in edge cases?"
+- "How would an agent interpret this instruction if it skimmed the prompt?"
+- "What could go wrong with this phrasing?"
+
+If verification reveals issues, revise before presenting the final prompt.
+
+### 4.3 Final Anti-Pattern Check
+
+Re-consult the reference's Anti-Patterns section. Verify the optimized prompt doesn't exhibit:
+
+- The Hedging Spiral (accumulated uncertainty language)
+- The Everything-Is-Critical Problem (overuse of emphasis)
+- The Negative Instruction Trap (telling what NOT to do instead of what TO do)
+- The Implicit Category Trap (examples without explicit principles)
+- Any other documented anti-patterns
+
+### 4.4 Present Final Optimization for Approval
+
+```markdown
+## Optimized Prompt
+
+[Complete optimized prompt text]
+
+---
+
+## Summary of Changes
+
+**Techniques applied** (with reference sections):
+
+1. [Technique]: [which section, what it improved]
+2. [Technique]: [which section, what it improved]
+   ...
+
+**Quality improvements**:
+
+1. [Most significant improvement and why it matters]
+2. [Second most significant]
+3. [Third most significant]
+
+**Preserved from original**: [What was already working well and kept unchanged]
+
+**Verification completed**: [Confirm you ran quality verification on major changes]
+
+---
+
+Please review the complete prompt. Let me know if you'd like any adjustments.
+```
+
+---
+
+## Completion Checkpoint
+
+Before presenting the final prompt, verify:
+
+- [ ] Phase 1 context assessment was completed (operating context understood)
+- [ ] Phase 2 plan quoted specific trigger conditions from the reference for each technique
+- [ ] Phase 2 plan was approved by user before proceeding to Phase 3
+- [ ] Every change quotes both the problematic prompt text AND the reference justification
+- [ ] No technique was applied without matching its quoted trigger condition to an observed problem
+- [ ] Open verification questions were used to check each technique selection (not yes/no)
+- [ ] Stacking compatibility was checked; no conflicting techniques applied together
+- [ ] Section-by-section changes were approved by user before integration
+- [ ] Pattern conflicts were presented to user and resolved with their input
 - [ ] No section contradicts another section
-- [ ] Critical instructions use appropriate emphasis (CAPITAL, NEVER/ALWAYS, etc.)
-- [ ] Examples are provided where complexity is high
-- [ ] Anti-patterns are explicitly called out where relevant
-- [ ] Safety-critical operations have verbose instructions
-- [ ] Output format requirements are unambiguous
-- [ ] Tool usage hierarchies are clear
-- [ ] Default behaviors are specified for edge cases
-- [ ] The prompt follows progressive disclosure principles
+- [ ] Anti-patterns section was consulted; no anti-patterns introduced
+- [ ] Emphasis markers are used sparingly (≤3 highest-level markers)
+- [ ] Quality verification was performed on major changes
+- [ ] Simple prompts were not over-engineered (Phase 0 triage respected)
 
-## Best Practices
+If any checkbox fails, address it before presenting the final prompt.
 
-### Token Efficiency
-- Remove redundant explanations
-- Use concise examples over verbose descriptions
-- Consolidate related instructions
+---
 
-### Behavioral Clarity
-- Use imperative voice ("Use X" not "You should use X")
-- State absolutes clearly (NEVER, ALWAYS, MUST)
-- Provide specific examples for complex behaviors
+## Quick Reference: The Process
 
-### Safety and Reliability
-- Longer instructions for dangerous operations
-- Explicit anti-patterns for common mistakes
-- Clear error handling procedures
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. READ THE REFERENCE                                           │
+│    Load references/prompt-engineering.md before any analysis    │
+├─────────────────────────────────────────────────────────────────┤
+│ 2. UNDERSTAND THE PROMPT (Phase 1)                              │
+│    - Operating context (single-shot? tool-use? constraints?)    │
+│    - Current state (working? unclear? missing?)                 │
+│    - Document specific problems with quoted prompt text         │
+├─────────────────────────────────────────────────────────────────┤
+│ 3. PLAN WITH QUOTED EVIDENCE (Phase 2)                          │
+│    - Quote trigger conditions from reference for each technique │
+│    - Quote problematic text from prompt                         │
+│    - Verify with open questions (not yes/no)                    │
+│    - ⚠️  WAIT FOR USER APPROVAL before proceeding               │
+├─────────────────────────────────────────────────────────────────┤
+│ 4. EXECUTE WITH GROUNDING (Phase 3)                             │
+│    - Quote problem text AND reference justification per change  │
+│    - Verify each change with open questions                     │
+│    - ⚠️  WAIT FOR USER APPROVAL per section                     │
+├─────────────────────────────────────────────────────────────────┤
+│ 5. INTEGRATE AND VERIFY QUALITY (Phase 4)                       │
+│    - Check cross-section coherence                              │
+│    - Run quality verification on major changes                  │
+│    - Final anti-pattern check                                   │
+│    - Present complete optimized prompt for approval             │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### Pattern Application Discipline
+## Core Quality Principles
 
-**DO**:
-- Apply multiple patterns per section when beneficial
-- Explain why each pattern is appropriate
-- Show concrete before/after examples
-- Consider the user's specific use case
+1. **Quote before deciding**: Every technique selection must quote the reference's trigger condition. Every change must quote the problematic prompt text. This grounds decisions in evidence, not intuition.
 
-**DON'T**:
-- Apply patterns mechanically without rationale
-- Change text without identifying the pattern used
-- Assume patterns are obvious (always attribute)
-- Optimize for optimization's sake (preserve working patterns)
+2. **Open verification questions**: Ask "What behavior will this produce?" not "Is this correct?" Open questions surface issues; yes/no questions bias toward confirmation.
 
-## Notes
+3. **User gates at phase transitions**: Do not proceed from Phase 2→3 or Phase 3→4 without explicit user approval. This prevents wasted effort and catches misunderstandings early.
 
-- This process is systematic but not mechanical. Use judgment about which patterns provide value for the specific prompt.
-- When the user's prompt already uses a pattern well, acknowledge it rather than changing it.
-- Focus attribution on changes, not on what was already done well.
-- If the user requests specific optimizations (e.g., "make it more concise"), prioritize those patterns while maintaining completeness.
+4. **Preserve what works**: Optimization means improving problems, not rewriting everything. Explicitly note what you're keeping unchanged and why.
