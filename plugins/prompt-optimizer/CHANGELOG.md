@@ -5,6 +5,12 @@ All notable changes to the prompt-optimizer plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2025-12-16
+
+### Fixed
+
+- **Reference file discovery**: Added explicit path resolution instructions so Claude can reliably find the prompt-engineering.md reference file, with Glob fallback
+
 ## [1.1.0] - 2025-12-16
 
 ### Changed

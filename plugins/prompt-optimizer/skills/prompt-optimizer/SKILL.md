@@ -34,13 +34,28 @@ Do NOT use for:
 
 ## Required Resources
 
-Before ANY analysis, read the pattern reference:
+Before ANY analysis, you MUST read the pattern reference file. Follow these steps:
 
+1. **Determine the skill directory**: Note the path you used to read this SKILL.md file
+2. **Construct the reference path**: The reference file is located at `references/prompt-engineering.md` relative to this SKILL.md
+3. **Read the reference**: Use the Read tool to load the file
+
+**Example**: If you read this skill from:
 ```
-references/prompt-engineering.md
+/Users/example/.claude/plugins/marketplaces/vladolaru-claude-code-plugins/plugins/prompt-optimizer/skills/prompt-optimizer/SKILL.md
 ```
 
-This contains the complete catalog of applicable patterns, including:
+Then read the reference from:
+```
+/Users/example/.claude/plugins/marketplaces/vladolaru-claude-code-plugins/plugins/prompt-optimizer/skills/prompt-optimizer/references/prompt-engineering.md
+```
+
+**Alternative**: If you cannot determine the skill path, use Glob to find the file:
+```
+Glob pattern: **/prompt-optimizer/**/prompt-engineering.md
+```
+
+The reference contains the complete catalog of applicable patterns, including:
 
 - The **Technique Selection Guide** table (maps domains, trigger conditions, stacking compatibility, conflicts, and expected effects)
 - The **Quick Reference: Key Principles** (numbered list of foundational techniques)
