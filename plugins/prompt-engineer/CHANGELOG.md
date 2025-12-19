@@ -1,9 +1,23 @@
 # Changelog
 
-All notable changes to the prompt-optimizer plugin will be documented in this file.
+All notable changes to the prompt-engineer plugin will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.0.0] - 2025-12-19
+
+### Changed
+
+- **BREAKING: Renamed plugin from `prompt-optimizer` to `prompt-engineer`** to better reflect the skill's comprehensive scope beyond simple optimization
+- **Split reference document**: Single `prompt-engineering.md` now split into `prompt-engineering-single-turn.md` (always read) and `prompt-engineering-multi-turn.md` (conditional read for multi-turn/multi-agent flows)
+- Updated all internal references to use new plugin and skill name
+
+### Migration
+
+Users must reinstall: `/plugin install prompt-engineer@vladolaru-claude-code-plugins`
+
+The old `prompt-optimizer` name is no longer available.
 
 ## [1.1.1] - 2025-12-16
 

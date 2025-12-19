@@ -1,5 +1,5 @@
 ---
-name: prompt-optimizer
+name: prompt-engineer
 description: Optimize system prompts for Claude Code agents using proven prompt engineering patterns. Use when users request prompt improvement, optimization, or refinement for agent workflows, tool instructions, or system behaviors.
 ---
 
@@ -34,35 +34,43 @@ Do NOT use for:
 
 ## Required Resources
 
-Before ANY analysis, you MUST read the pattern reference file. Follow these steps:
+Before ANY analysis, read the appropriate pattern reference(s):
 
-1. **Determine the skill directory**: Note the path you used to read this SKILL.md file
-2. **Construct the reference path**: The reference file is located at `references/prompt-engineering.md` relative to this SKILL.md
-3. **Read the reference**: Use the Read tool to load the file
+### Single-Turn Reference (Always Read)
 
-**Example**: If you read this skill from:
 ```
-/Users/example/.claude/plugins/marketplaces/vladolaru-claude-code-plugins/plugins/prompt-optimizer/skills/prompt-optimizer/SKILL.md
+references/prompt-engineering-single-turn.md
 ```
 
-Then read the reference from:
-```
-/Users/example/.claude/plugins/marketplaces/vladolaru-claude-code-plugins/plugins/prompt-optimizer/skills/prompt-optimizer/references/prompt-engineering.md
-```
-
-**Alternative**: If you cannot determine the skill path, use Glob to find the file:
-```
-Glob pattern: **/prompt-optimizer/**/prompt-engineering.md
-```
-
-The reference contains the complete catalog of applicable patterns, including:
+This contains the complete catalog of single-turn patterns, including:
 
 - The **Technique Selection Guide** table (maps domains, trigger conditions, stacking compatibility, conflicts, and expected effects)
 - The **Quick Reference: Key Principles** (numbered list of foundational techniques)
 - Domain-organized technique sections with research citations and examples
 - The **Anti-Patterns to Avoid** section documenting common failure modes
 
-All technique selection decisions must be grounded in this reference. Do not apply patterns from memory or general knowledge—consult the reference to ensure accuracy and to surface stacking/conflict information.
+### Multi-Turn Reference (Conditional)
+
+```
+references/prompt-engineering-multi-turn.md
+```
+
+**Read this reference ONLY when the prompt involves:**
+
+- **Multi-turn flows**: Scripts or systems that inject prompts accumulating on a shared context (e.g., iterative refinement loops, conversation chains where previous outputs become subsequent inputs)
+- **Multi-agent / sub-agent orchestration**: Parent/child agent patterns, agent handoffs, or workflows where one agent's output feeds into another agent's prompt
+
+**Skip this reference for:**
+
+- Static system prompts executed in a single LLM call
+- Tool instructions or one-shot prompts
+- Prompts that don't involve message accumulation or agent coordination
+
+The multi-turn document covers techniques like Self-Refine, Chain-of-Verification, Universal Self-Consistency, and Multi-Chain Reasoning—patterns that exploit deliberate self-examination across multiple passes.
+
+---
+
+All technique selection decisions must be grounded in these references. Do not apply patterns from memory or general knowledge—consult the appropriate reference to ensure accuracy and to surface stacking/conflict information.
 
 ---
 
@@ -172,33 +180,94 @@ Before finalizing the plan, verify each selection by asking yourself open verifi
 
 If you cannot answer these questions by pointing to specific text in the reference or the prompt, reconsider the technique selection.
 
-### 2.3 Present the Plan for User Approval
+### 2.3 Present the Plan for User Approval (Visual Card Layout)
 
-Present the optimization plan to the user and **wait for explicit approval** before proceeding to Phase 3.
+Present each proposed change as a visually distinct "card" using ASCII box drawing. This format prioritizes scannability—the user should grasp scope, problem, and proposed fix at a glance before approving.
+
+**Wait for explicit approval** before proceeding to Phase 3.
+
+**Card Template:**
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  CHANGE N: [Short title - what this change does]                             ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  SCOPE                                                                       ║
+║  ─────                                                                       ║
+║  Prompt:      [prompt name or "multi-prompt: A → B"]                         ║
+║  Section:     [which part of the prompt]                                     ║
+║  Downstream:  [what depends on this output, or "none"]                       ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  PROBLEM                                                                     ║
+║  ───────                                                                     ║
+║  Issue:    [One sentence - what's wrong]                                     ║
+║                                                                              ║
+║  Evidence: "[quoted problematic text from the prompt]"                       ║
+║                                                                              ║
+║  Runtime:  [What the user actually sees - concrete failure behavior]         ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  TECHNIQUE                                                                   ║
+║  ─────────                                                                   ║
+║  Apply:    [Technique name from reference]                                   ║
+║                                                                              ║
+║  Trigger:  "[quoted trigger condition from reference]"                       ║
+║  Effect:   "[quoted expected effect from reference]"                         ║
+║  Stacks:   [compatible techniques, or "none"]                                ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  BEFORE                                                                      ║
+║  ──────                                                                      ║
+║  ┌────────────────────────────────────────────────────────────────────────┐  ║
+║  │ [Original prompt text - exact copy]                                    │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+║                                     ▼                                        ║
+║                                                                              ║
+║  AFTER                                                                       ║
+║  ─────                                                                       ║
+║  ┌────────────────────────────────────────────────────────────────────────┐  ║
+║  │ [Modified prompt text - exact copy]                                    │  ║
+║  └────────────────────────────────────────────────────────────────────────┘  ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  WHY THIS IMPROVES QUALITY                                                   ║
+║  ─────────────────────────                                                   ║
+║  [1-2 sentences: concrete behavioral improvement expected]                   ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+**For multi-prompt changes**, add an INTERACTION section between TECHNIQUE and BEFORE:
+
+```
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                              ║
+║  INTERACTION (how prompts connect)                                           ║
+║  ─────────────────────────────────                                           ║
+║                                                                              ║
+║  Currently:                                                                  ║
+║  ┌──────────┐   free-form text   ┌──────────┐                                ║
+║  │ Prompt A │ ─────────────────▶ │ Prompt B │ ──▶ [failure mode]             ║
+║  └──────────┘                    └──────────┘                                ║
+║                                                                              ║
+║  After change:                                                               ║
+║  ┌──────────┐   structured XML   ┌──────────┐                                ║
+║  │ Prompt A │ ─────────────────▶ │ Prompt B │ ──▶ [success outcome]          ║
+║  └──────────┘                    └──────────┘                                ║
+║                                                                              ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+```
+
+**After presenting all change cards:**
 
 ```markdown
-## Optimization Plan
-
-**Problems identified in the prompt**:
-
-1. [Problem]: "[quoted text from prompt showing the problem]"
-2. [Problem]: "[quoted text from prompt showing the problem]"
-   ...
-
-**Proposed techniques** (with reference grounding):
-
-### Problem 1 → Technique: [name]
-
-- **Reference says apply when**: "[quoted trigger condition]"
-- **This prompt shows**: "[quoted problematic text]"
-- **Expected improvement**: "[quoted effect from reference]"
-
-### Problem 2 → Technique: [name]
-
-- **Reference says apply when**: "[quoted trigger condition]"
-- **This prompt shows**: "[quoted problematic text]"
-- **Expected improvement**: "[quoted effect from reference]"
-
 **Compatibility check**:
 
 - [Note any stacking opportunities]
@@ -208,92 +277,28 @@ Present the optimization plan to the user and **wait for explicit approval** bef
 
 ---
 
-Does this plan look reasonable? I'll proceed with section-by-section changes once you confirm.
+Does this plan look reasonable? I'll apply these changes once you confirm.
 ```
 
 Do not proceed to Phase 3 without user confirmation.
 
 ---
 
-## Phase 3: Execute — Section-by-Section Optimization
+## Phase 3: Execute — Apply Approved Changes
 
-With the plan approved, apply techniques to the prompt systematically.
+With the plan approved, apply the changes to the prompt. The detailed approval happened in Phase 2; execution is straightforward.
 
-### 3.1 Decompose the Prompt
+### 3.1 Apply Changes Systematically
 
-Decompose the prompt into functional sections. Sections are defined by **what function they serve**, not by formatting or headers in the original. Common section functions include:
+Work through the approved changes in logical order (typically by prompt section). For each change:
 
-- Identity establishment
-- Capability descriptions
-- Tool instructions
-- Constraints and prohibitions
-- Priority rules
-- Output format requirements
-- Examples
+1. Locate the target text in the prompt
+2. Apply the BEFORE → AFTER transformation from the approved plan
+3. Verify the modification matches what was approved
 
-### 3.2 Apply Techniques with Evidence
+No additional approval is needed per change—the plan was already approved in Phase 2.
 
-For each change, ground both the problem AND the solution in quoted text. This prevents drift from the reference and ensures changes are justified.
-
-```markdown
-#### Change N
-
-**Section**: [Which functional section]
-
-**Problem observed**:
-
-> "[Quoted text from the prompt showing the issue]"
-
-**Technique**: [Name from reference]
-
-**Reference justification**:
-
-> "[Quoted trigger condition from reference that matches this problem]"
-> "[Quoted expected effect from reference]"
-
-**Before**:
-```
-
-[Original text]
-
-```
-
-**After**:
-```
-
-[Modified text]
-
-```
-
-**Why this improves quality**: [Specific behavioral improvement expected, grounded in the reference's stated effect]
-```
-
-### 3.3 Verify Each Change
-
-Before presenting changes, verify each one with open questions:
-
-- "What specific problem does this solve?" (must point to quoted prompt text)
-- "What does the reference say this technique does?" (must point to quoted reference text)
-- "Could this change introduce any anti-patterns?" (check the Anti-Patterns section)
-- "Does the modified text actually implement the technique correctly?"
-
-If you cannot answer these questions with specific textual evidence, reconsider the change.
-
-### 3.4 Present Changes for User Approval
-
-Present changes one section at a time (or in logical groups) and **wait for user approval** before proceeding to the next section. This prevents wasted effort if the user disagrees with early changes.
-
-```markdown
-## Section: [Name]
-
-[Present changes using the format from 3.2]
-
----
-
-Do these changes look correct? I'll continue to the next section once you confirm, or revise if you have concerns.
-```
-
-### 3.5 Handle Conflicts
+### 3.2 Handle Conflicts During Execution
 
 When multiple techniques could apply to the same text but suggest different approaches, present the conflict to the user:
 
@@ -416,13 +421,12 @@ Please review the complete prompt. Let me know if you'd like any adjustments.
 Before presenting the final prompt, verify:
 
 - [ ] Phase 1 context assessment was completed (operating context understood)
+- [ ] Phase 2 plan used visual card format showing BEFORE/AFTER for each change
 - [ ] Phase 2 plan quoted specific trigger conditions from the reference for each technique
 - [ ] Phase 2 plan was approved by user before proceeding to Phase 3
-- [ ] Every change quotes both the problematic prompt text AND the reference justification
 - [ ] No technique was applied without matching its quoted trigger condition to an observed problem
 - [ ] Open verification questions were used to check each technique selection (not yes/no)
 - [ ] Stacking compatibility was checked; no conflicting techniques applied together
-- [ ] Section-by-section changes were approved by user before integration
 - [ ] Pattern conflicts were presented to user and resolved with their input
 - [ ] No section contradicts another section
 - [ ] Anti-patterns section was consulted; no anti-patterns introduced
@@ -438,30 +442,31 @@ If any checkbox fails, address it before presenting the final prompt.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ 1. READ THE REFERENCE                                           │
-│    Load references/prompt-engineering.md before any analysis    │
+│ 1. READ THE REFERENCE(S)                                        │
+│    - Always: references/prompt-engineering-single-turn.md       │
+│    - If multi-turn/multi-agent: also read multi-turn reference  │
 ├─────────────────────────────────────────────────────────────────┤
 │ 2. UNDERSTAND THE PROMPT (Phase 1)                              │
 │    - Operating context (single-shot? tool-use? constraints?)    │
 │    - Current state (working? unclear? missing?)                 │
 │    - Document specific problems with quoted prompt text         │
 ├─────────────────────────────────────────────────────────────────┤
-│ 3. PLAN WITH QUOTED EVIDENCE (Phase 2)                          │
-│    - Quote trigger conditions from reference for each technique │
-│    - Quote problematic text from prompt                         │
-│    - Verify with open questions (not yes/no)                    │
+│ 3. PLAN WITH VISUAL CARDS (Phase 2)                             │
+│    - Present each change as a visual card with:                 │
+│      SCOPE → PROBLEM → TECHNIQUE → BEFORE/AFTER                 │
+│    - Quote trigger conditions from reference                    │
+│    - Show exact text transformations for user approval          │
 │    - ⚠️  WAIT FOR USER APPROVAL before proceeding               │
 ├─────────────────────────────────────────────────────────────────┤
-│ 4. EXECUTE WITH GROUNDING (Phase 3)                             │
-│    - Quote problem text AND reference justification per change  │
-│    - Verify each change with open questions                     │
-│    - ⚠️  WAIT FOR USER APPROVAL per section                     │
+│ 4. EXECUTE APPROVED CHANGES (Phase 3)                           │
+│    - Apply the BEFORE → AFTER transformations                   │
+│    - No additional approval needed (plan was approved)          │
 ├─────────────────────────────────────────────────────────────────┤
 │ 5. INTEGRATE AND VERIFY QUALITY (Phase 4)                       │
 │    - Check cross-section coherence                              │
 │    - Run quality verification on major changes                  │
 │    - Final anti-pattern check                                   │
-│    - Present complete optimized prompt for approval             │
+│    - Present complete optimized prompt                          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -471,6 +476,6 @@ If any checkbox fails, address it before presenting the final prompt.
 
 2. **Open verification questions**: Ask "What behavior will this produce?" not "Is this correct?" Open questions surface issues; yes/no questions bias toward confirmation.
 
-3. **User gates at phase transitions**: Do not proceed from Phase 2→3 or Phase 3→4 without explicit user approval. This prevents wasted effort and catches misunderstandings early.
+3. **Approval happens once, upfront**: The visual card format in Phase 2 shows full impact (BEFORE/AFTER) so you can approve the complete plan. Phase 3 executes without re-approval.
 
 4. **Preserve what works**: Optimization means improving problems, not rewriting everything. Explicitly note what you're keeping unchanged and why.

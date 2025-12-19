@@ -56,10 +56,10 @@
       ]
     },
     {
-      "name": "prompt-optimizer",
-      "source": "./plugins/prompt-optimizer",
+      "name": "prompt-engineer",
+      "source": "./plugins/prompt-engineer",
       "description": "Human-in-the-loop prompt optimization with evidence-grounded pattern attribution using proven prompt engineering patterns.",
-      "version": "1.1.1",
+      "version": "2.0.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -69,7 +69,7 @@
       "category": "productivity",
       "strict": true,
       "skills": [
-        "./skills/prompt-optimizer"
+        "./skills/prompt-engineer"
       ],
       "commands": [
         "./commands/optimize-prompt.md"

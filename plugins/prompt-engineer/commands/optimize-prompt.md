@@ -1,8 +1,8 @@
 ---
-description: Optimize a prompt or file (skill, CLAUDE.md, agent) using the prompt-optimizer skill
+description: Optimize a prompt or file (skill, CLAUDE.md, agent) using the prompt-engineer skill
 ---
 
-Use the prompt-optimizer skill to optimize the following:
+Use the prompt-engineer skill to optimize the following:
 
 $ARGUMENTS
 
