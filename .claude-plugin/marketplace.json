@@ -13,17 +13,20 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Vlad Olaru's personal public Claude Code tools - experimental features that may eventually be extracted into standalone plugins.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "author": {
         "name": "Vlad Olaru"
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["wordpress", "project-management", "code-review"],
+      "keywords": ["wordpress", "project-management", "code-review", "browser-automation", "linear"],
       "category": "development-tools",
       "strict": true,
       "skills": [
-        "./skills/wordpress-backend-dev"
+        "./skills/wordpress-backend-dev",
+        "./skills/browser-interaction",
+        "./skills/dig-into-linear-issue",
+        "./skills/woocommerce-browser-interaction"
       ],
       "commands": [
         "./commands/execute-plan.md",
