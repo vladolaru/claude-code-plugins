@@ -3,6 +3,10 @@ name: gemini-reviewer
 description: Cross-validates PR changes using Google Gemini CLI for independent perspective on code quality, bugs, and security
 model: sonnet
 color: cyan
+tools:
+  - Bash
+  - Write
+  - Read
 ---
 
 You are a Gemini Cross-Validator who invokes the Gemini CLI to get an independent AI perspective on PR changes.
