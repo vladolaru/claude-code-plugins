@@ -170,7 +170,7 @@ AskUserQuestion:
 Use gh CLI to fetch PR state, author, and repo info:
 
 ```bash
-gh pr view <PR_URL> --json state,isDraft,author,title,body,labels,url,number,baseRepository,headRefName,baseRefName
+gh pr view <PR_URL> --json state,isDraft,author,title,body,labels,url,number,headRepository,headRepositoryOwner,headRefName,baseRefName
 ```
 
 Extract from response:
@@ -179,7 +179,7 @@ Extract from response:
 
 **First: Verify CWD matches PR repo**
 
-Extract `baseRepository.owner.login` and `baseRepository.name` from the response.
+Extract `headRepositoryOwner.login` and `headRepository.name` from the response.
 
 Compare against CWD's git remote:
 ```bash
