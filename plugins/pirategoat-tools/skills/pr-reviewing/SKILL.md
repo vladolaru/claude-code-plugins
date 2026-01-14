@@ -16,6 +16,7 @@ Core principle: **context before code** - understanding what problem is being so
 - Asked to review a GitHub PR
 - Given a PR URL to help with review
 - Need to prepare review feedback for a PR
+- **Branched from `dig-into-linear-issue`** when issue has an open PR linked
 
 ## Core Rules (in priority order)
 
@@ -42,6 +43,24 @@ Core principle: **context before code** - understanding what problem is being so
 
 These are expected scenarios. Adapt and continue - no apology needed.
 
+## Handoff from dig-into-linear-issue
+
+When this skill is invoked from `dig-into-linear-issue`, issue context has already been gathered. The handoff includes:
+
+| Context Provided | Use It For |
+|------------------|------------|
+| Issue summary | Skip re-fetching, use provided summary in step 6 |
+| Issue ID | Reference in review, link in comments |
+| Acceptance criteria | Key verification points for the review |
+| Issue comments context | Understanding decisions, constraints |
+
+**When handoff context is provided:**
+- **Skip step 5** (Fetch Linear issue) - context already gathered
+- **Use provided context** in step 6 (Summarize Full Context)
+- **Include issue ID** in review context for agents
+
+**Detecting handoff:** If the invocation includes issue context (issue summary, acceptance criteria, issue ID), treat it as a handoff and skip redundant fetching.
+
 ## Workflow
 
 ```dot
@@ -50,6 +69,7 @@ digraph workflow {
     node [shape=box];
 
     start [label="Skill invoked", shape=doublecircle];
+    has_context [shape=diamond, label="Handoff from\nissue skill?"];
     has_url [shape=diamond, label="PR URL\nprovided?"];
     ask_url [label="0. AskUserQuestion:\nRequest PR URL"];
 
@@ -73,7 +93,9 @@ digraph workflow {
     check_draft [shape=diamond, label="Is draft?"];
     stop_draft [label="STOP: PR not ready\nfor review", shape=octagon, style=filled, fillcolor=red, fontcolor=white];
 
-    start -> has_url;
+    start -> has_context;
+    has_context -> has_url [label="no"];
+    has_context -> get_pr [label="yes\n(has PR URL)", style=dashed];
     has_url -> ask_url [label="no"];
     ask_url -> get_pr;
     has_url -> get_pr [label="yes"];
@@ -106,7 +128,9 @@ digraph workflow {
 
     find_issue [label="4. Extract linked\nissue ID"];
     has_issue [shape=diamond, label="Issue\nlinked?"];
+    has_handoff [shape=diamond, label="Handoff\ncontext?"];
     fetch_issue [label="5. Fetch Linear issue\nwith comments"];
+    use_handoff [label="5. Use provided\nissue context", style=filled, fillcolor=lightgreen];
     no_issue [label="Note: No issue linked\n(context limited)"];
 
     summarize [label="6. Summarize context:\n- Issue background\n- PR state\n- Review state\n- Pending items"];
@@ -133,9 +157,12 @@ digraph workflow {
     followup_choice -> find_issue [label="yes"];
     followup_choice -> stop_here [label="no"];
     find_issue -> has_issue;
-    has_issue -> fetch_issue [label="yes"];
+    has_issue -> has_handoff [label="yes"];
     has_issue -> no_issue [label="no"];
+    has_handoff -> use_handoff [label="yes"];
+    has_handoff -> fetch_issue [label="no"];
     fetch_issue -> summarize;
+    use_handoff -> summarize;
     no_issue -> summarize;
     summarize -> assess_size;
     assess_size -> size_check;
@@ -449,7 +476,9 @@ Parse the PR body for issue references:
 
 ### 5. Fetch Linear Issue (if linked)
 
-Use `dig-into-linear-issue` skill or context-a8c directly:
+**If handoff context was provided from `dig-into-linear-issue`:** Skip this step. Use the provided issue context directly in step 6. The issue has already been thoroughly investigated.
+
+**Otherwise**, use context-a8c directly:
 
 ```
 context-a8c → linear provider → get issue (include comments!)
@@ -775,6 +804,7 @@ Always restore the repo to its pre-review state. The user should find their repo
 | Mistake | Prevention |
 |---------|------------|
 | Jump straight to code | ALWAYS fetch issue context first |
+| Re-fetch issue after handoff | If context came from `dig-into-linear-issue`, use it directly |
 | Review draft PR | Check `isDraft` before starting |
 | Duplicate existing feedback | Review previous comments first |
 | Not knowing you already reviewed | Check reviews for your username |

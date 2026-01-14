@@ -70,6 +70,10 @@ digraph workflow {
     fetch [label="1. Fetch issue\n+ comments"];
     check_done [shape=diamond, label="Already\ndone?"];
     close_done [label="Close with\nresolution link"];
+    has_open_pr [shape=diamond, label="Open PR\nlinked?"];
+    present_pr [label="1b. Present PR\noptions"];
+    pr_choice [shape=diamond, label="User\nchoice?"];
+    branch_pr [label="Branch to\npr-reviewing", style=filled, fillcolor=lightblue];
     identify [shape=diamond, label="Type?"];
 
     split [label="Split into\nseparate issues"];
@@ -109,7 +113,12 @@ digraph workflow {
 
     fetch -> check_done;
     check_done -> close_done [label="yes"];
-    check_done -> identify [label="no"];
+    check_done -> has_open_pr [label="no"];
+    has_open_pr -> present_pr [label="yes"];
+    has_open_pr -> identify [label="no"];
+    present_pr -> pr_choice;
+    pr_choice -> branch_pr [label="review PR"];
+    pr_choice -> identify [label="investigate"];
 
     identify -> clarify [label="support"];
     identify -> triage [label="stale"];
@@ -180,7 +189,39 @@ Before proceeding, confirm you have extracted:
 **Quick checks:** Search GitHub for merged PRs mentioning issue ID. Check comments for "fixed in", "resolved by". Check if linked PRs are merged.
 
 **If done:** Verify deployment, recommend closing with resolution link.
-**If in progress:** Note open PRs, coordinate rather than duplicate.
+
+### 1b. Handle Open PRs (Branch Point)
+
+If the issue has an **open PR** linked to it (exclude draft PRs), present options to the user:
+
+**Multiple open PRs?** If there are multiple non-draft open PRs, mention all of them in the question and let the user choose which one to review, or offer to continue investigation.
+
+```
+AskUserQuestion:
+  question: "This issue has an open PR linked: PR #<number> - <title>. How would you like to proceed?"
+  header: "Open PR"
+  options:
+    - label: "Review the PR (Recommended)"
+      description: "Branch to pr-reviewing skill to review the existing PR"
+    - label: "Continue investigation"
+      description: "Investigate the issue independently (useful if PR may be incomplete)"
+    - label: "Stop here"
+      description: "I have enough context from this information"
+```
+
+| User Choice | Action |
+|-------------|--------|
+| Review the PR | **Branch to `pr-reviewing` skill** with the PR URL. Include issue context gathered so far. |
+| Continue investigation | Proceed to step 2 (identify issue type). Note the open PR in your report. |
+| Stop here | End investigation. Provide summary of what you found. |
+
+**Why review is recommended:** If there's already an open PR, reviewing it is usually more valuable than starting a parallel investigation. The PR author has likely already done much of the investigation work.
+
+**Context handoff to pr-reviewing:** When branching, include:
+- Issue summary (what problem is being solved)
+- Issue ID for the PR to reference
+- Any acceptance criteria from the issue
+- Relevant context from issue comments
 
 ### 2. Identify Issue Type
 
@@ -336,6 +377,7 @@ Propose fix branch with approach from RCA. Note multi-area impact, flag architec
 | Trust secondhand info | Always fetch the actual issue yourself |
 | Ignore comments | Read ALL comments before investigating |
 | Ignore linked PRs | Check PR status first - merged? open? closed? |
+| Skip PR review option | If open PR exists, ask user before continuing investigation |
 | Skip P2/Slack search for features | Always search even if issue seems clear |
 | Ignore linked resources | Follow every link, extract context |
 | Skip project-level context | Check project description and docs first |
@@ -378,6 +420,7 @@ If you catch yourself thinking any of these, **STOP** and verify:
 - "No linked resources to check" → Did you search P2/Slack anyway?
 - "I understand this feature" → Did you check P2/Slack for context?
 - "I know where this feature goes" → Did you investigate the target UI area via browser?
+- "There's an open PR but I'll investigate anyway" → Did you offer to review the PR first?
 
 ### Wrong Workflow (STOP → check issue type)
 - "Let me validate this feature" → Is it actually a bug? Only bugs need validation.
@@ -390,6 +433,11 @@ If you catch yourself thinking any of these, **STOP** and verify:
 - "Browser isn't working" → Did you try code analysis instead?
 - "I'll ask user for details" → Did you try code analysis first?
 - "I can't access that P2/tool" → Did you document the barrier and try fallbacks?
+
+### Bypassing the PR Check (STOP → ask user first)
+- "The PR is probably incomplete" → Did you ASK the user instead of assuming?
+- "I can investigate faster myself" → The PR author already did investigation - review is usually faster
+- "It's a draft so I'll ignore it" → Correct - drafts should be skipped, but check for non-draft PRs too
 
 ### Assuming State (STOP → verify current state)
 - "Looks like a duplicate" → Did you verify it's the same team/repo?
