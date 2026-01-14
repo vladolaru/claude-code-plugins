@@ -5,6 +5,29 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-01-14
+
+### Added
+
+- `software-architecture` skill - Comprehensive design patterns and software architecture guidance
+  - Covers GoF design patterns, SOLID principles, hexagonal architecture, and composable designs
+  - Pattern selection guide mapping architectural problems to pattern solutions
+  - Essential patterns (DEMS D'FFACTS): Command, Strategy, Template Method, Adapter, Façade, Factory, Dependency Injection
+  - Common architectural problems troubleshooting table with SOLID violations
+  - Pattern combinations and anti-patterns guidance
+  - Refactoring to patterns tactical guide
+  - Architecture review checklist
+  - Language-specific considerations for PHP/WordPress and JavaScript
+  - Comprehensive pattern reference library (716KB total) synthesized from jhumelsine.github.io architecture series:
+    - **Behavioral patterns:** Command, Strategy, Template Method, Chain of Responsibility, Specification
+    - **Structural patterns:** Adapter, Façade, Decorator, Composite, Proxy
+    - **Creational patterns:** Factory (Method, Class, Abstract), Dependency Injection
+    - **Architectural patterns:** Hexagonal Architecture (Ports & Adapters, Clean Architecture)
+    - **Core concepts:** SOLID Principles, Composable Design, Pattern Relationships
+    - **Navigation:** patterns/README.md with 4 reading paths and pattern taxonomy
+  - All pattern references include: when to use, when NOT to use, structure, implementation guide (PHP), benefits, trade-offs, common mistakes, pattern relationships, decision criteria
+  - Real-world examples, quotes, and further reading sections throughout
+
 ## [1.6.0] - 2026-01-14
 
 ### Added
