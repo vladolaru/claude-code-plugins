@@ -13,7 +13,7 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Vlad Olaru's personal public Claude Code tools - experimental features that may eventually be extracted into standalone plugins.",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -27,7 +27,8 @@
         "./skills/browser-interaction",
         "./skills/dig-into-linear-issue",
         "./skills/woocommerce-browser-interaction",
-        "./skills/pr-reviewing"
+        "./skills/pr-reviewing",
+        "./skills/testing-patterns"
       ],
       "commands": [
         "./commands/execute-plan.md",
@@ -40,6 +41,7 @@
         "./agents/performance-reviewer.md",
         "./agents/architecture-reviewer.md",
         "./agents/patterns-reviewer.md",
+        "./agents/tests-reviewer.md",
         "./agents/gemini-reviewer.md",
         "./agents/codex-reviewer.md",
         "./agents/review-reconciliator.md"

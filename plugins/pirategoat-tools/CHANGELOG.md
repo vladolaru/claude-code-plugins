@@ -5,6 +5,31 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-01-14
+
+### Added
+
+- `testing-patterns` skill - Comprehensive test quality patterns for PHP (PHPUnit/WordPress), JavaScript (Jest/Vitest), and E2E (Playwright)
+  - Reference guides for test quality, structure (AAA), mocking strategies, test data management, and coverage
+  - Language-specific patterns including WordPress/WooCommerce testing utilities
+  - Test philosophy section emphasizing tests as specifications, not verification
+  - Test smells diagnostic guide with root cause analysis
+  - Enhanced quality principles table (9 attributes including behavior-based, declarative, complete)
+  - Mocking principles section with clear guidance on when/how to mock
+  - Test layer context comparing unit/integration/E2E with strategy guidance
+  - Skill now includes contextual pointers to deep-dive references throughout
+  - Organized reference library section: Quick Reference (tactical) vs Deep Dives (strategic)
+  - "Using the Reference Library" guide at end of skill with navigation by problem type
+  - Comprehensive reference documents synthesized from jhumelsine.github.io architecture blog series (77KB total):
+    - `README.md` - Navigation guide with 4 reading paths and key insights summary
+    - `test-philosophy.md` - Mental models, behavior vs implementation, the fundamental shift (12KB)
+    - `test-smells.md` - Diagnostic guide for flaky, brittle, slow, complex tests with root cause analysis (16KB)
+    - `tdd-workflow.md` - Complete Red-Green-Refactor cycle with examples and anti-patterns (15KB)
+    - `test-layers.md` - Unit/Integration/System comparison with Mars Orbiter lesson and strategy guidance (17KB)
+    - `test-benefits.md` - 13 benefits of testing from specifications to future bug prevention (17KB)
+  - All reference docs include real-world examples, quotes, and further reading sections
+- `tests-reviewer` agent - Test quality-focused code review for test structure, assertions, mocking patterns, coverage, and anti-patterns
+
 ## [1.5.0] - 2026-01-10
 
 ### Added
