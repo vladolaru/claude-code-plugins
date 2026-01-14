@@ -40,7 +40,7 @@
         "./agents/pr-reviewer.md",
         "./agents/security-reviewer.md",
         "./agents/performance-reviewer.md",
-        "./agents/architecture-reviewer.md",
+        "./agents/wp-architecture-reviewer.md",
         "./agents/patterns-reviewer.md",
         "./agents/tests-reviewer.md",
         "./agents/gemini-reviewer.md",

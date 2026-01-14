@@ -1,5 +1,5 @@
 ---
-name: architecture-reviewer
+name: wp-architecture-reviewer
 description: WordPress architecture-focused code review for hooks, coding standards, extensibility, backwards compatibility, and design patterns
 model: inherit
 color: blue
@@ -73,9 +73,9 @@ When reviewing public open-source projects (WooCommerce, WooPayments, WordPress,
 Code must work with other plugins, themes, and WordPress core. Extensibility and compatibility are not optional—they're architectural requirements.
 
 **The Ecosystem Test:**
-For every public-facing value or action, ask:
-1. Can another plugin modify this? (Is there a filter?)
-2. Can another plugin react to this? (Is there an action?)
+For public APIs and significant actions, ask:
+1. Can another plugin modify public API outputs? (Filter at boundaries, not internals)
+2. Can another plugin react to significant events? (Actions at lifecycle points)
 3. Does the naming avoid global conflicts? (Prefixed/namespaced?)
 4. Will this break existing code? (Backwards compatible?)
 
@@ -93,21 +93,17 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
 
 1. **Hooks System Violations**
    ```php
-   // PROBLEMATIC - Hardcoded behavior, no extensibility
-   function get_price() {
-       return $this->base_price * 1.2; // Tax hardcoded!
-   }
+   // PROBLEMATIC - Removing core hooks without justification
+   remove_filter( 'the_content', 'wpautop' );
 
-   // CORRECT - Filterable
-   function get_price() {
-       $price = $this->base_price * 1.2;
-       return apply_filters( 'my_plugin_price', $price, $this );
-   }
+   // PROBLEMATIC - Wrong priority breaking expected order
+   add_filter( 'wc_price', 'my_modifier', 1 ); // Too early, breaks other plugins
    ```
-   - Missing filters for output values
-   - Missing actions at key lifecycle points
    - Removing core/other plugin hooks without good reason
    - Wrong hook priority breaking expected order
+   - Missing actions at **significant lifecycle points** (order completed, user registered, etc.)
+
+   **Note on filters:** Not every output needs a filter. See HIGH section for filter guidance.
 
 2. **Direct Database Access When APIs Exist**
    ```php
@@ -162,13 +158,32 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
 
 ### HIGH (Maintainability issues)
 
-1. **WPCS Violations**
+1. **Missing Filters at Public API Boundaries**
+   ```php
+   // Consider adding filter - public API return value
+   function get_price() {
+       $price = $this->base_price * 1.2;
+       return apply_filters( 'my_plugin_price', $price, $this );
+   }
+   ```
+   **When filters ARE needed:**
+   - Public API return values (methods other code will call)
+   - User-facing outputs (displayed text, formatted values)
+   - Configurable values that site owners might customize
+
+   **When filters are NOT needed:**
+   - Internal helper methods (private/protected)
+   - Intermediate calculations within a function
+   - Values already derived from filterable sources
+   - Simple getters returning stored data unchanged
+
+2. **WPCS Violations**
    - Missing Yoda conditions
    - Incorrect spacing/indentation
    - Missing documentation blocks
    - Non-standard naming conventions
 
-2. **Poor Hook Design**
+3. **Poor Hook Design**
    ```php
    // PROBLEMATIC - Filter doesn't pass enough context
    apply_filters( 'my_filter', $value );
@@ -180,7 +195,7 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
    - Actions missing relevant objects
    - Inconsistent hook naming (mixing `my-plugin` and `my_plugin`)
 
-3. **Tight Coupling**
+4. **Tight Coupling**
    ```php
    // PROBLEMATIC - Direct class instantiation
    class OrderProcessor {
@@ -200,7 +215,7 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
    - Code that can't be tested in isolation
    - Features that can't be disabled/replaced
 
-4. **Missing Internationalization**
+5. **Missing Internationalization**
    ```php
    // PROBLEMATIC
    echo 'Settings saved';
@@ -249,11 +264,13 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
 
 ## Extensibility Checklist
 
-### For Each Public-Facing Value:
+### For Public API Return Values:
 ```
-□ Is there a filter to modify it?
-□ Does the filter pass enough context?
-□ Is the filter documented?
+□ Is this a public API that other code will call? If yes:
+  □ Is there a filter to modify the return value?
+  □ Does the filter pass enough context?
+  □ Is the filter documented?
+□ If internal/private helper, filter NOT required
 ```
 
 ### For Each Significant Action:
@@ -295,7 +312,7 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
 ### Critical Issues
 | Issue | Location | Impact | Recommendation |
 |-------|----------|--------|----------------|
-| Missing filter | price.php:42 | Not extensible | Add apply_filters() |
+| Unprefixed function | helpers.php:42 | Global collision | Add plugin prefix |
 
 ### High Impact
 ...
@@ -319,14 +336,18 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
 |---------|-------------------|-----------|
 | Unprefixed function/class | Global namespace collision | `function get_settings()` without prefix |
 | Removed public API | Breaks dependent code | Methods/hooks removed without deprecation |
-| Hardcoded output value | Not extensible | Return without `apply_filters()` |
 | Direct DB write to core tables | Bypasses WordPress APIs | `$wpdb->insert()` to wp_posts/options |
+
+**HIGH—review but don't block:**
+| Pattern | When To Flag | When To Skip |
+|---------|--------------|--------------|
+| Missing filter on return value | Public API, user-facing output | Internal/private helpers, intermediate calculations |
 
 **Architecture Verification:**
 Before approving any public-facing code:
 ```
 □ Functions/classes prefixed or namespaced?
-□ Output values filterable?
+□ Public API return values filterable? (internal helpers exempt)
 □ Key events have action hooks?
 □ Removed APIs have deprecation path?
 □ User strings translatable?

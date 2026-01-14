@@ -584,7 +584,7 @@ For larger or sensitive PRs, specialists run in parallel and their findings are 
 | Large (500+ lines) | `pr-reviewer` + all specialists | Parallel deep analysis |
 | Security-sensitive | `pr-reviewer` + `security-reviewer` + `patterns-reviewer` | Auth, payments, user data |
 | Database-heavy | `pr-reviewer` + `performance-reviewer` + `patterns-reviewer` | Queries, migrations |
-| API/hooks changes | `pr-reviewer` + `architecture-reviewer` + `patterns-reviewer` | Public interfaces |
+| API/hooks changes | `pr-reviewer` + `wp-architecture-reviewer` + `patterns-reviewer` | Public interfaces |
 
 #### Specialist Agents
 
@@ -592,7 +592,7 @@ For larger or sensitive PRs, specialists run in parallel and their findings are 
 |-------|-------------|
 | `security-reviewer` | XSS, SQL injection, CSRF/nonces, capabilities, sanitization/escaping |
 | `performance-reviewer` | N+1 queries, caching/transients, autoloaded options, query optimization |
-| `architecture-reviewer` | Hooks/extensibility, coding standards, backwards compatibility, i18n |
+| `wp-architecture-reviewer` | Hooks/extensibility, coding standards, backwards compatibility, i18n |
 | `patterns-reviewer` | Existing patterns, git history precedents, naming consistency, consolidation |
 
 #### Dispatch Order
@@ -627,7 +627,7 @@ Task tool (parallel - single message with multiple calls):
     Git Range: <baseRefName>..<headRefName>
     Focus: N+1 queries, caching, autoloaded options, WP_Query
 
-  subagent_type: pirategoat-tools:architecture-reviewer
+  subagent_type: pirategoat-tools:wp-architecture-reviewer
   prompt: |
     PR ID: <PR_NUMBER>
     Output Directory: /tmp/pr-review-<PR_NUMBER>

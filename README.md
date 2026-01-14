@@ -56,7 +56,7 @@ Specialized review agents for the Task tool:
 | **pr-reviewer** | Generalist PR reviewer - validates code changes against stated goals |
 | **security-reviewer** | WordPress security review (XSS, SQL injection, CSRF/nonces, capabilities, sanitization/escaping) |
 | **performance-reviewer** | WordPress performance review (N+1 queries, caching/transients, autoloaded options, WP_Query) |
-| **architecture-reviewer** | WordPress architecture review (hooks/extensibility, WPCS, backwards compatibility, i18n) |
+| **wp-architecture-reviewer** | WordPress architecture review (hooks/extensibility, WPCS, backwards compatibility, i18n) |
 | **patterns-reviewer** | Explores codebase and git history for existing patterns, ensures consistency |
 | **gemini-reviewer** | Cross-validates PR changes using Google Gemini CLI |
 | **codex-reviewer** | Cross-validates PR changes using OpenAI Codex CLI |
