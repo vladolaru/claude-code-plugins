@@ -5,6 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-01-14
+
+### Added
+
+- `architecture-reviewer` agent - General-purpose software architecture code review
+  - Leverages software-architecture skill for comprehensive pattern knowledge
+  - Reviews: Design patterns, SOLID principles, coupling/cohesion, architectural code smells
+  - Works with any codebase: PHP, JavaScript, TypeScript, Python, Java, etc.
+  - Analyzes: God objects, tight coupling, SOLID violations, design pattern opportunities
+  - Provides: Specific recommendations with file/line references, pattern implementation guides
+  - Prioritizes by impact: Critical (blocks changes) → Important (creates debt) → Nice-to-have
+  - Includes: Rule of three, YAGNI principles, over-engineering detection, testability analysis
+  - Output: Structured markdown with executive summary, SOLID violations, pattern opportunities, prioritized recommendations
+  - Complements wp-architecture-reviewer (WordPress-specific) for general architectural analysis
+  - References specific pattern docs (e.g., `patterns/behavioral/strategy.md`) for implementation
+
 ## [1.7.0] - 2026-01-14
 
 ### Added
