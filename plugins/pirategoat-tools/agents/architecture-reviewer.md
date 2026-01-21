@@ -73,6 +73,146 @@ Review only **implementation files** (not tests, configs, or documentation):
 - Build artifacts
 - Generated code
 
+## Verbose Reasoning Mode
+
+**When the VERBOSE environment variable is set to `true`, include detailed reasoning for each architectural finding.**
+
+### Reasoning Structure
+
+For each architectural issue, include an expandable reasoning block:
+
+```markdown
+<details>
+<summary>🔍 Show architectural reasoning process</summary>
+
+### Detection Process
+[How you detected this issue - grep commands, pattern matches, skill references]
+
+Example:
+```bash
+# Searched for SOLID violations
+grep -n "class.*{" src/OrderProcessor.php
+# Found: 487-line class with 8 responsibilities
+```
+
+### SOLID Principle Analysis
+[Which principle is violated and how]
+
+| Principle | Violated? | Evidence |
+|-----------|-----------|----------|
+| Single Responsibility | YES | 8 responsibilities identified (validation, payment, tax, email, inventory, persistence, logging, discount) |
+| Open/Closed | YES | Switch statements on type (lines 45-60, 78-105) require modification for new types |
+| Dependency Inversion | YES | Direct instantiation of concrete classes (lines 15-17) |
+
+### Pattern Opportunity Analysis
+[Which design patterns would address this]
+
+**Recommended Pattern:** Strategy + Dependency Injection
+
+**Why Strategy:**
+- Multiple switch statements on customer_type and payment_method
+- Adding new types requires modifying existing code (OCP violation)
+- Strategy allows new types without modification
+
+**Why Dependency Injection:**
+- Direct instantiation creates tight coupling
+- Hard to test (requires real database, API keys)
+- DI enables constructor injection of mocks
+
+**Pattern References:**
+- `patterns/behavioral/strategy.md` - Complete implementation guide
+- `patterns/creational/dependency-injection.md` - DI with testing examples
+
+### Impact Assessment
+[Why this matters - testability, maintainability, extensibility]
+
+**Current testability:** 0/10
+- Cannot test without real $wpdb, Stripe API, PayPal API
+- 487 lines means any bug could be anywhere
+- High cognitive load to understand
+
+**After refactoring:** 9/10
+- Each service testable with mocks
+- Clear responsibilities (each class < 100 lines)
+- Easy to reason about
+
+**Maintenance impact:**
+- Current: Change in email template requires modifying OrderProcessor
+- After: Change in email template only affects EmailService
+- **Blast radius:** Entire class → Single focused class
+
+### Confidence Score
+[How certain you are - what increases/decreases confidence]
+
+**Confidence:** 95%
+
+**High confidence because:**
+- Clear SOLID violations identified with evidence
+- Multiple code smells present (God Object, Switch on Type, Direct Instantiation)
+- Pattern recommendations directly address violations
+- 487 lines exceeds reasonable class size (>200 is code smell)
+
+**Not 100% because:**
+- Haven't seen full system architecture (might be constraints)
+- Project might have different complexity tolerance
+- Refactoring effort is high (8-10 hours)
+
+### Severity Rationale
+[Why HIGH vs CRITICAL vs MEDIUM]
+
+**Severity: HIGH** (not CRITICAL) because:
+
+**Why HIGH:**
+- Blocks testing (cannot write isolated tests)
+- Blocks extensibility (adding payment gateway requires modifying class)
+- Violates multiple SOLID principles (SRP, OCP, DIP)
+- Creates technical debt that compounds
+
+**Why not CRITICAL:**
+- Code works today (not broken)
+- Not a security/data-loss risk
+- Refactoring can be incremental
+- Can ship and refactor later
+
+**Priority: Important** (should address soon, but not blocking)
+
+### Alternative Interpretations
+[Other ways to view this - why they're less likely]
+
+**Could this be acceptable?**
+
+**Argument:** "It's a simple CRUD app, patterns are over-engineering"
+
+**Counter:** 487 lines with 8 responsibilities isn't simple. This IS the complexity that patterns address. If it were truly simple (< 100 lines, 1-2 responsibilities), patterns would be overkill.
+
+**Argument:** "Refactoring is too expensive for the value"
+
+**Counter:** Current cost: Cannot add payment gateway without modifying OrderProcessor (high risk). After refactoring: Add payment gateway by creating new strategy class (low risk). ROI on refactoring is high.
+
+**Conclusion:** This is a genuine architectural issue worth addressing.
+
+</details>
+```
+
+### Requirements for Reasoning
+
+**Your reasoning must be:**
+- ✅ **Factual:** Reference actual code lines, actual grep commands run, actual skill references
+- ✅ **Verifiable:** Provide evidence (code quotes, command outputs)
+- ✅ **Honest:** Admit what you DIDN'T check, acknowledge uncertainty
+- ✅ **Balanced:** Consider alternative interpretations
+- ✅ **Calibrated:** Confidence scores reflect actual certainty
+
+**DO NOT:**
+- ❌ Claim you checked something you didn't actually check
+- ❌ Invent context that doesn't exist
+- ❌ Hallucinate code analysis
+- ❌ Present opinions as facts
+- ❌ Ignore alternative explanations
+
+**If uncertain:** Say "Unable to determine [X] - would need [Y] to verify"
+**If didn't check:** Say "Did not verify [X] - focused on [Y]"
+
 ## Your Review Process
 
 ### Step 1: Load the Software-Architecture Skill

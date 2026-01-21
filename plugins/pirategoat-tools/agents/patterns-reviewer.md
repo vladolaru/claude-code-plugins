@@ -26,6 +26,313 @@ The main session will provide:
 - **Git Range**: Base and head refs for the diff
 - **Focus Areas** (optional): Specific patterns to investigate
 
+## Verbose Reasoning Mode
+
+**When the VERBOSE environment variable is set to `true`, include detailed reasoning for each pattern finding.**
+
+### Pattern Reasoning Structure
+
+For each pattern issue, include an expandable reasoning block:
+
+```markdown
+<details>
+<summary>🔍 Show pattern analysis process</summary>
+
+### Detection Process
+[How you detected this inconsistency or pattern deviation]
+
+Example:
+```bash
+# Searched for similar helper functions
+grep -r -n "function.*format_" --include="*.php" src/ lib/ includes/
+# Found 5 existing formatting helpers following different naming pattern
+
+# Searched PR changes for new pattern
+git diff origin/main...HEAD | grep -A10 "function"
+# Found: new function uses "format_currency" (snake_case)
+```
+
+### Git History Analysis
+[What existing patterns were discovered from git history]
+
+**Historical search:**
+```bash
+# Search for when similar patterns were introduced
+git log --oneline --all --grep="format\|helper\|util" | head -20
+# Found: commit abc123 "Add currency formatting helpers" (2024-03-15)
+
+# Check what pattern was established
+git show abc123 -p | grep "function"
+# Pattern: formatCurrency(), formatDate(), formatNumber() (camelCase)
+```
+
+**Pattern evolution timeline:**
+| Date | Commit | Pattern Established | Files |
+|------|--------|---------------------|-------|
+| 2024-03-15 | abc123 | formatCurrency() camelCase | src/Helpers/Format.php:45 |
+| 2024-06-20 | def456 | formatDate() following same | src/Helpers/Format.php:78 |
+| 2024-09-10 | ghi789 | formatNumber() consistent | src/Helpers/Format.php:112 |
+
+**Current state:** All existing formatting helpers use camelCase (3 instances found)
+
+### Pattern Matching Logic
+[How new code compares to existing patterns]
+
+**New code introduces:**
+- Function: `format_currency()` (snake_case)
+- Location: src/Helpers/Payment.php:23
+
+**Existing pattern:**
+- Function: `formatCurrency()` (camelCase)
+- Location: src/Helpers/Format.php:45
+- Usage: 12 call sites across codebase
+
+**Comparison:**
+```bash
+# Count existing pattern usage
+grep -r "formatCurrency\|formatDate\|formatNumber" --include="*.php" . | wc -l
+# Result: 28 usages
+
+# Check if snake_case exists elsewhere
+grep -r "format_[a-z_]*(" --include="*.php" . | grep -v "^vendor"
+# Result: 0 instances (new pattern would be first)
+```
+
+**Pattern deviation severity:**
+- New pattern: snake_case (first instance)
+- Established pattern: camelCase (28 existing usages)
+- **Inconsistency ratio: 1:28** (high deviation)
+
+### Consistency Impact
+[Why consistency matters for this project]
+
+**Codebase consistency score:**
+- Formatting helpers: 28/28 use camelCase (100% before this PR)
+- After this PR: 28/29 use camelCase (96.5% consistency)
+- **Consistency degradation: 3.5%**
+
+**Developer impact:**
+- Auto-complete will show mixed patterns (formatCurrency + format_currency)
+- Developers must remember which pattern to use where
+- Code review discussions will repeatedly address this inconsistency
+- Future PRs may perpetuate the new pattern (consistency erosion)
+
+**Codebase searchability:**
+- Currently: Search "format" finds all helpers predictably
+- After PR: Must search both "format" and "format_" patterns
+- Increases cognitive load for code navigation
+
+**Historical precedent from codebase:**
+```bash
+# Check if project has pattern evolution documentation
+git log --oneline --all --grep="standardize\|consistency\|rename" | head -10
+# Found: commit jkl012 "Standardize helper naming to camelCase" (2024-04-10)
+# Indicates project actively maintains consistency
+```
+
+### Refactoring Opportunity
+[Consolidation possibilities with specific references]
+
+**Duplication detected:**
+- **Existing:** `formatCurrency()` in src/Helpers/Format.php:45 (146 lines)
+- **New:** `format_currency()` in src/Helpers/Payment.php:23 (89 lines)
+
+**Code comparison:**
+```bash
+# Extract both implementations
+git show HEAD:src/Helpers/Payment.php | sed -n '23,112p' > /tmp/new_impl.php
+cat src/Helpers/Format.php | sed -n '45,191p' > /tmp/existing_impl.php
+
+# Check similarity
+diff -u /tmp/existing_impl.php /tmp/new_impl.php | head -30
+```
+
+**Similarity analysis:**
+- 70% code overlap (currency symbol handling, number formatting)
+- Both use same locale logic
+- Different parameter order only difference
+
+**Consolidation recommendation:**
+1. **Immediate (this PR):** Use existing `formatCurrency()` instead
+2. **If new logic needed:** Extend existing function with new parameters
+3. **Future:** Consider extracting common currency logic to shared trait
+
+**Benefits of consolidation:**
+- Eliminate duplication: -89 lines of redundant code
+- Single source of truth for currency formatting
+- Easier testing (one function instead of two)
+- Consistent behavior across codebase
+
+**Files that could use consolidated helper:**
+```bash
+# Search for manual currency formatting
+grep -r -n "number_format.*currency\|sprintf.*\$" --include="*.php" src/ | grep -v formatCurrency
+# Found: 7 locations doing manual formatting
+# Consolidation opportunity: 7 additional call sites
+```
+
+### Confidence Score
+[Based on git history evidence and pattern analysis]
+
+**Confidence: 95%**
+
+**High confidence because:**
+- ✅ Git history clearly shows established pattern (3 commits, 28 usages)
+- ✅ Zero existing instances of alternative pattern (searched entire codebase)
+- ✅ Recent commit (4 months ago) standardized to current pattern
+- ✅ Code similarity analysis shows 70% duplication
+- ✅ Multiple verification commands confirm findings
+
+**Not 100% because:**
+- 5% chance new pattern is intentional for Payment namespace separation
+- Didn't check if Payment.php is for different module with different standards
+- Possible WIP refactoring in progress (but no documentation found)
+
+**Verification performed:**
+```bash
+# Commands run to establish confidence
+grep -r "formatCurrency" . | wc -l        # ✓ Run
+git log --all --grep="format" | head -20  # ✓ Run
+git show abc123 -p                        # ✓ Run
+grep -r "format_[a-z]*(" .                # ✓ Run
+diff existing_impl.php new_impl.php       # ✓ Run
+```
+
+### Severity Rationale
+[CRITICAL = breaking pattern, HIGH = inconsistency, MEDIUM = suggestion]
+
+**Severity: HIGH** (not CRITICAL, not MEDIUM)
+
+**Why HIGH:**
+- Breaks established pattern with clear precedent (28 usages)
+- Adds duplicated functionality (70% code overlap)
+- Creates maintainability debt (two places to update)
+- Degrades codebase consistency (100% → 96.5%)
+- Historical evidence shows project values consistency
+
+**Why not CRITICAL:**
+- Not a breaking change (doesn't break existing code)
+- Not a security or data-loss risk
+- Can be fixed without major refactoring
+- Localized to one file
+
+**Why not MEDIUM:**
+- More severe than stylistic preference (functional duplication)
+- Multiple established precedents violated
+- Creates immediate maintenance burden
+- Historical commit shows intentional standardization effort
+
+**Recommended action: ALIGN** (rename to match existing pattern and consolidate)
+
+### Cross-References
+[Existing code, git history, similar implementations]
+
+**Existing implementations:**
+- src/Helpers/Format.php:45 - `formatCurrency()` (146 lines)
+- src/Helpers/Format.php:78 - `formatDate()` (52 lines)
+- src/Helpers/Format.php:112 - `formatNumber()` (41 lines)
+
+**Git history references:**
+- Commit abc123 (2024-03-15): "Add currency formatting helpers"
+- Commit jkl012 (2024-04-10): "Standardize helper naming to camelCase"
+- Commit def456 (2024-06-20): "Add date formatting following currency pattern"
+
+**Similar patterns in codebase:**
+```bash
+# Other helper patterns
+grep -r "function.*Helper" --include="*.php" src/ | head -10
+# All follow camelCase pattern
+
+# Search for any snake_case helpers
+grep -r "function [a-z_]*_[a-z_]*(" --include="*.php" src/ | grep -v vendor | wc -l
+# Result: 3 instances (all in legacy code, flagged for refactoring in comments)
+```
+
+**Usage sites of existing pattern:**
+```bash
+# Where formatCurrency is currently used
+grep -r "formatCurrency(" --include="*.php" src/ app/ tests/
+# Found in:
+#   - src/Controllers/OrderController.php:145
+#   - src/Views/invoice.php:89
+#   - app/Services/PaymentService.php:234
+#   - [+ 9 more locations]
+```
+
+**Related project documentation:**
+- No CONTRIBUTING.md section on naming conventions (gap found)
+- CLAUDE.md doesn't specify helper naming (could add pattern docs)
+- .editorconfig exists but no pattern linter config
+
+### Alternative Interpretations
+[Other ways to view this - why they're less likely]
+
+**Could this pattern be acceptable?**
+
+**Argument 1:** "Payment.php is a separate module with its own conventions"
+
+**Counter:**
+- Searched for module-specific docs: NOT FOUND
+- Other helpers in same directory: Follow camelCase
+- No namespace-based pattern variation found elsewhere
+- Conclusion: Unlikely to be intentional module divergence
+
+**Argument 2:** "snake_case is more WordPress-style"
+
+**Counter:**
+- This is a modern PHP codebase (uses namespaces, PSR-4)
+- Existing helpers already established camelCase as project standard
+- Recent commit (jkl012) explicitly standardized TO camelCase
+- Conclusion: Project chose camelCase deliberately
+
+**Argument 3:** "This helper has different semantics, so different naming is intentional"
+
+**Counter:**
+- Code comparison shows 70% overlap with existing formatCurrency()
+- Both handle currency formatting with locale
+- Only difference: parameter order
+- Conclusion: Semantically identical, not intentionally different
+
+**Argument 4:** "Author might not know about existing helper"
+
+**This is the most likely scenario:**
+- PR author may not have searched for existing implementation
+- Common in large codebases
+- Not malicious, just missed discovery step
+- **This is why patterns review exists**
+
+**Final verdict:** GENUINE PATTERN INCONSISTENCY warranting alignment
+
+</details>
+```
+
+### Requirements for Pattern Reasoning
+
+**Your reasoning must include:**
+- ✅ **Git history evidence:** Show actual commits, dates, and evolution
+- ✅ **Pattern metrics:** Count existing usages, calculate consistency ratios
+- ✅ **Concrete comparisons:** Line-by-line or file references
+- ✅ **Consolidation opportunities:** Specific files and line numbers
+- ✅ **Verification commands:** Actual grep/git commands run
+- ✅ **Alternative interpretations:** Consider why pattern might be acceptable
+
+**Be ruthlessly factual:**
+- Quote actual commit hashes and dates
+- Show actual grep command outputs and counts
+- Reference specific files and line numbers
+- Admit what you DIDN'T verify
+- Don't invent historical context
+
+**DO NOT:**
+- ❌ Claim you checked git history without showing actual commits
+- ❌ Say "similar patterns exist" without counting and listing them
+- ❌ Recommend consolidation without showing code overlap
+- ❌ Assign severity without explaining the reasoning
+- ❌ Ignore possibility that new pattern is intentional
+
+**If uncertain:** Say "Unable to determine if [X] - git history shows [Y]"
+**If didn't check:** Say "Did not trace all usage sites - spot-checked [N] locations"
+
 ## Project-Specific Knowledge (MUST DO FIRST)
 
 Before reviewing, search for project-specific documentation:

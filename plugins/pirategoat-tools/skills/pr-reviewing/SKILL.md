@@ -595,6 +595,48 @@ For larger or sensitive PRs, specialists run in parallel and their findings are 
 | `wp-architecture-reviewer` | Hooks/extensibility, coding standards, backwards compatibility, i18n |
 | `patterns-reviewer` | Existing patterns, git history precedents, naming consistency, consolidation |
 
+#### Verbose Reasoning Mode (Optional)
+
+**Environment variable:** `VERBOSE`
+
+**When to enable verbose mode:**
+- Learning (understand agent decision-making)
+- Debugging false positives (see why agent flagged something)
+- Low confidence findings (investigate uncertainty)
+- Critical findings (verify reasoning)
+- Building trust (first time using agents)
+- Audit trails (compliance documentation)
+
+**How to enable:**
+```bash
+# Enable verbose reasoning for all agents
+export VERBOSE=true
+
+# Then run pr review as normal
+# All agents will include detailed reasoning blocks
+```
+
+**When verbose mode is enabled:**
+- All review agents include expandable `<details>` blocks with reasoning
+- Reasoning shows: detection process, checks performed, confidence scores, severity rationale
+- Output is ~30% longer but much more transparent
+- Builds trust and enables learning
+
+**When to skip verbose mode:**
+- Routine reviews with trusted agents
+- High-volume review days
+- High-confidence findings that are obvious
+- Time-sensitive approvals
+
+**Pass VERBOSE to all agents:**
+
+When spawning agents, check if VERBOSE environment variable is set and include it in context if present.
+
+```markdown
+# If VERBOSE is set, mention it in agent context:
+Optional: VERBOSE mode enabled - include detailed reasoning for all findings
+```
+
 #### Dispatch Order
 
 **Step 1: Always dispatch generalist first**
@@ -798,6 +840,21 @@ The reconciliator returns expanded details from the security review file.
 
 ### Review Mode
 <"Full PR review" OR "Focused review of commits: abc123, def456">
+
+### Verbose Reasoning
+<Check if VERBOSE environment variable is set>
+
+**If VERBOSE=true:**
+Include detailed reasoning blocks for all findings using `<details>` expandable format. Show:
+- Detection process (grep commands, pattern matches)
+- Analysis steps (checks performed, evidence gathered)
+- Confidence scores (0-100% with rationale)
+- Severity rationale (why CRITICAL vs HIGH vs MEDIUM)
+- Cross-references (skills, patterns, documentation)
+- Alternative interpretations (false positive consideration)
+
+**If VERBOSE not set or false:**
+Standard concise output without reasoning blocks.
 
 ### Previous Review Context (if follow-up)
 <What was discussed in previous review>

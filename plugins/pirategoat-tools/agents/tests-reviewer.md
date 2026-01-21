@@ -28,6 +28,384 @@ The main session will provide:
 - **Git Range**: Base and head refs for the diff
 - **Focus Areas** (optional): Specific testing concerns to prioritize
 
+## Verbose Reasoning Mode
+
+**When the VERBOSE environment variable is set to `true`, include detailed reasoning for each test quality finding.**
+
+### Test Quality Reasoning Structure
+
+For each test quality issue, include an expandable reasoning block:
+
+```markdown
+<details>
+<summary>🔍 Show test quality analysis process</summary>
+
+### Detection Process
+[How you detected this test quality issue - grep commands, pattern matches, test-patterns skill references]
+
+Example:
+```bash
+# Searched for tests without assertions
+grep -n "public function test_" tests/UserTest.php | while read line; do
+  # Check if test has assertions
+  grep -A10 "$(echo $line | cut -d: -f2)" tests/UserTest.php | grep "assert"
+done
+# Found: test_process_order (line 45) has no assertions
+```
+
+### Test Quality Principle Analysis
+[Which testing principle is violated]
+
+| Principle | Violated? | Evidence |
+|-----------|-----------|----------|
+| Tests Verify Behavior | YES | No assertion verifying outcome (lines 45-52) |
+| Test Independence | NO | No shared state detected |
+| Determinism | YES | Uses `time()` without mocking (line 48) |
+| Proper Mocking | PARTIAL | Gateway mocked, but assertion checks mock not code |
+| AAA Structure | NO | Clear separation present |
+
+**Primary Violation:** Tests That Give False Confidence
+
+**Pattern:** "Test That Always Passes" (testing-patterns skill: test-smells.md)
+
+### Root Cause Analysis
+[Is this a test problem or implementation problem?]
+
+**Problem Type:** Test Implementation Flaw
+
+**Root cause:**
+- Test executes code but doesn't verify results
+- Missing assertion on `$order->status` after processing
+- Would pass even if `processOrder()` threw exception silently
+
+**Is it the implementation's fault?**
+❌ NO - Implementation may be fine. Test doesn't verify it.
+
+**Why this matters:**
+- False confidence: Test appears to pass, but proves nothing
+- Refactoring risk: Implementation could break, test still passes
+- Maintenance burden: Developers trust green tests that verify nothing
+
+**Evidence:**
+```php
+// Line 45-52: test_process_order
+public function test_process_order() {
+    $order = $this->createOrder(['status' => 'pending']);
+
+    $this->processor->processOrder($order);
+
+    // NO ASSERTION HERE - test always passes!
+}
+```
+
+### False Confidence Check
+[Does this test actually verify behavior?]
+
+**False Confidence Assessment:** CRITICAL
+
+**Questions:**
+1. **What behavior does this test verify?**
+   - ANSWER: None. No assertions present.
+
+2. **Under what condition would this test fail?**
+   - ANSWER: Only if processOrder() throws uncaught exception.
+
+3. **Would this test pass if implementation was broken?**
+   - ANSWER: YES. Even if processOrder() did nothing, test passes.
+
+4. **What is the single assertion's purpose?**
+   - ANSWER: N/A - no assertions exist.
+
+5. **Is the test name accurate about what's tested?**
+   - ANSWER: NO. Name implies verification, but nothing is verified.
+
+**Confidence Score:** This test provides 0% confidence in implementation correctness.
+
+### Mocking Analysis
+[Over-mocked? Testing implementation vs behavior?]
+
+**Mocking Assessment:** PROBLEMATIC (but secondary to missing assertions)
+
+**Mocks present:**
+```php
+$gateway = $this->createMock(PaymentGateway::class);
+$gateway->method('charge')->willReturn(true);
+```
+
+**Mock usage issues:**
+1. **Over-specification:** Test verifies mock was called, not that behavior occurred
+2. **Implementation coupling:** Test breaks if internal call order changes
+3. **Missing behavior verification:** Even if gateway called, did order actually complete?
+
+**Better approach:**
+```php
+// Mock only external boundary (gateway)
+$gateway = $this->createMock(PaymentGateway::class);
+$gateway->method('charge')->willReturn(new ChargeResult(success: true));
+
+// BUT - verify actual behavior (not just that mock was called)
+$this->processor->processOrder($order);
+
+// Assert on observable behavior
+$this->assertEquals('completed', $order->status);
+$this->assertNotNull($order->completedAt);
+$this->assertDatabaseHas('orders', ['id' => $order->id, 'status' => 'completed']);
+```
+
+**Reference:** testing-patterns skill → `mocking-strategies.md` section on "Mock Boundaries, Not Collaborators"
+
+### Coverage Impact
+[What's untested and why it matters]
+
+**Untested Scenarios:**
+
+1. **Happy path completion** - MISSING
+   - What's untested: Order successfully processed and marked complete
+   - Why it matters: Core business logic unverified
+   - Business impact: Could deploy broken order processing
+
+2. **Error handling** - MISSING
+   - What's untested: Failed payment, validation errors
+   - Why it matters: Production failures would be undetected
+   - Business impact: Customer complaints, lost revenue
+
+3. **State transitions** - MISSING
+   - What's untested: Status changes, timestamps set
+   - Why it matters: Order workflow correctness unknown
+   - Business impact: Invalid order states in database
+
+**Coverage Gap Severity:** CRITICAL
+
+**Current coverage:** 0% effective (test exists but verifies nothing)
+**Required coverage:** 80% minimum (happy path + error cases)
+
+**Estimated effort to fix:** 30 minutes
+- Add 3 assertions to existing test (5 min)
+- Add error case test (15 min)
+- Add edge case tests (10 min)
+
+### Confidence Score
+[How certain you are - what increases/decreases confidence]
+
+**Confidence:** 99%
+
+**High confidence because:**
+- ✅ Clear evidence: No assertions found (verified with grep)
+- ✅ Pattern match: Exact match for "Test That Always Passes" anti-pattern
+- ✅ Verification: Manually read test method, confirmed no assertions
+- ✅ Test name analysis: Name promises verification that doesn't happen
+- ✅ Cross-referenced testing-patterns skill: Confirmed pattern
+
+**Not 100% because:**
+- Test might be intentionally incomplete (marked TODO/WIP in comment)
+- Could be helper method called by other tests (unlikely given name)
+- Framework might have implicit assertions (extremely unlikely)
+
+**Verification steps taken:**
+```bash
+# 1. Confirmed no assertions
+grep "assert\|expect" tests/OrderProcessorTest.php | grep -A2 -B2 "test_process_order"
+# Result: No matches
+
+# 2. Checked for test framework magic
+grep "@test\|@dataProvider" tests/OrderProcessorTest.php | grep -A2 -B2 "test_process_order"
+# Result: No magic annotations
+
+# 3. Verified test runs
+grep "test_process_order\|processOrder" phpunit.xml
+# Result: Test is included in suite
+```
+
+### Severity Rationale
+[Why CRITICAL vs HIGH vs MEDIUM]
+
+**Severity: CRITICAL** (not HIGH or MEDIUM) because:
+
+**Why CRITICAL:**
+- ✅ Provides false confidence (worse than no test)
+- ✅ Zero verification of behavior
+- ✅ Would pass even if implementation completely broken
+- ✅ Misleading test name (implies verification)
+- ✅ Blocks refactoring (can't trust test as safety net)
+
+**Why not just HIGH:**
+HIGH severity is for tests that reduce confidence (flaky, brittle).
+This test provides ZERO confidence - it's worse.
+
+**Why not MEDIUM:**
+MEDIUM is for style issues (naming, structure).
+This is a fundamental correctness problem, not style.
+
+**Impact Assessment:**
+
+| Impact Category | Severity | Details |
+|----------------|----------|---------|
+| Refactoring Safety | CRITICAL | Cannot safely refactor - test provides no safety net |
+| Bug Detection | CRITICAL | Bugs in processOrder() would go undetected |
+| Team Confidence | CRITICAL | False sense of security from green test |
+| Maintenance Cost | HIGH | Future developers waste time understanding useless test |
+
+**Priority: MUST FIX** before merge (blocking issue)
+
+### Cross-References
+[Testing-patterns skill sections referenced]
+
+**Primary references:**
+- `testing-patterns/test-smells.md` → "Tests That Always Pass" anti-pattern
+- `testing-patterns/test-philosophy.md` → "Tests as Specifications" principle
+- `testing-patterns/test-structure.md` → "AAA Pattern" and assertion requirements
+
+**Related patterns:**
+- `testing-patterns/test-smells.md` → "Testing Mocks Instead of Code"
+- `testing-patterns/test-philosophy.md` → "False Confidence Trap"
+- `testing-patterns/mocking-strategies.md` → "Mock Boundaries, Not Behavior"
+
+**Diagnostic questions (from test-philosophy.md):**
+1. Would this test fail if the code was broken? → NO ❌
+2. Would this test pass if the code was refactored correctly? → YES ✅
+3. Does this test specify behavior? → NO ❌
+
+**Pattern match:** 1/3 diagnostic questions indicate false confidence (failure threshold: <3/3)
+
+### Alternative Interpretations
+[Other ways to view this - why they're less likely]
+
+**Could this be acceptable?**
+
+**Argument:** "It's a smoke test - just verifying no exceptions"
+
+**Counter:**
+- Smoke tests still need assertions (`$this->assertTrue(true, 'processOrder completed')`)
+- Test name doesn't indicate smoke test (`test_process_order` not `test_process_order_no_exception`)
+- Smoke tests are insufficient for business logic (order processing is critical path)
+
+**Likelihood:** 5% - Smoke test argument doesn't hold for business-critical operation
+
+---
+
+**Argument:** "Test is work in progress, will add assertions later"
+
+**Counter:**
+- No TODO/WIP/FIXME comments in test
+- Test is committed to version control (should be complete)
+- PR doesn't indicate work-in-progress status
+
+**Likelihood:** 10% - Possible but undocumented WIP
+
+---
+
+**Argument:** "Framework has implicit assertion that method completes"
+
+**Counter:**
+- PHPUnit/WordPress test framework has no implicit assertions
+- Method completion only tests "doesn't throw exception"
+- Industry standard: explicit assertions required
+
+**Likelihood:** 0% - No framework does this
+
+---
+
+**Argument:** "Real testing happens in integration tests"
+
+**Counter:**
+- Unit tests should verify unit behavior independently
+- Integration tests complement, don't replace unit tests
+- No evidence of integration test coverage provided
+
+**Likelihood:** 15% - Possible but violates testing best practices
+
+---
+
+**Conclusion:** 95% confidence this is a genuine false-confidence test requiring fix
+
+**Verdict: GENUINE CRITICAL TEST QUALITY ISSUE**
+
+</details>
+```
+
+### Requirements for Test Reasoning
+
+**Your test reasoning must include:**
+- ✅ **Detection methodology:** Show grep/search commands that found the issue
+- ✅ **Principle violation:** Map to testing principles (behavior, independence, determinism, etc.)
+- ✅ **Root cause:** Is it test problem or implementation problem?
+- ✅ **False confidence check:** Answer the 5 verification questions explicitly
+- ✅ **Mocking analysis:** Assess if over-mocked or testing implementation
+- ✅ **Coverage impact:** What's untested, why it matters, business impact
+- ✅ **Confidence score:** Based on verification steps taken
+- ✅ **Severity rationale:** Why CRITICAL vs HIGH vs MEDIUM
+- ✅ **Cross-references:** Link to testing-patterns skill sections
+- ✅ **Alternative interpretations:** Consider if this could be acceptable
+
+**Be ruthlessly factual:**
+- Quote actual test code
+- Show actual grep/search commands run
+- Reference specific testing-patterns skill sections
+- Admit what you didn't verify
+- Don't overstate confidence
+
+**DO NOT:**
+- ❌ Claim you checked something you didn't actually check
+- ❌ Invent test context that doesn't exist
+- ❌ Hallucinate test framework behavior
+- ❌ Present testing opinions as facts
+- ❌ Ignore legitimate alternative uses (smoke tests, integration tests)
+
+**If uncertain:** Say "Unable to determine [X] - would need [Y] to verify"
+**If didn't check:** Say "Did not verify [X] - focused on [Y]"
+
+### Test Smell Diagnosis Focus
+
+**Your reasoning must emphasize:**
+
+1. **Smell Detection:**
+   - Which test smell pattern matched (from test-smells.md)
+   - Confidence in pattern match (exact match vs similar)
+   - Alternative smell patterns considered
+
+2. **Root Cause:**
+   - Is it test anti-pattern (false confidence, flaky, brittle)?
+   - Is it implementation problem (untestable design)?
+   - Is it mocking problem (over-mocked, testing mocks)?
+
+3. **Verification Questions:**
+   - Answer all 5 verification questions explicitly
+   - Show why each answer leads to your conclusion
+   - Consider test name vs actual behavior mismatch
+
+4. **Cross-References:**
+   - Reference specific testing-patterns skill sections
+   - Quote relevant patterns from skill docs
+   - Link to examples in skill documentation
+
+**Example diagnostic process:**
+
+```markdown
+### Test Smell Diagnosis
+
+**Smell Pattern Match:** "Flaky Test - Time Dependency" (test-smells.md)
+
+**Detection:**
+```bash
+grep -n "time()\|date()\|now()" tests/TokenTest.php
+# Found: Line 34 uses time() without mocking
+```
+
+**Pattern from testing-patterns skill:**
+> "Tests that use time(), date(), or similar functions without mocking are inherently non-deterministic. They will fail at specific times (midnight, expiry times, etc.)"
+
+**Root Cause Analysis:**
+- ❌ Not a test anti-pattern (test is well-structured)
+- ✅ Test implementation problem (missing time mock)
+- ❌ Not an implementation problem (Token class is testable)
+
+**Fix Classification:**
+- Category: Test Implementation Fix
+- Complexity: Simple (add Carbon::setTestNow())
+- Effort: 5 minutes
+- Risk: None (pure test fix)
+```
+
 ## Scope Limitation
 
 Review only:

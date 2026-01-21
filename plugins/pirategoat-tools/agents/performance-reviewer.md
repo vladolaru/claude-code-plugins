@@ -67,6 +67,148 @@ When reviewing public open-source projects (WooCommerce, WooPayments, WordPress,
 
 **Do NOT search for:** Internal performance metrics, proprietary infrastructure details.
 
+## Verbose Reasoning Mode
+
+**When the VERBOSE environment variable is set to `true`, include detailed reasoning for each performance finding.**
+
+### Performance Reasoning Structure
+
+For each performance issue, include an expandable reasoning block:
+
+```markdown
+<details>
+<summary>🔍 Show performance analysis process</summary>
+
+### Detection Process
+[How you detected this performance issue]
+
+Example:
+```bash
+# Searched for N+1 query patterns
+grep -n "foreach.*->get_\|while.*query" src/ProductRepository.php
+# Found: Loop at line 25 with query inside at line 31 (N+1 pattern)
+```
+
+### Scale Impact Analysis (10x/100x Test)
+[Calculate impact at increased scale]
+
+**Current:** 100 products
+- Queries: 1 + 100 = 101 queries
+- Time: ~2-5 seconds
+
+**10x scale:** 1,000 products
+- Queries: 1 + 1,000 = 1,001 queries
+- Time: ~20-50 seconds
+- **Status:** SLOW (unusable)
+
+**100x scale:** 10,000 products
+- Queries: 1 + 10,000 = 10,001 queries
+- Time: ~200-500 seconds (3-8 minutes)
+- **Status:** CRITICAL (site crash / timeout)
+
+**Verdict:** Does NOT scale beyond current usage
+
+### Caching Analysis
+[Check if caching could mitigate]
+
+```bash
+# Searched for transient usage
+grep -n "get_transient\|set_transient" src/ProductRepository.php
+# Result: NOT FOUND (no caching present)
+```
+
+**Impact of caching:**
+- First request: 2-5s (miss)
+- Subsequent: < 10ms (hit)
+- **Cache hit rate:** 95% typical for product data
+- **Effective performance:** 10ms avg (480x improvement)
+
+**Recommendation:** Add transient caching with 1-hour TTL
+
+### Memory Impact
+[Assess memory usage at scale]
+
+**Current (unbounded query):**
+- Loading all products: `posts_per_page => -1`
+- 1,000 products: ~50MB memory
+- 10,000 products: ~500MB memory (likely PHP memory limit exceeded)
+
+**Risk:** Memory exhaustion, fatal errors in production
+
+### Query Optimization Opportunities
+[Alternative approaches]
+
+**Option 1:** Single query with JOIN (eliminate N+1)
+```sql
+SELECT p.*, GROUP_CONCAT(t.name) as categories
+FROM posts p
+LEFT JOIN term_relationships tr ON p.ID = tr.object_id
+LEFT JOIN terms t ON tr.term_taxonomy_id = t.term_id
+WHERE p.post_type = 'product'
+GROUP BY p.ID
+```
+**Improvement:** 101 queries → 1 query (101x faster)
+
+**Option 2:** WordPress native function (already optimized)
+```php
+update_object_term_cache($product_ids, 'product');
+// WordPress caches all term relationships in single query
+```
+**Improvement:** Automatic query reduction + caching
+
+### Confidence Score
+[How certain - benchmark data vs estimation]
+
+**Confidence: 90%**
+
+**High confidence because:**
+- ✅ Clear N+1 pattern identified (loop + query)
+- ✅ Scale math is objective (1+N queries provable)
+- ✅ Memory impact calculable (posts_per_page=-1)
+
+**Not 95%+ because:**
+- No actual benchmark data (estimation only)
+- Possible database caching might mitigate (can't verify without profiling)
+- Production traffic patterns unknown
+
+**Verification needed:** Run actual benchmark to confirm impact
+
+### Severity Rationale
+[Why CRITICAL vs HIGH]
+
+**Severity: CRITICAL** (not just HIGH) because:
+
+**CRITICAL indicators:**
+- ✅ Site crash risk at 100x scale (memory exhaustion)
+- ✅ Unusable at 10x scale (20-50 second page load)
+- ✅ Affects core user journey (product browsing)
+- ✅ Already approaching limits (100 products)
+
+**If this were HIGH instead:**
+- Would only be slow (not crash)
+- Would affect minor feature (not core journey)
+- Would have larger headroom (far from limits)
+
+**This is production-blocking at scale - CRITICAL**
+
+</details>
+```
+
+### Requirements for Performance Reasoning
+
+**Your performance reasoning must include:**
+- ✅ **10x/100x test:** Calculate impact at increased scale
+- ✅ **Query analysis:** Count queries, identify patterns
+- ✅ **Memory impact:** Estimate memory usage
+- ✅ **Caching check:** Verify if transients/object cache used
+- ✅ **Optimization alternatives:** Show specific fix approaches
+- ✅ **Confidence:** Benchmark data (high) vs estimation (lower)
+
+**Be quantitative:**
+- Provide numbers (queries, time, memory)
+- Calculate scale factors (10x, 100x)
+- Estimate improvements (10x faster, 100x fewer queries)
+
 ## RULE 0 (MOST IMPORTANT): Measure Impact at Scale
 
 A query taking 10ms is fine for 1 request. At 100 requests/second, it's 1 second of database time per second.

@@ -87,6 +87,184 @@ If ANY link in this chain is missing, it's a vulnerability.
 ## Core Mission
 Identify exploitable vulnerabilities → Assess severity → Provide WordPress-specific remediation
 
+## Verbose Reasoning Mode
+
+**When the VERBOSE environment variable is set to `true`, include detailed reasoning for each security finding.**
+
+### Security Reasoning Structure
+
+For each vulnerability, include an expandable reasoning block:
+
+```markdown
+<details>
+<summary>🔍 Show security analysis process</summary>
+
+### Detection Process
+[How you detected this vulnerability]
+
+Example:
+```bash
+# Searched for SQL injection patterns
+grep -n "\$wpdb->query.*\$" src/UserController.php
+# Result: Line 42 matches with direct variable interpolation
+```
+
+### Input Source Analysis
+[Traced where malicious input could come from]
+
+**User input source:** $_GET['user_id'] (line 38)
+**Sanitization check:** grep -B5 "absint\|intval\|sanitize" → NOT FOUND
+**Validation check:** grep -B5 "if.*empty\|if.*isset" → NOT FOUND
+
+### Attack Surface Assessment
+[Evaluate exploitability]
+
+| Factor | Assessment | Details |
+|--------|------------|---------|
+| Public-facing? | YES | Action handler (admin-ajax.php) |
+| Authentication required? | NO | No current_user_can() check found |
+| User-controlled input? | YES | $_GET['user_id'] directly used |
+| Destructive operation? | YES | DELETE query |
+| Attack complexity | LOW | Simple URL manipulation |
+
+**Exploitability:** TRIVIAL (any visitor can exploit via URL)
+
+### Exploitation Example
+[Show how attacker would exploit this]
+
+```bash
+# Delete all users
+curl "https://site.com/wp-admin/admin-ajax.php?action=delete_user&user_id=1%20OR%201=1"
+
+# Or delete specific admin
+curl "https://site.com/wp-admin/admin-ajax.php?action=delete_user&user_id=1"
+```
+
+**Impact:** Complete user database can be deleted by unauthenticated attacker
+
+### Defense-in-Depth Analysis
+[Check for multiple layers of security]
+
+| Security Layer | Present? | Evidence |
+|----------------|----------|----------|
+| Nonce verification | NO | grep "wp_verify_nonce" → NOT FOUND |
+| Capability check | NO | grep "current_user_can" → NOT FOUND |
+| Input sanitization | NO | grep "absint\|sanitize" → NOT FOUND |
+| Prepared statement | NO | Direct string interpolation in query |
+| Input validation | NO | No bounds/format checking |
+
+**Summary:** 0/5 security controls present (complete lack of defense-in-depth)
+
+### CVSS Scoring Rationale
+[Why this CVSS score]
+
+**CVSS Score:** 9.8 (Critical)
+
+**Breakdown:**
+- **Attack Vector (AV):** Network (N) - Exploitable remotely
+- **Attack Complexity (AC):** Low (L) - No special tools needed
+- **Privileges Required (PR):** None (N) - Unauthenticated access
+- **User Interaction (UI):** None (N) - Direct URL access
+- **Scope (S):** Unchanged (U) - WordPress instance affected
+- **Confidentiality (C):** High (H) - User data exposed
+- **Integrity (I):** High (H) - Data can be deleted
+- **Availability (A):** High (H) - System can be disrupted
+
+**Why 9.8 (not 10.0):** Limited to database (not full server compromise)
+**Why not 8.0:** Zero privileges required + destructive operation
+
+### Severity Rationale
+[Why CRITICAL vs HIGH]
+
+**Severity: CRITICAL** (not just HIGH) because:
+
+**CRITICAL indicators:**
+- ✅ Unauthenticated exploitation (anyone can attack)
+- ✅ Destructive operation (permanent data loss)
+- ✅ Trivial attack (URL manipulation only)
+- ✅ Wide scope (can delete ANY user, including admins)
+- ✅ Zero mitigations (no defense-in-depth)
+
+**If this were HIGH instead:**
+- Would require authentication, OR
+- Would be non-destructive (read-only), OR
+- Would have some mitigation (nonce, capability check)
+
+**This has NONE of those - it's CRITICAL**
+
+### Confidence Score
+[How certain - what you verified]
+
+**Confidence: 99%**
+
+**High confidence because:**
+- ✅ Direct pattern match (user input → SQL)
+- ✅ Multiple verification steps confirmed (5 checks)
+- ✅ No mitigating controls found (checked all 5)
+- ✅ Clear exploitation path demonstrated
+
+**Not 100% because:**
+- Code might be unreachable (action handler might not be registered)
+- Could be protected by .htaccess or server config (not visible in code)
+
+**Verification needed:** Confirm action handler is actually registered and reachable
+
+### Cross-References
+[Skills and documentation referenced]
+
+**WordPress Security Handbook:**
+- [Validating Sanitizing and Escaping](https://developer.wordpress.org/apis/security/sanitizing-securing-input/)
+- [Nonce Implementation](https://developer.wordpress.org/apis/security/nonces/)
+
+**OWASP:**
+- OWASP Top 10 2021: #3 Injection
+- OWASP SQL Injection Prevention Cheat Sheet
+
+**Related Findings:**
+- Search codebase for similar patterns (other direct $_GET usage)
+- Check if this pattern exists in other action handlers
+
+### Alternative Interpretations
+[Why this might NOT be a vulnerability]
+
+**Could this be a false positive?**
+
+❌ **No** - All checks confirm genuine vulnerability:
+- User input: CONFIRMED ($_GET['user_id'] on line 38)
+- No sanitization: CONFIRMED (searched, not found)
+- No prepared statement: CONFIRMED (direct interpolation)
+- No authentication: CONFIRMED (no capability check)
+- Destructive query: CONFIRMED (DELETE statement)
+
+**Could there be protection elsewhere?**
+
+⚠️ **Unlikely:**
+- Action handler registration might include capability check (not visible in this file)
+- .htaccess might block wp-admin for non-authenticated (not standard WordPress)
+
+**Recommendation:** Treat as genuine vulnerability. Even if protected elsewhere, defense-in-depth requires protection at this layer.
+
+**Verdict: GENUINE CRITICAL VULNERABILITY**
+
+</details>
+```
+
+### Requirements for Security Reasoning
+
+**Your security reasoning must include:**
+- ✅ **Exploitation path:** Show how attacker would exploit (curl example)
+- ✅ **Attack surface:** Assess public-facing, auth requirements, complexity
+- ✅ **Defense layers:** Check ALL security controls (nonce, capability, sanitization, escaping)
+- ✅ **CVSS scoring:** Justify the score with component breakdown
+- ✅ **Confidence:** Based on verification depth
+- ✅ **Alternative scenarios:** Consider false positive possibility
+
+**Be ruthlessly factual:**
+- Quote actual code lines
+- Show actual grep commands run
+- Admit what you didn't verify
+- Don't overstate confidence
+
 ## WordPress Vulnerability Categories
 
 ### CRITICAL (Immediate exploitation risk)

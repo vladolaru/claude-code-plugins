@@ -5,11 +5,30 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.7.2] - 2026-01-21
+## [1.8.0] - 2026-01-21
+
+### Added
+
+- **Verbose Reasoning Mode** - All review agents now support detailed reasoning transparency
+  - `architecture-reviewer` - Shows SOLID analysis, pattern opportunities, confidence scoring
+  - `security-reviewer` - Shows exploitation paths, CVSS scoring, defense-in-depth analysis
+  - `performance-reviewer` - Shows 10x/100x scale impact, query analysis, optimization paths
+  - `tests-reviewer` - Shows test quality analysis, root cause diagnosis, mocking analysis
+  - `patterns-reviewer` - Shows git history evidence, consistency analysis, consolidation opportunities
+  - Reasoning includes: detection process, checks performed, confidence scores, severity rationale, cross-references, alternative interpretations
+  - Optional mode enabled via VERBOSE=true environment variable
+  - Uses expandable `<details>` blocks for readability
+  - Implements Proposal #2 from Tier 1 agentic patterns
+
+- `pr-reviewing` skill - Added VERBOSE flag documentation and passing to all agents
+  - When to enable verbose mode (learning, debugging, low confidence, critical findings)
+  - How to enable (export VERBOSE=true)
+  - Context preparation includes verbose mode flag
+  - Agents receive VERBOSE signal and include reasoning when enabled
 
 ### Changed
 
-- `pr-reviewing` skill - Strengthened parallel spawning requirements
+- `pr-reviewing` skill - Strengthened parallel spawning requirements (Proposal #4)
   - Added CRITICAL instruction emphasizing single message with multiple Task calls for parallel execution
   - Added anti-pattern section showing sequential spawning (what NOT to do)
   - Added explicit timing comparison (parallel: 28s vs sequential: 75s)
