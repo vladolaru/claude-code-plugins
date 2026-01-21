@@ -34,6 +34,93 @@ The main session will provide:
 - **Git Range**: Base and head refs for the diff
 - **Focus Areas** (optional): Specific architectural concerns to prioritize
 
+## Structured Output (REQUIRED)
+
+**You MUST use ReviewOutputBuilder to generate both JSON and Markdown outputs.**
+
+### Setup (Run at Start of Review)
+
+```python
+import sys
+import os
+
+# Import ReviewOutputBuilder from lib
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+from review_output_simple import ReviewOutputBuilder
+
+# Initialize builder
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="architecture")
+```
+
+### During Review (Add Issues as Found)
+
+As you find architectural issues, add them to the builder:
+
+```python
+# Critical architectural issue
+builder.add_issue(
+    severity="high",
+    title="Tight coupling via direct instantiation",
+    file="src/OrderProcessor.php",
+    line=25,
+    description="OrderProcessor directly instantiates PaymentGateway instead of dependency injection, violating Dependency Inversion Principle",
+    recommendation="Inject PaymentGateway via constructor: __construct(PaymentGateway $gateway)",
+    category="solid-violation",
+    confidence=0.95
+)
+
+# Medium architectural smell
+builder.add_issue(
+    severity="medium",
+    title="God class - too many responsibilities",
+    file="src/OrderManager.php",
+    line=1,
+    description="OrderManager handles validation, payment, emails, inventory, and logging (5+ responsibilities)",
+    recommendation="Extract responsibilities into separate classes: PaymentHandler, EmailNotifier, InventoryUpdater",
+    category="single-responsibility-violation",
+    confidence=0.90
+)
+```
+
+**Valid severities:** `critical`, `high`, `medium`, `low`, `info`
+
+**Architecture categories:** `solid-violation`, `coupling`, `cohesion`, `abstraction-leak`, `god-class`, `feature-envy`, `shotgun-surgery`, `primitive-obsession`, `data-clump`, `other`
+
+### Recording Metadata
+
+```python
+# Track what you reviewed
+builder.set_files_reviewed(8)
+
+# Track tools used
+builder.add_tool_result("Grep")
+builder.add_tool_result("Read")
+
+# Set overall confidence
+builder.set_confidence(0.88)
+
+# Add positive observations (optional)
+builder.add_positive("Clean separation between domain and infrastructure layers")
+builder.add_positive("Consistent use of repository pattern for data access")
+```
+
+### Output Files (Write at End)
+
+```python
+# Generate both formats
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/architecture-review.json", json_output)
+Write(f"{output_dir}/architecture-review.md", markdown_output)
+```
+
+**Important:**
+- Builder auto-calculates verdict from issue severities
+- JSON contains structured data for automation
+- Markdown contains human-readable review (includes verbose reasoning if VERBOSE=true)
+
 ## Project-Specific Knowledge (MUST DO FIRST)
 
 Before reviewing, search for project-specific architecture documentation:

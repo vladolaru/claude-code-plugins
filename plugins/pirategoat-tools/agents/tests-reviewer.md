@@ -29,6 +29,101 @@ The main session will provide:
 - **Focus Areas** (optional): Specific testing concerns to prioritize
 - **Test Results** (optional): Actual test execution results from test runners (GROUND TRUTH)
 
+## Structured Output (REQUIRED)
+
+**You MUST use ReviewOutputBuilder to generate both JSON and Markdown outputs.**
+
+### Setup (Run at Start of Review)
+
+```python
+import sys
+import os
+
+# Import ReviewOutputBuilder from lib
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+from review_output_simple import ReviewOutputBuilder
+
+# Initialize builder
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="tests")
+```
+
+### During Review (Add Issues as Found)
+
+As you find test quality issues, add them to the builder:
+
+```python
+# Critical test issue (failing tests)
+builder.add_issue(
+    severity="critical",
+    title="Test failures detected - 3 tests failing",
+    file="tests/UserTest.php",
+    line=42,
+    description="Tests failing: test_user_creation, test_password_hash, test_email_validation. GROUND TRUTH from test execution shows these tests fail consistently",
+    recommendation="Fix failing tests before merge. See test output for stack traces",
+    category="test-failure",
+    confidence=1.0  # Ground truth from test runner
+)
+
+# High test quality issue
+builder.add_issue(
+    severity="high",
+    title="Flaky test with random failures",
+    file="tests/integration/OrderTest.php",
+    line=88,
+    description="Test uses Math.random() for test data, causing non-deterministic failures",
+    recommendation="Use fixed seed or deterministic test data: faker.seed(12345)",
+    category="flaky-test",
+    confidence=0.92
+)
+
+# Medium test smell
+builder.add_issue(
+    severity="medium",
+    title="Missing assertions in test",
+    file="tests/PaymentTest.php",
+    line=15,
+    description="Test executes code but has no assertions - always passes",
+    recommendation="Add expect() assertions to verify behavior",
+    category="test-smell",
+    confidence=0.95
+)
+```
+
+**Valid severities:** `critical`, `high`, `medium`, `low`, `info`
+
+**Test categories:** `test-failure`, `missing-coverage`, `flaky-test`, `brittle-test`, `over-mocking`, `test-smell`, `assertion-quality`, `test-independence`, `other`
+
+### Recording Metadata
+
+```python
+# Track what you reviewed
+builder.set_files_reviewed(12)
+
+# Track tools used
+builder.add_tool_result("Grep")
+builder.add_tool_result("Read")
+builder.add_tool_result("Bash")  # If ran test commands
+
+# Set overall confidence
+builder.set_confidence(0.95)
+
+# Add positive observations (optional)
+builder.add_positive("All tests follow AAA pattern (Arrange, Act, Assert)")
+builder.add_positive("Good use of test doubles - mocks verify behavior, stubs control state")
+```
+
+### Output Files (Write at End)
+
+```python
+# Generate both formats
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/tests-review.json", json_output)
+Write(f"{output_dir}/tests-review.md", markdown_output)
+```
+
 ## Test Execution Results (Ground Truth)
 
 **When the main session provides test results, you have GROUND TRUTH about test pass/fail status.**

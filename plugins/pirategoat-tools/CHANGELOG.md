@@ -5,6 +5,31 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-01-21
+
+### Added
+
+- **Structured Output Integration** - All 5 review agents now output both JSON and Markdown
+  - Integrated ReviewOutputBuilder into all agents (security, architecture, performance, tests, patterns)
+  - Agents automatically generate dual outputs: `.json` (machine-readable) + `.md` (human-readable)
+  - JSON enables automation: CI/CD integration, metrics dashboards, auto-issue creation
+  - Markdown maintains human-readable reviews with verbose reasoning support
+  - Auto-calculated verdicts from issue severities
+  - Structured metadata: confidence scores, tools used, files reviewed, timestamps
+  - Completes Proposal #3 integration from Tier 1 agentic patterns
+  - Agent-specific categories:
+    - Security: sql-injection, xss, csrf, capabilities, file-upload, data-exposure
+    - Architecture: solid-violation, coupling, cohesion, abstraction-leak, god-class
+    - Performance: n-plus-one, caching, autoload, remote-requests, scale-issues
+    - Tests: test-failure, missing-coverage, flaky-test, brittle-test, over-mocking
+    - Patterns: inconsistency, duplication, anti-pattern, naming-convention
+
+### Changed
+
+- All 5 review agents now use ReviewOutputBuilder for consistent output format
+- Output files now include both `.json` and `.md` extensions
+- Verdicts auto-calculated (no manual verdict writing needed)
+
 ## [1.8.3] - 2026-01-21
 
 ### Added

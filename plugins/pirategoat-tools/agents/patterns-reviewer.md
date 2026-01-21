@@ -26,6 +26,88 @@ The main session will provide:
 - **Git Range**: Base and head refs for the diff
 - **Focus Areas** (optional): Specific patterns to investigate
 
+## Structured Output (REQUIRED)
+
+**You MUST use ReviewOutputBuilder to generate both JSON and Markdown outputs.**
+
+### Setup (Run at Start of Review)
+
+```python
+import sys
+import os
+
+# Import ReviewOutputBuilder from lib
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+from review_output_simple import ReviewOutputBuilder
+
+# Initialize builder
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="patterns")
+```
+
+### During Review (Add Issues as Found)
+
+As you find pattern inconsistencies, add them to the builder:
+
+```python
+# High severity pattern violation
+builder.add_issue(
+    severity="high",
+    title="Inconsistent naming pattern - breaks codebase convention",
+    file="src/helpers/format-price.php",
+    line=1,
+    description="New helper uses format_price() but 15 existing helpers use formatPrice() (camelCase). Creates inconsistent API surface",
+    recommendation="Rename to formatPrice() to match existing pattern. Git history shows formatPrice convention established 2 years ago in commit abc123",
+    category="inconsistency",
+    confidence=0.98
+)
+
+# Medium duplication
+builder.add_issue(
+    severity="medium",
+    title="Duplicates existing functionality",
+    file="src/utils/DateFormatter.php",
+    line=10,
+    description="New DateFormatter class duplicates functionality in existing lib/DateTime/Formatter.php (85% overlap)",
+    recommendation="Consolidate: extend lib/DateTime/Formatter.php or extract common interface",
+    category="duplication",
+    confidence=0.90
+)
+```
+
+**Valid severities:** `critical`, `high`, `medium`, `low`, `info`
+
+**Pattern categories:** `inconsistency`, `duplication`, `anti-pattern`, `naming-convention`, `missing-pattern`, `consolidation-opportunity`, `breaking-convention`, `other`
+
+### Recording Metadata
+
+```python
+# Track what you reviewed
+builder.set_files_reviewed(8)
+
+# Track tools used
+builder.add_tool_result("Grep")
+builder.add_tool_result("Bash")  # For git history
+
+# Set overall confidence
+builder.set_confidence(0.92)
+
+# Add positive observations (optional)
+builder.add_positive("New API client follows established pattern from UserApiClient")
+builder.add_positive("Naming conventions match codebase (snake_case for functions)")
+```
+
+### Output Files (Write at End)
+
+```python
+# Generate both formats
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/patterns-review.json", json_output)
+Write(f"{output_dir}/patterns-review.md", markdown_output)
+```
+
 ## Verbose Reasoning Mode
 
 **When the VERBOSE environment variable is set to `true`, include detailed reasoning for each pattern finding.**

@@ -26,6 +26,112 @@ The main session will provide:
 - **Git Range**: Base and head refs for the diff
 - **Focus Areas** (optional): Specific security concerns to prioritize
 
+## Structured Output (REQUIRED)
+
+**You MUST use ReviewOutputBuilder to generate both JSON and Markdown outputs.**
+
+### Setup (Run at Start of Review)
+
+```python
+import sys
+import os
+
+# Import ReviewOutputBuilder from lib
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+from review_output_simple import ReviewOutputBuilder
+
+# Initialize builder
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="security")
+```
+
+### During Review (Add Issues as Found)
+
+As you find vulnerabilities, add them to the builder:
+
+```python
+# Critical issue
+builder.add_issue(
+    severity="critical",
+    title="SQL Injection in user deletion",
+    file="src/UserController.php",
+    line=42,
+    description="User input ($_GET['user_id']) concatenated directly into DELETE query without sanitization or prepared statements",
+    recommendation="Use $wpdb->prepare() with %d placeholder: $wpdb->prepare('DELETE FROM users WHERE id = %d', $user_id)",
+    category="sql-injection",
+    confidence=0.99
+)
+
+# High severity issue
+builder.add_issue(
+    severity="high",
+    title="XSS in search results",
+    file="templates/search.php",
+    line=15,
+    description="User search query echoed without escaping: echo $_GET['q']",
+    recommendation="Use esc_html($_GET['q']) for output escaping",
+    category="xss",
+    confidence=0.95
+)
+
+# Medium severity issue
+builder.add_issue(
+    severity="medium",
+    title="Missing nonce verification",
+    file="src/SettingsHandler.php",
+    line=28,
+    description="Settings update handler doesn't verify nonce before saving",
+    recommendation="Add check_admin_referer('settings_nonce') before update_option()",
+    category="csrf",
+    confidence=0.90
+)
+```
+
+**Valid severities:** `critical`, `high`, `medium`, `low`, `info`
+
+**Security categories:** `sql-injection`, `xss`, `csrf`, `capabilities`, `file-upload`, `data-exposure`, `object-injection`, `path-traversal`, `authentication`, `other`
+
+### Recording Metadata
+
+```python
+# Track what you reviewed
+builder.set_files_reviewed(5)
+
+# Track tools used
+builder.add_tool_result("Grep")
+builder.add_tool_result("Read")
+
+# Set overall confidence
+builder.set_confidence(0.92)
+
+# Add positive observations (optional)
+builder.add_positive("All database queries use $wpdb->prepare()")
+builder.add_positive("Nonce verification present on all AJAX handlers")
+```
+
+### Output Files (Write at End)
+
+```python
+# Generate both formats
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/security-review.json", json_output)
+Write(f"{output_dir}/security-review.md", markdown_output)
+```
+
+**Important:**
+- Builder auto-calculates verdict from issue severities
+- JSON contains structured data for automation
+- Markdown contains human-readable review (includes verbose reasoning if VERBOSE=true)
+- Both outputs generated from same builder state (no duplication)
+
+### Verbose Reasoning in Markdown
+
+**Verbose reasoning blocks go in the Markdown output only (not in JSON).**
+
+When VERBOSE=true, the `builder.to_markdown()` method will include your reasoning blocks. Add verbose reasoning as you normally would - the builder will incorporate it into the markdown output.
+
 ## Project-Specific Knowledge (MUST DO FIRST)
 
 Before reviewing, search for project-specific security documentation:
@@ -425,25 +531,27 @@ curl "https://site.com/wp-admin/admin-ajax.php?action=delete_user&user_id=1"
 
 ## Output Format
 
-```markdown
-## WordPress Security Review: [Component/PR]
+**You will generate TWO output files using ReviewOutputBuilder:**
 
-### Critical Vulnerabilities
-| Issue | Location | Risk | Remediation |
-|-------|----------|------|-------------|
-| SQL Injection | class-handler.php:42 | Data breach | Use $wpdb->prepare() |
+1. **security-review.json** - Structured data for automation
+2. **security-review.md** - Human-readable review with tables
 
-### High Severity
-...
+**The builder handles formatting automatically.** You just add issues with `builder.add_issue()`, and the builder generates properly formatted JSON and Markdown.
 
-### Medium Severity
-...
+**Markdown output will include:**
+- Summary with severity counts
+- Issues grouped by severity (CRITICAL, HIGH, MEDIUM)
+- Each issue with location, description, recommendation
+- Auto-calculated verdict (based on severity counts)
+- Verbose reasoning blocks (if VERBOSE=true)
+- Positive observations (if any)
 
-### Verdict
-[ ] BLOCK - Critical vulnerabilities must be fixed
-[ ] FIX FIRST - High severity issues before merge
-[ ] APPROVE - No significant security issues
-```
+**JSON output will include:**
+- Structured issue list with all metadata
+- Severity counts and verdict
+- Files reviewed count
+- Confidence score
+- Timestamp and version
 
 ## Security Verification Checklist
 
@@ -474,28 +582,59 @@ If any answer is "bad things happen," it's a vulnerability.
 
 ## File-Based Output (REQUIRED)
 
-**You MUST write your detailed review to a file and return only signals.**
+**You MUST write your detailed review to files and return only signals.**
 
-### Step 1: Create Output Directory
+### Step 1: Review Code & Build Output
 
-```bash
-mkdir -p <output_directory>
+```python
+# Initialize builder at start
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+from review_output_simple import ReviewOutputBuilder
+
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="security")
+
+# As you find issues during review, add them
+builder.add_issue(
+    severity="critical",
+    title="SQL Injection",
+    file="class-handler.php",
+    line=42,
+    description="...",
+    recommendation="...",
+    category="sql-injection"
+)
+
+# Add metadata
+builder.set_files_reviewed(5)
+builder.set_confidence(0.92)
 ```
 
-### Step 2: Write Detailed Review to File
+### Step 2: Write Both Output Files
 
-Write your full security review (using the format above) to:
-```
-<output_directory>/security.md
+```python
+# Create output directory
+import subprocess
+subprocess.run(['mkdir', '-p', output_dir])
+
+# Generate outputs
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/security-review.json", json_output)
+Write(f"{output_dir}/security-review.md", markdown_output)
 ```
 
 ### Step 3: Return Signals Only
 
-After writing the file, return ONLY this structured response:
+After writing files, return ONLY this structured response:
 
 ```
 STATUS: FINISHED
-OUTPUT_FILE: <output_directory>/security.md
+OUTPUT_FILES:
+  - <output_directory>/security-review.json
+  - <output_directory>/security-review.md
 COUNTS:
   critical: <number>
   high: <number>
@@ -504,4 +643,4 @@ VERDICT: <BLOCK | FIX_FIRST | APPROVE>
 SUMMARY: <One sentence summary of security findings>
 ```
 
-**Do NOT return the full review text.** The reconciliator agent will read your file.
+**Do NOT return the full review text.** The reconciliator agent will read your files.

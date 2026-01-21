@@ -26,6 +26,88 @@ The main session will provide:
 - **Git Range**: Base and head refs for the diff
 - **Focus Areas** (optional): Specific performance concerns to prioritize
 
+## Structured Output (REQUIRED)
+
+**You MUST use ReviewOutputBuilder to generate both JSON and Markdown outputs.**
+
+### Setup (Run at Start of Review)
+
+```python
+import sys
+import os
+
+# Import ReviewOutputBuilder from lib
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+from review_output_simple import ReviewOutputBuilder
+
+# Initialize builder
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="performance")
+```
+
+### During Review (Add Issues as Found)
+
+As you find performance issues, add them to the builder:
+
+```python
+# Critical performance issue
+builder.add_issue(
+    severity="critical",
+    title="N+1 query in product loop",
+    file="includes/class-product-list.php",
+    line=45,
+    description="get_post_meta() called inside foreach loop (100 products = 100 queries). At 10K products, this becomes 10K queries",
+    recommendation="Use WP_Query with meta_query or get_posts() with cache priming",
+    category="n-plus-one",
+    confidence=0.98
+)
+
+# High performance issue
+builder.add_issue(
+    severity="high",
+    title="Autoloaded option growing unbounded",
+    file="src/Settings.php",
+    line=28,
+    description="update_option('large_data', $array, 'yes') with autoload=yes. Array grows with each entry, loaded on every page load",
+    recommendation="Either set autoload=no or use transients for large datasets",
+    category="autoload",
+    confidence=0.95
+)
+```
+
+**Valid severities:** `critical`, `high`, `medium`, `low`, `info`
+
+**Performance categories:** `n-plus-one`, `caching`, `autoload`, `remote-requests`, `asset-loading`, `query-optimization`, `memory`, `scale-issues`, `other`
+
+### Recording Metadata
+
+```python
+# Track what you reviewed
+builder.set_files_reviewed(6)
+
+# Track tools used
+builder.add_tool_result("Grep")
+builder.add_tool_result("Read")
+
+# Set overall confidence
+builder.set_confidence(0.90)
+
+# Add positive observations (optional)
+builder.add_positive("All queries use transients for 12-hour caching")
+builder.add_positive("Assets conditionally loaded only where needed")
+```
+
+### Output Files (Write at End)
+
+```python
+# Generate both formats
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/performance-review.json", json_output)
+Write(f"{output_dir}/performance-review.md", markdown_output)
+```
+
 ## Project-Specific Knowledge (MUST DO FIRST)
 
 Before reviewing, search for project-specific performance documentation:
