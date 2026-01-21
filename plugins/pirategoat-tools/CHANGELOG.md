@@ -5,6 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3] - 2026-01-21
+
+### Added
+
+- **Structured Output Foundation** - JSON schema infrastructure for reliable automation
+  - `schemas/review-output.ts` - Complete TypeScript type definitions for all review types
+  - `lib/review_schemas.py` - Pydantic models for runtime validation (requires pydantic package)
+  - `lib/review_output_simple.py` - Dependency-free builder (works immediately, no installs)
+  - ReviewOutputBuilder helper class with dual output (JSON + Markdown)
+  - Schema definitions: Issue, SecurityIssue, PerformanceIssue, ArchitectureIssue, TestIssue, PatternIssue
+  - Verdict auto-calculation from issue severity
+  - Confidence scoring and metadata tracking
+  - Implements Proposal #3 foundation from Tier 1 agentic patterns
+
+Note: Agent integration will follow in next release. Foundation ready for use.
+
 ## [1.8.2] - 2026-01-21
 
 ### Added
