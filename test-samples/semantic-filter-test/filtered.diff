@@ -1,0 +1,58 @@
+
+Semantic Filter MVP - Results:
+  Total lines: 79
+  Noise filtered: 32 (40.5%)
+    - Blank lines: 7
+    - Docblocks: 22
+    - Comments: 1
+    - Formatting: 2
+  Signal kept: 47 (59.5%)
+  Reduction: 79→47 (40.5% reduction)
+
+--- before.php	2026-01-21 17:22:26
++++ after.php	2026-01-21 17:22:43
+@@ -1,21 +1,66 @@
+ <?php
+ namespace App\Payment;
+ 
++use App\Gateway\PaymentGateway;
+ use App\Database\Repository;
+-use App\Email\Mailer;
++use App\Notification\EmailService;
+ 
+-class Payment {
+-    private $repository;
+-    private $mailer;
++class Payment
++    private Repository $repository;
+ 
+-    public function __construct($repository, $mailer) {
++    private EmailService $emailService;
++    private PaymentGateway $gateway;
++    public function __construct(
++        Repository $repository,
++        EmailService $emailService,
++        PaymentGateway $gateway
++    ) {
+         $this->repository = $repository;
+-        $this->mailer = $mailer;
++        $this->emailService = $emailService;
++        $this->gateway = $gateway;
+     }
+ 
+-    public function process($amount) {
+-        $result = $this->repository->save(['amount' => $amount]);
+-        $this->mailer->send('Payment processed');
++    public function process($amount)
++        $chargeResult = $this->gateway->charge($amount);
++        if (!$chargeResult->success) {
++            throw new PaymentException('Charge failed');
++        }
++        $result = $this->repository->save([
++            'amount' => $amount
++        ]);
++        $this->emailService->send('Payment processed');
+         return $result;
+     }
+ }
+

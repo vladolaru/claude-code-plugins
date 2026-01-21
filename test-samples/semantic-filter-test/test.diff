@@ -1,0 +1,78 @@
+--- before.php	2026-01-21 17:22:26
++++ after.php	2026-01-21 17:22:43
+@@ -1,21 +1,66 @@
+ <?php
++
+ namespace App\Payment;
+ 
++use App\Gateway\PaymentGateway;
+ use App\Database\Repository;
+-use App\Email\Mailer;
++use App\Notification\EmailService;
+ 
+-class Payment {
+-    private $repository;
+-    private $mailer;
++/**
++ * Payment processor class
++ *
++ * Handles payment processing with gateway integration
++ */
++class Payment
++{
++    /** @var Repository */
++    private Repository $repository;
+ 
+-    public function __construct($repository, $mailer) {
++    /** @var EmailService */
++    private EmailService $emailService;
++
++    /** @var PaymentGateway */
++    private PaymentGateway $gateway;
++
++    /**
++     * Constructor
++     *
++     * @param Repository $repository Data repository
++     * @param EmailService $emailService Email notification service
++     * @param PaymentGateway $gateway Payment gateway
++     */
++    public function __construct(
++        Repository $repository,
++        EmailService $emailService,
++        PaymentGateway $gateway
++    ) {
+         $this->repository = $repository;
+-        $this->mailer = $mailer;
++        $this->emailService = $emailService;
++        $this->gateway = $gateway;
+     }
+ 
+-    public function process($amount) {
+-        $result = $this->repository->save(['amount' => $amount]);
+-        $this->mailer->send('Payment processed');
++    /**
++     * Process a payment
++     *
++     * @param float $amount Amount to process
++     * @return mixed Result from repository
++     * @throws PaymentException If gateway charge fails
++     */
++    public function process($amount)
++    {
++        // Charge via gateway (NEW LOGIC)
++        $chargeResult = $this->gateway->charge($amount);
++
++        if (!$chargeResult->success) {
++            throw new PaymentException('Charge failed');
++        }
++
++        $result = $this->repository->save([
++            'amount' => $amount
++        ]);
++
++        $this->emailService->send('Payment processed');
++
+         return $result;
+     }
+ }
