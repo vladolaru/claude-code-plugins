@@ -5,7 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.0] - 2026-01-21
+## [1.8.2] - 2026-01-21
+
+### Added
+
+- **Rich Feedback Loops - Phase 1: Test Runner Integration**
+  - `scripts/run-tests-for-review.sh` - Executes Jest, PHPUnit, Playwright with JSON output
+  - `scripts/parse-test-results.py` - Unifies test results from multiple frameworks into standard format
+  - `tests-reviewer` agent now consumes actual test execution results (ground truth)
+  - Agent decision logic updated: test failures = automatic BLOCK verdict
+  - Eliminates false approvals based on "code looks good" without execution
+  - Test results format: unified JSON with pass/fail counts, failure details, locations
+  - Demo test suite in `test-samples/feedback-loops-demo/` with failing tests
+  - Baseline documented: 100% false approval rate without feedback, 0% with feedback
+  - Implements Proposal #5 Phase 1 from Tier 1 agentic patterns
+
+## [1.8.1] - 2026-01-21
 
 ### Added
 

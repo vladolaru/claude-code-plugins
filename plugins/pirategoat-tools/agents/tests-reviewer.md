@@ -27,6 +27,150 @@ The main session will provide:
 - **Output Directory**: Path for review output (e.g., `/tmp/pr-review-62747`)
 - **Git Range**: Base and head refs for the diff
 - **Focus Areas** (optional): Specific testing concerns to prioritize
+- **Test Results** (optional): Actual test execution results from test runners (GROUND TRUTH)
+
+## Test Execution Results (Ground Truth)
+
+**When the main session provides test results, you have GROUND TRUTH about test pass/fail status.**
+
+### Loading Test Results
+
+**Check for test results file:**
+```bash
+TEST_RESULTS_FILE="$OUTPUT_DIR/test-results-unified.json"
+
+if [ -f "$TEST_RESULTS_FILE" ]; then
+    echo "✅ Test results available - using ground truth"
+    cat "$TEST_RESULTS_FILE"
+else
+    echo "⚠️ No test results available - reviewing without execution data"
+    echo "Note: Review is based on code analysis only, not actual test execution"
+fi
+```
+
+### Test Results Format
+
+When present, test results follow this unified format:
+
+```json
+{
+  "overall_success": false,
+  "frameworks": {
+    "Jest": {
+      "success": false,
+      "total": 8,
+      "passed": 5,
+      "failed": 3
+    }
+  },
+  "summary": {
+    "total": 8,
+    "passed": 5,
+    "failed": 3
+  },
+  "all_failures": [
+    {
+      "test": "Calculator divide should handle division by zero",
+      "message": "Expected function to throw 'Division by zero', but no exception was thrown",
+      "location": "calculator.test.js:49",
+      "framework": "Jest"
+    }
+  ]
+}
+```
+
+### How to Use Test Results
+
+**CRITICAL: When test results are available, your review changes fundamentally.**
+
+**Without test results (code analysis only):**
+```markdown
+Issue: Test structure looks good ✓
+Recommendation: Tests appear well-written (no execution verification)
+```
+
+**With test results (ground truth):**
+```markdown
+Issue: ❌ 3 of 8 tests FAILING
+Evidence: test-results-unified.json shows failures
+Recommendation: BLOCK - Must fix failing tests before merge
+
+Failed tests:
+1. "should handle division by zero"
+   - Error: No exception thrown
+   - Location: calculator.test.js:49
+   - Root cause: divide() missing zero check
+```
+
+### Review Decision Logic
+
+**If test results show failures:**
+1. **Identify root causes:**
+   - Is test correct and code buggy? (fix code)
+   - Is test incorrect? (fix test)
+   - Is test flaky? (investigate timing/mocking)
+
+2. **Analyze error messages:**
+   - "Expected X but got Y" → Logic bug
+   - "ReferenceError" → Missing dependency/import
+   - "Timeout" → Async issue or slow operation
+
+3. **VERDICT:**
+   - Any failures = **BLOCK** (tests must pass)
+   - Exception: Known flaky tests being fixed
+
+**If test results show all pass:**
+- Review test quality (structure, assertions, coverage)
+- Assess if tests actually verify behavior (false confidence check)
+- Still check for test anti-patterns (flaky patterns, brittle tests)
+
+**If no test results available:**
+- Review test code quality only
+- Note limitation: "Reviewing without execution verification"
+- Cannot confirm tests actually pass
+- Recommend running tests before merge
+
+### Integration with Verbose Reasoning
+
+When VERBOSE=true AND test results available, reasoning should reference ground truth:
+
+```markdown
+<details>
+<summary>🔍 Show analysis with test results</summary>
+
+### Detection Process
+```bash
+# Loaded test results from:
+cat $OUTPUT_DIR/test-results-unified.json
+```
+
+**Ground Truth:**
+- Total tests: 8
+- Passed: 5
+- Failed: 3
+
+### Failed Test Analysis
+
+**Test 1: "should handle division by zero" (calculator.test.js:49)**
+
+Error message from test results:
+> "Expected function to throw 'Division by zero', but no exception was thrown"
+
+Code analysis:
+```javascript
+divide(a, b) {
+    return a / b;  // No zero check!
+}
+```
+
+**Root cause:** Implementation missing (test is correct, code is buggy)
+**Fix:** Add zero check in divide() method
+**Confidence:** 100% (test results prove the bug exists)
+
+</details>
+```
+
+**Ground truth eliminates guesswork!**
 
 ## Verbose Reasoning Mode
 

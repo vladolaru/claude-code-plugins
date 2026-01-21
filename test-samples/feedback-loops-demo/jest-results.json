@@ -1,0 +1,61 @@
+{
+  "success": false,
+  "numTotalTests": 8,
+  "numPassedTests": 5,
+  "numFailedTests": 3,
+  "numPendingTests": 0,
+  "testResults": [
+    {
+      "name": "Calculator add should add two positive numbers",
+      "status": "passed",
+      "duration": 12
+    },
+    {
+      "name": "Calculator add should add negative numbers",
+      "status": "passed",
+      "duration": 8
+    },
+    {
+      "name": "Calculator subtract should subtract two numbers",
+      "status": "passed",
+      "duration": 9
+    },
+    {
+      "name": "Calculator multiply should multiply two numbers",
+      "status": "passed",
+      "duration": 7
+    },
+    {
+      "name": "Calculator divide should divide two numbers",
+      "status": "passed",
+      "duration": 10
+    },
+    {
+      "name": "Calculator divide should handle division by zero",
+      "status": "failed",
+      "duration": 45,
+      "failureMessages": [
+        "Expected function to throw 'Division by zero', but no exception was thrown"
+      ],
+      "location": "calculator.test.js:49"
+    },
+    {
+      "name": "Calculator percentage should calculate percentage of a value",
+      "status": "failed",
+      "duration": 11,
+      "failureMessages": [
+        "Expected 10, but got 110"
+      ],
+      "location": "calculator.test.js:56"
+    },
+    {
+      "name": "Calculator percentage should calculate 50% correctly",
+      "status": "failed",
+      "duration": 9,
+      "failureMessages": [
+        "Expected 100, but got 250"
+      ],
+      "location": "calculator.test.js:61"
+    }
+  ]
+}

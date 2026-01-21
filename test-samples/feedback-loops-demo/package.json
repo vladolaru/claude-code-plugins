@@ -1,0 +1,12 @@
+{
+  "name": "feedback-loops-demo",
+  "version": "1.0.0",
+  "description": "Demo test suite for rich feedback loops validation",
+  "scripts": {
+    "test": "jest",
+    "test:json": "jest --json --outputFile=test-results.json"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0"
+  }
+}
