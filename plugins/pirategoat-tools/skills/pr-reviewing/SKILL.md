@@ -610,8 +610,13 @@ Task tool:
 
 **Step 2: For large/sensitive PRs, dispatch specialists in parallel**
 
+**CRITICAL: You MUST spawn all specialists in a SINGLE message with MULTIPLE Task tool calls for parallel execution.**
+
+**DO NOT spawn agents sequentially** (one message per agent). That defeats the purpose.
+
+**Correct approach (PARALLEL):**
 ```
-Task tool (parallel - single message with multiple calls):
+Task tool (PARALLEL - single message with multiple Tool calls):
 
   subagent_type: pirategoat-tools:security-reviewer
   prompt: |
@@ -679,6 +684,59 @@ Task tool (parallel with other specialists):
 ```
 
 **External AI returns signals only** - detailed output written to files.
+
+---
+
+**❌ ANTI-PATTERN: Sequential Spawning (DO NOT DO THIS)**
+
+```
+# WRONG - This spawns agents sequentially (slow):
+
+# Message 1
+Task: security-reviewer
+# Wait for completion (25s)...
+
+# Message 2
+Task: performance-reviewer
+# Wait for completion (22s)...
+
+# Message 3
+Task: architecture-reviewer
+# Wait for completion (28s)...
+
+# Total time: 25 + 22 + 28 = 75 seconds (sequential)
+```
+
+**This is WRONG because:**
+- Agents run one at a time (waste of resources)
+- Total time = sum of all agents (slow)
+- Poor developer experience (long wait)
+
+**✅ CORRECT: Parallel Spawning (DO THIS)**
+
+```
+# CORRECT - Single message with multiple Task calls (fast):
+
+# ONE Message with ALL Task calls
+I'm spawning all reviewers in parallel now.
+
+Task: security-reviewer (starts immediately)
+Task: performance-reviewer (starts immediately)
+Task: architecture-reviewer (starts immediately)
+Task: tests-reviewer (starts immediately)
+
+# All start simultaneously
+# Total time: max(25, 22, 28, 18) = 28 seconds (parallel)
+```
+
+**This is CORRECT because:**
+- All agents run simultaneously (efficient)
+- Total time = longest single agent (fast)
+- Better developer experience (3x faster)
+
+**Remember:** ONE message, MULTIPLE Task calls = parallel execution
+
+---
 
 #### Step 3: Dispatch Reconciliator
 

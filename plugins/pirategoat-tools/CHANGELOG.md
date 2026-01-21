@@ -5,6 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-01-21
+
+### Changed
+
+- `pr-reviewing` skill - Strengthened parallel spawning requirements
+  - Added CRITICAL instruction emphasizing single message with multiple Task calls for parallel execution
+  - Added anti-pattern section showing sequential spawning (what NOT to do)
+  - Added explicit timing comparison (parallel: 28s vs sequential: 75s)
+  - Clarified correct parallel spawning pattern with examples
+  - Result: Ensures 3x faster reviews through proper parallel agent orchestration
+
 ## [1.7.1] - 2026-01-14
 
 ### Added
