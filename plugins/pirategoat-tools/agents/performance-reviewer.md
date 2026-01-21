@@ -37,7 +37,7 @@ import sys
 import os
 
 # Import ReviewOutputBuilder from lib
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../lib'))
 from review_output_simple import ReviewOutputBuilder
 
 # Initialize builder

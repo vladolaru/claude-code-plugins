@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All 5 review agents now use ReviewOutputBuilder for consistent output format
 - Output files now include both `.json` and `.md` extensions
 - Verdicts auto-calculated (no manual verdict writing needed)
+- Moved review output libraries to plugin directory (lib/ → plugins/pirategoat-tools/lib/)
+  - review_output_simple.py (dependency-free builder)
+  - review_output_builder.py (alternative implementation)
+  - review_schemas.py (Pydantic models)
 
 ## [1.8.3] - 2026-01-21
 

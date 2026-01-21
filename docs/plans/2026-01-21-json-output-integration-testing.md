@@ -6,7 +6,7 @@
 
 **Architecture:** Three-phase approach - validate individual agents first, then integrate aggregation, then end-to-end test.
 
-**Tech Stack:** Python ReviewOutputBuilder (lib/review_output_simple.py), Claude Code agents, JSON schema validation
+**Tech Stack:** Python ReviewOutputBuilder (plugins/pirategoat-tools/lib/review_output_simple.py), Claude Code agents, JSON schema validation
 
 ---
 
@@ -295,7 +295,7 @@ import os
 import json
 
 # Import ReviewOutputBuilder from lib
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../lib'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../lib'))
 from review_output_simple import ReviewOutputBuilder
 
 # Initialize aggregated builder
@@ -594,7 +594,7 @@ Identify root cause:
 ## Dependencies
 
 **Required:**
-- lib/review_output_simple.py (exists)
+- plugins/pirategoat-tools/lib/review_output_simple.py (exists)
 - All 5 agents updated with JSON instructions (done)
 - Python 3 available
 

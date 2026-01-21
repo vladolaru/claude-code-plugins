@@ -132,7 +132,7 @@
 **Files created:**
 - `schemas/review-output.ts` - TypeScript type definitions
 - `lib/review_schemas.py` - Pydantic models (requires pydantic)
-- `lib/review_output_simple.py` - Dependency-free builder (works now)
+- `plugins/pirategoat-tools/lib/review_output_simple.py` - Dependency-free builder (works now)
 
 **Schemas defined:**
 - Issue (base)
@@ -222,7 +222,7 @@ claude-code-plugins/
 
 ### Libraries (Ready to Use)
 
-4. **lib/review_output_simple.py**
+4. **plugins/pirategoat-tools/lib/review_output_simple.py**
    - Build structured review JSON + Markdown
    - No dependencies required
    - Example usage in file's `__main__` block
@@ -336,7 +336,7 @@ Plus documentation commits (proposals, plans, progress tracking).
 
 **Start with:**
 1. Read `docs/research/proposal-03-structured-output-json.md`
-2. Review `lib/review_output_simple.py` (builder example)
+2. Review `plugins/pirategoat-tools/lib/review_output_simple.py` (builder example)
 3. Update architecture-reviewer.md (first agent)
 4. Follow pattern for remaining 4 agents
 
