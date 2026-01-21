@@ -1,0 +1,10 @@
+diff --git a/src/OrderProcessor.php b/src/OrderProcessor.php
+--- a/src/OrderProcessor.php
++++ b/src/OrderProcessor.php
+@@ -5,3 +5,7 @@
+ class OrderProcessor {
++    public function process($order) {
++        $gateway = new PaymentGateway();  // Direct instantiation
++        $gateway->charge($order->total);
++    }
+ }

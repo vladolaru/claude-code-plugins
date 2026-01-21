@@ -1,0 +1,10 @@
+diff --git a/includes/class-product-list.php b/includes/class-product-list.php
+--- a/includes/class-product-list.php
++++ b/includes/class-product-list.php
+@@ -10,5 +10,9 @@
+ public function render_products() {
++    $products = get_posts(['post_type' => 'product', 'posts_per_page' => -1]);
++    foreach ($products as $product) {
++        $meta = get_post_meta($product->ID);  // N+1 query
++    }
+ }

@@ -1,0 +1,10 @@
+diff --git a/src/UserHandler.php b/src/UserHandler.php
+--- a/src/UserHandler.php
++++ b/src/UserHandler.php
+@@ -10,5 +10,8 @@
+ class UserHandler {
++    public function delete_user() {
++        $id = $_GET['user_id'];
++        $wpdb->query("DELETE FROM users WHERE id = $id");
++    }
+ }

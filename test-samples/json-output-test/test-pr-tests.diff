@@ -1,0 +1,9 @@
+diff --git a/tests/UserTest.php b/tests/UserTest.php
+--- a/tests/UserTest.php
++++ b/tests/UserTest.php
+@@ -5,3 +5,6 @@
+ class UserTest extends TestCase {
++    public function test_user_creation() {
++        $user = new User();  // No assertions!
++    }
+ }
