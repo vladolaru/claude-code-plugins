@@ -384,6 +384,10 @@ def map_cwe_to_category(cwe_list):
 - Scanner findings **must** be addressed before approval
 - Document any scanner findings you believe are false positives (with evidence)
 
+**For detailed guidance on handling false positives, see:**
+- `../docs/guides/FALSE-POSITIVE-HANDLING-GUIDE.md` - Complete guide on analyzing and handling false positives
+- `../docs/guides/REAL-EXAMPLE-ANALYSIS.md` - Real WooCommerce example analysis
+
 ## Verbose Reasoning Mode
 
 **When the VERBOSE environment variable is set to `true`, include detailed reasoning for each security finding.**
