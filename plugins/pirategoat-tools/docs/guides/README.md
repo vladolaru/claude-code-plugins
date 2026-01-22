@@ -58,5 +58,6 @@ When adding new guides:
 - **Agent Specs:** `../../agents/`
 - **Scripts:** `../../scripts/`
 - **Skills:** `../../skills/`
-- **Research:** `../../../../docs/research/` (proposals and analysis)
-- **Progress:** `../../../../docs/progress/` (implementation logs)
+- **Research:** `../research/` (proposals and analysis)
+- **Progress:** `../progress/` (implementation logs)
+- **Plans:** `../plans/` (implementation plans)
