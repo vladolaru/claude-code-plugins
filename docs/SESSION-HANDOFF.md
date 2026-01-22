@@ -3,7 +3,7 @@
 **Session Date:** January 21, 2026
 **Duration:** 6 hours across 1.5 days
 **Status:** All 5 Tier 1 foundations complete (100%)
-**Current Version:** v1.8.3
+**Current Version:** v1.9.0 (JSON output integration complete)
 
 ---
 
@@ -517,6 +517,7 @@ Plus documentation commits (proposals, plans, progress tracking).
 | v1.8.1 | Semantic filtering MVP | Jan 21 |
 | v1.8.2 | Rich feedback Phase 1 | Jan 21 |
 | v1.8.3 | Structured output foundation | Jan 21 |
+| v1.9.0 | JSON output integration (all 5 agents + reconciliator) | Jan 22 |
 
 **All versions tested and deployed to main branch.**
 
@@ -575,10 +576,11 @@ Plus documentation commits (proposals, plans, progress tracking).
 
 **Pending integration:**
 - ⏳ Agents don't automatically use semantic filter yet
-- ⏳ Agents don't automatically output JSON yet
-- ⏳ pr-reviewer doesn't auto-aggregate JSON yet
 
-**Can use manually:** All tools work, just not auto-integrated into agent workflows yet
+**Completed (v1.9.0):**
+- ✅ All 5 agents automatically output JSON + Markdown
+- ✅ Review-reconciliator aggregates JSON outputs
+- ✅ Validated on real WooCommerce PRs (#62100, #61681)
 
 ---
 
