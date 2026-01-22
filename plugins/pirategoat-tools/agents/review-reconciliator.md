@@ -27,17 +27,132 @@ The main session will provide:
 
 ## Review Files to Read
 
+**Prefer JSON files when available** - they contain structured data for precise aggregation.
+
 ```
 <output_directory>/
-├── pr-reviewer.md      # Generalist review (ANCHOR - always read first)
-├── security.md         # Security specialist (if exists)
-├── performance.md      # Performance specialist (if exists)
-├── architecture.md     # Architecture specialist (if exists)
-├── patterns.md         # Patterns specialist (if exists)
-├── gemini.md           # Gemini cross-validation (if exists)
-├── codex.md            # Codex cross-validation (if exists)
-└── reconciled.md       # Your output (written here)
+├── security-review.json    # Security specialist (STRUCTURED - prefer)
+├── security-review.md      # Security specialist (human-readable)
+├── architecture-review.json
+├── architecture-review.md
+├── performance-review.json
+├── performance-review.md
+├── tests-review.json
+├── tests-review.md
+├── patterns-review.json
+├── patterns-review.md
+├── pr-reviewer.md          # Generalist review (ANCHOR)
+├── gemini.md               # Gemini cross-validation (if exists)
+├── codex.md                # Codex cross-validation (if exists)
+├── reconciled.json         # Your structured output
+└── reconciled.md           # Your human-readable output
 ```
+
+## JSON-Based Reconciliation (REQUIRED)
+
+**You MUST read JSON outputs from specialist agents for structured aggregation.**
+
+### Setup
+
+```python
+import sys
+import os
+import json
+
+# Import ReviewOutputBuilder from lib
+sys.path.insert(0, '/Users/vladolaru/Work/a8c/claude-code-plugins/lib')
+from review_output_simple import ReviewOutputBuilder
+
+# Initialize aggregated builder
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
+```
+
+### Reading Agent JSON Outputs
+
+```python
+# Read each agent's JSON output
+agent_outputs = {}
+agent_names = ['security', 'architecture', 'performance', 'tests', 'patterns']
+
+for agent_name in agent_names:
+    json_path = f"{output_dir}/{agent_name}-review.json"
+
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            agent_outputs[agent_name] = json.load(f)
+        print(f"✓ Loaded {agent_name} review")
+    else:
+        print(f"⚠️ {agent_name} review not found (skipping)")
+```
+
+### Aggregating Issues
+
+```python
+# Aggregate all issues from all agents
+all_issues = []
+
+for agent_name, output in agent_outputs.items():
+    for issue in output.get('issues', []):
+        # Add source attribution
+        issue['source_agent'] = agent_name
+        all_issues.append(issue)
+
+# Sort by severity (critical > high > medium > low)
+severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4}
+all_issues.sort(key=lambda x: severity_order.get(x['severity'], 5))
+
+# Add to aggregated builder
+for issue in all_issues:
+    builder.add_issue(
+        severity=issue['severity'],
+        title=f"[{issue['source_agent']}] {issue['title']}",
+        file=issue['file'],
+        line=issue.get('line'),
+        description=issue['description'],
+        recommendation=issue['recommendation'],
+        category=issue.get('category', 'general'),
+        confidence=issue.get('confidence', 0.9),
+        source_agent=issue['source_agent']  # Extra field for tracking
+    )
+```
+
+### Calculate Aggregated Metadata
+
+```python
+# Count total files reviewed across all agents
+total_files = sum(
+    output.get('meta', {}).get('files_reviewed', 0)
+    for output in agent_outputs.values()
+)
+builder.set_files_reviewed(total_files)
+
+# Average confidence across agents
+confidences = [
+    output.get('meta', {}).get('confidence_score', 0.9)
+    for output in agent_outputs.values()
+]
+builder.set_confidence(sum(confidences) / len(confidences) if confidences else 0.9)
+
+# Track which agents contributed
+for agent_name in agent_outputs.keys():
+    builder.add_tool_result(f"{agent_name}-reviewer")
+```
+
+### Output Aggregated Review
+
+```python
+# Generate aggregated outputs
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/reconciled.json", json_output)
+Write(f"{output_dir}/reconciled.md", markdown_output)
+```
+
+### Fallback to Markdown
+
+If JSON files don't exist, fall back to reading `.md` files and manually parsing findings. This maintains backwards compatibility with agents that haven't been updated.
 
 ## Reconciliation Process
 
