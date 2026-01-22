@@ -131,8 +131,9 @@
 
 **Files created:**
 - `schemas/review-output.ts` - TypeScript type definitions
-- `lib/review_schemas.py` - Pydantic models (requires pydantic)
-- `plugins/pirategoat-tools/lib/review_output_simple.py` - Dependency-free builder (works now)
+- `plugins/pirategoat-tools/lib/review_output_simple.py` - Dependency-free builder (production version)
+
+**Note:** Pydantic implementations (review_schemas.py, review_output_builder.py) were created but later removed in v1.9.0 to eliminate dependencies. The simple builder provides all needed functionality.
 
 **Schemas defined:**
 - Issue (base)
