@@ -43,11 +43,13 @@ Then restart Claude Code to activate the plugins.
 
 ## Plugins
 
-### pirategoat-tools (v1.7.1)
+### pirategoat-tools (v1.10.0)
 
 Vlad Olaru's personal public Claude Code tools - experimental features that may eventually be extracted into standalone plugins.
 
-See [pirategoat-tools CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md) for version history.
+**Includes:** 11 review agents, 9 skills, rich feedback loop integration (linters, coverage, security scanners)
+
+**[Full Documentation →](plugins/pirategoat-tools/README.md)** | [CHANGELOG](plugins/pirategoat-tools/CHANGELOG.md)
 
 #### Skills
 
@@ -92,38 +94,21 @@ Specialized review agents for the Task tool:
 
 ### image-optimizer (v1.1.0)
 
-Lossless image optimization with review/confirm workflow.
+Lossless image optimization (PNG, JPEG, GIF, SVG) with review/confirm workflow.
 
-- **Raster (PNG, JPEG, GIF):** Fully lossless optimization using ImageOptim - reduces file size without any quality loss
-- **SVG:** Uses [svgo](https://github.com/svg/svgo), the same optimizer powering [SVGOMG](https://svgomg.net/), with web-safe default techniques
+**Includes:** 1 command (`/optimize-images`), optimization scripts
 
-See [image-optimizer CHANGELOG](plugins/image-optimizer/CHANGELOG.md) for version history.
-
-**Prerequisites:**
-```bash
-npm install -g imageoptim-cli  # PNG, JPEG, GIF (requires ImageOptim.app on macOS)
-npm install -g svgo            # SVG
-```
-
-**Usage:** `/optimize-images ./assets`
+**[Full Documentation →](plugins/image-optimizer/README.md)** | [CHANGELOG](plugins/image-optimizer/CHANGELOG.md)
 
 ---
 
 ### prompt-engineer (v2.0.0)
 
-Human-in-the-loop prompt optimization with evidence-grounded pattern attribution using proven prompt engineering patterns.
+Human-in-the-loop prompt optimization with evidence-grounded pattern attribution.
 
-See [prompt-engineer CHANGELOG](plugins/prompt-engineer/CHANGELOG.md) for version history.
+**Includes:** 1 skill, 1 command (`/optimize-prompt`), comprehensive reference library
 
-**Features:**
-- 5-phase workflow with user approval gates between phases
-- Quote-first evidence grounding - all technique selections require quoted triggers from reference
-- Phase 0 triage to avoid over-engineering simple prompts
-- Split reference documents for single-turn and multi-turn/multi-agent flows
-
-**Usage:**
-- Use the skill: Ask Claude to "optimize this prompt using the prompt-engineer skill"
-- Use the command: `/optimize-prompt`
+**[Full Documentation →](plugins/prompt-engineer/README.md)** | [CHANGELOG](plugins/prompt-engineer/CHANGELOG.md)
 
 ---
 
