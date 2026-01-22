@@ -48,7 +48,7 @@
 
 **Task 2: GREEN Phase - Test Runner Scripts (1.5 hours)**
 
-- [ ] Create `scripts/run-tests-for-review.sh`
+- [ ] Create `plugins/pirategoat-tools/scripts/run-tests-for-review.sh`
   ```bash
   #!/bin/bash
   # Run all test suites with JSON output
@@ -74,7 +74,7 @@
   echo "✅ Test results written to $OUTPUT_DIR/"
   ```
 
-- [ ] Make executable: `chmod +x scripts/run-tests-for-review.sh`
+- [ ] Make executable: `chmod +x plugins/pirategoat-tools/scripts/run-tests-for-review.sh`
 - [ ] Test on our repository (run Jest tests)
 - [ ] Verify JSON output is valid
 
@@ -84,7 +84,7 @@
 
 **Task 3: GREEN Phase - Test Result Parser (1 hour)**
 
-- [ ] Create `scripts/parse-test-results.py`
+- [ ] Create `plugins/pirategoat-tools/scripts/parse-test-results.py`
   ```python
   #!/usr/bin/env python3
   """

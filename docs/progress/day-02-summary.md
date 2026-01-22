@@ -27,13 +27,13 @@
 
 **Implementation (1.5 hours):**
 
-**scripts/run-tests-for-review.sh:**
+**plugins/pirategoat-tools/scripts/run-tests-for-review.sh:**
 - Executes Jest, PHPUnit, Playwright with JSON output
 - Handles missing test suites gracefully
 - Generates coverage if configured
 - Exit codes reflect test status
 
-**scripts/parse-test-results.py:**
+**plugins/pirategoat-tools/scripts/parse-test-results.py:**
 - Parses Jest, PHPUnit, Playwright JSON formats
 - Unifies into standard format
 - Extracts pass/fail counts, failure details, locations

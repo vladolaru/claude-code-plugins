@@ -8,7 +8,7 @@
 
 ## Problem Statement
 
-The regex-based MVP (`scripts/semantic-filter-mvp.py`) achieves 40% noise reduction by filtering blank lines, docblocks, and comments. AST parsing can reach 70%+ by understanding code structure and detecting semantic equivalence.
+The regex-based MVP (`plugins/pirategoat-tools/scripts/semantic-filter-mvp.py`) achieves 40% noise reduction by filtering blank lines, docblocks, and comments. AST parsing can reach 70%+ by understanding code structure and detecting semantic equivalence.
 
 **Current limitation:** Regex cannot distinguish:
 - Import reordering (noise) vs new imports (signal)
@@ -234,19 +234,19 @@ pip3 install tree-sitter tree-sitter-php tree-sitter-javascript
 
 ```bash
 # Basic usage (same as MVP)
-git diff | ./scripts/semantic-filter.py
+git diff | ./plugins/pirategoat-tools/scripts/semantic-filter.py
 
 # Language override
-./scripts/semantic-filter.py --language=php < input.diff
+./plugins/pirategoat-tools/scripts/semantic-filter.py --language=php < input.diff
 
 # Verbose mode (show filtered rules)
-./scripts/semantic-filter.py --verbose < input.diff
+./plugins/pirategoat-tools/scripts/semantic-filter.py --verbose < input.diff
 
 # Stats only
-./scripts/semantic-filter.py --stats-only < input.diff
+./plugins/pirategoat-tools/scripts/semantic-filter.py --stats-only < input.diff
 
 # Force regex fallback (for comparison)
-./scripts/semantic-filter.py --no-ast < input.diff
+./plugins/pirategoat-tools/scripts/semantic-filter.py --no-ast < input.diff
 ```
 
 ### Output Format
@@ -458,7 +458,7 @@ cursor = tree.walk()
 
 **Deliverables:**
 - `lib/semantic_filter/` (reusable library)
-- `scripts/semantic-filter.py` (CLI tool)
+- `plugins/pirategoat-tools/scripts/semantic-filter.py` (CLI tool)
 - Test suite with validation
 - Documentation
 

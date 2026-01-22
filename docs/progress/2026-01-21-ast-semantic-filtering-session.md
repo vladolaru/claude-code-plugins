@@ -62,7 +62,7 @@
 ## Final Deliverables
 
 ### Production Tool
-**File:** `scripts/semantic-filter.py`
+**File:** `plugins/pirategoat-tools/scripts/semantic-filter.py`
 - Pure Python regex (no dependencies)
 - 22.7% average noise reduction
 - Validated on 27 real PRs
@@ -70,7 +70,7 @@
 
 **Usage:**
 ```bash
-git diff | ./scripts/semantic-filter.py > filtered.diff
+git diff | ./plugins/pirategoat-tools/scripts/semantic-filter.py > filtered.diff
 ```
 
 ### Documentation
@@ -182,7 +182,7 @@ git diff | ./scripts/semantic-filter.py > filtered.diff
 ## Files Changed
 
 ### Added
-- `scripts/semantic-filter.py` (production tool)
+- `plugins/pirategoat-tools/scripts/semantic-filter.py` (production tool)
 - `docs/plans/2026-01-21-ast-semantic-filtering-design.md` (AST design)
 - `docs/plans/2026-01-21-semantic-filtering-real-world-validation.md` (validation)
 
@@ -190,9 +190,9 @@ git diff | ./scripts/semantic-filter.py > filtered.diff
 - `.gitignore` (added .venv)
 
 ### Removed
-- `scripts/semantic-filter-mvp.py` (replaced)
+- `plugins/pirategoat-tools/scripts/semantic-filter-mvp.py` (replaced)
 - `lib/semantic_filter/` (AST exploration)
-- `scripts/semantic-filter.py` (AST version)
+- `plugins/pirategoat-tools/scripts/semantic-filter.py` (AST version)
 - `.venv/` (Python virtual environment)
 - `lib/__pycache__/` (Python bytecode)
 
@@ -217,7 +217,7 @@ git diff | ./scripts/semantic-filter.py > filtered.diff
 
 ## Status: ✅ COMPLETE
 
-**Tool shipped:** `scripts/semantic-filter.py`
+**Tool shipped:** `plugins/pirategoat-tools/scripts/semantic-filter.py`
 **Documentation:** Complete with realistic expectations
 **Validation:** 27 PRs tested
 **Decision:** Opt-in tool (not automatic integration)

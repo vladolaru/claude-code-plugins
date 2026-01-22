@@ -75,7 +75,7 @@
 **Commit:** `3fff63a`
 
 **Files created:**
-- `scripts/semantic-filter-mvp.py` - Production-ready filter (159 lines)
+- `plugins/pirategoat-tools/scripts/semantic-filter-mvp.py` - Production-ready filter (159 lines)
 - `test-samples/semantic-filter-test/` - Validation test suite
 
 **Results validated:**
@@ -83,7 +83,7 @@
 - Signal preservation: 100% (all 6 semantic changes kept)
 - Filters: blank lines, docblocks, comments, formatting
 
-**Usage:** `git diff | ./scripts/semantic-filter-mvp.py`
+**Usage:** `git diff | ./plugins/pirategoat-tools/scripts/semantic-filter-mvp.py`
 
 **Result:** 40% token reduction, better agent focus
 
@@ -98,8 +98,8 @@
 **Commit:** `3611ce2`
 
 **Files created:**
-- `scripts/run-tests-for-review.sh` - Multi-framework test runner
-- `scripts/parse-test-results.py` - Unified result parser
+- `plugins/pirategoat-tools/scripts/run-tests-for-review.sh` - Multi-framework test runner
+- `plugins/pirategoat-tools/scripts/parse-test-results.py` - Unified result parser
 - `test-samples/feedback-loops-demo/` - Demo test suite with failures
 
 **Changes made:**
@@ -112,7 +112,7 @@
 - Baseline: 100% false approval without test results
 - With results: 0% false approval (blocks on failures)
 
-**Usage:** Run `./scripts/run-tests-for-review.sh` before agent review
+**Usage:** Run `./plugins/pirategoat-tools/scripts/run-tests-for-review.sh` before agent review
 
 **Result:** Eliminates guesswork, no false approvals
 
@@ -131,7 +131,7 @@
 
 **Files created:**
 - `schemas/review-output.ts` - TypeScript type definitions
-- `plugins/pirategoat-tools/lib/review_output_simple.py` - Dependency-free builder (production version)
+- `plugins/pirategoat-tools/scripts/review_output_simple.py` - Dependency-free builder (production version)
 
 **Note:** Pydantic implementations (review_schemas.py, review_output_builder.py) were created but later removed in v1.9.0 to eliminate dependencies. The simple builder provides all needed functionality.
 
@@ -208,22 +208,22 @@ claude-code-plugins/
 
 ### Scripts (Ready to Use)
 
-1. **scripts/semantic-filter-mvp.py**
+1. **plugins/pirategoat-tools/scripts/semantic-filter-mvp.py**
    - Removes 40% of diff noise
-   - Usage: `git diff | ./scripts/semantic-filter-mvp.py`
+   - Usage: `git diff | ./plugins/pirategoat-tools/scripts/semantic-filter-mvp.py`
    - Tested and validated
 
-2. **scripts/run-tests-for-review.sh**
+2. **plugins/pirategoat-tools/scripts/run-tests-for-review.sh**
    - Runs Jest, PHPUnit, Playwright with JSON output
-   - Usage: `./scripts/run-tests-for-review.sh /tmp/test-results`
+   - Usage: `./plugins/pirategoat-tools/scripts/run-tests-for-review.sh /tmp/test-results`
 
-3. **scripts/parse-test-results.py**
+3. **plugins/pirategoat-tools/scripts/parse-test-results.py**
    - Unifies test results into standard JSON
-   - Usage: `./scripts/parse-test-results.py /tmp/test-results/*.json`
+   - Usage: `./plugins/pirategoat-tools/scripts/parse-test-results.py /tmp/test-results/*.json`
 
 ### Libraries (Ready to Use)
 
-4. **plugins/pirategoat-tools/lib/review_output_simple.py**
+4. **plugins/pirategoat-tools/scripts/review_output_simple.py**
    - Build structured review JSON + Markdown
    - No dependencies required
    - Example usage in file's `__main__` block
@@ -337,7 +337,7 @@ Plus documentation commits (proposals, plans, progress tracking).
 
 **Start with:**
 1. Read `docs/research/proposal-03-structured-output-json.md`
-2. Review `plugins/pirategoat-tools/lib/review_output_simple.py` (builder example)
+2. Review `plugins/pirategoat-tools/scripts/review_output_simple.py` (builder example)
 3. Update architecture-reviewer.md (first agent)
 4. Follow pattern for remaining 4 agents
 

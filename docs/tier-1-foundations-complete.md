@@ -86,7 +86,7 @@
 **What it does:** Removes 40% of diff noise (whitespace, docblocks, comments)
 
 **Implementation:**
-- `scripts/semantic-filter-mvp.py` - Regex-based filter
+- `plugins/pirategoat-tools/scripts/semantic-filter-mvp.py` - Regex-based filter
   - Filters: blank lines, docblocks, inline comments, formatting
   - Conservative: keeps line when uncertain
   - No dependencies: pure Python
@@ -102,7 +102,7 @@
 - Better agent focus (signal-to-noise: 100% vs 31%)
 - Cost savings: ~$780/year
 
-**Usage:** `git diff | ./scripts/semantic-filter-mvp.py`
+**Usage:** `git diff | ./plugins/pirategoat-tools/scripts/semantic-filter-mvp.py`
 
 **Status:** Tested and validated, ready for integration
 
@@ -115,12 +115,12 @@
 **What it does:** Provides ground truth from test runners to agents
 
 **Implementation:**
-- `scripts/run-tests-for-review.sh` - Multi-framework test runner
+- `plugins/pirategoat-tools/scripts/run-tests-for-review.sh` - Multi-framework test runner
   - Jest, PHPUnit, Playwright support
   - JSON output from all frameworks
   - Coverage generation if configured
 
-- `scripts/parse-test-results.py` - Unified result parser
+- `plugins/pirategoat-tools/scripts/parse-test-results.py` - Unified result parser
   - Parses all 3 framework formats
   - Standard JSON output
   - Pass/fail counts, failure details, locations

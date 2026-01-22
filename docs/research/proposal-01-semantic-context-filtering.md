@@ -570,7 +570,7 @@ Agent never sees import reordering → No false positive.
 ### Phase 1: MVP with Regex Filtering (2 hours)
 
 **Deliverables:**
-1. Python script: `scripts/semantic-filter.py`
+1. Python script: `plugins/pirategoat-tools/scripts/semantic-filter.py`
 2. Filters: blank lines, obvious comments, simple whitespace
 3. CLI: `./semantic-filter.py < input.diff > output.diff`
 4. Integration: Update one agent (architecture-reviewer) as proof-of-concept
@@ -1334,7 +1334,7 @@ def test_agent_with_filtered_context():
 - [ ] Review awesome-agentic-patterns for additional context
 
 ### Phase 1: MVP (2 hours)
-- [ ] Create `scripts/semantic-filter.py` (regex-based)
+- [ ] Create `plugins/pirategoat-tools/scripts/semantic-filter.py` (regex-based)
 - [ ] Implement blank line filtering
 - [ ] Implement comment filtering
 - [ ] Implement import reordering detection

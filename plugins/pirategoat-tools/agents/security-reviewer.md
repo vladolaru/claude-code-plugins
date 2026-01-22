@@ -37,7 +37,7 @@ import sys
 import os
 
 # Import ReviewOutputBuilder from lib
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../lib'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../scripts'))
 from review_output_simple import ReviewOutputBuilder
 
 # Initialize builder
@@ -589,7 +589,7 @@ If any answer is "bad things happen," it's a vulnerability.
 ```python
 # Initialize builder at start
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../lib'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../scripts'))
 from review_output_simple import ReviewOutputBuilder
 
 builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="security")

@@ -306,7 +306,7 @@
 - Not 60-70% as originally projected
 - Misses structural noise (rare)
 
-**Action:** Ship scripts/semantic-filter.py as production tool
+**Action:** Ship plugins/pirategoat-tools/scripts/semantic-filter.py as production tool
 
 ---
 
@@ -387,7 +387,7 @@
 
 ### Production Decision
 
-**Ship:** scripts/semantic-filter.py
+**Ship:** plugins/pirategoat-tools/scripts/semantic-filter.py
 **Set expectations:** 15-30% typical, up to 40% for large/comment-heavy PRs
 **Defer:** AST implementation (complexity not justified for +5-10% gain)
 **Recommend:** Use filter on large PRs (500+ lines) for best ROI
@@ -404,14 +404,14 @@ cd /Users/vladolaru/Work/a8c/woocommerce-develop
 git show <commit-hash> > /tmp/test.diff
 
 # Test MVP
-cat /tmp/test.diff | ./scripts/semantic-filter-mvp.py
+cat /tmp/test.diff | ./plugins/pirategoat-tools/scripts/semantic-filter-mvp.py
 
 # Test Enhanced
-cat /tmp/test.diff | ./scripts/semantic-filter.py
+cat /tmp/test.diff | ./plugins/pirategoat-tools/scripts/semantic-filter.py
 
 # Compare results
-diff <(cat /tmp/test.diff | ./scripts/semantic-filter-mvp.py 2>/dev/null) \
-     <(cat /tmp/test.diff | ./scripts/semantic-filter.py 2>/dev/null)
+diff <(cat /tmp/test.diff | ./plugins/pirategoat-tools/scripts/semantic-filter-mvp.py 2>/dev/null) \
+     <(cat /tmp/test.diff | ./plugins/pirategoat-tools/scripts/semantic-filter.py 2>/dev/null)
 ```
 
 ---

@@ -192,7 +192,7 @@ Following **writing-skills TDD discipline** for all changes:
 - [ ] Document: Baseline metrics
 
 **Afternoon: GREEN Phase - MVP Implementation (1 hour)**
-- [ ] Create scripts/semantic-filter.py (regex-based)
+- [ ] Create plugins/pirategoat-tools/scripts/semantic-filter.py (regex-based)
 - [ ] Implement:
   - Blank line filtering
   - Comment filtering
@@ -290,7 +290,7 @@ Following **writing-skills TDD discipline** for all changes:
 - [ ] Measure: False negative rate
 
 **Afternoon: GREEN Phase - Test Runner Integration (3 hours)**
-- [ ] Create scripts/run-tests-for-review.sh
+- [ ] Create plugins/pirategoat-tools/scripts/run-tests-for-review.sh
   ```bash
   # Run all test suites with JSON output
   npm test --json > test-results.json

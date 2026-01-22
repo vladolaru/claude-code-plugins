@@ -84,7 +84,7 @@
 ### Proposal #1: Semantic Context Filtering MVP (1 hour)
 
 **Implementation:**
-- scripts/semantic-filter-mvp.py (159 lines, production-ready)
+- plugins/pirategoat-tools/scripts/semantic-filter-mvp.py (159 lines, production-ready)
   - Regex-based filtering (no AST dependencies)
   - Filters: blank lines, docblocks, comments, formatting
   - Conservative: when in doubt, keeps the line
