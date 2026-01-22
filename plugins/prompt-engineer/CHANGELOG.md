@@ -5,6 +5,25 @@ All notable changes to the prompt-engineer plugin will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2025-01-23
+
+### Added
+
+- **Three new reference documents** integrated into the skill for comprehensive prompt engineering coverage:
+  - `prompt-engineering-compression.md` - Research-backed techniques for reasoning compression (Chain of Draft, Concise CoT, TALE-EP, Sketch-of-Thought, MARP, Program-of-Thoughts, Focused CoT, Symbolic CoT)
+  - `prompt-engineering-hitl.md` - Human-in-the-loop workflow patterns (HULA framework, Plan Review Gates, Iterative Refinement with Feedback, Pre-Execution Checkpoints, Selective Escalation, Human Context Augmentation)
+  - `prompt-engineering-subagents.md` - Subagent orchestration techniques (Skeleton-of-Thought, Tree of Thoughts, Least-to-Most, Task Orchestration, Explicit Reflection, Self-Contrast, Anticipatory Reflection, MPSC, LM^2, Multi-Expert Prompting)
+- Conditional loading triggers for each new reference based on prompt characteristics
+- Updated Quick Reference diagram showing all five reference categories
+
+### Changed
+
+- Reorganized "Required Resources" section with clearer conditional loading guidance for all references
+
+### Attribution
+
+Synced with upstream source: https://github.com/solatis/claude-config
+
 ## [2.0.0] - 2025-12-19
 
 ### Changed

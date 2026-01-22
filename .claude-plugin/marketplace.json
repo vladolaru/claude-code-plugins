@@ -70,13 +70,13 @@
       "name": "prompt-engineer",
       "source": "./plugins/prompt-engineer",
       "description": "Human-in-the-loop prompt optimization with evidence-grounded pattern attribution using proven prompt engineering patterns.",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "author": {
         "name": "Vlad Olaru"
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["prompt-engineering", "optimization", "claude", "ai-prompts"],
+      "keywords": ["prompt-engineering", "optimization", "claude", "ai-prompts", "compression", "hitl", "subagents"],
       "category": "productivity",
       "strict": true,
       "skills": [

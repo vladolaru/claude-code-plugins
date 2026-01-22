@@ -34,7 +34,7 @@ Do NOT use for:
 
 ## Required Resources
 
-Before ANY analysis, read the appropriate pattern reference(s):
+Before ANY analysis, read the appropriate pattern reference(s). Each reference contains a **Technique Selection Guide** table mapping domains, trigger conditions, stacking compatibility, conflicts, and expected effects.
 
 ### Single-Turn Reference (Always Read)
 
@@ -44,7 +44,7 @@ references/prompt-engineering-single-turn.md
 
 This contains the complete catalog of single-turn patterns, including:
 
-- The **Technique Selection Guide** table (maps domains, trigger conditions, stacking compatibility, conflicts, and expected effects)
+- The **Technique Selection Guide** table
 - The **Quick Reference: Key Principles** (numbered list of foundational techniques)
 - Domain-organized technique sections with research citations and examples
 - The **Anti-Patterns to Avoid** section documenting common failure modes
@@ -55,18 +55,59 @@ This contains the complete catalog of single-turn patterns, including:
 references/prompt-engineering-multi-turn.md
 ```
 
-**Read this reference ONLY when the prompt involves:**
+**Read when the prompt involves:**
 
 - **Multi-turn flows**: Scripts or systems that inject prompts accumulating on a shared context (e.g., iterative refinement loops, conversation chains where previous outputs become subsequent inputs)
+- **Iterative refinement**: Self-Refine, Chain-of-Verification, or similar patterns that exploit deliberate self-examination across multiple passes
+
+**Skip for:** Static system prompts executed in a single LLM call, tool instructions, or one-shot prompts.
+
+### Subagent Orchestration Reference (Conditional)
+
+```
+references/prompt-engineering-subagents.md
+```
+
+**Read when the prompt involves:**
+
 - **Multi-agent / sub-agent orchestration**: Parent/child agent patterns, agent handoffs, or workflows where one agent's output feeds into another agent's prompt
+- **Parallelization**: Skeleton-of-Thought, parallel sampling, or concurrent LLM calls with aggregation
+- **Search/exploration**: Tree of Thoughts (BFS/DFS), branching reasoning paths with pruning or backtracking
+- **Decomposition**: Least-to-Most, Task Orchestration, or breaking complex tasks into specialized subtasks
+- **Reflection patterns**: Self-Contrast, Anticipatory Reflection, or explicit failure diagnosis before retry
+- **Multi-perspective verification**: MPSC, LM^2, or verification through multiple solution perspectives
 
-**Skip this reference for:**
+**Skip for:** Single-agent prompts without coordination, handoffs, or parallel execution.
 
-- Static system prompts executed in a single LLM call
-- Tool instructions or one-shot prompts
-- Prompts that don't involve message accumulation or agent coordination
+### Human-in-the-Loop Reference (Conditional)
 
-The multi-turn document covers techniques like Self-Refine, Chain-of-Verification, Universal Self-Consistency, and Multi-Chain Reasoning—patterns that exploit deliberate self-examination across multiple passes.
+```
+references/prompt-engineering-hitl.md
+```
+
+**Read when the prompt involves:**
+
+- **Human approval gates**: Plan review, pre-execution checkpoints, or workflows requiring human sign-off before proceeding
+- **Iterative feedback loops**: Human-provided feedback incorporated into refinement cycles
+- **Selective escalation**: Confidence-based routing where low-confidence outputs go to human review
+- **Context augmentation**: Human-provided domain knowledge, constraints, or examples improving LLM output
+
+**Skip for:** Fully autonomous prompts without human intervention points.
+
+### Compression Reference (Conditional)
+
+```
+references/prompt-engineering-compression.md
+```
+
+**Read when:**
+
+- **Token efficiency is critical**: Cost-sensitive applications, latency requirements, or output length constraints
+- **Reasoning compression needed**: Chain of Draft, Concise CoT, TALE-EP, or techniques reducing CoT verbosity while maintaining accuracy
+- **Cognitive-inspired compression**: Sketch-of-Thought paradigms (Conceptual Chaining, Chunked Symbolism, Expert Lexicons)
+- **Tool-augmented reasoning**: Program-of-Thoughts for computation, or delegating calculation to external interpreters
+
+**Skip for:** Prompts where thoroughness is more important than brevity, or where compression would degrade output quality.
 
 ---
 
@@ -443,8 +484,11 @@ If any checkbox fails, address it before presenting the final prompt.
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │ 1. READ THE REFERENCE(S)                                        │
-│    - Always: references/prompt-engineering-single-turn.md       │
-│    - If multi-turn/multi-agent: also read multi-turn reference  │
+│    - Always: prompt-engineering-single-turn.md                  │
+│    - If multi-turn/refinement: + multi-turn reference           │
+│    - If multi-agent/subagents: + subagents reference            │
+│    - If human approval gates:  + hitl reference                 │
+│    - If token efficiency:      + compression reference          │
 ├─────────────────────────────────────────────────────────────────┤
 │ 2. UNDERSTAND THE PROMPT (Phase 1)                              │
 │    - Operating context (single-shot? tool-use? constraints?)    │
