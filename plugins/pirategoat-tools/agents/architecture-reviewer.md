@@ -160,6 +160,112 @@ Review only **implementation files** (not tests, configs, or documentation):
 - Build artifacts
 - Generated code
 
+## Linter Results (Ground Truth)
+
+**When the main session provides linter results, you have GROUND TRUTH about code quality violations.**
+
+### Loading Linter Results
+
+**Check for linter results file:**
+```bash
+LINT_RESULTS_FILE="$OUTPUT_DIR/lint-results-unified.json"
+
+if [ -f "$LINT_RESULTS_FILE" ]; then
+    echo "✅ Linter results available - using ground truth"
+    cat "$LINT_RESULTS_FILE"
+else
+    echo "⚠️ No linter results available - reviewing without linter data"
+    echo "Note: Review is based on manual analysis only, not linter output"
+fi
+```
+
+### Linter Results Format
+
+When present, linter results follow this unified format:
+
+```json
+{
+  "overall_pass": false,
+  "linters": {
+    "ESLint": {"pass": false, "errors": 5, "warnings": 3},
+    "PHPCS": {"pass": false, "errors": 12, "warnings": 7}
+  },
+  "summary": {
+    "total_violations": 27,
+    "errors": 17,
+    "warnings": 10
+  },
+  "all_violations": [
+    {
+      "file": "src/OrderProcessor.php",
+      "line": 42,
+      "column": 10,
+      "severity": "error",
+      "rule": "WordPress.WP.DeprecatedFunctions",
+      "message": "Function get_currentuserinfo() is deprecated",
+      "linter": "PHPCS"
+    }
+  ]
+}
+```
+
+### Using Linter Results in Review
+
+**When linter results are available:**
+
+1. **Load results at start of review:**
+```python
+import json
+
+lint_results = None
+lint_file = f"{output_dir}/lint-results-unified.json"
+
+if os.path.exists(lint_file):
+    with open(lint_file) as f:
+        lint_results = json.load(f)
+    print(f"✅ Loaded {lint_results['summary']['total_violations']} linter violations")
+```
+
+2. **Use as ground truth for code quality issues:**
+```python
+if lint_results:
+    for violation in lint_results['all_violations']:
+        # Only escalate errors (not warnings) as architectural issues
+        if violation['severity'] == 'error':
+            # Check if violation indicates architectural problem
+            if is_architectural_violation(violation['rule']):
+                builder.add_issue(
+                    severity="high",
+                    title=f"Code standard violation: {violation['rule']}",
+                    file=violation['file'],
+                    line=violation['line'],
+                    description=f"GROUND TRUTH from {violation['linter']}: {violation['message']}",
+                    recommendation="Fix linter violation - see linter output for details",
+                    category="code-standards",
+                    confidence=1.0  # Ground truth from linter
+                )
+```
+
+3. **Reference linter findings in architectural analysis:**
+When you find architectural issues that also have linter violations, reference them:
+
+```markdown
+### Architectural Issue: Deprecated Function Usage
+
+**GROUND TRUTH:** PHPCS detected deprecated function `get_currentuserinfo()` at line 42
+
+**Architectural Impact:** Using deprecated functions indicates technical debt and
+failure to follow evolution of the platform's architecture.
+
+**Recommendation:** Replace with `wp_get_current_user()` per WordPress Core architecture
+```
+
+**Important:**
+- Treat linter results as **definitive** - don't question them
+- Focus architectural review on patterns, SOLID principles, design - linters handle syntax
+- Use linter violations as **supporting evidence** for architectural concerns
+- Don't duplicate linter findings unless they have architectural significance
+
 ## Verbose Reasoning Mode
 
 **When the VERBOSE environment variable is set to `true`, include detailed reasoning for each architectural finding.**

@@ -267,6 +267,180 @@ divide(a, b) {
 
 **Ground truth eliminates guesswork!**
 
+## Coverage Results (Ground Truth)
+
+**When the main session provides coverage results, you have GROUND TRUTH about which code is tested and which is not.**
+
+### Loading Coverage Results
+
+**Check for coverage results file:**
+```bash
+COVERAGE_RESULTS_FILE="$OUTPUT_DIR/coverage-results-unified.json"
+
+if [ -f "$COVERAGE_RESULTS_FILE" ]; then
+    echo "✅ Coverage results available - using ground truth"
+    cat "$COVERAGE_RESULTS_FILE"
+else
+    echo "⚠️ No coverage results available - reviewing without coverage data"
+    echo "Note: Cannot verify which code paths are tested"
+fi
+```
+
+### Coverage Results Format
+
+When present, coverage results follow this unified format:
+
+```json
+{
+  "frameworks": {
+    "Jest": {
+      "line": 72.5,
+      "branch": 65.3,
+      "function": 78.2,
+      "statement": 72.1
+    },
+    "PHPUnit": {
+      "line": 82.3,
+      "branch": 75.8
+    }
+  },
+  "overall_coverage": 77.4,
+  "all_files_below_threshold": [
+    {
+      "file": "src/PaymentGateway.php",
+      "line_coverage": 45.2,
+      "uncovered_lines": [42, 45, 78, 79, 80, 95]
+    },
+    {
+      "file": "src/OrderProcessor.js",
+      "line_coverage": 52.1,
+      "branch_coverage": 40.5,
+      "function_coverage": 60.0
+    }
+  ]
+}
+```
+
+### Using Coverage Results in Review
+
+**When coverage results are available:**
+
+1. **Load results at start of review:**
+```python
+import json
+
+coverage_results = None
+coverage_file = f"{output_dir}/coverage-results-unified.json"
+
+if os.path.exists(coverage_file):
+    with open(coverage_file) as f:
+        coverage_results = json.load(f)
+    print(f"✅ Loaded coverage data: {coverage_results['overall_coverage']:.1f}% overall")
+```
+
+2. **Use coverage gaps as ground truth:**
+```python
+if coverage_results:
+    # Identify critical uncovered code
+    for file_data in coverage_results['all_files_below_threshold']:
+        if file_data['line_coverage'] < 50:  # Critical threshold
+            builder.add_issue(
+                severity="high",
+                title=f"Critical coverage gap: {file_data['line_coverage']:.1f}% coverage",
+                file=file_data['file'],
+                line=file_data.get('uncovered_lines', [None])[0] if file_data.get('uncovered_lines') else None,
+                description=f"GROUND TRUTH from coverage: Only {file_data['line_coverage']:.1f}% of code is tested. Uncovered lines: {file_data.get('uncovered_lines', [])}",
+                recommendation="Add tests to cover critical code paths, especially error handling and edge cases",
+                category="missing-coverage",
+                confidence=1.0  # Ground truth from coverage tool
+            )
+```
+
+3. **Reference coverage in test quality analysis:**
+When you find test quality issues AND have coverage data, cross-reference:
+
+```markdown
+### Test Quality Issue: Missing Edge Case Tests
+
+**Test Gap:** No tests for error handling in PaymentGateway.process()
+
+**GROUND TRUTH from coverage:**
+- Lines 78-95 (error handling) have 0% coverage
+- Lines 42, 45 (validation) uncovered
+
+**Impact:** Production bugs in error paths won't be caught by tests
+
+**Recommendation:** Add tests for:
+1. Invalid payment method (line 42)
+2. Network timeout (line 78-82)
+3. API error response (line 85-90)
+```
+
+### Coverage Interpretation Guidelines
+
+**What good coverage means:**
+- Line coverage >80% = Most code paths tested
+- Branch coverage >70% = Most conditions tested
+- Function coverage >90% = Most functions have at least one test
+
+**What coverage DOESN'T mean:**
+- High coverage ≠ good tests (can have assertions that don't verify behavior)
+- Low coverage ≠ bad tests (critical paths might be well-tested)
+- 100% coverage ≠ bug-free (logic errors can still exist)
+
+**How to use coverage in review:**
+
+1. **Prioritize review of uncovered code:**
+   - Focus on files below 50% (critical gaps)
+   - Check if uncovered code is error handling (high risk)
+   - Verify if uncovered code is legacy or new
+
+2. **Correlate with test quality:**
+   - High coverage + weak assertions = false confidence
+   - Low coverage + critical code = high risk
+   - High coverage + good tests = real confidence
+
+3. **Make specific recommendations:**
+```markdown
+❌ BAD: "Increase coverage"
+✅ GOOD: "Add test for error handling in PaymentGateway.php lines 78-95 (currently 0% covered)"
+```
+
+### Integration with Test Results
+
+**When you have BOTH test results AND coverage:**
+
+1. **Passing tests + low coverage = partial confidence**
+```markdown
+✅ All 8 tests pass
+⚠️  But only 45% code coverage
+
+Recommendation: Tests verify happy path, but error handling untested.
+Add tests for: [specific uncovered paths]
+```
+
+2. **Failing tests + high coverage = implementation bug**
+```markdown
+❌ 3 tests failing
+✅ 82% code coverage
+
+Analysis: Tests are comprehensive, implementation has bugs.
+Root cause: [specific bug from test failure analysis]
+```
+
+3. **Passing tests + high coverage = high confidence**
+```markdown
+✅ All 15 tests pass
+✅ 87% code coverage
+
+Verdict: APPROVE - Code well-tested with good coverage
+```
+
+**Important:**
+- Coverage is a **necessary but not sufficient** indicator of test quality
+- Use coverage to **identify gaps**, not to **prove quality**
+- Always correlate coverage with test results and test code quality
+
 ## Verbose Reasoning Mode
 
 **When the VERBOSE environment variable is set to `true`, include detailed reasoning for each test quality finding.**

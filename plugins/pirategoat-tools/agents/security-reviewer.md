@@ -193,6 +193,197 @@ If ANY link in this chain is missing, it's a vulnerability.
 ## Core Mission
 Identify exploitable vulnerabilities → Assess severity → Provide WordPress-specific remediation
 
+## Security Scanner Results (Ground Truth)
+
+**When the main session provides security scanner results, you have GROUND TRUTH about detected vulnerabilities.**
+
+### Loading Security Scanner Results
+
+**Check for security scanner results file:**
+```bash
+SECURITY_RESULTS_FILE="$OUTPUT_DIR/security-results-unified.json"
+
+if [ -f "$SECURITY_RESULTS_FILE" ]; then
+    echo "✅ Security scanner results available - using ground truth"
+    cat "$SECURITY_RESULTS_FILE"
+else
+    echo "⚠️ No security scanner results available - reviewing without scanner data"
+    echo "Note: Security review based on manual analysis only"
+fi
+```
+
+### Security Scanner Results Format
+
+When present, security scanner results follow this unified format:
+
+```json
+{
+  "overall_pass": false,
+  "scanners": {
+    "Semgrep": {
+      "pass": false,
+      "total_findings": 12,
+      "by_severity": {
+        "high": 4,
+        "medium": 6,
+        "low": 2,
+        "info": 0
+      }
+    }
+  },
+  "summary": {
+    "total_findings": 12,
+    "high": 4,
+    "medium": 6,
+    "low": 2,
+    "info": 0
+  },
+  "all_findings": [
+    {
+      "file": "src/api.php",
+      "line": 42,
+      "column": 10,
+      "severity": "high",
+      "rule": "php.lang.security.sqli.tainted-sql-string",
+      "message": "User input flows to SQL query without sanitization",
+      "scanner": "Semgrep",
+      "cwe": ["CWE-89"]
+    }
+  ]
+}
+```
+
+### Using Security Scanner Results in Review
+
+**When security scanner results are available:**
+
+1. **Load results at start of review:**
+```python
+import json
+
+security_findings = []
+security_file = f"{output_dir}/security-results-unified.json"
+
+if os.path.exists(security_file):
+    with open(security_file) as f:
+        security_results = json.load(f)
+
+    security_findings = security_results['all_findings']
+    print(f"✅ Loaded {len(security_findings)} security findings from scanners")
+```
+
+2. **Use scanner findings as ground truth:**
+```python
+if security_findings:
+    for finding in security_findings:
+        # Map scanner severity to our severity levels
+        severity = finding['severity']  # Already mapped to high/medium/low
+
+        # Only escalate high and medium findings (skip low/info unless relevant)
+        if severity in ['high', 'medium']:
+            builder.add_issue(
+                severity="critical" if severity == "high" else "high",
+                title=f"Security scanner detected: {finding['rule']}",
+                file=finding['file'],
+                line=finding['line'],
+                description=f"GROUND TRUTH from {finding['scanner']}: {finding['message']}. CWE: {finding.get('cwe', 'N/A')}",
+                recommendation="Review and fix security vulnerability identified by scanner",
+                category=map_cwe_to_category(finding.get('cwe', [])),
+                confidence=1.0  # Ground truth from scanner
+            )
+```
+
+3. **Cross-reference scanner findings with manual analysis:**
+
+When you find vulnerabilities AND have scanner data, reference both:
+
+```markdown
+### SQL Injection Vulnerability
+
+**GROUND TRUTH:** Semgrep detected `php.lang.security.sqli.tainted-sql-string` at line 42
+
+**Manual Analysis Confirms:**
+```php
+// Line 42: User input directly in SQL
+$wpdb->query("DELETE FROM users WHERE id = " . $_GET['user_id']);
+```
+
+**Attack Vector:**
+1. Attacker provides: `?user_id=1 OR 1=1`
+2. Query becomes: `DELETE FROM users WHERE id = 1 OR 1=1`
+3. All users deleted
+
+**CWE-89:** SQL Injection
+**CVSS Severity:** Critical (9.8/10)
+
+**Fix:** Use prepared statements
+```php
+$wpdb->query($wpdb->prepare("DELETE FROM users WHERE id = %d", $_GET['user_id']));
+```
+```
+
+### Scanner Interpretation Guidelines
+
+**What scanners detect well:**
+- SQL injection patterns (tainted data flow)
+- XSS patterns (unsanitized output)
+- Hardcoded secrets (API keys, passwords)
+- Insecure cryptography
+- Path traversal patterns
+- Command injection
+
+**What scanners miss:**
+- Business logic vulnerabilities (authorization bugs)
+- Context-specific security issues
+- Complex data flow requiring human reasoning
+- WordPress-specific patterns (nonce verification, capability checks)
+
+**How to use scanner results:**
+
+1. **Treat high-severity findings as critical:**
+   - Scanner found it = likely exploitable
+   - Prioritize these in review
+   - Verify manually to understand exploit
+
+2. **Investigate medium-severity findings:**
+   - May be context-dependent
+   - Check if WordPress security functions used
+   - Assess actual exploitability
+
+3. **Ignore scanner false positives sparingly:**
+   - Only if you have strong evidence
+   - Document why it's a false positive
+   - Scanner may still be right
+
+### Example Integration
+
+```python
+def map_cwe_to_category(cwe_list):
+    """Map CWE IDs to our security categories."""
+    cwe_mapping = {
+        'CWE-89': 'sql-injection',
+        'CWE-79': 'xss',
+        'CWE-352': 'csrf',
+        'CWE-22': 'path-traversal',
+        'CWE-434': 'file-upload',
+        'CWE-639': 'authentication',
+        'CWE-862': 'capabilities',
+        'CWE-200': 'data-exposure'
+    }
+
+    for cwe in cwe_list:
+        if cwe in cwe_mapping:
+            return cwe_mapping[cwe]
+
+    return 'other'
+```
+
+**Important:**
+- Security scanner results are **ground truth** for pattern-based vulnerabilities
+- Manual review still required for business logic and WordPress-specific issues
+- Scanner findings **must** be addressed before approval
+- Document any scanner findings you believe are false positives (with evidence)
+
 ## Verbose Reasoning Mode
 
 **When the VERBOSE environment variable is set to `true`, include detailed reasoning for each security finding.**

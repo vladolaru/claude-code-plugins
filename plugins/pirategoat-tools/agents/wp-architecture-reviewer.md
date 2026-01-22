@@ -304,6 +304,128 @@ Ensure WordPress patterns → Verify extensibility → Maintain backwards compat
 □ Is the change documented in changelog?
 ```
 
+## Linter Results (Ground Truth)
+
+**When the main session provides linter results, you have GROUND TRUTH about WordPress Coding Standards (WPCS) violations.**
+
+### Loading Linter Results
+
+**Check for linter results file:**
+```bash
+LINT_RESULTS_FILE="$OUTPUT_DIR/lint-results-unified.json"
+
+if [ -f "$LINT_RESULTS_FILE" ]; then
+    echo "✅ Linter results available - using ground truth for WPCS"
+    cat "$LINT_RESULTS_FILE"
+else
+    echo "⚠️ No linter results available - reviewing without PHPCS data"
+    echo "Note: WPCS review is based on manual analysis only"
+fi
+```
+
+### Linter Results Format
+
+When present, linter results follow this unified format (focus on PHPCS for WordPress):
+
+```json
+{
+  "overall_pass": false,
+  "linters": {
+    "PHPCS": {
+      "pass": false,
+      "total_violations": 42,
+      "errors": 18,
+      "warnings": 24
+    }
+  },
+  "all_violations": [
+    {
+      "file": "includes/class-payment-gateway.php",
+      "line": 156,
+      "column": 10,
+      "severity": "error",
+      "rule": "WordPress.Security.EscapeOutput.OutputNotEscaped",
+      "message": "All output should be run through an escaping function",
+      "linter": "PHPCS"
+    }
+  ]
+}
+```
+
+### Using PHPCS Results in WordPress Architecture Review
+
+**When PHPCS results are available:**
+
+1. **Load results at start of review:**
+```python
+import json
+
+phpcs_violations = []
+lint_file = f"{output_dir}/lint-results-unified.json"
+
+if os.path.exists(lint_file):
+    with open(lint_file) as f:
+        lint_results = json.load(f)
+
+    # Filter to PHPCS violations only (WordPress-specific)
+    phpcs_violations = [
+        v for v in lint_results['all_violations']
+        if v['linter'] == 'PHPCS'
+    ]
+
+    print(f"✅ Loaded {len(phpcs_violations)} PHPCS violations")
+```
+
+2. **Prioritize architectural violations from PHPCS:**
+
+PHPCS detects many WordPress-specific issues. Focus on architectural significance:
+
+**Architectural (elevate to HIGH/CRITICAL):**
+- `WordPress.Security.*` - Security issues (escaping, nonces, SQL)
+- `WordPress.WP.DeprecatedFunctions` - Backwards compatibility
+- `WordPress.WP.GlobalVariablesOverride` - Global namespace pollution
+- `WordPress.DB.DirectDatabaseQuery` - Bypassing APIs
+- `WordPress.WP.I18n.*` - Internationalization architecture
+
+**Code style only (acknowledge but don't escalate):**
+- `WordPress.WhiteSpace.*` - Formatting
+- `WordPress.NamingConventions.ValidVariableName` - Style
+- `Squiz.Commenting.*` - Documentation format
+
+3. **Example integration:**
+```python
+for violation in phpcs_violations:
+    # Only escalate architectural violations
+    if violation['rule'].startswith('WordPress.Security.'):
+        builder.add_issue(
+            severity="critical",
+            title=f"Security violation: {violation['rule']}",
+            file=violation['file'],
+            line=violation['line'],
+            description=f"GROUND TRUTH from PHPCS: {violation['message']}",
+            recommendation="Fix WPCS security violation immediately",
+            category="security",
+            confidence=1.0  # Ground truth from PHPCS
+        )
+    elif violation['rule'].startswith('WordPress.WP.DeprecatedFunctions'):
+        builder.add_issue(
+            severity="high",
+            title="Deprecated WordPress function",
+            file=violation['file'],
+            line=violation['line'],
+            description=f"GROUND TRUTH from PHPCS: {violation['message']}",
+            recommendation="Replace deprecated function per WordPress backwards compatibility guidelines",
+            category="backwards-compatibility",
+            confidence=1.0
+        )
+```
+
+**Important:**
+- Treat PHPCS results as **definitive** for WordPress standards
+- Focus architectural review on ecosystem patterns (hooks, extensibility, compatibility)
+- Use PHPCS violations as **supporting evidence** for architectural concerns
+- Don't duplicate pure style issues unless they have architectural significance
+
 ## Output Format
 
 ```markdown
