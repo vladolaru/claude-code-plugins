@@ -964,3 +964,104 @@ User: "Review PR #62747"
 Agent: "Let me first gather context before reviewing the code."
 → Checks PR state → Checks if user reviewed before → Fetches linked issue → Reviews existing feedback → THEN proceeds to code
 </example>
+
+---
+
+## Memory System (Learning from Experience)
+
+**MANUAL TRIGGER:** Logging only happens when you (the user) request it.
+
+After completing PR review, if the user says **"Log this experience"** or **"Save to memory"**, log the session to improve future review quality.
+
+### Load Knowledge Before Starting
+
+Before beginning PR review, load accumulated knowledge:
+
+```python
+import sys
+from pathlib import Path
+
+try:
+    sys.path.insert(0, str(Path.home() / "ai-memory"))
+    from lib import load_knowledge, has_memory_system
+
+    if has_memory_system():
+        knowledge = load_knowledge("pr-reviewing")
+        if knowledge:
+            print("📚 Loaded accumulated knowledge")
+            # Review knowledge for:
+            # - Effective context gathering sequence
+            # - Common pitfalls to avoid
+            # - Review depth patterns by PR type
+            # - Tool usage patterns
+except ImportError:
+    knowledge = None
+```
+
+### Log Experience (On User Request Only)
+
+```python
+import sys
+from pathlib import Path
+from datetime import datetime
+
+experience = {
+    "timestamp": datetime.now().isoformat(),
+    "task": f"PR review #{pr_number}",
+    "approach": approach_used,  # "context-first" | "code-first" | "hybrid"
+    "outcome": outcome,  # "success" | "partial" | "failed"
+    "duration_seconds": total_duration,
+    "pr_number": pr_number,
+    "pr_state": pr_state,  # "open" | "draft" | "merged"
+    "review_depth": review_depth,  # "comprehensive" | "focused" | "quick"
+    "context_sources": context_sources_used,  # ["issue", "commits", "previous-reviews", "related-prs"]
+    "tools_used": tools_used,
+    "iterations": iterations,  # How many context-gathering rounds
+    "insights": [
+        # What did you learn?
+        # - "Issue context critical for understanding WHY"
+        # - "Previous reviews saved time (already discussed X)"
+        # - "Draft PR - should have checked state first"
+    ],
+    "tags": [
+        f"pr:{pr_number}",
+        f"pr-state:{pr_state}",
+        # Domain tags if applicable
+    ],
+    "context": {
+        "pr_number": pr_number,
+        "pr_state": pr_state,
+        "issue_linked": issue_linked,
+        "had_previous_reviews": had_previous_reviews,
+    }
+}
+
+try:
+    sys.path.insert(0, str(Path.home() / "ai-memory"))
+    from lib import log_experience, has_memory_system
+
+    if has_memory_system():
+        log_experience("pr-reviewing", experience)
+    else:
+        print("ℹ️  Memory system not available")
+except ImportError:
+    print("ℹ️  Memory system not installed")
+```
+
+### What to Track
+
+**Approaches:**
+- `context-first` - Gathered full context before code review
+- `code-first` - Started with code, added context later
+- `hybrid` - Iterative context + code review
+
+**Outcomes:**
+- `success` - Review completed with sufficient context
+- `partial` - Review completed but context gaps
+- `failed` - Could not complete review (blocked, draft, etc.)
+
+**Insights examples:**
+- "Issue context explains WHY better than PR description"
+- "Previous reviews save time - check them first"
+- "Draft PRs should be skipped (check state early)"
+- "Linked issues critical - don't skip this step"

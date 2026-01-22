@@ -458,3 +458,104 @@ User: "Fix WOOPLUG-1234 - the checkout button is broken"
 Agent: "Let me fetch the issue details including all comments and linked PRs first."
 → Fetches issue → Checks for duplicates → Validates bug → Completes RCA → Proposes fix
 </example>
+
+---
+
+## Memory System (Learning from Experience)
+
+**MANUAL TRIGGER:** Logging only happens when you (the user) request it.
+
+After completing investigation, if the user says **"Log this experience"** or **"Save to memory"**, log the session to improve future investigation quality.
+
+### Load Knowledge Before Starting
+
+Before beginning investigation, load accumulated knowledge:
+
+```python
+import sys
+from pathlib import Path
+
+try:
+    sys.path.insert(0, str(Path.home() / "ai-memory"))
+    from lib import load_knowledge, has_memory_system
+
+    if has_memory_system():
+        knowledge = load_knowledge("dig-into-linear-issue")
+        if knowledge:
+            print("📚 Loaded accumulated knowledge")
+            # Review knowledge for:
+            # - Effective search strategies (Linear vs P2 vs GitHub)
+            # - Issue age patterns (recent vs old issues)
+            # - Tool usage patterns
+            # - Common pitfalls to avoid
+except ImportError:
+    knowledge = None
+```
+
+### Log Experience (On User Request Only)
+
+```python
+import sys
+from pathlib import Path
+from datetime import datetime
+
+experience = {
+    "timestamp": datetime.now().isoformat(),
+    "task": f"investigate {issue_id}",
+    "approach": approach_used,  # "linear-first" | "p2-first" | "github-first" | "hybrid"
+    "outcome": outcome,  # "success" | "partial" | "failed"
+    "duration_seconds": total_duration,
+    "issue_id": issue_id,
+    "issue_age_days": issue_age_days,
+    "resolution_type": resolution_type,  # "found-fix" | "found-duplicate" | "needs-more-info"
+    "evidence_sources": evidence_sources_used,  # ["linear", "p2", "github", "slack"]
+    "tools_used": tools_used,
+    "iterations": iterations,  # How many search attempts
+    "insights": [
+        # What did you learn?
+        # - "Linear API search fast for recent issues"
+        # - "P2 archives better for legacy issues"
+        # - "GitHub PR context critical for understanding fix"
+    ],
+    "tags": [
+        f"issue:{issue_id}",
+        f"issue-age:{categorize_age(issue_age_days)}",  # recent/medium/old
+        # Domain tags if applicable
+    ],
+    "context": {
+        "issue_id": issue_id,
+        "issue_age_days": issue_age_days,
+        "team": team_name if known else None,
+    }
+}
+
+try:
+    sys.path.insert(0, str(Path.home() / "ai-memory"))
+    from lib import log_experience, has_memory_system
+
+    if has_memory_system():
+        log_experience("dig-into-linear-issue", experience)
+    else:
+        print("ℹ️  Memory system not available")
+except ImportError:
+    print("ℹ️  Memory system not installed")
+```
+
+### What to Track
+
+**Approaches:**
+- `linear-first` - Started with Linear API search
+- `p2-first` - Started with P2 archives search
+- `github-first` - Started with GitHub PR search
+- `hybrid` - Parallel or adaptive search
+
+**Outcomes:**
+- `success` - Found sufficient context/resolution
+- `partial` - Found some context but gaps remain
+- `failed` - Could not find useful context
+
+**Insights examples:**
+- "Linear API search fast for recent issues (<7 days)"
+- "P2 archives have better context for legacy issues (>30 days)"
+- "GitHub PR search reveals implementation details"
+- "Cross-referencing multiple sources gives complete picture"
