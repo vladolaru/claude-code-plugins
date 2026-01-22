@@ -5,23 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.11.0] - 2026-01-22
-
-### Changed
-
-- **date-time-wrangling skill** - Major expansion and prompt engineering optimization
-  - Applied prompt engineering patterns: RULE 0 directive, affirmative language, CSO-optimized description
-  - Added comprehensive time operations (24h/12h formats, ISO 8601, time arithmetic)
-  - Added Unix timestamp support (to/from epoch conversion)
-  - Added time zone support with 16 major geographic regions (Americas, Europe, Middle East/Africa, Asia, Oceania)
-  - Added localization guidance (`LC_TIME=C` for English, locale-independent formats)
-  - Restructured for scannability with Quick Reference tables
-  - Reduced token usage ~40% while expanding functionality
-  - Tested with subagents for correct command usage and localization choices
-
 ## [1.10.0] - 2026-01-22
 
 ### Added
+
+- **date-time-wrangling skill** - Verify temporal information using Unix date commands
+  - Date operations: current date, day of week, date arithmetic, days between dates
+  - Time operations: current time (12h/24h), ISO 8601, Unix timestamps, time arithmetic
+  - Time zone support: 16 major geographic regions with TZ identifiers
+  - Localization guidance: `LC_TIME=C` for English, locale-independent formats
+  - Platform support: GNU date (Linux) and BSD date (macOS) syntax
+  - Adapted from Matt Hodges' temporal-awareness skill (MIT)
 
 - **Rich Feedback Loops - Phases 2-4 Complete** - Agents now integrate with linters, coverage, and security scanners
 
