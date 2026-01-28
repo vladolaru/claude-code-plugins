@@ -21,7 +21,8 @@ Browser automation for WooCommerce debugging, verification, and testing.
 Question: "What is the WordPress site URL?"
 Header: "Site URL"
 Options:
-  - "http://localhost:8888" (local development)
+  - "http://localhost:8082" (WooPayments wp-env, credentials: admin/admin)
+  - "http://localhost:8888" (wp-env default)
   - "http://localhost:8080" (alternate local)
 ```
 
