@@ -524,7 +524,7 @@ grep -r "Adapter\|Gateway\|Repository" .
 
 ### Step 5: Compose Review Output
 
-Create review file: `$OUTPUT_DIR/architecture-review-$PR_ID.md`
+Create review files: `$OUTPUT_DIR/architecture-review.json` and `$OUTPUT_DIR/architecture-review.md`
 
 **Structure:**
 
@@ -606,15 +606,16 @@ For implementing recommendations, see:
 **Time:** [timestamp]
 ```
 
-### Step 6: Write Output File
+### Step 6: Write Output Files
 
-```bash
-# Create the review file
-cat > "$OUTPUT_DIR/architecture-review-$PR_ID.md" << 'EOF'
-[Your review content]
-EOF
+```python
+# Generate both formats
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
 
-echo "✅ Architecture review written to: $OUTPUT_DIR/architecture-review-$PR_ID.md"
+# Write both files
+Write(f"{output_dir}/architecture-review.json", json_output)
+Write(f"{output_dir}/architecture-review.md", markdown_output)
 ```
 
 ## Review Philosophy

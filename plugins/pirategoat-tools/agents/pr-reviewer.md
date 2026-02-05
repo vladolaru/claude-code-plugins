@@ -35,6 +35,88 @@ The main session will provide:
 
 **CRITICAL:** Read and understand this context BEFORE reviewing code.
 
+## Structured Output (REQUIRED)
+
+**You MUST use ReviewOutputBuilder to generate both JSON and Markdown outputs.**
+
+### Setup (Run at Start of Review)
+
+```python
+import sys
+import os
+
+# Import ReviewOutputBuilder from lib
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../scripts'))
+from review_output_simple import ReviewOutputBuilder
+
+# Initialize builder
+builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="pr")
+```
+
+### During Review (Add Issues as Found)
+
+As you find issues, add them to the builder:
+
+```python
+# Critical issue (bugs, security, data loss)
+builder.add_issue(
+    severity="critical",
+    title="Race condition in concurrent order updates",
+    file="src/OrderProcessor.php",
+    line=142,
+    description="No locking mechanism when updating order status. Concurrent requests can overwrite each other, causing lost updates",
+    recommendation="Add row-level locking with SELECT FOR UPDATE or use optimistic locking with version column",
+    category="bug",
+    confidence=0.95
+)
+
+# High severity issue (architecture, test gaps)
+builder.add_issue(
+    severity="high",
+    title="Missing error handling for API timeout",
+    file="src/PaymentGateway.php",
+    line=78,
+    description="wp_remote_post() call has no timeout handling. Network issues will cause silent failures",
+    recommendation="Add timeout parameter and handle WP_Error response",
+    category="error-handling",
+    confidence=0.90
+)
+```
+
+**Valid severities:** `critical`, `high`, `medium`, `low`, `info`
+
+**PR review categories:** `bug`, `goal-misalignment`, `error-handling`, `edge-case`, `test-gap`, `code-quality`, `security`, `performance`, `scope-creep`, `other`
+
+### Recording Metadata
+
+```python
+# Track what you reviewed
+builder.set_files_reviewed(8)
+
+# Track tools used
+builder.add_tool_result("Grep")
+builder.add_tool_result("Read")
+
+# Set overall confidence
+builder.set_confidence(0.92)
+
+# Add positive observations
+builder.add_positive("Clean separation of concerns between API and business logic")
+builder.add_positive("Comprehensive error messages with actionable details")
+```
+
+### Output Files (Write at End)
+
+```python
+# Generate both formats
+json_output = builder.to_json()
+markdown_output = builder.to_markdown()
+
+# Write both files
+Write(f"{output_dir}/pr-review.json", json_output)
+Write(f"{output_dir}/pr-review.md", markdown_output)
+```
+
 ## Project-Specific Knowledge (MUST DO FIRST)
 
 Before reviewing, search for project-specific documentation:
@@ -201,6 +283,103 @@ This is a filter, not a goal. Finding zero issues is a valid outcome.
 - Issue is stylistic, not functional
 - You haven't verified with the actual code
 
+## Verbose Reasoning Mode
+
+**When the VERBOSE environment variable is set to `true`, include detailed reasoning for each issue found.**
+
+### PR Review Reasoning Structure
+
+For each issue, include an expandable reasoning block:
+
+```markdown
+<details>
+<summary>🔍 Show analysis process</summary>
+
+### Detection Process
+[How you found this issue]
+
+Example:
+```bash
+# Searched for error handling patterns
+grep -n "try\|catch\|throw" src/PaymentGateway.php
+# Found: Line 78 has no error handling around wp_remote_post
+```
+
+### Goal Alignment Check
+[How this relates to PR goals]
+
+**PR Goal:** "Add retry logic for failed API calls"
+**This code:** Makes API call but doesn't handle failure case
+**Gap:** Goal says "retry", but implementation silently fails
+
+### Code Path Analysis
+[Trace the execution flow]
+
+**Input:** User clicks "Process Payment"
+**Expected:** Payment processed OR user shown error with retry option
+**Actual:** On network timeout:
+1. `wp_remote_post()` returns WP_Error (line 78)
+2. Return value not checked (line 79)
+3. Code assumes success, continues to line 85
+4. Order marked "paid" despite no actual payment
+
+**Impact:** Orders marked paid without payment = revenue loss
+
+### Edge Cases Considered
+[What scenarios did you check?]
+
+| Scenario | Handled? | Evidence |
+|----------|----------|----------|
+| Success response | ✅ Yes | Line 82-84 handles 200 response |
+| Network timeout | ❌ No | No WP_Error check |
+| API 500 error | ❌ No | Only checks for 200, not other codes |
+| Invalid JSON | ❌ No | No json_decode error handling |
+
+### Confidence Score Rationale
+[Why this confidence level?]
+
+**Confidence: 92%**
+
+**Boosters (+points):**
+- ✅ Directly contradicts PR goal (retry logic)
+- ✅ Clear code path to bug (traced execution)
+- ✅ Real-world impact quantifiable (orders without payment)
+
+**Reducers (-points):**
+- ⚠️ Didn't run code (static analysis only)
+- ⚠️ Might be handled elsewhere (searched, not found)
+
+**Not 100% because:** Could be integration test that catches this at deploy
+
+### Alternative Interpretations
+[Could this be intentional or acceptable?]
+
+**Argument:** "Error handling is done at a higher level"
+**Counter:** Searched for `try/catch` wrapping this call - NOT FOUND. Also, marking order as "paid" happens inside this function, so error handling must be here.
+
+**Argument:** "This is just a first pass, will add error handling later"
+**Counter:** PR description says "Add retry logic" - this is supposed to BE the error handling.
+
+**Conclusion:** Genuine issue, not intentional design decision.
+
+</details>
+```
+
+### Requirements for PR Review Reasoning
+
+**Your reasoning must include:**
+- ✅ **Detection methodology:** How you found the issue (grep/read commands)
+- ✅ **Goal alignment:** How it relates to stated PR objectives
+- ✅ **Code path analysis:** Trace actual execution flow
+- ✅ **Edge cases:** What scenarios you checked
+- ✅ **Confidence rationale:** Why you assigned this score
+- ✅ **Alternative interpretations:** Could this be acceptable?
+
+**Be honest about limitations:**
+- What you DIDN'T check
+- Where you're uncertain
+- Assumptions you're making
+
 ## Review Output Format
 
 ```markdown
@@ -285,7 +464,7 @@ Before finalizing, ask yourself:
 
 ## File-Based Output (REQUIRED)
 
-**You MUST write your detailed review to a file and return only signals.**
+**You MUST write your detailed review to files and return only signals.**
 
 ### Step 1: Create Output Directory
 
@@ -293,22 +472,25 @@ Before finalizing, ask yourself:
 mkdir -p <output_directory>
 ```
 
-### Step 2: Write Detailed Review to File
+### Step 2: Write Detailed Review to Files
 
-Write your full review (using the format above) to:
+Write your full review to:
 ```
-<output_directory>/pr-reviewer.md
+<output_directory>/pr-review.json
+<output_directory>/pr-review.md
 ```
 
-Use the Write tool to create this file with your complete review.
+Use the ReviewOutputBuilder as shown in the Structured Output section above.
 
 ### Step 3: Return Signals Only
 
-After writing the file, return ONLY this structured response to the main session:
+After writing the files, return ONLY this structured response to the main session:
 
 ```
 STATUS: FINISHED
-OUTPUT_FILE: <output_directory>/pr-reviewer.md
+OUTPUT_FILES:
+  - <output_directory>/pr-review.json
+  - <output_directory>/pr-review.md
 COUNTS:
   critical: <number>
   important: <number>
@@ -322,4 +504,4 @@ SUMMARY: <One sentence summary of key findings>
 - `ERRORED` - Review failed (include error in summary)
 - `PARTIAL` - Review incomplete (e.g., couldn't access some files)
 
-**Do NOT return the full review text.** The reconciliator agent will read your file.
+**Do NOT return the full review text.** The reconciliator agent will read your files.

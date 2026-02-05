@@ -5,6 +5,37 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-02-05
+
+### Changed
+
+- **Review agents** - Standardized output file naming and added structured output
+  - All reviewers now output both JSON and Markdown files consistently
+  - Naming pattern: `{domain}-review.json` and `{domain}-review.md`
+  - `wp-architecture-reviewer` now outputs to distinct `wp-architecture-review.*` (was conflicting with `architecture-reviewer`)
+  - `pr-reviewer` renamed output from `pr-reviewer.md` to `pr-review.md/json`
+  - Fixed internal inconsistencies where documentation and code examples showed different filenames
+
+- **pr-reviewer agent** - Added ReviewOutputBuilder and verbose reasoning
+  - Now generates structured JSON output alongside Markdown
+  - Added comprehensive verbose reasoning mode with templates for:
+    - Detection methodology
+    - Goal alignment checks
+    - Code path analysis
+    - Edge case tables
+    - Confidence score rationale
+    - Alternative interpretations
+
+- **wp-architecture-reviewer agent** - Added ReviewOutputBuilder
+  - Now generates structured JSON output alongside Markdown
+  - Added WordPress-specific categories for issues
+  - Improved pragmatic hooks guidance (don't require hooks everywhere)
+
+- **review-reconciliator agent** - Updated to match new file naming
+  - Updated expected file list with all reviewer outputs
+  - Added `wp-architecture` and `pr` to agent list
+  - Fixed references to old `pr-reviewer.md` filename
+
 ## [1.12.0] - 2026-02-05
 
 ### Removed

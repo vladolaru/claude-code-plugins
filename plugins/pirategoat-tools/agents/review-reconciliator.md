@@ -31,21 +31,24 @@ The main session will provide:
 
 ```
 <output_directory>/
-├── security-review.json    # Security specialist (STRUCTURED - prefer)
-├── security-review.md      # Security specialist (human-readable)
-├── architecture-review.json
+├── security-review.json        # Security specialist (STRUCTURED - prefer)
+├── security-review.md          # Security specialist (human-readable)
+├── architecture-review.json    # General architecture
 ├── architecture-review.md
+├── wp-architecture-review.json # WordPress-specific architecture
+├── wp-architecture-review.md
 ├── performance-review.json
 ├── performance-review.md
 ├── tests-review.json
 ├── tests-review.md
 ├── patterns-review.json
 ├── patterns-review.md
-├── pr-reviewer.md          # Generalist review (ANCHOR)
-├── gemini.md               # Gemini cross-validation (if exists)
-├── codex.md                # Codex cross-validation (if exists)
-├── reconciled.json         # Your structured output
-└── reconciled.md           # Your human-readable output
+├── pr-review.json              # Generalist review (ANCHOR)
+├── pr-review.md
+├── gemini.md                   # Gemini cross-validation (if exists)
+├── codex.md                    # Codex cross-validation (if exists)
+├── reconciled.json             # Your structured output
+└── reconciled.md               # Your human-readable output
 ```
 
 ## JSON-Based Reconciliation (REQUIRED)
@@ -72,7 +75,7 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
 ```python
 # Read each agent's JSON output
 agent_outputs = {}
-agent_names = ['security', 'architecture', 'performance', 'tests', 'patterns']
+agent_names = ['security', 'architecture', 'wp-architecture', 'performance', 'tests', 'patterns', 'pr']
 
 for agent_name in agent_names:
     json_path = f"{output_dir}/{agent_name}-review.json"
@@ -163,7 +166,7 @@ If JSON files don't exist, fall back to reading `.md` files and manually parsing
 ls -la <output_directory>/*.md
 ```
 
-Read each file that exists. The generalist review (`pr-reviewer.md`) is the **anchor** - all other findings are reconciled against it.
+Read each file that exists. The generalist review (`pr-review.md`) is the **anchor** - all other findings are reconciled against it.
 
 ### Step 2: Build Issue Map
 
@@ -210,7 +213,7 @@ Produce a condensed review (~200 lines max) that:
 ```markdown
 ## Unified PR Review
 
-**Agents consulted:** pr-reviewer, security, performance, patterns
+**Agents consulted:** pr, security, architecture, wp-architecture, performance, tests, patterns
 **External AI:** gemini (FINISHED), codex (UNAVAILABLE)
 
 ### Overall Verdict: <APPROVE | REQUEST_CHANGES | COMMENT>
@@ -328,7 +331,7 @@ Full context available in: <output_directory>/reconciled.md
 **Priority order for findings:**
 1. **Critical from ANY source** → Always include
 2. **Found by multiple agents** → High confidence, include
-3. **Generalist (pr-reviewer) findings** → Include unless specialist contradicts
+3. **Generalist (pr) findings** → Include unless specialist contradicts
 4. **Specialist-only findings** → Include with source attribution
 5. **External-AI-only findings** → Flag for manual verification
 

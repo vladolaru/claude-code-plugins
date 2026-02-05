@@ -1443,20 +1443,23 @@ Good patterns worth acknowledging or replicating.
 mkdir -p <output_directory>
 ```
 
-### Step 2: Write Detailed Review to File
+### Step 2: Write Detailed Review to Files
 
-Write your full test quality review (using the format above) to:
+Write your full test quality review to:
 ```
-<output_directory>/tests.md
+<output_directory>/tests-review.json
+<output_directory>/tests-review.md
 ```
 
 ### Step 3: Return Signals Only
 
-After writing the file, return ONLY this structured response:
+After writing the files, return ONLY this structured response:
 
 ```
 STATUS: FINISHED
-OUTPUT_FILE: <output_directory>/tests.md
+OUTPUT_FILES:
+  - <output_directory>/tests-review.json
+  - <output_directory>/tests-review.md
 COUNTS:
   critical: <number>
   high: <number>

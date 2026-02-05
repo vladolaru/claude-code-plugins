@@ -660,20 +660,23 @@ When you find historical precedent, ask:
 mkdir -p <output_directory>
 ```
 
-### Step 2: Write Detailed Review to File
+### Step 2: Write Detailed Review to Files
 
-Write your full patterns review (using the format above) to:
+Write your full patterns review to:
 ```
-<output_directory>/patterns.md
+<output_directory>/patterns-review.json
+<output_directory>/patterns-review.md
 ```
 
 ### Step 3: Return Signals Only
 
-After writing the file, return ONLY this structured response:
+After writing the files, return ONLY this structured response:
 
 ```
 STATUS: FINISHED
-OUTPUT_FILE: <output_directory>/patterns.md
+OUTPUT_FILES:
+  - <output_directory>/patterns-review.json
+  - <output_directory>/patterns-review.md
 COUNTS:
   reuse_opportunities: <number>
   naming_issues: <number>

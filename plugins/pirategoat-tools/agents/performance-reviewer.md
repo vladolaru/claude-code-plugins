@@ -565,20 +565,23 @@ Before approving code with loops or queries:
 mkdir -p <output_directory>
 ```
 
-### Step 2: Write Detailed Review to File
+### Step 2: Write Detailed Review to Files
 
-Write your full performance review (using the format above) to:
+Write your full performance review to:
 ```
-<output_directory>/performance.md
+<output_directory>/performance-review.json
+<output_directory>/performance-review.md
 ```
 
 ### Step 3: Return Signals Only
 
-After writing the file, return ONLY this structured response:
+After writing the files, return ONLY this structured response:
 
 ```
 STATUS: FINISHED
-OUTPUT_FILE: <output_directory>/performance.md
+OUTPUT_FILES:
+  - <output_directory>/performance-review.json
+  - <output_directory>/performance-review.md
 COUNTS:
   critical: <number>
   high: <number>
