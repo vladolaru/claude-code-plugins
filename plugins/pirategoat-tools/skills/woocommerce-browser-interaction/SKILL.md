@@ -1,6 +1,6 @@
 ---
 name: woocommerce-browser-interaction
-description: Use when needing to interact with WooCommerce in a browser - debugging UI issues, verifying changes, testing flows, taking screenshots, or exploring admin and frontend pages (shop, cart, checkout, my account). Requires a browser automation MCP server (chrome-devtools, playwright, or puppeteer).
+description: Use when needing to interact with WooCommerce in a browser - debugging UI issues, verifying changes, testing flows, taking screenshots, or exploring admin and frontend pages (shop, cart, checkout, my account). Requires a browser automation MCP server (chrome-devtools or playwright).
 ---
 
 # WooCommerce Browser Interaction
