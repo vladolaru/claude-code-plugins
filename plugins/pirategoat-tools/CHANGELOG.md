@@ -5,6 +5,26 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-02-05
+
+### Added
+
+- **browser-navigator agent** - Isolated browser automation with automatic error recovery
+  - Executes all browser tasks in subagent for context isolation
+  - Auto-recovers from profile locks, stale refs, tool stalls (max 3 retries)
+  - Timeout enforcement: 30s navigation, 10s waits, configurable overall
+  - RULE 0 compliance: fresh snapshot after every navigation
+  - Flexible output: summary, screenshot, data extraction
+  - Lifecycle control: `fresh`, `reuse`, `leave_open`
+  - Escalates auth errors and server errors to caller
+
+### Changed
+
+- **browser-interaction skill** - Now dispatches to browser-navigator agent
+  - Simplified to lightweight dispatcher + reference documentation
+  - All browser logic moved to agent for single source of truth
+  - Consistent behavior whether called from main session or subagent
+
 ## [1.10.1] - 2026-02-05
 
 ### Fixed
