@@ -1,34 +1,95 @@
 ---
 name: browser-interaction
-description: Use when automating browser tasks - clicking, filling forms, taking screenshots, debugging UI, or testing web flows. Dispatches to browser-navigator agent for isolated execution.
+description: Use when automating browser tasks - clicking, filling forms, taking screenshots, debugging UI, or testing web flows. Requires chrome-devtools or playwright MCP.
 ---
 
 # Browser Interaction
 
-Browser automation via the `browser-navigator` agent. All tasks run in isolation to prevent context pollution and ensure reliable error recovery.
+Browser automation via MCP tools (chrome-devtools or playwright).
 
-## Usage
+## Prerequisites
 
-**Always delegate browser tasks to the agent:**
+One of these MCP servers must be connected:
+- **chrome-devtools** - Connect to Chrome with remote debugging
+- **playwright** - Headless/headed browser automation
+
+## Quick Start
 
 ```
-Task agent: browser-navigator
-prompt: |
-  task: "<what to do>"
-  url: "<starting URL>"
-  output: ["summary"]
-  lifecycle: "reuse"
+1. ToolSearch query: "+chrome-devtools list pages snapshot navigate"
+2. Navigate: mcp__chrome-devtools__navigate_page(type: "url", url: "...")
+3. Snapshot: mcp__chrome-devtools__take_snapshot()
+4. Interact using uid from snapshot
 ```
 
-## Parameters
+## MCP Detection
 
-| Parameter | Values | Description |
-|-----------|--------|-------------|
-| `task` | string | What to do (required) |
-| `url` | string | Starting URL |
-| `output` | `["summary"]`, `["summary", "screenshot"]`, `["summary", "data"]` | What to return |
-| `lifecycle` | `"fresh"`, `"reuse"`, `"leave_open"` | Browser session handling |
-| `timeout` | number (seconds) | Max time for task (default: 60) |
+**MCP tools are deferred - load via ToolSearch first:**
+
+```
+ToolSearch query: "+chrome-devtools list pages snapshot navigate screenshot"
+```
+
+If chrome-devtools unavailable, try playwright:
+```
+ToolSearch query: "+playwright browser snapshot navigate"
+```
+
+## Tool Mapping
+
+| Action | Chrome DevTools | Playwright |
+|--------|-----------------|------------|
+| List pages | `list_pages` | `browser_tabs` |
+| Navigate | `navigate_page` | `browser_navigate` |
+| Click | `click` | `browser_click` |
+| Fill | `fill` | `browser_type` |
+| Screenshot | `take_screenshot` | `browser_take_screenshot` |
+| Snapshot | `take_snapshot` | `browser_snapshot` |
+| Wait | `wait_for` | `browser_wait_for` |
+
+## RULE 0: Fresh Snapshot After Navigation
+
+After ANY navigation, take a fresh snapshot BEFORE clicking or filling:
+
+```
+Navigate → Snapshot → Interact → Verify
+         ↑                      │
+         └──────────────────────┘
+```
+
+**Why:** Element refs (`uid="1_5"`) regenerate per snapshot. Old refs match DIFFERENT elements after navigation.
+
+## Common Operations
+
+**Navigate and inspect:**
+```
+mcp__chrome-devtools__navigate_page(type: "url", url: "http://localhost:9001/wp-admin/", timeout: 30000)
+mcp__chrome-devtools__take_snapshot()
+```
+
+**Take screenshot:**
+```
+mcp__chrome-devtools__take_screenshot(filePath: "/tmp/screenshot.png", fullPage: true)
+```
+
+**Click element:**
+```
+# Get uid from snapshot first
+mcp__chrome-devtools__click(uid: "1_42", includeSnapshot: true)
+```
+
+**Fill input:**
+```
+mcp__chrome-devtools__fill(uid: "1_15", value: "test@example.com")
+```
+
+## Error Recovery
+
+| Error | Recovery |
+|-------|----------|
+| "browser is already running" | `pkill -f "chrome-devtools-mcp/chrome-profile"`, retry |
+| "Ref not found" / "No node with given id" | Fresh snapshot, get new uid, retry |
+| Network timeout | Wait 2s, retry (max 3 attempts) |
 
 ## When to Use
 
@@ -37,45 +98,3 @@ prompt: |
 - Taking screenshots for documentation
 - Extracting data from rendered pages
 - Testing user flows
-
-## Examples
-
-**Verify a page loads:**
-```
-Task agent: browser-navigator
-prompt: |
-  task: "Verify the settings page loads and shows the save button"
-  url: "http://localhost:9001/wp-admin/admin.php?page=next-admin"
-  output: ["summary"]
-```
-
-**Take a screenshot:**
-```
-Task agent: browser-navigator
-prompt: |
-  task: "Screenshot the Products settings page"
-  url: "http://localhost:9001/wp-admin/admin.php?page=next-admin&p=/woocommerce/settings/products"
-  output: ["summary", "screenshot"]
-  lifecycle: "fresh"
-```
-
-**Extract data:**
-```
-Task agent: browser-navigator
-prompt: |
-  task: "Get the store name and visibility setting"
-  url: "http://localhost:9001/wp-admin/admin.php?page=next-admin&p=/woocommerce/settings/general"
-  output: ["summary", "data"]
-```
-
-## Agent Capabilities
-
-The `browser-navigator` agent handles automatically:
-
-- **Profile lock recovery** - Clears orphaned Chrome processes
-- **Timeout enforcement** - 30s navigation, 10s waits, configurable overall
-- **RULE 0 compliance** - Fresh snapshot after every navigation
-- **Error recovery** - Stale refs, modals, network timeouts (max 3 retries)
-- **Clean output** - Structured results with summary, screenshots, extracted data
-
-See the agent documentation for full details on error handling and recovery behavior.
