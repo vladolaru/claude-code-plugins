@@ -5,6 +5,18 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-02-05
+
+### Fixed
+
+- **browser-interaction skill** - Add profile lock recovery and timeout guidance
+  - New "Profile Lock Errors" section with `pkill` recovery command
+  - Mention of `--isolated` flag for parallel browser sessions
+  - New "Timeouts (CRITICAL)" section enforcing explicit timeouts
+  - Recommended timeouts: `navigate_page` 30s, `wait_for` 10s
+  - Updated error patterns with "Profile lock errors" and "Tool stalls"
+  - Updated recovery table with profile lock and stall recovery actions
+
 ## [1.10.0] - 2026-01-22
 
 ### Added
