@@ -47,6 +47,47 @@ Use the first available. If none available, suggest install command and restart 
 
 ---
 
+## Profile Lock Errors (Chrome DevTools)
+
+**Error:** `"The browser is already running for .../chrome-profile"`
+
+This blocks ALL MCP operations. Resolve before proceeding:
+
+```bash
+# Find and kill orphaned Chrome processes using MCP profile
+pkill -f "chrome-devtools-mcp/chrome-profile"
+```
+
+Then retry your navigation. If error persists, the browser may be in use by another Claude session.
+
+**For parallel sessions**, use `--isolated` flag when starting Chrome DevTools MCP to avoid profile conflicts.
+
+---
+
+## Timeouts (CRITICAL)
+
+**Always set timeouts** to prevent indefinite stalls:
+
+| Tool | Timeout Parameter | Default | Recommendation |
+|------|-------------------|---------|----------------|
+| `navigate_page` | `timeout` (ms) | varies | 30000 (30s) |
+| `wait_for` | `timeout` (ms) | varies | 10000 (10s) |
+| `click` | implicit | none | N/A |
+
+**Navigation with timeout:**
+```
+navigate_page(url, timeout=30000)
+```
+
+**Wait with timeout:**
+```
+wait_for(text="Success", timeout=10000)
+```
+
+If a tool stalls without timeout, you lose the entire session. Always specify explicit timeouts.
+
+---
+
 ## Tool Mapping
 
 | Action | Chrome DevTools | Playwright | Puppeteer |
@@ -65,11 +106,17 @@ Use the first available. If none available, suggest install command and restart 
 
 ## Common Error Patterns
 
+**Profile lock errors** ("browser is already running for"):
+→ See **Profile Lock Errors** section above — kill orphaned processes
+
 **Connection errors** (browser/page closed, "No browser connected", "Target closed"):
 → Reopen browser manually or call navigate to restart session
 
 **Stale ref errors** ("Ref not found", "No node with given id", element not found after navigation):
 → Take fresh snapshot, get new ref — this is RULE 0
+
+**Tool stalls** (no response, hanging indefinitely):
+→ You didn't set a timeout. Kill session, restart with explicit timeouts.
 
 **Network errors** (`ERR_CONNECTION_REFUSED`, `ERR_NAME_NOT_RESOLVED`, timeout):
 → Verify server running, check URL/port, try http:// if SSL issues
@@ -87,10 +134,12 @@ Use the first available. If none available, suggest install command and restart 
 
 | Category | Recovery Action |
 |----------|-----------------|
+| **Profile lock** | `pkill -f "chrome-devtools-mcp/chrome-profile"`, retry |
 | **Stale ref** | Fresh snapshot, get new ref, retry |
 | **Session redirect** | Re-authenticate, return to previous URL |
 | **Modal blocking** | Find close button, dismiss, retry |
 | **Network timeout** | Wait 2-3 seconds, retry |
+| **Tool stall** | Kill session (see Closing Browser), restart with timeouts |
 
 ### Ask User First
 
