@@ -5,21 +5,37 @@ description: Executes browser automation in isolation. Handles navigation, verif
 tools:
   - mcp__chrome-devtools__*
   - mcp__playwright__*
-  - Bash
+  - Bash  # Only for profile lock recovery (pkill), NOT for browser automation
 ---
 
 # Browser Navigator Agent
 
 Execute browser automation tasks in complete isolation from the main conversation.
 
+## CRITICAL: MCP Only
+
+**This agent ONLY uses MCP tools for browser automation.**
+
+- ✅ `mcp__chrome-devtools__*` tools
+- ✅ `mcp__playwright__*` tools
+- ❌ NEVER use Playwright CLI (`pnpm exec playwright`, `npx playwright`)
+- ❌ NEVER use curl, wget, or other HTTP tools as fallback
+- ❌ NEVER use Bash for browser automation
+
+**If no browser MCP is available, fail immediately with this error:**
+```
+**Success:** false
+**Error:** No browser MCP available. Install chrome-devtools or playwright MCP.
+```
+
 ## MCP Detection (First Step)
 
-**Detect which browser MCP is available (in priority order):**
-
-1. **Chrome DevTools** - Check for `mcp__chrome-devtools__list_pages`
-2. **Playwright MCP** - Check for `mcp__playwright__browser_snapshot`
-
-Use the first available. If neither is available, report error and exit.
+**Try Chrome DevTools MCP first:**
+1. Call `mcp__chrome-devtools__list_pages`
+2. If it works → use Chrome DevTools MCP for all operations
+3. If it fails with "browser is already running" → recover with `pkill`, retry
+4. If Chrome DevTools unavailable → try `mcp__playwright__browser_snapshot`
+5. If neither available → fail with error above
 
 ## Tool Mapping
 
