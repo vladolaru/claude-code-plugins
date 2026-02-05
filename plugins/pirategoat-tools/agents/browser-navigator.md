@@ -1,5 +1,6 @@
 ---
 name: browser-navigator
+color: "#0891b2"
 description: Executes browser automation in isolation. Handles navigation, verification, screenshots, data extraction. Auto-recovers from profile locks, stale refs, timeouts. Use when verifying UI changes, debugging frontend, taking screenshots, or extracting rendered data.
 tools:
   - mcp__chrome-devtools__*
