@@ -83,13 +83,41 @@ mcp__chrome-devtools__click(uid: "1_42", includeSnapshot: true)
 mcp__chrome-devtools__fill(uid: "1_15", value: "test@example.com")
 ```
 
+## Chrome DevTools Profile Locations
+
+chrome-devtools-mcp stores browser profiles at:
+
+| Mode | Profile path | pkill pattern |
+|------|-------------|---------------|
+| Default | `$HOME/.cache/chrome-devtools-mcp/chrome-profile` | `chrome-devtools-mcp/chrome-profile` |
+| `--isolated` | OS temp dir, e.g. `/var/folders/.../puppeteer_dev_chrome_profile-XXXXXX` | `puppeteer_dev_chrome_profile` |
+
+The profile persists across runs unless `--isolated` is used. A killed Chrome process leaves a `SingletonLock` file in the profile dir that blocks the next launch.
+
 ## Error Recovery
 
 | Error | Recovery |
 |-------|----------|
-| "browser is already running" | `pkill -f "chrome-devtools-mcp/chrome-profile"`, retry |
+| "browser is already running" | See kill procedure below |
 | "Ref not found" / "No node with given id" | Fresh snapshot, get new uid, retry |
 | Network timeout | Wait 2s, retry (max 3 attempts) |
+
+### Killing a Stuck Browser
+
+When chrome-devtools-mcp reports "browser is already running":
+
+```bash
+# 1. Try isolated profile first (temp dir) — kills ALL isolated instances
+pkill -f 'puppeteer_dev_chrome_profile'
+
+# 2. If that didn't match, try default persistent profile
+pkill -f 'chrome-devtools-mcp/chrome-profile'
+rm -f "$HOME/.cache/chrome-devtools-mcp/chrome-profile/SingletonLock"
+```
+
+Wait 2 seconds after killing before retrying.
+
+**Note:** With `--isolated`, each session gets a unique temp dir (e.g. `puppeteer_dev_chrome_profile-RGjl4g`). The pkill pattern above kills all isolated instances. There is no reliable way to target a specific one without tracing PIDs through the process tree.
 
 ## When to Use
 

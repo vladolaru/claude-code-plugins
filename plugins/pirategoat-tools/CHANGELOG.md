@@ -5,6 +5,16 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.1] - 2026-02-06
+
+### Fixed
+
+- **browser-interaction** - Add chrome-devtools profile locations and profile-aware kill procedure
+  - Document default (`chrome-profile`) and isolated (`puppeteer_dev_chrome_profile-*`) profile paths
+  - Kill procedure tries isolated pattern first, then falls back to default persistent profile
+  - Remove `SingletonLock` file that blocks relaunch after a kill
+  - Note limitation: isolated pkill kills all instances, no way to target a specific one
+
 ## [1.13.0] - 2026-02-05
 
 ### Changed
