@@ -5,6 +5,41 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-02-08
+
+### Changed
+
+- **Review agents** - Extract shared boilerplate into shared reviewer protocol, reducing agent context by ~45%
+  - New `agents/shared/reviewer-protocol.md` (~96L) consolidates: Changed Code Only rule, ReviewOutputBuilder API, file-based output format, return signal template, project-specific knowledge search, ground truth data loading, verbose reasoning mode
+  - All 9 reviewer agents now reference shared protocol via `**FIRST:** Read shared/reviewer-protocol.md`
+  - Domain-specific content preserved in each agent: RULE 0s, red flags, verification protocols, checklists, review philosophy
+  - Boilerplate removed: Structured Output sections, Context format, File-Based Output steps (all identical across agents)
+
+- **software-architecture skill** - Restructured as section-aware routing hub (461L -> 111L, 76% reduction)
+  - Code smell -> pattern routing table maps symptoms to specific `## ` headings in reference files
+  - Agents read ~200L per reference file instead of ~2,000L (90% reference context savings)
+  - Kept inline: SOLID quick reference, architecture review checklist, pattern selection decision matrix, when-not-to-apply rules
+  - Removed: GoF pattern categories overview, DEMS D'FFACTS mnemonic, design pattern combinations, inline hexagonal architecture overview, language-specific considerations (all available in reference files or training knowledge)
+
+- **testing-patterns skill** - Restructured as section-aware routing hub (365L -> 104L, 71% reduction)
+  - Test smell -> reference routing table maps findings to specific sections in reference files
+  - Kept inline: "What Makes a Good Test" table, FORBIDDEN patterns, mocking decision table, test smells quick diagnosis
+  - Removed: Inline PHP/JS/Playwright code examples, test review checklist (in tests-reviewer), test layer context table (covered by routing)
+
+- **architecture-reviewer agent** - Replaced skill loading with inline routing table and SOLID reference (674L -> 133L)
+- **security-reviewer agent** - Condensed function tables to quick reference, removed code examples (611L -> 119L)
+- **performance-reviewer agent** - Condensed optimization tables inline, removed code examples (480L -> 118L)
+- **wp-architecture-reviewer agent** - Condensed code examples, kept ecosystem patterns (643L -> 145L)
+- **tests-reviewer agent** - Preserved all verification protocols and red flags (803L -> 163L)
+- **pr-reviewer agent** - Preserved goal alignment rules and confidence scoring (509L -> 127L)
+- **patterns-reviewer agent** - Preserved git history search protocol (421L -> 139L)
+- **tests-mutation-reviewer agent** - Preserved all mutation phases and safety rules (552L -> 199L)
+- **review-reconciliator agent** - Preserved JSON-first reconciliation with REQUIRED directive (365L -> 209L)
+
+### Added
+
+- `agents/shared/reviewer-protocol.md` - Shared protocol for all review agents
+
 ## [1.14.0] - 2026-02-08
 
 ### Added
