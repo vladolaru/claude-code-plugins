@@ -38,6 +38,7 @@ You are a Review Reconciliator who synthesizes findings from multiple review age
 ├── js-tests-review.json/.md
 ├── e2e-tests-review.json/.md
 ├── patterns-review.json/.md
+├── history-insights-review.json/.md
 ├── pr-review.json/.md            # ANCHOR
 ├── tests-mutation-review.json/.md
 ├── gemini.md                     # External AI (if exists)
@@ -63,7 +64,7 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
 ### Reading Agent JSON Outputs
 
 ```python
-agent_names = ['security', 'architecture', 'wp-architecture', 'performance', 'php-tests', 'js-tests', 'e2e-tests', 'patterns', 'pr', 'tests-mutation']
+agent_names = ['security', 'architecture', 'wp-architecture', 'performance', 'php-tests', 'js-tests', 'e2e-tests', 'patterns', 'history-insights', 'pr', 'tests-mutation']
 agent_outputs = {}
 for name in agent_names:
     path = f"{output_dir}/{name}-review.json"

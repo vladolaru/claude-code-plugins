@@ -594,6 +594,7 @@ For larger or sensitive PRs, specialists run in parallel and their findings are 
 | `performance-reviewer` | N+1 queries, caching/transients, autoloaded options, query optimization |
 | `wp-architecture-reviewer` | Hooks/extensibility, coding standards, backwards compatibility, i18n |
 | `patterns-reviewer` | Existing patterns, git history precedents, naming consistency, consolidation |
+| `history-insights-reviewer` | Git history mining for similar fixes, enhancements, and lessons learned elsewhere |
 
 #### Verbose Reasoning Mode (Optional)
 
@@ -687,6 +688,13 @@ Task tool (PARALLEL - single message with multiple Tool calls):
     Output Directory: /tmp/pr-review-<PR_NUMBER>
     Git Range: <baseRefName>..<headRefName>
     Focus: existing patterns, git history precedents, naming conventions, consolidation
+
+  subagent_type: pirategoat-tools:history-insights-reviewer
+  prompt: |
+    PR ID: <PR_NUMBER>
+    Output Directory: /tmp/pr-review-<PR_NUMBER>
+    Git Range: <baseRefName>..<headRefName>
+    Focus: similar fixes, enhancements, and lessons learned from git history
 ```
 
 #### Cross-Validation with External AI (Optional)
@@ -768,6 +776,7 @@ Task: architecture-reviewer (starts immediately)
 Task: php-tests-reviewer (starts immediately)
 Task: js-tests-reviewer (starts immediately)
 Task: e2e-tests-reviewer (starts immediately)
+Task: history-insights-reviewer (starts immediately)
 
 # All start simultaneously
 # Total time: max(25, 22, 28, 18) = 28 seconds (parallel)
