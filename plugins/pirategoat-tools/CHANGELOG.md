@@ -5,6 +5,21 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-02-08
+
+### Added
+
+- **tests-mutation-reviewer agent** - Adversarial mutation testing that temporarily mutates production code to verify tests catch real bugs
+  - Runs SOLO (no other review agents alongside) due to code modification
+  - 10-category mutation catalog: boolean flip, comparison swap, string corruption, guard removal, default change, return value change, boundary shift, null swap, array empty, conditional removal
+  - Pre-flight safety: stash/unstash, branch verification, test runner auto-detection
+  - Per-mutation execution loop: mutate → test → capture → revert → verify revert
+  - Mutation score calculation with verdict mapping (>=80% APPROVE, 60-79% COMMENT, <60% REQUEST_CHANGES)
+  - Surviving mutation root cause analysis: over-mocking, weak assertions, untested paths, false tests
+  - ReviewOutputBuilder integration for reconciliator compatibility
+  - Emergency cleanup with nuclear revert option
+  - Integrates with pr-reviewing skill as optional post-review phase
+
 ## [1.13.1] - 2026-02-06
 
 ### Fixed

@@ -45,6 +45,8 @@ The main session will provide:
 ├── patterns-review.md
 ├── pr-review.json              # Generalist review (ANCHOR)
 ├── pr-review.md
+├── tests-mutation-review.json   # Mutation testing (if run)
+├── tests-mutation-review.md
 ├── gemini.md                   # Gemini cross-validation (if exists)
 ├── codex.md                    # Codex cross-validation (if exists)
 ├── reconciled.json             # Your structured output
@@ -75,7 +77,7 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
 ```python
 # Read each agent's JSON output
 agent_outputs = {}
-agent_names = ['security', 'architecture', 'wp-architecture', 'performance', 'tests', 'patterns', 'pr']
+agent_names = ['security', 'architecture', 'wp-architecture', 'performance', 'tests', 'patterns', 'pr', 'tests-mutation']
 
 for agent_name in agent_names:
     json_path = f"{output_dir}/{agent_name}-review.json"

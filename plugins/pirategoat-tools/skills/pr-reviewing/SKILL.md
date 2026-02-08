@@ -804,6 +804,38 @@ The reconciliator:
 3. Writes full reconciled review to `reconciled.md`
 4. Returns condensed summary to main session
 
+#### Optional: Mutation Testing (Deep Test Validation)
+
+After the standard review pipeline (specialists + reconciliation) completes, the user can request **mutation testing** for deeper test quality validation.
+
+The `tests-mutation-reviewer` agent temporarily mutates production code and runs tests to measure how many real bugs the tests actually catch. This provides a **mutation score** that quantifies test effectiveness empirically.
+
+**When to suggest mutation testing:**
+- PR adds significant new tests
+- Tests-reviewer flagged potential over-mocking or weak assertions
+- Critical code paths (payments, auth, data integrity)
+- User wants high confidence in test quality
+
+**How to run (MUST be after standard review completes):**
+
+```
+Task tool:
+  subagent_type: pirategoat-tools:tests-mutation-reviewer
+  prompt: |
+    PR ID: <PR_NUMBER>
+    Output Directory: /tmp/pr-review-<PR_NUMBER>
+    Git Range: <baseRefName>..<headRefName>
+    Test Scope: auto-detect from diff
+    Test Command: <from CLAUDE.md or auto-detect>
+    Max Mutations: 20
+```
+
+**Important constraints:**
+- Runs SOLO (no other agents alongside) because it modifies production code
+- Must run AFTER all other review agents have completed
+- Automatically stashes/restores any uncommitted changes
+- After completion, re-run reconciliator to include mutation findings in the unified review
+
 #### Getting More Details
 
 If the user wants to drill down on a specific topic:
