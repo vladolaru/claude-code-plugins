@@ -5,6 +5,41 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-02-08
+
+### Added
+
+- **Bootstrap reviewer evals** (`tests/`) - Deterministic test suite and grading framework for bootstrap-reviewer.py
+  - `test_bootstrap_reviewer.py` — Pytest suite with unit tests (name derivation, protocol extraction, field parsing, output building) and integration tests (subprocess runs for all 11 agents verifying structure, identity, conditional sections, personalization, error handling)
+  - `graders.py` — Reusable code-based grading functions for review output files (JSON schema, markdown structure, signal format, no-domain-files, error exit, output pair)
+  - `test_graders.py` — Validates graders themselves: valid input passes, missing fields fail, invalid verdicts fail, empty files fail
+  - `eval_agent_compliance.py` — Agent compliance runner with `--grade-only` (grade existing outputs) and `--dispatch` (temp repo → bootstrap → dispatch agent → grade) modes
+  - `fixtures/no-code-changes.diff` — Docs-only diff fixture for NO_DOMAIN_FILES testing
+
+- **bootstrap-reviewer.py script** (`scripts/`) - Single-command setup that consolidates all reviewer agent initialization into one call
+  - Finds plugin root (cached `/tmp/.pirategoat-tools-root`, self-location, or `find` fallback)
+  - Validates agent name against known configuration
+  - Reads and extracts behavioral rules from `reviewer-protocol.md` (skips setup sections the bootstrap already performed)
+  - For test agents, also includes full `tests-reviewer-protocol.md` content
+  - Runs `review-scope.py` with agent-specific domain and flags
+  - For patterns-reviewer, runs scope twice (normal + `--base-ref-only` for exploration)
+  - For tests-mutation-reviewer, skips scope (no domain) but still provides protocol and output instructions
+  - Outputs structured prompt block ordered by steering importance: rules (primacy) → scope (processing) → output instructions (recency)
+  - Supports `--range` and `--output-dir` pass-through flags
+  - Exit codes: 0 (success), 1 (error)
+
+### Changed
+
+- **All 11 reviewer agents** - Simplified MANDATORY SETUP from 3 steps to 1 step
+  - Single `bootstrap-reviewer.py --agent <name>` call replaces: get plugin root + read protocol + run scope discovery
+  - Reduces setup instructions from ~15 lines to ~7 lines per agent
+  - Agents that previously skipped multi-step setup are more likely to comply with a single command
+  - Each agent specifies its own `--agent` flag matching its configuration
+
+- **Shared reviewer protocol** - Step 0 now references bootstrap script as preferred method
+  - Added bootstrap command as primary setup approach
+  - Kept manual steps as fallback if bootstrap unavailable
+
 ## [1.20.0] - 2026-02-08
 
 ### Added

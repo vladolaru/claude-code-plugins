@@ -1,0 +1,220 @@
+"""
+Tests for the grading functions in graders.py.
+
+Validates graders work correctly on synthetic inputs.
+"""
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+# Add tests/ and scripts/ to path before importing local modules
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+import pytest
+
+from graders import (
+    GradeResult,
+    grade_review_json,
+    grade_review_markdown,
+    grade_signal_format,
+    grade_no_domain_files,
+    grade_error_exit,
+    grade_output_pair,
+)
+
+from review_output_simple import ReviewOutputBuilder
+
+
+@pytest.fixture
+def tmp_dir():
+    with tempfile.TemporaryDirectory() as d:
+        yield d
+
+
+def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
+    """Create a valid review JSON file using ReviewOutputBuilder."""
+    builder = ReviewOutputBuilder(pr_id="123", reviewer=reviewer)
+    builder.add_issue(
+        severity="high",
+        title="SQL Injection",
+        file="src/User.php",
+        description="Direct input in query",
+        recommendation="Use prepared statements",
+    )
+    builder.set_files_reviewed(3)
+
+    path = os.path.join(tmp_dir, f"{reviewer}-review.json")
+    with open(path, "w") as f:
+        f.write(builder.to_json())
+    return path
+
+
+def _make_valid_markdown(tmp_dir: str, reviewer: str = "security") -> str:
+    """Create a valid review markdown file using ReviewOutputBuilder."""
+    builder = ReviewOutputBuilder(pr_id="123", reviewer=reviewer)
+    builder.add_issue(
+        severity="high",
+        title="SQL Injection",
+        file="src/User.php",
+        description="Direct input in query",
+        recommendation="Use prepared statements",
+    )
+
+    path = os.path.join(tmp_dir, f"{reviewer}-review.md")
+    with open(path, "w") as f:
+        f.write(builder.to_markdown())
+    return path
+
+
+class TestGradeReviewJson:
+    """Tests for grade_review_json."""
+
+    def test_valid_json_passes(self, tmp_dir):
+        path = _make_valid_json(tmp_dir)
+        result = grade_review_json(path)
+        assert result.passed, f"Failures: {result.failures}"
+        assert result.score == 1.0
+
+    def test_missing_file_fails(self):
+        result = grade_review_json("/nonexistent/path.json")
+        assert not result.passed
+        assert any("does not exist" in f for f in result.failures)
+
+    def test_invalid_json_fails(self, tmp_dir):
+        path = os.path.join(tmp_dir, "bad.json")
+        with open(path, "w") as f:
+            f.write("not json at all {{{")
+        result = grade_review_json(path)
+        assert not result.passed
+        assert any("Invalid JSON" in f for f in result.failures)
+
+    def test_missing_required_field_fails(self, tmp_dir):
+        path = os.path.join(tmp_dir, "missing.json")
+        data = {"pr_id": "1", "reviewer": "test"}  # missing verdict, summary, issues, meta
+        with open(path, "w") as f:
+            json.dump(data, f)
+        result = grade_review_json(path)
+        assert not result.passed
+        assert any("verdict" in f for f in result.failures)
+
+    def test_invalid_verdict_fails(self, tmp_dir):
+        path = os.path.join(tmp_dir, "bad-verdict.json")
+        data = {
+            "pr_id": "1",
+            "reviewer": "test",
+            "verdict": "INVALID_VERDICT",
+            "summary": {"total_issues": 0, "by_severity": {}},
+            "issues": [],
+            "meta": {},
+        }
+        with open(path, "w") as f:
+            json.dump(data, f)
+        result = grade_review_json(path)
+        assert not result.passed
+        assert any("Invalid verdict" in f for f in result.failures)
+
+    def test_empty_file_fails(self, tmp_dir):
+        path = os.path.join(tmp_dir, "empty.json")
+        with open(path, "w") as f:
+            f.write("")
+        result = grade_review_json(path)
+        assert not result.passed
+
+    def test_issue_with_invalid_severity_fails(self, tmp_dir):
+        path = os.path.join(tmp_dir, "bad-sev.json")
+        data = {
+            "pr_id": "1",
+            "reviewer": "test",
+            "verdict": "comment",
+            "summary": {"total_issues": 1, "by_severity": {"unknown": 1}},
+            "issues": [
+                {
+                    "id": "abc",
+                    "severity": "unknown",
+                    "title": "Test",
+                    "file": "a.py",
+                    "description": "desc",
+                    "recommendation": "fix",
+                }
+            ],
+            "meta": {},
+        }
+        with open(path, "w") as f:
+            json.dump(data, f)
+        result = grade_review_json(path)
+        assert not result.passed
+        assert any("invalid severity" in f.lower() for f in result.failures)
+
+
+class TestGradeReviewMarkdown:
+    """Tests for grade_review_markdown."""
+
+    def test_valid_markdown_passes(self, tmp_dir):
+        path = _make_valid_markdown(tmp_dir)
+        result = grade_review_markdown(path)
+        assert result.passed, f"Failures: {result.failures}"
+
+    def test_missing_file_fails(self):
+        result = grade_review_markdown("/nonexistent/review.md")
+        assert not result.passed
+
+    def test_missing_header_fails(self, tmp_dir):
+        path = os.path.join(tmp_dir, "no-header.md")
+        with open(path, "w") as f:
+            f.write("Just some text without a proper header\n")
+        result = grade_review_markdown(path)
+        assert not result.passed
+
+
+class TestGradeSignalFormat:
+    """Tests for grade_signal_format."""
+
+    def test_valid_signal(self):
+        signal = (
+            "STATUS: FINISHED\n"
+            "OUTPUT_FILES:\n"
+            "  - /tmp/security-review.json\n"
+            "COUNTS:\n"
+            "  critical: 0\n"
+            "VERDICT: APPROVE\n"
+            "SUMMARY: No issues found\n"
+        )
+        result = grade_signal_format(signal)
+        assert result.passed
+
+    def test_missing_status(self):
+        result = grade_signal_format("OUTPUT_FILES:\nVERDICT: APPROVE\n")
+        assert not result.passed
+
+
+class TestGradeNoDomainFiles:
+    """Tests for grade_no_domain_files."""
+
+    def test_approve_with_no_findings(self):
+        text = "VERDICT: APPROVE\nNo security files to review."
+        result = grade_no_domain_files(text)
+        assert result.passed
+
+    def test_non_approve_fails(self):
+        text = "VERDICT: REQUEST_CHANGES\nCRITICAL: found issue"
+        result = grade_no_domain_files(text)
+        assert not result.passed
+
+
+class TestGradeOutputPair:
+    """Tests for grade_output_pair."""
+
+    def test_valid_pair_passes(self, tmp_dir):
+        _make_valid_json(tmp_dir, "security")
+        _make_valid_markdown(tmp_dir, "security")
+        result = grade_output_pair(tmp_dir, "security")
+        assert result.passed, f"Failures: {result.failures}"
+
+    def test_missing_json_fails(self, tmp_dir):
+        _make_valid_markdown(tmp_dir, "security")
+        result = grade_output_pair(tmp_dir, "security")
+        assert not result.passed

@@ -101,6 +101,41 @@ All skills must have a `SKILL.md` file with YAML frontmatter:
    }
    ```
 
+## Testing
+
+### pirategoat-tools
+
+The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no model calls) for plugin scripts. See `tests/TESTING.md` for the full framework documentation: architecture, design principles, how to add tests/graders/scenarios, and conventions.
+
+**When to run tests:** After modifying any of these files, run the relevant test suite:
+
+| Changed file | Run |
+|---|---|
+| `scripts/bootstrap-reviewer.py` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
+| `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
+| `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
+| `scripts/review_output_simple.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
+| `tests/graders.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
+| Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (verifies agent config still works) |
+| New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (auto-included in all parameterized tests) |
+
+**Run all tests:** `pytest plugins/pirategoat-tools/tests/ -v`
+
+**Test principles:**
+- Code-based graders only (fast, deterministic, no model calls)
+- Grade outcomes not paths
+- Test both positive and negative cases
+- Integration tests run `bootstrap-reviewer.py` via subprocess against all 11 agents
+
+**Agent compliance eval** (requires `claude` CLI, makes model calls):
+```bash
+# Grade existing review output files
+python3 plugins/pirategoat-tools/tests/eval_agent_compliance.py --grade-only /tmp/pr-review-<N>
+
+# Full dispatch eval (slow, model calls)
+python3 plugins/pirategoat-tools/tests/eval_agent_compliance.py --dispatch --agent security-reviewer
+```
+
 ## Versioning & Releases
 
 ### Plugin-Prefixed Tags
