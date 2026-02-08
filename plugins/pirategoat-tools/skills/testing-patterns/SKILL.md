@@ -1,15 +1,20 @@
 ---
 name: testing-patterns
-description: Use when reviewing tests for quality, writing new tests, or identifying test anti-patterns (flaky, brittle, over-mocked) - covers test philosophy, quality principles, and language-specific patterns for PHPUnit/WordPress, Jest/Vitest, and Playwright E2E.
+description: Core test quality principles - philosophy, smells, structure, mocking, and coverage. For language-specific patterns see php-testing-patterns, js-testing-patterns, e2e-testing-patterns.
 ---
 
 # Testing Patterns
 
-Guide for writing and reviewing high-quality tests. Focuses on test quality patterns, not TDD methodology.
+Core guide for writing and reviewing high-quality tests. Focuses on shared test quality principles, not language-specific patterns.
 
 ## When to Use This Skill
 
-Use when reviewing test code, writing new tests, identifying test anti-patterns, choosing mocking strategies, or evaluating coverage decisions. NOT for TDD workflow (separate skill).
+Use for language-agnostic test quality: philosophy, smells, structure, mocking strategies, coverage decisions, test data. NOT for TDD workflow (separate skill).
+
+**For language-specific patterns use:**
+- `php-testing-patterns` — PHPUnit, WordPress, WooCommerce
+- `js-testing-patterns` — Jest, Vitest, React Testing Library
+- `e2e-testing-patterns` — Playwright, Page Object Model
 
 ## Test Smell -> Reference Routing (Section-Targeted References)
 
@@ -24,9 +29,6 @@ When you find a test smell, read ONLY the specified sections. Do NOT read full f
 | Poor structure (no AAA, bad names) | `references/test-structure.md` | `## The AAA Pattern` + `## Test Naming Conventions` |
 | Missing edge/error case coverage | `references/coverage.md` | `## What to Test` |
 | Over-testing trivial code | `references/coverage.md` | `## What NOT to Test` |
-| PHP/WordPress test patterns | `references/phpunit-patterns.md` | Full file (~422L, manageable) |
-| Jest/Vitest patterns | `references/jest-vitest-patterns.md` | Full file (~422L, manageable) |
-| E2E/Playwright patterns | `references/playwright-patterns.md` | Full file (~461L, manageable) |
 | Test data strategy | `references/test-data.md` | `## Factories` + `## Builders` |
 | Choosing test layer | `references/test-layers.md` | `## The Three Layers` + `## Choosing the Right Layer` |
 

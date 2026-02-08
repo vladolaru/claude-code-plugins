@@ -765,7 +765,9 @@ I'm spawning all reviewers in parallel now.
 Task: security-reviewer (starts immediately)
 Task: performance-reviewer (starts immediately)
 Task: architecture-reviewer (starts immediately)
-Task: tests-reviewer (starts immediately)
+Task: php-tests-reviewer (starts immediately)
+Task: js-tests-reviewer (starts immediately)
+Task: e2e-tests-reviewer (starts immediately)
 
 # All start simultaneously
 # Total time: max(25, 22, 28, 18) = 28 seconds (parallel)
@@ -812,7 +814,7 @@ The `tests-mutation-reviewer` agent temporarily mutates production code and runs
 
 **When to suggest mutation testing:**
 - PR adds significant new tests
-- Tests-reviewer flagged potential over-mocking or weak assertions
+- Test reviewers flagged potential over-mocking or weak assertions
 - Critical code paths (payments, auth, data integrity)
 - User wants high confidence in test quality
 

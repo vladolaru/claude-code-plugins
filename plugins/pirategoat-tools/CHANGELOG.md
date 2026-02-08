@@ -5,6 +5,33 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-02-08
+
+### Changed
+
+- **tests-reviewer agent** - Split into three language-specific agents for focused, non-overlapping reviews
+  - `php-tests-reviewer` — PHPUnit, WordPress (WP_UnitTestCase, factories), WooCommerce, Brain Monkey
+  - `js-tests-reviewer` — Jest, Vitest, React Testing Library, async patterns, snapshot discipline
+  - `e2e-tests-reviewer` — Playwright, Page Object Model, locator strategies, auto-waiting
+  - Shared test quality protocol extracted to `agents/shared/tests-reviewer-protocol.md`
+  - Each agent reads shared reviewer protocol + shared tests protocol, then applies language-specific red flags
+  - Non-overlapping file scopes prevent duplicate findings across agents
+
+- **testing-patterns skill** - Reduced to shared core, language-specific patterns split into dedicated skills
+  - `php-testing-patterns` — PHPUnit assertions, WordPress factories, `assertSame` > `assertEquals`, data providers
+  - `js-testing-patterns` — RTL query priority, `toMatchObject` > `toEqual`, async assertions, mock scope
+  - `e2e-testing-patterns` — Locator priority, Page Object Model, `waitForTimeout` alternatives, network interception
+  - Core skill retains: test philosophy, smells, mocking decisions, coverage, test data, test layers
+  - Language-specific routing entries removed from core (phpunit-patterns, jest-vitest-patterns, playwright-patterns)
+  - Reference files remain in `testing-patterns/references/` (no moves)
+
+- **review-reconciliator agent** - Updated to read three test review outputs instead of one
+- **pr-reviewing skill** - Updated parallel dispatch to spawn three test reviewers
+
+### Removed
+
+- `tests-reviewer` agent — replaced by `php-tests-reviewer`, `js-tests-reviewer`, `e2e-tests-reviewer`
+
 ## [1.15.0] - 2026-02-08
 
 ### Changed

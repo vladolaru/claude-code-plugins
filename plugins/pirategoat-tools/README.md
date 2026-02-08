@@ -8,12 +8,14 @@ Vlad Olaru's personal Claude Code development tools - experimental features for 
 
 ## What's Included
 
-### 11 Review Agents
+### 13 Review Agents
 Specialized agents for comprehensive code review:
 - **security-reviewer** - WordPress security (SQL injection, XSS, CSRF, capabilities)
 - **architecture-reviewer** - Design patterns, SOLID principles, coupling/cohesion
 - **performance-reviewer** - N+1 queries, caching, autoload, WP_Query optimization
-- **tests-reviewer** - Test quality, structure, mocking patterns, coverage
+- **php-tests-reviewer** - PHP/PHPUnit test quality, WordPress factories, WooCommerce patterns
+- **js-tests-reviewer** - Jest/Vitest test quality, RTL queries, async patterns, snapshot discipline
+- **e2e-tests-reviewer** - Playwright E2E test quality, locators, Page Object Model
 - **patterns-reviewer** - Codebase archaeology, existing patterns, consolidation
 - **wp-architecture-reviewer** - WordPress hooks, WPCS, extensibility, backwards compatibility
 - **pr-reviewer** - Generalist orchestrator for all reviews
@@ -109,8 +111,8 @@ cd /path/to/project
 # Architecture review only
 # architecture-reviewer will check for linter results
 
-# Test quality review
-# tests-reviewer will check for test results and coverage
+# Test quality review (language-specific agents)
+# php-tests-reviewer, js-tests-reviewer, e2e-tests-reviewer check for test results and coverage
 ```
 
 ---

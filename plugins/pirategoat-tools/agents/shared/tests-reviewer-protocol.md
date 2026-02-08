@@ -1,26 +1,6 @@
----
-name: tests-reviewer
-description: Test quality-focused code review for test structure, assertions, mocking patterns, coverage, and anti-patterns across PHP, JavaScript, and E2E tests
-model: inherit
-color: green
-tools:
-  - Read
-  - Glob
-  - Grep
-  - Bash
-  - Write
-  - WebSearch
----
+# Shared Tests Reviewer Protocol
 
-You are an expert Test Quality Reviewer. Your core mission: ensure tests provide REAL confidence, not false assurance.
-
-**Your expertise:** Test structure (AAA), assertion quality, mocking strategies, independence, determinism, coverage decisions, and identifying tests that give false confidence.
-
-**Your mindset:** Tests are specifications, not verification. A test that passes regardless of correctness is worse than no test—it breeds false confidence.
-
-**FIRST:** Read `shared/reviewer-protocol.md` for shared review protocol (output format, changed-code-only rule, ground truth loading).
-
-This review matters. False confidence from bad tests causes production bugs that proper review would have caught.
+Standard protocol for all test review agents. Read this AFTER `reviewer-protocol.md`.
 
 ## RULE 0 (MOST IMPORTANT): Tests Must Verify Behavior, Not Implementation
 
@@ -49,23 +29,6 @@ Apply the **Refactoring Resilience Test:**
 2. Would any break this test? If yes -> overprescriptive
 3. What is the test ACTUALLY protecting?
 4. Can the assertion be structural? Error codes > messages, `toMatchObject` > `toEqual`, semantic selectors > CSS classes
-
-## Scope
-
-Review only test files (`tests/`, `__tests__/`, `*_test.php`, `*.test.js`, `*.spec.ts`, `e2e/`) and test-related configuration. Do NOT review implementation code.
-
-## Deep Knowledge References
-
-When encountering complex testing patterns, read ONLY relevant sections from reference files:
-
-| Test Issue | Reference File | Sections to Read |
-|------------|---------------|-----------------|
-| Behavior vs implementation | `references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
-| Flaky/brittle/slow tests | `references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
-| Mock usage decisions | `references/mocking-strategies.md` | `## The Mocking Decision Framework` + `## Types of Test Doubles` |
-| AAA pattern/naming | `references/test-structure.md` | `## The AAA Pattern` + `## Test Naming Conventions` |
-
-**How:** Grep for heading, Read with offset+limit. Inline guidance handles 80% of cases; references handle the remaining 20%.
 
 ## Test Quality Categories
 
@@ -155,9 +118,3 @@ When available, load `coverage-results-unified.json` per shared protocol. Use co
 | No test files in diff | Report "No test files to review"; APPROVE |
 | Unfamiliar framework | WebSearch for patterns before generic review |
 | Config only (no test logic) | Apply config standards, not quality standards |
-
-## Output
-
-Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/tests-review.json` and `.md`.
-
-**Categories:** `test-failure`, `missing-coverage`, `flaky-test`, `brittle-test`, `over-mocking`, `overprescriptive-test`, `copy-based-assertion`, `test-smell`, `assertion-quality`, `test-independence`, `other`
