@@ -1,0 +1,53 @@
+diff --git a/e2e/checkout.spec.ts b/e2e/checkout.spec.ts
+new file mode 100644
+--- /dev/null
++++ b/e2e/checkout.spec.ts
+@@ -0,0 +1,24 @@
++import { test, expect } from '@playwright/test';
++
++test.describe( 'Checkout flow', () => {
++    test( 'should complete a purchase', async ( { page } ) => {
++        await page.goto( '/shop' );
++        await page.click( '.product-card:first-child .add-to-cart' );
++
++        // Hard-coded wait: fragile, slows tests, hides real timing issues
++        await page.waitForTimeout( 3000 );
++
++        await page.click( '.cart-icon' );
++        await page.click( '.checkout-button' );
++
++        await page.fill( '#email', 'test@example.com' );
++        await page.fill( '#card-number', '4242424242424242' );
++
++        // Another hard-coded wait instead of proper assertion
++        await page.waitForTimeout( 2000 );
++
++        await page.click( '#submit-payment' );
++
++        const confirmation = page.locator( '.order-confirmation' );
++        await expect( confirmation ).toBeVisible();
++    } );
++} );
+diff --git a/e2e/pages/CheckoutPage.ts b/e2e/pages/CheckoutPage.ts
+new file mode 100644
+--- /dev/null
++++ b/e2e/pages/CheckoutPage.ts
+@@ -0,0 +1,18 @@
++import { Page } from '@playwright/test';
++
++export class CheckoutPage {
++    constructor( private page: Page ) {}
++
++    async fillEmail( email: string ) {
++        await this.page.fill( '#email', email );
++    }
++
++    async fillCardNumber( cardNumber: string ) {
++        await this.page.fill( '#card-number', cardNumber );
++    }
++
++    async submitPayment() {
++        await this.page.click( '#submit-payment' );
++        await this.page.waitForTimeout( 1000 );
++    }
++}

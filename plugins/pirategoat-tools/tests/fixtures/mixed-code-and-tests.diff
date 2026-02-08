@@ -1,0 +1,77 @@
+diff --git a/src/Cart.php b/src/Cart.php
+new file mode 100644
+--- /dev/null
++++ b/src/Cart.php
+@@ -0,0 +1,28 @@
++<?php
++
++class Cart {
++
++    private $items = [];
++
++    public function add_item( $product_id, $quantity, $price ) {
++        if ( isset( $this->items[ $product_id ] ) ) {
++            $this->items[ $product_id ]['quantity'] += $quantity;
++        } else {
++            $this->items[ $product_id ] = [
++                'quantity' => $quantity,
++                'price'    => $price,
++            ];
++        }
++    }
++
++    public function get_total() {
++        $total = 0;
++        foreach ( $this->items as $item ) {
++            $total += $item['quantity'] * $item['price'];
++        }
++        return $total;
++    }
++
++    public function get_items() {
++        return $this->items;
++    }
++}
+diff --git a/tests/CartTest.php b/tests/CartTest.php
+new file mode 100644
+--- /dev/null
++++ b/tests/CartTest.php
+@@ -0,0 +1,18 @@
++<?php
++
++use PHPUnit\Framework\TestCase;
++
++class CartTest extends TestCase {
++
++    public function test_add_item() {
++        $cart = new Cart();
++        $cart->add_item( 1, 2, 9.99 );
++        $this->assertCount( 1, $cart->get_items() );
++    }
++
++    public function test_get_total() {
++        $cart = new Cart();
++        $cart->add_item( 1, 2, 10.00 );
++        $this->assertEquals( 20.00, $cart->get_total() );
++    }
++}
+diff --git a/src/cart.test.ts b/src/cart.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/cart.test.ts
+@@ -0,0 +1,15 @@
++import { Cart } from './cart';
++
++describe( 'Cart', () => {
++    it( 'should add items', () => {
++        const cart = new Cart();
++        cart.addItem( 1, 2, 9.99 );
++        expect( cart.getItems() ).toHaveLength( 1 );
++    } );
++
++    it( 'should calculate total', () => {
++        const cart = new Cart();
++        cart.addItem( 1, 2, 10.0 );
++        expect( cart.getTotal() ).toBe( 20.0 );
++    } );
++} );

@@ -9,11 +9,20 @@ tests/
 ├── TESTING.md                      # This file
 ├── __init__.py                     # Package marker
 ├── test_bootstrap_reviewer.py      # Level 1: Script evals (pytest)
+├── test_domain_routing.py          # Level 1: Domain routing evals (pytest)
 ├── graders.py                      # Shared grading functions
 ├── test_graders.py                 # Tests for the graders themselves
 ├── eval_agent_compliance.py        # Level 2: Agent compliance evals
 └── fixtures/
-    └── no-code-changes.diff        # Docs-only diff for NO_DOMAIN_FILES tests
+    ├── no-code-changes.diff        # Docs-only diff for NO_DOMAIN_FILES tests
+    ├── php-source.diff             # PHP source: SQL injection, tight coupling
+    ├── js-ts-source.diff           # JS/TS source: XSS, hardcoded API key
+    ├── php-test-only.diff          # PHP tests: missing assertions, over-mocking
+    ├── js-test-only.diff           # JS tests: snapshot overuse, weak assertions
+    ├── e2e-test-only.diff          # E2E tests: hard-coded waits
+    ├── mixed-code-and-tests.diff   # Cart logic + PHP/JS tests
+    ├── wp-hooks-and-i18n.diff      # WP plugin: hooks, i18n, escaping, $wpdb
+    └── multi-file-realistic.diff   # 7 files across all 9 domains
 ```
 
 ### Level 1: Script Evals (`test_bootstrap_reviewer.py`)
@@ -39,6 +48,28 @@ Deterministic pytest suite. Tests `bootstrap-reviewer.py` by importing its funct
 | `TestConditionalSections` | DOMAIN RULES only for test agents; EXPLORATION SCOPE only for patterns-reviewer; tests-mutation-reviewer has no scope |
 | `TestPersonalization` | REVIEWER_NAME, output file paths, builder snippet are correct per agent |
 | `TestErrorHandling` | Unknown agent exits 1 with structured error; all valid agents exit 0 |
+
+### Level 1: Domain Routing Evals (`test_domain_routing.py`)
+
+Deterministic pytest suite that verifies `review-scope.py` routes each diff fixture to the correct set of domains. For every fixture × domain combination, creates a temp git repo, applies the diff, runs `review-scope.py --domain <X>`, and asserts STATUS is `OK` or `NO_DOMAIN_FILES`.
+
+Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parameterized across all 9 domains and all 9 fixtures (81 test cases). Repos are cached per fixture to avoid redundant git operations.
+
+**Fixture domain coverage:**
+
+| Fixture | code | security | perf | arch | wp-arch | php-tests | js-tests | e2e-tests | patterns |
+|---|---|---|---|---|---|---|---|---|---|
+| `php-source.diff` | OK | OK | OK | OK | OK | - | - | - | OK |
+| `js-ts-source.diff` | OK | OK | OK | OK | OK | - | - | - | OK |
+| `php-test-only.diff` | OK | OK | OK | - | OK | OK | - | - | OK |
+| `js-test-only.diff` | OK | OK | OK | - | OK | - | OK | - | OK |
+| `e2e-test-only.diff` | OK | OK | OK | OK | OK | - | - | OK | OK |
+| `mixed-code-and-tests.diff` | OK | OK | OK | OK | OK | OK | OK | - | OK |
+| `wp-hooks-and-i18n.diff` | OK | OK | OK | OK | OK | - | - | - | OK |
+| `multi-file-realistic.diff` | OK | OK | OK | OK | OK | OK | OK | OK | OK |
+| `no-code-changes.diff` | - | - | - | - | - | - | - | - | - |
+
+`OK` = STATUS: OK (domain matches files), `-` = STATUS: NO_DOMAIN_FILES (domain excludes all files)
 
 ### Shared Graders (`graders.py`)
 
@@ -155,9 +186,21 @@ Follow the pattern in `test_bootstrap_reviewer.py`:
 ### Add a new diff fixture
 
 1. Create the `.diff` file in `tests/fixtures/`
-2. Use standard unified diff format (`diff --git a/... b/...`)
+2. **Use `new file mode 100644` with `--- /dev/null`** for all files in the diff. This ensures `git apply` works in a fresh temp repo (no context lines to match). Example:
+   ```diff
+   diff --git a/src/Example.php b/src/Example.php
+   new file mode 100644
+   --- /dev/null
+   +++ b/src/Example.php
+   @@ -0,0 +1,5 @@
+   +<?php
+   +class Example {
+   +    // ...
+   +}
+   ```
 3. Keep fixtures minimal — just enough to trigger the scenario
-4. Reuse existing fixtures from `test-samples/json-output-test/` via path reference when possible (don't duplicate)
+4. Add the fixture to `ROUTING_MATRIX` in `test_domain_routing.py` with expected STATUS per domain
+5. Run `pytest plugins/pirategoat-tools/tests/test_domain_routing.py -v` to verify routing
 
 ## Conventions
 

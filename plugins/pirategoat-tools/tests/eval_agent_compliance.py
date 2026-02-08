@@ -58,6 +58,7 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
     subprocess.run(["git", "init"], cwd=tmp, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp, capture_output=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp, capture_output=True)
 
     # Create initial commit
     readme = os.path.join(tmp, "README.md")
@@ -67,11 +68,15 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
     subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp, capture_output=True)
 
     if diff_file and os.path.isfile(diff_file):
-        # Create files from diff (simplified: create the target files)
-        subprocess.run(
-            ["git", "apply", "--allow-empty", str(diff_file)],
-            cwd=tmp, capture_output=True,
+        result = subprocess.run(
+            ["git", "apply", str(diff_file)],
+            cwd=tmp, capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise RuntimeError(
+                f"git apply failed for {diff_file}: {result.stderr.strip()}"
+            )
         subprocess.run(["git", "add", "."], cwd=tmp, capture_output=True)
         subprocess.run(["git", "commit", "-m", "changes"], cwd=tmp, capture_output=True)
 
@@ -97,6 +102,42 @@ SCENARIOS = {
         "diff": None,  # No git repo
         "grader": "error_exit",
         "no_git": True,
+    },
+    "php_source_review": {
+        "description": "PHP source with SQL injection and tight coupling",
+        "agents": ["security-reviewer", "architecture-reviewer", "performance-reviewer"],
+        "diff": str(FIXTURES_DIR / "php-source.diff"),
+        "grader": "output_pair",
+    },
+    "js_source_review": {
+        "description": "JS/TS source with XSS and hardcoded API key",
+        "agents": ["security-reviewer"],
+        "diff": str(FIXTURES_DIR / "js-ts-source.diff"),
+        "grader": "output_pair",
+    },
+    "php_tests_review": {
+        "description": "PHP test files with missing assertions and over-mocking",
+        "agents": ["php-tests-reviewer"],
+        "diff": str(FIXTURES_DIR / "php-test-only.diff"),
+        "grader": "output_pair",
+    },
+    "e2e_tests_review": {
+        "description": "E2E test files with hard-coded waits",
+        "agents": ["e2e-tests-reviewer"],
+        "diff": str(FIXTURES_DIR / "e2e-test-only.diff"),
+        "grader": "output_pair",
+    },
+    "wp_specific_review": {
+        "description": "WP plugin with hooks, i18n, escaping, and wpdb",
+        "agents": ["wp-architecture-reviewer", "security-reviewer"],
+        "diff": str(FIXTURES_DIR / "wp-hooks-and-i18n.diff"),
+        "grader": "output_pair",
+    },
+    "realistic_multi_file": {
+        "description": "Realistic multi-file PR touching all domains",
+        "agents": ALL_AGENTS,
+        "diff": str(FIXTURES_DIR / "multi-file-realistic.diff"),
+        "grader": "output_pair",
     },
 }
 

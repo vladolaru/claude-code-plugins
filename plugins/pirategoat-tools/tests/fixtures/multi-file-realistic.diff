@@ -1,0 +1,121 @@
+diff --git a/assets/css/product-list.css b/assets/css/product-list.css
+new file mode 100644
+--- /dev/null
++++ b/assets/css/product-list.css
+@@ -0,0 +1,8 @@
++.product-list {
++    list-style: none;
++    padding: 0;
++}
++
++.product-list li {
++    padding: 8px 0;
++}
+diff --git a/e2e/products.spec.ts b/e2e/products.spec.ts
+new file mode 100644
+--- /dev/null
++++ b/e2e/products.spec.ts
+@@ -0,0 +1,11 @@
++import { test, expect } from '@playwright/test';
++
++test.describe( 'Products page', () => {
++    test( 'should display product list', async ( { page } ) => {
++        await page.goto( '/products' );
++
++        const items = page.locator( '.product-list li' );
++        await expect( items ).toHaveCount( 2 );
++        await expect( items.first() ).toContainText( 'Widget' );
++    } );
++} );
+diff --git a/migrations/001-create-products.sql b/migrations/001-create-products.sql
+new file mode 100644
+--- /dev/null
++++ b/migrations/001-create-products.sql
+@@ -0,0 +1,8 @@
++CREATE TABLE IF NOT EXISTS wp_products (
++    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
++    name VARCHAR(255) NOT NULL,
++    price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
++    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    PRIMARY KEY (id),
++    KEY idx_name (name)
++);
+diff --git a/src/ProductManager.php b/src/ProductManager.php
+new file mode 100644
+--- /dev/null
++++ b/src/ProductManager.php
+@@ -0,0 +1,18 @@
++<?php
++
++class ProductManager {
++
++    public function get_product( $id ) {
++        global $wpdb;
++        return $wpdb->get_row(
++            $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}products WHERE id = %d", $id )
++        );
++    }
++
++    public function search_products( $query ) {
++        global $wpdb;
++        return $wpdb->get_results(
++            $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}products WHERE name LIKE %s", '%' . $wpdb->esc_like( $query ) . '%' )
++        );
++    }
++}
+diff --git a/src/components/ProductList.tsx b/src/components/ProductList.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/components/ProductList.tsx
+@@ -0,0 +1,15 @@
++import React from 'react';
++
++interface Product {
++    id: number;
++    name: string;
++    price: number;
++}
++
++export const ProductList: React.FC<{ products: Product[] }> = ( { products } ) => (
++    <ul className="product-list">
++        { products.map( ( product ) => (
++            <li key={ product.id }>{ product.name } - ${ product.price }</li>
++        ) ) }
++    </ul>
++);
+diff --git a/src/components/__tests__/ProductList.test.tsx b/src/components/__tests__/ProductList.test.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/components/__tests__/ProductList.test.tsx
+@@ -0,0 +1,14 @@
++import React from 'react';
++import { render } from '@testing-library/react';
++import { ProductList } from '../ProductList';
++
++describe( 'ProductList', () => {
++    it( 'should render products', () => {
++        const products = [
++            { id: 1, name: 'Widget', price: 9.99 },
++            { id: 2, name: 'Gadget', price: 19.99 },
++        ];
++        const { container } = render( <ProductList products={ products } /> );
++        expect( container.querySelectorAll( 'li' ) ).toHaveLength( 2 );
++    } );
++} );
+diff --git a/tests/ProductManagerTest.php b/tests/ProductManagerTest.php
+new file mode 100644
+--- /dev/null
++++ b/tests/ProductManagerTest.php
+@@ -0,0 +1,12 @@
++<?php
++
++use PHPUnit\Framework\TestCase;
++
++class ProductManagerTest extends TestCase {
++
++    public function test_get_product() {
++        $manager = new ProductManager();
++        $product = $manager->get_product( 1 );
++        $this->assertNotNull( $product );
++    }
++}

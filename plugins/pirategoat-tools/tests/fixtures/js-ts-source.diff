@@ -1,0 +1,63 @@
+diff --git a/src/components/UserForm.tsx b/src/components/UserForm.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/components/UserForm.tsx
+@@ -0,0 +1,28 @@
++import React, { useState } from 'react';
++
++interface UserFormProps {
++    onSubmit: ( name: string ) => void;
++}
++
++export const UserForm: React.FC<UserFormProps> = ( { onSubmit } ) => {
++    const [name, setName] = useState( '' );
++    const [preview, setPreview] = useState( '' );
++
++    const handleChange = ( e: React.ChangeEvent<HTMLInputElement> ) => {
++        setName( e.target.value );
++        // XSS vulnerability: rendering unsanitized user input as HTML
++        document.getElementById( 'preview' )!.innerHTML = e.target.value;
++    };
++
++    return (
++        <div>
++            <input
++                type="text"
++                value={ name }
++                onChange={ handleChange }
++                placeholder="Enter your name"
++            />
++            <div id="preview"></div>
++            <button onClick={ () => onSubmit( name ) }>Submit</button>
++        </div>
++    );
++};
+diff --git a/src/api/client.ts b/src/api/client.ts
+new file mode 100644
+--- /dev/null
++++ b/src/api/client.ts
+@@ -0,0 +1,24 @@
++const API_KEY = 'sk-live-abc123def456ghi789';
++
++interface ApiResponse<T> {
++    data: T;
++    status: number;
++}
++
++export async function fetchUser( userId: string ): Promise<ApiResponse<unknown>> {
++    const response = await fetch( `https://api.example.com/users/${ userId }`, {
++        headers: {
++            Authorization: `Bearer ${ API_KEY }`,
++            'Content-Type': 'application/json',
++        },
++    } );
++
++    if ( ! response.ok ) {
++        throw new Error( `HTTP ${ response.status }` );
++    }
++
++    return {
++        data: await response.json(),
++        status: response.status,
++    };
++}

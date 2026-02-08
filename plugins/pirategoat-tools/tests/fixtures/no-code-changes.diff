@@ -1,17 +1,3 @@
-diff --git a/README.md b/README.md
---- a/README.md
-+++ b/README.md
-@@ -1,5 +1,7 @@
- # My Project
-
-+## Getting Started
-+
-+Follow the instructions below to set up your development environment.
-+
- ## Overview
-
--This is a sample project.
-+This is a sample project for testing reviewer agents.
 diff --git a/docs/CONTRIBUTING.md b/docs/CONTRIBUTING.md
 new file mode 100644
 --- /dev/null
@@ -22,3 +8,13 @@ new file mode 100644
 +1. Fork the repository
 +2. Create a feature branch
 +3. Submit a pull request
+diff --git a/docs/CHANGELOG.md b/docs/CHANGELOG.md
+new file mode 100644
+--- /dev/null
++++ b/docs/CHANGELOG.md
+@@ -0,0 +1,5 @@
++# Changelog
++
++## [1.0.0] - 2025-01-01
++
++- Initial release
