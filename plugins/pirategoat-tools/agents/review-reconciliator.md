@@ -352,6 +352,12 @@ When agents disagree (e.g., performance says "add cache" but security says "don'
 2. Identify the tradeoff
 3. Suggest resolution or escalate to user
 
+**Pre-existing vs New Issue Filtering:**
+When aggregating issues from agents, check whether each issue is in code changed by the PR:
+- Issues in changed code: Include normally
+- Issues in unchanged code: Flag as "pre-existing" and deprioritize
+- If multiple agents flag the same pre-existing issue: Note it as context, not as a blocking finding
+
 **The 200-line rule:**
 Summary mode output must be ~200 lines max. If you're exceeding this:
 - You're including too much detail → Summarize more aggressively

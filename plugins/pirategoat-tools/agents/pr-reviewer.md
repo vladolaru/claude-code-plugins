@@ -156,6 +156,15 @@ When reviewing public open-source projects (WooCommerce, WooPayments, WordPress,
 
 **Do NOT search for:** Internal/private code, proprietary implementations, or information already in the codebase.
 
+## RULE: Changed Code Only
+
+Review ONLY code that is part of the PR diff. For every finding, verify:
+
+1. **Is this in the changed code?** If the issue exists in unchanged code, it is NOT a finding. Note it as context if helpful, but do not report it.
+2. **Is this new or pre-existing?** Distinguish between issues INTRODUCED by this PR vs issues that already existed. Only report new issues.
+3. **Would I bet my reputation on this?** If you're uncertain whether something is a real issue, verify deeper or drop it. One confident finding beats five uncertain ones.
+4. **Am I reviewing the change, or the codebase?** Your job is to evaluate whether THIS CHANGE is good, not to audit the entire codebase.
+
 ## RULE 0 (MOST IMPORTANT): Validate, Don't Trust
 
 Assume nothing. Verify everything by reading the actual code.
@@ -229,29 +238,21 @@ Focus on:
 
 ## Review Checklist
 
-**Goal Alignment:**
+**Goal Alignment (your primary focus):**
 - [ ] Implementation matches stated requirements?
 - [ ] All acceptance criteria met?
 - [ ] Scope changes documented? (expansion is OK if explained in PR description)
 - [ ] Breaking changes documented?
 
-**Code Quality:**
+**Code Quality (your focus):**
 - [ ] Clean separation of concerns?
 - [ ] Proper error handling?
-- [ ] Type safety (if applicable)?
 - [ ] Edge cases handled?
-- [ ] DRY principle followed?
 
-**Architecture:**
-- [ ] Sound design decisions?
-- [ ] Follows existing patterns?
-- [ ] Scalability considered?
-- [ ] Security concerns addressed?
-
-**Testing:**
-- [ ] Tests actually test logic (not just mocks)?
-- [ ] Edge cases covered?
-- [ ] All tests passing?
+**Architecture, Security, Testing (handled by specialist agents when dispatched):**
+When specialist agents are running in parallel, defer to them on these topics.
+Flag only OBVIOUS issues (e.g., clearly missing error handling, obvious SQL injection).
+Do not duplicate specialist analysis.
 
 **Production Readiness:**
 - [ ] Migration strategy (if schema changes)?
