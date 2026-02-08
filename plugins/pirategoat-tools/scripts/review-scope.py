@@ -1,0 +1,734 @@
+#!/usr/bin/env python3
+"""
+Review Scope - Efficient diff scoping for review agents.
+
+Single source of truth for all filtering logic. Agents call this script
+instead of running 5+ ad-hoc git/grep commands to determine their review scope.
+
+Usage:
+    python3 review-scope.py --domain code
+    python3 review-scope.py --domain code --summary
+    python3 review-scope.py --domain php-tests --range main..feature-branch
+    python3 review-scope.py --domain security --max-lines 3000
+    python3 review-scope.py --domain patterns --base-ref-only
+
+Exit codes:
+    0  Success — scope determined, output on stdout
+    1  Error — something failed, details on stderr AND stdout (for agent visibility)
+    2  No changes — clean working tree, nothing to review
+
+Zero external dependencies (stdlib only).
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from typing import Dict, List, Optional, Tuple
+
+# =============================================================================
+# Domain Catalog — single source of truth for file filtering
+# =============================================================================
+
+DOMAIN_CATALOG = {
+    "code": {
+        "description": "All code files (pr-reviewer)",
+        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
+        "exclude": None,
+    },
+    "security": {
+        "description": "Security-relevant code files",
+        "include": r"\.(php|js|ts|jsx|tsx|py|rb|go)$",
+        "exclude": None,
+    },
+    "performance": {
+        "description": "Performance-relevant code files (incl. SQL)",
+        "include": r"\.(php|js|ts|jsx|tsx|py|java|rb|go|sql)$",
+        "exclude": None,
+    },
+    "architecture": {
+        "description": "Implementation files, excluding tests",
+        "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb)$",
+        "exclude": r"(test|spec|\.test\.|\.spec\.|__tests__)",
+    },
+    "wp-architecture": {
+        "description": "WordPress PHP/JS/TS files",
+        "include": r"\.(php|js|ts|jsx|tsx)$",
+        "exclude": None,
+    },
+    "php-tests": {
+        "description": "PHP test files only",
+        "include": r"(Test\.php|_test\.php|tests/.*\.php|phpunit\.xml|bootstrap\.php)$",
+        "exclude": None,
+    },
+    "js-tests": {
+        "description": "JS/TS test files, excluding E2E",
+        "include": r"(\.(test|spec)\.(js|ts|tsx|jsx)$|__tests__/)",
+        "exclude": r"(^e2e/|/e2e/)",
+    },
+    "e2e-tests": {
+        "description": "Playwright E2E test files",
+        "include": r"(^e2e/|/e2e/|playwright\.config|Page\.(js|ts)$|PageObject\.(js|ts)$)",
+        "exclude": None,
+    },
+    "patterns": {
+        "description": "All code files for pattern analysis",
+        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go)$",
+        "exclude": None,
+    },
+}
+
+# Noise patterns — files no reviewer should waste context on
+NOISE_PATTERNS = [
+    # Images, fonts, media, binary assets
+    r"\.(lock|png|jpg|jpeg|gif|svg|ico|webp|avif|bmp|woff|woff2|ttf|eot|otf|map)$",
+    # Archives and compiled binaries
+    r"\.(zip|tar|gz|tgz|jar|war|wasm|pyc|pyo|so|dylib|dll|exe)$",
+    # Documents and non-code artifacts
+    r"\.(pdf|mo|pot)$",
+    # Jest snapshots (large, noisy)
+    r"\.snap$",
+    # Dependency directories
+    r"(^|/)(vendor|node_modules)/",
+    # Minified assets and source maps
+    r"\.min\.(js|css)$",
+    # Build artifacts and IDE/OS config
+    r"(^dist/|^build/|^\.idea/|^\.vscode/|\.DS_Store$)",
+]
+
+
+def run_cmd(cmd: List[str], check: bool = True, capture_stderr: bool = True) -> str:
+    """Run a command and return stdout. Raises on failure if check=True."""
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if check and result.returncode != 0:
+            stderr_msg = result.stderr.strip()
+            # Truncate verbose git error output
+            stderr_lines = stderr_msg.splitlines()
+            if len(stderr_lines) > 5:
+                stderr_msg = "\n".join(stderr_lines[:5]) + f"\n... ({len(stderr_lines) - 5} more lines truncated)"
+            raise RuntimeError(
+                f"Command failed (exit {result.returncode}): {' '.join(cmd)}\n"
+                f"stderr: {stderr_msg}"
+            )
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Command timed out after 30s: {' '.join(cmd)}")
+    except FileNotFoundError:
+        raise RuntimeError(f"Command not found: {cmd[0]}")
+
+
+def detect_default_branch() -> str:
+    """Detect the default branch (main/master/trunk/develop)."""
+    # Try symbolic ref first (most reliable)
+    try:
+        ref = run_cmd(
+            ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+            check=False,
+        )
+        if ref:
+            return ref.replace("refs/remotes/origin/", "")
+    except RuntimeError:
+        pass
+
+    # Fallback: check common branch names
+    for branch in ["main", "master", "trunk", "develop"]:
+        try:
+            run_cmd(["git", "rev-parse", f"refs/remotes/origin/{branch}"], check=True)
+            return branch
+        except RuntimeError:
+            continue
+
+    return "main"  # last resort
+
+
+def detect_range() -> Tuple[str, str]:
+    """
+    Detect the appropriate diff range.
+
+    Returns:
+        (range_spec, base_ref) — e.g. ("main..HEAD", "main") or ("--cached", "HEAD")
+
+    Raises RuntimeError if no changes found.
+    """
+    default_branch = detect_default_branch()
+
+    # Check if current branch has diverged from default
+    try:
+        commit_count = run_cmd(
+            ["git", "rev-list", "--count", f"{default_branch}..HEAD"],
+            check=True,
+        )
+        if int(commit_count) > 0:
+            return f"{default_branch}..HEAD", default_branch
+    except (RuntimeError, ValueError):
+        pass
+
+    # Check for staged changes
+    staged = run_cmd(["git", "diff", "--cached", "--name-only"], check=True)
+    if staged:
+        return "--cached", "HEAD"
+
+    # Check for unstaged changes
+    unstaged = run_cmd(["git", "diff", "--name-only"], check=True)
+    if unstaged:
+        return "", "HEAD"  # empty range = unstaged working tree diff
+
+    raise RuntimeError("NO_CHANGES: No changes to review — clean working tree.")
+
+
+def get_changed_files(range_spec: str) -> List[str]:
+    """Get list of changed files for the given range."""
+    if range_spec == "--cached":
+        cmd = ["git", "diff", "--cached", "--name-only"]
+    elif range_spec == "":
+        cmd = ["git", "diff", "--name-only"]
+    else:
+        cmd = ["git", "diff", "--name-only", range_spec]
+
+    output = run_cmd(cmd, check=True)
+    if not output:
+        return []
+    return output.splitlines()
+
+
+def filter_noise(files: List[str]) -> Tuple[List[str], List[str]]:
+    """
+    Remove files no reviewer should waste context on.
+
+    Returns:
+        (kept_files, skipped_files)
+    """
+    kept = []
+    skipped = []
+
+    for f in files:
+        is_noise = False
+        for pattern in NOISE_PATTERNS:
+            if re.search(pattern, f):
+                is_noise = True
+                break
+        if is_noise:
+            skipped.append(f)
+        else:
+            kept.append(f)
+
+    return kept, skipped
+
+
+def filter_domain(files: List[str], domain: str) -> Tuple[List[str], List[str]]:
+    """
+    Apply domain-specific include/exclude filters.
+
+    Returns:
+        (matched_files, excluded_files)
+    """
+    if domain not in DOMAIN_CATALOG:
+        raise RuntimeError(
+            f"Unknown domain '{domain}'. "
+            f"Available: {', '.join(sorted(DOMAIN_CATALOG.keys()))}"
+        )
+
+    spec = DOMAIN_CATALOG[domain]
+    include_re = re.compile(spec["include"])
+    exclude_re = re.compile(spec["exclude"]) if spec["exclude"] else None
+
+    matched = []
+    excluded = []
+
+    for f in files:
+        if not include_re.search(f):
+            excluded.append(f)
+            continue
+        if exclude_re and exclude_re.search(f):
+            excluded.append(f)
+            continue
+        matched.append(f)
+
+    return matched, excluded
+
+
+def get_diff_for_file(range_spec: str, filepath: str) -> str:
+    """Get the diff for a single file."""
+    if range_spec == "--cached":
+        cmd = ["git", "diff", "--cached", "--", filepath]
+    elif range_spec == "":
+        cmd = ["git", "diff", "--", filepath]
+    else:
+        cmd = ["git", "diff", range_spec, "--", filepath]
+
+    return run_cmd(cmd, check=True)
+
+
+def count_diff_lines(diff_text: str) -> int:
+    """Count meaningful lines in a diff (added + removed, not headers/context)."""
+    count = 0
+    for line in diff_text.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            count += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            count += 1
+    return count
+
+
+def get_diffstat(range_spec: str, files: List[str]) -> Dict[str, Tuple[int, int]]:
+    """
+    Get per-file diffstat (additions, deletions) using git diff --numstat.
+
+    Returns:
+        {filepath: (additions, deletions)} for each file in the list.
+        Binary files get (0, 0). Files not in the numstat output get (0, 0).
+    """
+    if range_spec == "--cached":
+        cmd = ["git", "diff", "--cached", "--numstat"]
+    elif range_spec == "":
+        cmd = ["git", "diff", "--numstat"]
+    else:
+        cmd = ["git", "diff", "--numstat", range_spec]
+
+    output = run_cmd(cmd, check=True)
+    if not output:
+        return {f: (0, 0) for f in files}
+
+    # Parse numstat: "added\tremoved\tfilepath" (binary files show "-\t-\t")
+    file_set = set(files)
+    stats = {}
+    for line in output.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        added_str, removed_str, filepath = parts
+        if filepath not in file_set:
+            continue
+        try:
+            added = int(added_str) if added_str != "-" else 0
+            removed = int(removed_str) if removed_str != "-" else 0
+        except ValueError:
+            added, removed = 0, 0
+        stats[filepath] = (added, removed)
+
+    # Fill in any files not found in numstat
+    for f in files:
+        if f not in stats:
+            stats[f] = (0, 0)
+
+    return stats
+
+
+def detect_output_dir() -> Tuple[str, Optional[str]]:
+    """
+    Detect output directory. Try gh/ghe to find PR number.
+
+    Returns:
+        (output_dir, pr_number_or_none)
+    """
+    # Detect if this is a github.a8c.com (GHE) or github.com repo
+    try:
+        remote_url = run_cmd(["git", "remote", "get-url", "origin"], check=False)
+    except RuntimeError:
+        remote_url = ""
+
+    is_ghe = "github.a8c.com" in remote_url
+
+    # Try the appropriate CLI first, then fallback
+    cli_order = ["ghe", "gh"] if is_ghe else ["gh", "ghe"]
+
+    for cli in cli_order:
+        try:
+            pr_num = run_cmd(
+                [cli, "pr", "view", "--json", "number", "-q", ".number"],
+                check=True,
+            )
+            if pr_num and pr_num.isdigit():
+                output_dir = f"/tmp/pr-review-{pr_num}"
+                os.makedirs(output_dir, exist_ok=True)
+                return output_dir, pr_num
+        except RuntimeError:
+            continue
+
+    return "/tmp", None
+
+
+def detect_base_ref(range_spec: str) -> str:
+    """Extract the base ref from a range spec."""
+    if ".." in range_spec:
+        return range_spec.split("..")[0]
+    return "HEAD"
+
+
+def build_scope(args: argparse.Namespace) -> dict:
+    """
+    Build the complete review scope.
+
+    Returns a structured dict with all scope information.
+    Raises RuntimeError on any failure (defensive — no silent errors).
+    """
+    # Step 0: Verify we're in a git repository
+    try:
+        run_cmd(["git", "rev-parse", "--git-dir"], check=True)
+    except RuntimeError:
+        raise RuntimeError("NOT_GIT_REPO: Not inside a git repository. Run from a git repo root.")
+
+    # Step 1: Determine range
+    if args.range:
+        range_spec = args.range
+        base_ref = detect_base_ref(range_spec)
+        # Validate the provided range is valid
+        try:
+            run_cmd(["git", "rev-parse", base_ref], check=True)
+        except RuntimeError:
+            raise RuntimeError(
+                f"Invalid range '{range_spec}': base ref '{base_ref}' does not exist."
+            )
+    else:
+        range_spec, base_ref = detect_range()
+
+    # Step 2: Get changed files
+    all_files = get_changed_files(range_spec)
+    if not all_files:
+        raise RuntimeError("NO_CHANGES: Range resolved but no files changed.")
+
+    # Step 3: Filter noise
+    after_noise, noise_skipped = filter_noise(all_files)
+    if not after_noise:
+        raise RuntimeError(
+            f"NO_RELEVANT_FILES: All {len(all_files)} changed files were "
+            f"noise (lock files, vendor, build artifacts). Nothing to review."
+        )
+
+    # Step 4: Apply domain filter
+    domain_matched, domain_excluded = filter_domain(after_noise, args.domain)
+    if not domain_matched:
+        return {
+            "status": "NO_DOMAIN_FILES",
+            "range": range_spec,
+            "base_ref": base_ref,
+            "total_changed": len(all_files),
+            "noise_skipped": len(noise_skipped),
+            "domain_excluded": len(domain_excluded),
+            "domain": args.domain,
+            "files": [],
+            "diffs": {},
+            "skipped_files": {
+                "noise": noise_skipped,
+                "domain": domain_excluded,
+            },
+        }
+
+    # Step 5: Get diffstat for all matched files (cheap — single git command)
+    diffstat = get_diffstat(range_spec, domain_matched)
+
+    # Sort files by total change size (ascending = smaller focused changes first)
+    domain_matched_sorted = sorted(
+        domain_matched,
+        key=lambda f: sum(diffstat.get(f, (0, 0))),
+    )
+
+    # Step 6: Get diffs with budget control (skip if --base-ref-only or --summary)
+    max_lines = args.max_lines
+    diffs = {}
+    total_lines = 0
+    budget_exceeded_files = []
+
+    if not args.base_ref_only and not args.summary:
+        for filepath in domain_matched_sorted:
+            if total_lines >= max_lines:
+                budget_exceeded_files.append(filepath)
+                continue
+
+            diff_text = get_diff_for_file(range_spec, filepath)
+            diff_lines = count_diff_lines(diff_text)
+
+            if total_lines + diff_lines > max_lines and diffs:
+                # Would exceed budget and we already have some diffs
+                budget_exceeded_files.append(filepath)
+                continue
+
+            diffs[filepath] = diff_text
+            total_lines += diff_lines
+
+    # Step 7: Detect output directory
+    output_dir, pr_number = detect_output_dir()
+
+    return {
+        "status": "OK",
+        "range": range_spec,
+        "base_ref": base_ref,
+        "pr_number": pr_number,
+        "output_dir": output_dir,
+        "domain": args.domain,
+        "total_changed": len(all_files),
+        "noise_skipped": len(noise_skipped),
+        "domain_excluded": len(domain_excluded),
+        "domain_matched": len(domain_matched),
+        "files_with_diffs": len(diffs),
+        "total_diff_lines": total_lines,
+        "budget_max": max_lines,
+        "budget_exceeded_files": budget_exceeded_files,
+        "files": domain_matched_sorted if (args.base_ref_only or args.summary) else list(diffs.keys()),
+        "diffs": diffs,
+        "diffstat": diffstat,
+        "skipped_files": {
+            "noise": noise_skipped,
+            "domain": domain_excluded,
+            "budget": budget_exceeded_files,
+        },
+    }
+
+
+def format_text_output(scope: dict) -> str:
+    """Format scope as structured text for agent consumption."""
+    lines = []
+
+    # Header — always present, agents parse this
+    lines.append("=== REVIEW SCOPE ===")
+    lines.append(f"STATUS: {scope['status']}")
+    lines.append(f"RANGE: {scope.get('range', 'N/A')}")
+    lines.append(f"BASE_REF: {scope.get('base_ref', 'N/A')}")
+    lines.append(f"DOMAIN: {scope.get('domain', 'N/A')}")
+
+    if scope.get("pr_number"):
+        lines.append(f"PR_NUMBER: {scope['pr_number']}")
+    lines.append(f"OUTPUT_DIR: {scope.get('output_dir', '/tmp')}")
+
+    lines.append("")
+    lines.append(f"FILES_CHANGED: {scope.get('total_changed', 0)}")
+    lines.append(f"NOISE_SKIPPED: {scope.get('noise_skipped', 0)}")
+    lines.append(f"DOMAIN_EXCLUDED: {scope.get('domain_excluded', 0)}")
+    lines.append(f"DOMAIN_MATCHED: {scope.get('domain_matched', 0)}")
+    lines.append(f"FILES_WITH_DIFFS: {scope.get('files_with_diffs', 0)}")
+    lines.append(f"TOTAL_DIFF_LINES: {scope.get('total_diff_lines', 0)}")
+
+    if scope.get("budget_exceeded_files"):
+        lines.append(
+            f"BUDGET_EXCEEDED: {len(scope['budget_exceeded_files'])} files skipped "
+            f"(max {scope.get('budget_max', 'N/A')} lines)"
+        )
+
+    if scope["status"] == "NO_DOMAIN_FILES":
+        lines.append("")
+        lines.append(
+            f"No files matched domain '{scope['domain']}'. "
+            f"Changed files were all noise ({scope.get('noise_skipped', 0)}) "
+            f"or outside domain ({scope.get('domain_excluded', 0)})."
+        )
+        return "\n".join(lines)
+
+    diffstat = scope.get("diffstat", {})
+    is_summary = bool(diffstat) and not scope.get("diffs")
+
+    if is_summary:
+        # Summary mode: diffstat for ALL matched files, sorted by size descending
+        lines.append("")
+        lines.append("=== DIFFSTAT (all matched files, largest first) ===")
+        lines.append(f"{'File':<80s} {'Added':>6s} {'Removed':>7s} {'Total':>6s}")
+        lines.append("-" * 103)
+
+        # Sort by total changes descending for summary view
+        sorted_files = sorted(
+            scope.get("files", []),
+            key=lambda f: sum(diffstat.get(f, (0, 0))),
+            reverse=True,
+        )
+        total_added = 0
+        total_removed = 0
+        for filepath in sorted_files:
+            added, removed = diffstat.get(filepath, (0, 0))
+            total = added + removed
+            total_added += added
+            total_removed += removed
+            # Truncate long paths from the left
+            display_path = filepath if len(filepath) <= 78 else "..." + filepath[-(78-3):]
+            lines.append(f"{display_path:<80s} {'+' + str(added):>6s} {'-' + str(removed):>7s} {total:>6d}")
+
+        lines.append("-" * 103)
+        lines.append(
+            f"{'TOTAL':<80s} {'+' + str(total_added):>6s} {'-' + str(total_removed):>7s} "
+            f"{total_added + total_removed:>6d}"
+        )
+        lines.append("")
+        lines.append(
+            f"Use 'git diff {scope.get('range', '')} -- <file>' to read specific diffs."
+        )
+    else:
+        # Regular mode: file list + diffs
+        lines.append("")
+        lines.append("=== FILES ===")
+        for filepath in scope.get("files", []):
+            added, removed = diffstat.get(filepath, (0, 0))
+            lines.append(f"{filepath}  (+{added} -{removed})")
+
+        # Budget-exceeded files with their diffstat so agent knows what it's missing
+        budget_files = scope.get("skipped_files", {}).get("budget", [])
+        if budget_files:
+            lines.append("")
+            lines.append(f"=== NOT DIFFED (budget exceeded, {len(budget_files)} files) ===")
+            lines.append("Use 'git diff <range> -- <file>' to read any of these selectively.")
+            # Sort budget-exceeded by size descending so agent sees biggest changes first
+            budget_sorted = sorted(
+                budget_files,
+                key=lambda f: sum(diffstat.get(f, (0, 0))),
+                reverse=True,
+            )
+            for filepath in budget_sorted:
+                added, removed = diffstat.get(filepath, (0, 0))
+                lines.append(f"  {filepath}  (+{added} -{removed})")
+
+        # Skipped files summary (noise + domain)
+        skipped = scope.get("skipped_files", {})
+        has_noise_or_domain = skipped.get("noise") or skipped.get("domain")
+        if has_noise_or_domain:
+            lines.append("")
+            lines.append("=== SKIPPED ===")
+            if skipped.get("noise"):
+                lines.append(f"Noise ({len(skipped['noise'])}): {', '.join(skipped['noise'][:10])}")
+                if len(skipped["noise"]) > 10:
+                    lines.append(f"  ... and {len(skipped['noise']) - 10} more")
+            if skipped.get("domain"):
+                lines.append(
+                    f"Outside domain ({len(skipped['domain'])}): "
+                    f"{', '.join(skipped['domain'][:10])}"
+                )
+                if len(skipped["domain"]) > 10:
+                    lines.append(f"  ... and {len(skipped['domain']) - 10} more")
+
+        # Diffs
+        if scope.get("diffs"):
+            lines.append("")
+            lines.append("=== DIFFS ===")
+            for filepath, diff_text in scope["diffs"].items():
+                lines.append(f"--- {filepath} ---")
+                lines.append(diff_text)
+                lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_json_output(scope: dict) -> str:
+    """Format scope as JSON (for programmatic consumption)."""
+    # Convert diffstat tuples to dicts for JSON serialization
+    output = dict(scope)
+    if "diffstat" in output:
+        output["diffstat"] = {
+            f: {"added": a, "removed": r}
+            for f, (a, r) in output["diffstat"].items()
+        }
+    return json.dumps(output, indent=2)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Review Scope — efficient diff scoping for review agents.",
+        epilog="Available domains: " + ", ".join(sorted(DOMAIN_CATALOG.keys())),
+    )
+    parser.add_argument(
+        "--domain",
+        choices=sorted(DOMAIN_CATALOG.keys()),
+        help="Domain filter to apply (determines which file types to include). Required unless --list-domains.",
+    )
+    parser.add_argument(
+        "--range",
+        default=None,
+        help="Git range to diff (e.g., 'main..HEAD'). Auto-detected if omitted.",
+    )
+    parser.add_argument(
+        "--max-lines",
+        type=int,
+        default=2000,
+        help="Max diff lines to include (default: 2000). Files beyond budget are listed but not diffed.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (default: text). Use 'json' for programmatic consumption.",
+    )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Output diffstat overview for all matched files (no diffs). Agent picks which files to deep-dive.",
+    )
+    parser.add_argument(
+        "--base-ref-only",
+        action="store_true",
+        help="Only output the base ref and file list (no diffs). For agents that explore preexisting code.",
+    )
+    parser.add_argument(
+        "--list-domains",
+        action="store_true",
+        help="List all available domains with descriptions and exit.",
+    )
+
+    args = parser.parse_args()
+
+    # Handle --list-domains
+    if args.list_domains:
+        for name, spec in sorted(DOMAIN_CATALOG.items()):
+            print(f"  {name:20s} {spec['description']}")
+            print(f"  {'':20s} include: {spec['include']}")
+            if spec["exclude"]:
+                print(f"  {'':20s} exclude: {spec['exclude']}")
+        sys.exit(0)
+
+    if not args.domain:
+        parser.error("--domain is required (unless using --list-domains)")
+        sys.exit(1)
+
+    try:
+        scope = build_scope(args)
+
+        if args.format == "json":
+            print(format_json_output(scope))
+        else:
+            print(format_text_output(scope))
+
+        # Exit code based on status
+        if scope["status"] == "NO_DOMAIN_FILES":
+            sys.exit(0)  # Not an error — agent should APPROVE and exit
+        sys.exit(0)
+
+    except RuntimeError as e:
+        error_msg = str(e)
+
+        # Structured error output so agents can parse it
+        error_output = (
+            f"=== REVIEW SCOPE ===\n"
+            f"STATUS: ERROR\n"
+            f"ERROR: {error_msg}\n"
+        )
+
+        # Special exit code for "no changes" (not a failure)
+        if error_msg.startswith("NO_CHANGES:"):
+            error_output += "ACTION: APPROVE and exit — nothing to review.\n"
+            print(error_output)
+            print(error_output, file=sys.stderr)
+            sys.exit(2)
+
+        # All other errors — agent should report back to caller
+        error_output += "ACTION: Report this error to the caller. Do NOT proceed with review.\n"
+        print(error_output)
+        print(error_output, file=sys.stderr)
+        sys.exit(1)
+
+    except Exception as e:
+        # Catch-all for unexpected errors — NEVER silently eat them
+        error_output = (
+            f"=== REVIEW SCOPE ===\n"
+            f"STATUS: ERROR\n"
+            f"ERROR: Unexpected error: {type(e).__name__}: {e}\n"
+            f"ACTION: Report this error to the caller. Do NOT proceed with review.\n"
+        )
+        print(error_output)
+        print(error_output, file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
