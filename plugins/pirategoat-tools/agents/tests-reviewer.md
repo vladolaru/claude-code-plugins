@@ -91,7 +91,7 @@ builder.add_issue(
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`
 
-**Test categories:** `test-failure`, `missing-coverage`, `flaky-test`, `brittle-test`, `over-mocking`, `test-smell`, `assertion-quality`, `test-independence`, `other`
+**Test categories:** `test-failure`, `missing-coverage`, `flaky-test`, `brittle-test`, `over-mocking`, `overprescriptive-test`, `copy-based-assertion`, `test-smell`, `assertion-quality`, `test-independence`, `other`
 
 ### Recording Metadata
 
@@ -791,6 +791,18 @@ This is a fundamental correctness problem, not style.
    - Quote relevant patterns from skill docs
    - Link to examples in skill documentation
 
+**Overprescriptive test diagnosis:**
+
+When evaluating whether a test is overprescriptive, apply the **Refactoring Resilience Test**:
+
+1. **Imagine three harmless changes** to the code under test:
+   - Renaming an internal variable or method
+   - Rewording a user-facing string (copy edit)
+   - Adding a new field/property to an existing data structure
+2. **Would any of these break this test?** If yes → overprescriptive
+3. **What is the test ACTUALLY protecting?** Identify the core business logic
+4. **Can the assertion be made structural?** Error codes > messages, `toMatchObject` > `toEqual`, semantic selectors > CSS classes
+
 **Example diagnostic process:**
 
 ```markdown
@@ -915,6 +927,8 @@ A test has value only if it would fail when the code is broken and pass when the
 
 If a test verifies implementation details (like which private methods are called), it provides false confidence and will break during refactoring.
 
+**Corollary: Fewer meaningful tests beat many overprescriptive tests.** A test suite's value comes from testing meaningful business logic, not from test count. Ten tests that verify real behavior provide more confidence than fifty tests that assert on copy strings, internal call order, or exact data shapes. Overprescriptive tests create maintenance burden and erode trust—developers learn to ignore test failures when most failures are caused by harmless refactoring or copy changes rather than real bugs.
+
 ## Verification Protocol (Apply to Each Test)
 
 Before flagging any issue, verify your analysis with these open questions:
@@ -925,6 +939,8 @@ Before flagging any issue, verify your analysis with these open questions:
 3. Would this test pass if the implementation was refactored but behavior unchanged?
 4. What is the single assertion's purpose? [If multiple purposes, flag as issue]
 5. Is the test name accurate about what's actually tested?
+6. Could a non-buggy change (copy edit, rename, refactor) cause this test to fail? [If yes, the test is overprescriptive]
+7. Is there a structural or behavioral way to assert this instead of matching exact strings/copy? [If yes, prefer it]
 </verification_questions>
 
 **Critical:** Ask these as open questions, not yes/no confirmations. "Does this test verify behavior?" biases toward "yes". "What behavior does this test verify?" forces a specific answer.
@@ -1187,6 +1203,185 @@ it('should get user', async () => {
 
 **Why the incorrect version fails:** Real HTTP calls are slow, flaky, and depend on external services. Unit tests must mock external boundaries.
 
+#### 6. Overprescriptive Tests (Not Resilient to Refactoring)
+
+Tests that break on harmless changes (copy edits, renames, internal restructuring) without any actual behavior change. These tests create noise, erode trust in the test suite, and slow down development.
+
+##### 6a. Copy/String-Based Assertions When Structural Alternatives Exist
+
+<example type="HIGH - INCORRECT">
+```php
+// Asserts on exact copy - breaks when someone fixes a typo or rewords a message
+public function test_error_message_on_invalid_email() {
+    $result = $this->validator->validate(['email' => 'bad']);
+    $this->assertSame(
+        'The email address you entered is not valid. Please check and try again.',
+        $result->getError()
+    );
+}
+```
+</example>
+
+<example type="CORRECT">
+```php
+// Asserts on behavior: an error exists for the right field with the right type
+public function test_invalid_email_produces_validation_error() {
+    $result = $this->validator->validate(['email' => 'bad']);
+
+    $this->assertTrue($result->hasErrors());
+    $this->assertArrayHasKey('email', $result->getErrors());
+    // If the error code/type system exists, use it:
+    $this->assertSame('invalid_email', $result->getError('email')->code);
+}
+```
+</example>
+
+**Why the incorrect version fails:** Copy changes (fixing typos, improving wording, translating) should never cause test failures. Assert on error codes, error types, or structural properties instead of exact message strings. Only assert on exact copy when the copy itself IS the business requirement (e.g., testing a template rendering engine).
+
+##### 6b. Snapshot Overuse
+
+<example type="HIGH - INCORRECT">
+```javascript
+// Snapshot of entire HTML output - breaks on any markup or copy change
+it('should render the settings page', () => {
+    const { container } = render(<SettingsPage />);
+    expect(container.innerHTML).toMatchSnapshot();
+});
+```
+</example>
+
+<example type="CORRECT">
+```javascript
+// Asserts on meaningful structure and behavior
+it('should render save button and form fields', () => {
+    render(<SettingsPage />);
+
+    expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/site title/i)).toBeInTheDocument();
+});
+```
+</example>
+
+**Why the incorrect version fails:** Large snapshots become "approve and move on" artifacts. They break on every CSS class change, whitespace adjustment, or copy edit. Nobody reads a 200-line snapshot diff—they just update it, defeating the purpose.
+
+##### 6c. Asserting on Exact Data Shapes When Only Specific Properties Matter
+
+<example type="HIGH - INCORRECT">
+```javascript
+// Asserts entire response shape - breaks when any field is added/renamed
+it('should return user data', async () => {
+    const user = await getUser(1);
+    expect(user).toEqual({
+        id: 1,
+        name: 'John',
+        email: 'john@example.com',
+        createdAt: '2024-01-01',
+        updatedAt: '2024-01-02',
+        role: 'admin',
+        avatarUrl: 'https://example.com/avatar.jpg',
+        preferences: { theme: 'dark', lang: 'en' },
+    });
+});
+```
+</example>
+
+<example type="CORRECT">
+```javascript
+// Asserts on what the test actually cares about
+it('should return user with correct identity', async () => {
+    const user = await getUser(1);
+
+    expect(user).toMatchObject({
+        id: 1,
+        name: 'John',
+        email: 'john@example.com',
+    });
+});
+
+it('should return user with admin role', async () => {
+    const user = await getUser(1);
+    expect(user.role).toBe('admin');
+});
+```
+</example>
+
+**Why the incorrect version fails:** Adding a new field to the user object (e.g., `lastLoginAt`) breaks this test even though no existing behavior changed. Use `toMatchObject`, `objectContaining`, or assert on individual properties that the test actually verifies.
+
+##### 6d. Testing Internal Call Sequences
+
+<example type="HIGH - INCORRECT">
+```javascript
+// Asserts on exact call order - breaks on harmless reordering
+it('should process payment', () => {
+    processor.process(order);
+
+    expect(validator.validate).toHaveBeenCalledBefore(gateway.charge);
+    expect(gateway.charge).toHaveBeenCalledBefore(notifier.notify);
+    expect(notifier.notify).toHaveBeenCalledBefore(logger.log);
+});
+```
+</example>
+
+<example type="CORRECT">
+```javascript
+// Asserts on outcome - doesn't care about internal sequence
+it('should charge the customer when order is valid', () => {
+    processor.process(order);
+
+    expect(gateway.charge).toHaveBeenCalledWith(order.total);
+});
+
+it('should notify customer after successful payment', () => {
+    gateway.charge.mockReturnValue({ success: true });
+
+    processor.process(order);
+
+    expect(notifier.notify).toHaveBeenCalled();
+});
+```
+</example>
+
+**Why the incorrect version fails:** The internal order of operations is an implementation detail. If a developer reorders `log` and `notify` for performance, the test breaks despite identical observable behavior.
+
+##### 6e. Pinning Tests on Incidental Details
+
+<example type="HIGH - INCORRECT">
+```php
+// Asserts on CSS class names and exact HTML structure
+public function test_renders_error_notice() {
+    $html = $this->renderer->render_notice('Something went wrong', 'error');
+    $this->assertStringContainsString('<div class="notice notice-error is-dismissible">', $html);
+    $this->assertStringContainsString('<p>Something went wrong</p>', $html);
+    $this->assertStringContainsString('<button type="button" class="notice-dismiss">', $html);
+}
+```
+</example>
+
+<example type="CORRECT">
+```php
+// Asserts on semantic content, not presentation details
+public function test_renders_error_notice() {
+    $html = $this->renderer->render_notice('Something went wrong', 'error');
+
+    // Use DOM parsing or check for key semantic attributes
+    $this->assertStringContainsString('notice-error', $html);
+    $this->assertStringContainsString('Something went wrong', $html);
+}
+
+// Or better: if you have a DOM parser available
+public function test_renders_error_notice() {
+    $html = $this->renderer->render_notice('Something went wrong', 'error');
+    $doc = new DOMDocument();
+    $doc->loadHTML($html);
+
+    $notice = $doc->getElementsByTagName('div')->item(0);
+    $this->assertStringContainsString('notice-error', $notice->getAttribute('class'));
+}
+```
+</example>
+
+**Why the incorrect version fails:** Tests that pin on exact HTML structure, CSS class order, or wrapper elements break when someone refactors markup for accessibility, updates a CSS framework, or changes the dismiss button implementation. Assert on what matters: the right type of notice with the right content.
+
 ### MEDIUM (Best Practice Violations)
 
 #### 1. Poor Test Structure
@@ -1332,6 +1527,17 @@ public function test_status_change_from_pending_to_completed() {
 [ ] Tests are deterministic (no time/random without mocking)?
 ```
 
+**Test Resilience (HIGH)**
+```
+[ ] Tests survive refactoring? (Would renaming an internal method break them?)
+[ ] Assertions use structural checks over exact copy? (error codes > error messages)
+[ ] No snapshot abuse? (Small, focused snapshots only—never full page/component HTML)
+[ ] Assertions target specific properties, not entire data shapes? (toMatchObject > toEqual for partial checks)
+[ ] No internal call sequence assertions? (Assert outcomes, not orchestration order)
+[ ] No pinning on incidental details? (CSS classes, HTML structure, whitespace)
+[ ] Copy changes won't break tests? (Unless copy IS the business logic being tested)
+```
+
 **Test Structure (HIGH)**
 ```
 [ ] Clear AAA structure (Arrange-Act-Assert)?
@@ -1376,6 +1582,17 @@ E2E:
 | Testing mocks | Tests nothing | `expect(mock.method()).toBe(mockedValue)` |
 | Commented assertions | Disabled verification | `// $this->assert...` |
 | `markTestSkipped` on real tests | Tests not running | Skip without good reason |
+
+**HIGH—flag as overprescriptive:**
+
+| Pattern | Why It's Harmful | Look For |
+|---------|-----------------|----------|
+| Exact error message assertions | Breaks on copy changes | `assertSame('The email...', $error)` when error codes exist |
+| Large snapshot tests | Never meaningfully reviewed | `toMatchSnapshot()` on full components/pages |
+| Full object equality for partial checks | Breaks when fields added | `toEqual({...20 fields...})` when testing 2-3 properties |
+| Call order assertions | Tests implementation, not behavior | `toHaveBeenCalledBefore()`, ordered mock expectations |
+| Exact HTML/markup assertions | Breaks on CSS/structure refactoring | `assertStringContainsString('<div class="exact classes">')` |
+| Hardcoded log/output messages | Couples tests to presentation | `expect(console.log).toHaveBeenCalledWith('Processing item 5...')` |
 
 ## Output Format
 

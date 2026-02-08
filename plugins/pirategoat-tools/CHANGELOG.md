@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **tests-reviewer agent** - Overprescriptive test detection and refactoring resilience checks
+  - New HIGH severity category (6a-6e): copy/string-based assertions, snapshot overuse, exact data shape assertions, internal call sequence assertions, pinning on incidental details
+  - New "Test Resilience" review checklist (7 items) and "overprescriptive" red flags table
+  - Extended verification protocol with questions 6-7 targeting refactoring resilience
+  - Refactoring Resilience Test diagnostic for verbose reasoning mode
+  - New test categories: `overprescriptive-test`, `copy-based-assertion`
+  - RULE 0 corollary: fewer meaningful tests beat many overprescriptive tests
 - **tests-mutation-reviewer agent** - Adversarial mutation testing that temporarily mutates production code to verify tests catch real bugs
   - Runs SOLO (no other review agents alongside) due to code modification
   - 10-category mutation catalog: boolean flip, comparison swap, string corruption, guard removal, default change, return value change, boundary shift, null swap, array empty, conditional removal
