@@ -2,18 +2,122 @@
 
 Standard protocol for all review agents. Read this FIRST before starting your review.
 
-## Context Format
+## Step 0: Locate Plugin Root
 
-The main session provides: **PR ID**, **Output Directory**, **Git Range** (base..head refs), and optional **Focus Areas**.
+You are running from the target project's directory, not the plugin directory. Before anything else, locate the plugin root so you can find scripts and shared files:
 
-## RULE: Changed Code Only
+```bash
+PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
+# Fallback if hook hasn't run yet
+[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname)
+echo "PLUGIN_ROOT=$PLUGIN_ROOT"
+```
 
-Review ONLY code in the PR diff. For every finding, verify:
+If this fails, fall back to the manual scope discovery at the end of this section.
 
+Store `PLUGIN_ROOT` — you'll use it for:
+- `python3 $PLUGIN_ROOT/scripts/review-scope.py` — scope discovery
+- Reading reference files like `$PLUGIN_ROOT/agents/shared/*.md`, `$PLUGIN_ROOT/skills/*/references/*.md`
+
+## Scope Discovery (Do This FIRST)
+
+Use `review-scope.py` to efficiently determine your review scope. It handles range detection, noise filtering, domain filtering, context budgeting, and output directory detection in a single call.
+
+```bash
+# Your Scope section specifies which --domain to use
+python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain>
+
+# With explicit range (when provided by caller)
+python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain> --range "main..feature-branch"
+
+# For large PRs: get diffstat overview, then selectively read diffs
+python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain> --summary
+
+# For agents exploring preexisting code (patterns-reviewer, history-insights-reviewer)
+python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain> --base-ref-only
+```
+
+### Reading the Output
+
+The script outputs structured text. Parse these key fields from the header:
+
+| Field | Use |
+|-------|-----|
+| `STATUS` | `OK`, `NO_DOMAIN_FILES`, or `ERROR` |
+| `RANGE` | The git range used (for manual diff reads if needed) |
+| `BASE_REF` | Base branch ref (for exploring preexisting code) |
+| `OUTPUT_DIR` | Where to write review output files |
+| `PR_NUMBER` | PR number (if detected) |
+| `BUDGET_EXCEEDED` | Files listed but not diffed due to context budget |
+
+**On `STATUS: ERROR`:** Report the error to the caller. Do NOT proceed with review.
+
+**On `STATUS: NO_DOMAIN_FILES`:** Report "No [domain] files to review" → APPROVE → exit.
+
+**On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted smallest-first (focused changes before large files). If many files exceed the budget, the `=== NOT DIFFED ===` section shows them with diffstat so you can selectively `git diff <range> -- <file>` the most important ones.
+
+**For large PRs (100+ matched files):** Use `--summary` to get a diffstat overview of ALL files without any diffs. Pick the most important files and read their diffs selectively. This is more context-efficient than the default mode for very large PRs.
+
+### When You Need More Context
+
+The script provides diffs. If a finding needs surrounding context:
+```bash
+# Read specific lines around a finding
+# Use the Read tool with offset+limit, not cat/head/tail
+```
+
+### If the Script Is Not Available
+
+Fall back to manual commands:
+```bash
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+[ -z "$DEFAULT_BRANCH" ] && DEFAULT_BRANCH="main"
+RANGE="${DEFAULT_BRANCH}..HEAD"
+git diff --name-only $RANGE | grep -v -E '\.(lock|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map)$' \
+  | grep -v -E '(^|/)(vendor|node_modules)/' \
+  | grep -v -E '\.min\.(js|css)$' \
+  | grep -v -E '(^dist/|^build/|^\.idea/|^\.vscode/|\.DS_Store$)'
+# Then apply your domain filter (see Scope section)
+# Then: git diff $RANGE -- <file> for each matched file
+```
+
+## RULE: Reviewing vs Exploring
+
+Two distinct activities with different rules:
+
+| Activity | Purpose | Scope | Generates findings? |
+|----------|---------|-------|---------------------|
+| **Reviewing** | Analyze code for issues | Changed files only (the diff) | YES |
+| **Exploring** | Understand context | Any file in the codebase | NO |
+
+Exploration is expected and encouraged: reading project conventions, understanding call sites, checking how similar code works elsewhere. But **never report findings on explored code** — only on code that changed.
+
+For every finding, verify:
 1. **Is this in the changed code?** Issues in unchanged code are NOT findings.
-2. **Is this new or pre-existing?** Only report issues INTRODUCED by this PR.
+2. **Is this new or pre-existing?** Only report issues INTRODUCED by this change.
 3. **Would I bet my reputation on this?** If uncertain, verify deeper or drop it.
 4. **Am I reviewing the change, or the codebase?** Evaluate THIS CHANGE, not the entire codebase.
+
+**Agents that explore preexisting code** (patterns-reviewer, history-insights-reviewer): when searching for what already exists, search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes — searching HEAD would find the very code you're supposed to be comparing against.
+
+## Output Directory
+
+**If Output Directory was provided:** use it (`mkdir -p` if needed).
+
+**If not provided:** use the `OUTPUT_DIR` from `review-scope.py` output. The script auto-detects PR number via `gh` (github.com) or `ghe` (github.a8c.com) and creates `/tmp/pr-review-{N}`. Falls back to `/tmp/` when no PR is found.
+
+**If the script was not available:**
+```bash
+PR_NUM=$(gh pr view --json number -q .number 2>/dev/null || ghe pr view --json number -q .number 2>/dev/null || echo "")
+if [ -n "$PR_NUM" ]; then
+  OUTPUT_DIR="/tmp/pr-review-${PR_NUM}"
+else
+  OUTPUT_DIR="/tmp"
+fi
+mkdir -p "$OUTPUT_DIR"
+```
+
+**Note on GHE:** For repos hosted on `github.a8c.com`, the `ghe` CLI is used (requires SOCKS5 proxy). The `review-scope.py` script handles this automatically by detecting the remote URL.
 
 ## ReviewOutputBuilder API
 
@@ -45,6 +149,8 @@ markdown_output = builder.to_markdown()
 # Write to: {output_dir}/{reviewer}-review.json and .md
 ```
 
+**When using `/tmp/` directly** (no PR number detected), append a timestamp to avoid collisions: `{reviewer}-review-{YYYYMMDD-HHMMSS}.json` and `.md`.
+
 **Return signal format:**
 ```
 STATUS: FINISHED
@@ -61,7 +167,7 @@ SUMMARY: <one sentence>
 
 Do NOT return full review text. The reconciliator reads your files.
 
-## Project-Specific Knowledge (MUST DO FIRST)
+## Project-Specific Knowledge
 
 Before reviewing, search for project-specific documentation:
 
@@ -69,7 +175,7 @@ Before reviewing, search for project-specific documentation:
 find . -type f \( -name "CLAUDE.md" -o -name "*.md" \) -path "*/.claude/*" 2>/dev/null | head -20
 ```
 
-Look for: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. Read and apply project-specific standards before generic patterns.
+Look for: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. Read and apply project-specific standards before generic patterns. This is **exploration** — it informs your review but is not itself reviewable.
 
 ## Ground Truth Data Loading
 

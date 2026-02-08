@@ -5,6 +5,97 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-02-08
+
+### Added
+
+- **Plugin root discovery hook** (`hooks/`) - PreToolUse:Bash hook writes `$CLAUDE_PLUGIN_ROOT` to `/tmp/.pirategoat-tools-root` so agents can find plugin files when dispatched into target repos
+  - `hooks.json` registers the hook for all Bash tool invocations
+  - `init-plugin-root.sh` writes the path on each Bash call; agents read it with `cat /tmp/.pirategoat-tools-root`
+  - Fallback `find ~/.claude` command when hook hasn't run yet
+
+### Changed
+
+- **All 11 reviewer agents** - Restructured with `## MANDATORY SETUP` as first content after frontmatter
+  - Three numbered steps: (1) get plugin root, (2) read shared protocol, (3) run `review-scope.py --domain <X>`
+  - Explicit gate: "Do NOT start reviewing code until these 3 steps are done"
+  - Identity/expertise section moved below the setup, separated by `---`
+  - Previously agents sometimes ignored setup instructions buried in the middle of their definitions
+
+- **Test reviewer agents** (php-tests, js-tests, e2e-tests) - Fixed reference file paths
+  - Added explicit `$PLUGIN_ROOT/skills/testing-patterns/references/` prefix
+  - Reference table entries now resolve correctly when agents run outside plugin directory
+
+- **architecture-reviewer agent** - Fixed pattern reference paths
+  - Added explicit `$PLUGIN_ROOT/skills/software-architecture/` prefix for design pattern files
+
+- **Shared reviewer protocol** - Step 0 uses hook-based discovery with `find` fallback
+  - `cat /tmp/.pirategoat-tools-root` as primary method (set by hook)
+  - `find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py"` as fallback
+
+## [1.19.0] - 2026-02-08
+
+### Added
+
+- **review-scope.py script** - Shared Python CLI tool that all reviewer agents call to efficiently determine their review scope in a single invocation
+  - Replaces 5+ ad-hoc git/grep commands per agent with one structured call
+  - Single source of truth for all filtering logic: range detection, noise filtering, domain filtering, context budgeting
+  - Parameterized domain catalog: `code`, `security`, `performance`, `architecture`, `wp-architecture`, `php-tests`, `js-tests`, `e2e-tests`, `patterns`
+  - Auto-detects default branch (`main`, `master`, `trunk`, `develop`), staged/unstaged changes, and PR number via `gh`/`ghe` CLI
+  - Smart `gh` vs `ghe` selection based on remote URL (`github.a8c.com` → `ghe`, `github.com` → `gh`)
+  - `--summary` flag for large PRs: outputs diffstat overview of ALL matched files (sorted largest-first) without diffs, letting agents pick which files to deep-dive
+  - `--base-ref-only` flag for agents exploring preexisting code (patterns-reviewer, history-insights-reviewer) — skips diff collection, lists all matched files
+  - Context budget (`--max-lines`, default 2000) — files sorted smallest-first (focused changes before large files), budget-exceeded files shown with diffstat so agents can selectively read them
+  - Defensive error handling: structured error output on both stdout and stderr so agents always see failures; never silently eats errors
+  - Extended noise filter: images, fonts, archives, binaries (.wasm, .pyc, .so), PDFs, translation artifacts (.mo, .pot), Jest snapshots (.snap), build artifacts, IDE/OS config
+  - Exit codes: 0 (success), 1 (error), 2 (no changes)
+
+### Changed
+
+- **Shared reviewer protocol** - Scope Discovery section now references `review-scope.py` as primary method with bash fallback
+  - Output Directory section simplified: script handles `gh`/`ghe` detection automatically
+  - Added GHE note for repos on `github.a8c.com`
+
+- **All reviewer agents** - Scope sections simplified to single `review-scope.py --domain <X>` call
+  - `pr-reviewer` → `--domain code`
+  - `security-reviewer` → `--domain security`
+  - `performance-reviewer` → `--domain performance`
+  - `architecture-reviewer` → `--domain architecture`
+  - `wp-architecture-reviewer` → `--domain wp-architecture`
+  - `php-tests-reviewer` → `--domain php-tests`
+  - `js-tests-reviewer` → `--domain js-tests`
+  - `e2e-tests-reviewer` → `--domain e2e-tests`
+  - `patterns-reviewer` → `--domain patterns` + `--base-ref-only` for exploration
+  - `history-insights-reviewer` → `--domain code --base-ref-only` for scenario extraction
+
+## [1.18.0] - 2026-02-08
+
+### Changed
+
+- **Shared reviewer protocol** - Agents are now self-sufficient: work both dispatched (from pr-reviewing) and standalone (ad-hoc invocation)
+  - New **Scope Discovery** section: agents detect their own review scope from Git Range (if provided), current branch divergence, staged changes, or unstaged changes — in that fallback order
+  - New **noise filter**: all agents skip `.lock`, `vendor/`, `node_modules/`, `dist/`, `build/`, binary files, IDE config before any review work
+  - New **Output Directory fallback**: agents detect PR number via `gh`/`ghe` CLI when no output dir provided; fall back to `/tmp/` with timestamped filenames to avoid collisions
+  - New **Reviewing vs Exploring** rule: explicitly distinguishes analyzing changed code (generates findings) from reading existing code for context (no findings); agents that explore preexisting code must search the base ref state, not HEAD
+  - New **context budget**: agents prioritize smaller diffs first and note skipped large files instead of silently ignoring them
+  - "Read diffs, not entire files" directive: agents read `git diff <range> -- <file>` and only use `Read` with offset+limit for surrounding context on specific findings
+
+- **All 11 reviewer agents** - Added concrete domain file filters referencing the shared scope discovery
+  - `pr-reviewer`: broad code file filter (generalist)
+  - `security-reviewer`: code files only (no docs, stylesheets)
+  - `performance-reviewer`: code files with queries and operations
+  - `architecture-reviewer`: implementation files excluding tests (updated from ad-hoc filter to shared protocol chain)
+  - `wp-architecture-reviewer`: PHP/JS/TS files
+  - `php-tests-reviewer`, `js-tests-reviewer`, `e2e-tests-reviewer`: concrete grep filters for their test file scopes, with early exit when no matching files in diff
+  - `history-insights-reviewer`: scope discovery for scenario extraction, searches are inherently history-scoped
+  - `tests-mutation-reviewer`: references shared protocol for scope discovery and output directory
+
+- **patterns-reviewer agent** - Now searches preexisting code only via base ref
+  - All codebase searches use `git grep <pattern> <base_ref>` instead of `grep -r .` on working tree
+  - Prevents finding the PR's own code when checking for existing patterns
+  - Git log searches unchanged (inherently history-scoped)
+  - Pattern Search Protocol step 1 updated: "Search base ref code" instead of "Search current code"
+
 ## [1.17.0] - 2026-02-08
 
 ### Added
