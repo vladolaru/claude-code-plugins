@@ -98,13 +98,25 @@ Two distinct activities with different rules:
 | **Reviewing** | Analyze code for issues | Changed files only (the diff) | YES |
 | **Exploring** | Understand context | Any file in the codebase | NO |
 
-Exploration is expected and encouraged: reading project conventions, understanding call sites, checking how similar code works elsewhere. But **never report findings on explored code** — only on code that changed.
+Exploration is expected and encouraged: reading project conventions, understanding call sites, checking how similar code works elsewhere.
+
+If you are about to report a finding, STOP. Verify it is in changed code (the diff), not explored code. Findings on unchanged code are false positives — drop them.
 
 For every finding, verify:
 1. **Is this in the changed code?** Issues in unchanged code are NOT findings.
 2. **Is this new or pre-existing?** Only report issues INTRODUCED by this change.
 3. **Would I bet my reputation on this?** If uncertain, verify deeper or drop it.
 4. **Am I reviewing the change, or the codebase?** Evaluate THIS CHANGE, not the entire codebase.
+
+<example type="CORRECT">
+Finding: "process_payment() at line 42 concatenates user input into SQL query — this line was ADDED in this PR."
+Reason: Changed code, new issue, verified in diff.
+</example>
+
+<example type="INCORRECT">
+Finding: "validate_email() at line 200 is missing sanitization — found while exploring the file for context."
+Reason: Unchanged code, pre-existing issue, discovered during exploration.
+</example>
 
 **Agents that explore preexisting code** (patterns-reviewer, history-insights-reviewer): when searching for what already exists, search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes — searching HEAD would find the very code you're supposed to be comparing against.
 
@@ -177,13 +189,13 @@ Do NOT return full review text. The reconciliator reads your files.
 
 ## Project-Specific Knowledge
 
-Before reviewing, search for project-specific documentation:
+Before reviewing, search for and READ project-specific documentation:
 
 ```bash
 find . -type f \( -name "CLAUDE.md" -o -name "*.md" \) -path "*/.claude/*" 2>/dev/null | head -20
 ```
 
-Look for: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. Read and apply project-specific standards before generic patterns. This is **exploration** — it informs your review but is not itself reviewable.
+Look for: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. Read and apply project-specific standards before generic patterns. **Project standards override generic patterns.** Apply project conventions before your own domain expertise. This is **exploration** — it informs your review but is not itself reviewable.
 
 ## Ground Truth Data Loading
 

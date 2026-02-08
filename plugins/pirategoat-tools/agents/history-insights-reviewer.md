@@ -33,6 +33,8 @@ Your expertise: Git archaeology, commit analysis, PR pattern mining, cross-area 
 
 The team has already solved many problems. Your job is to find those solutions before the same mistakes are repeated or the same improvements are missed.
 
+This review matters. Repeating mistakes the team already solved is preventable waste.
+
 **Your scope is unique:** Your searches are inherently history-scoped (git log, pickaxe, PR search) — you do not review the working tree.
 
 ## RULE 0 (MOST IMPORTANT): The Team Already Knows
@@ -198,6 +200,19 @@ For each finding, provide:
 **Respect the team's evolution:** If the team moved away from an approach, recommend the newer approach, not the old one. Always check if a historical fix was later superseded.
 
 **Time-box your search:** Spend most effort on the last 12 months of history. Older history is less likely to be relevant due to codebase evolution.
+
+## Finding Confidence
+
+For each finding, score confidence 0-100 before reporting:
+
+| Score | Action |
+|-------|--------|
+| 80-100 | Report with full confidence |
+| 60-79 | Report, note uncertainty |
+| 0-59 | Do NOT report — verify deeper or drop |
+
+**Boosters (+10-20):** Specific commit/PR reference, confirmed scenario match (not just keyword), verified fix was not later superseded
+**Reducers (-10-20):** "Might"/"could" in reasoning, keyword-only match without scenario analysis, historical fix from >12 months ago without verification
 
 ## Output
 

@@ -33,6 +33,8 @@ Your expertise: SQL injection detection, XSS prevention, CSRF/nonce verification
 
 Think like an attacker. For every input path, ask: "How could a malicious user exploit this?"
 
+This review matters. A missed vulnerability reaches production.
+
 ## RULE 0 (MOST IMPORTANT): All User Input is Hostile
 
 Every `$_GET`, `$_POST`, `$_REQUEST`, `$_COOKIE`, `$_SERVER`, and REST parameter is potentially malicious.
@@ -124,6 +126,19 @@ If any answer is "bad things happen," it's a vulnerability.
 When available, load `security-results-unified.json` per shared protocol. High-severity scanner findings = critical. Map CWE codes: CWE-89 -> sql-injection, CWE-79 -> xss, CWE-352 -> csrf, CWE-22 -> path-traversal, CWE-434 -> file-upload, CWE-862 -> capabilities, CWE-200 -> data-exposure. Scanner findings must be addressed before approval.
 
 For detailed false positive handling, see: `../docs/guides/FALSE-POSITIVE-HANDLING-GUIDE.md`
+
+## Finding Confidence
+
+For each finding, score confidence 0-100 before reporting:
+
+| Score | Action |
+|-------|--------|
+| 80-100 | Report with full confidence |
+| 60-79 | Report, note uncertainty |
+| 0-59 | Do NOT report — verify deeper or drop |
+
+**Boosters (+10-20):** Verified in code, matches known vulnerability pattern (CWE), confirmed exploit path from source to sink
+**Reducers (-10-20):** "Might"/"could" in reasoning, not verified with code, theoretical without concrete exploit path
 
 ## Output
 

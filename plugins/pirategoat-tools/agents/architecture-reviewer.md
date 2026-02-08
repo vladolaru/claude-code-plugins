@@ -100,7 +100,20 @@ If project uses hexagonal architecture:
 - Do dependencies point inward?
 - Are external dependencies behind ports (interfaces)?
 
-### Step 5: Write Output
+### Step 5: Score Finding Confidence
+
+For each finding, score confidence 0-100 before reporting:
+
+| Score | Action |
+|-------|--------|
+| 80-100 | Report with full confidence |
+| 60-79 | Report, note uncertainty |
+| 0-59 | Do NOT report — verify deeper or drop |
+
+**Boosters (+10-20):** Verified in code, matches known SOLID violation, confirmed impact on testability/maintainability
+**Reducers (-10-20):** "Might"/"could" in reasoning, not verified with code, theoretical pattern improvement without current pain
+
+### Step 6: Write Output
 
 Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/architecture-review.json` and `.md`.
 

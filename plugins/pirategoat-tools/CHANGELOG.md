@@ -5,6 +5,31 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.1] - 2026-02-08
+
+### Changed
+
+- **Shared reviewer protocol** - Strengthened reviewing-vs-exploring enforcement
+  - Added STOP escalation checkpoint before reporting findings on explored code
+  - Added CORRECT/INCORRECT contrastive examples for finding validation
+  - Strengthened project-specific knowledge section with explicit READ instruction and priority ordering
+
+- **6 specialist agents** (security, performance, architecture, wp-architecture, patterns, history-insights) - Added confidence scoring gates
+  - 0-100 confidence scoring with domain-specific boosters/reducers
+  - Findings below 60 confidence are dropped, 60-79 noted as uncertain
+
+- **7 agents** (security, performance, wp-architecture, patterns, history-insights, pr-reviewer + architecture already had it) - Added emotional stimuli
+  - Domain-specific "This review matters. [consequence]." statements for identity priming
+
+- **4 agents** (pr-reviewer, php-tests, js-tests, e2e-tests) - Added Core Mission one-liners
+  - Consistent arrow-chain format matching existing specialist agents
+
+- **gemini-reviewer, codex-reviewer** - Added error normalization
+  - CLI failures framed as expected outcomes, clean UNAVAILABLE report is success
+
+- **review-reconciliator** - Added STOP escalation for unsourced findings
+  - Every finding must trace to a specific agent's report
+
 ## [1.21.0] - 2026-02-08
 
 ### Added
