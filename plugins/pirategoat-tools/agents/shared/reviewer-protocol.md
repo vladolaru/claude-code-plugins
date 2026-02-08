@@ -4,7 +4,15 @@ Standard protocol for all review agents. Read this FIRST before starting your re
 
 ## Step 0: Locate Plugin Root
 
-You are running from the target project's directory, not the plugin directory. Before anything else, locate the plugin root so you can find scripts and shared files:
+**Preferred: Use the bootstrap script** which handles all setup (plugin root, protocol, scope discovery) in a single command:
+
+```bash
+PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
+[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | head -1 | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name>
+```
+
+If the bootstrap script is not available, locate the plugin root manually:
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)

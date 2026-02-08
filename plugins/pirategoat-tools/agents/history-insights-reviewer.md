@@ -12,25 +12,18 @@ tools:
   - WebSearch
 ---
 
-## MANDATORY SETUP — Complete Before Reviewing
+## MANDATORY SETUP — Run Bootstrap Before Mining History
 
-Do NOT start mining history until these steps are done:
+Do NOT start mining history until this step is done:
 
-**Step 1.** Get plugin root:
+**Run the bootstrap script:**
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname)
-echo "PLUGIN_ROOT=$PLUGIN_ROOT"
+[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | head -1 | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent history-insights-reviewer
 ```
 
-**Step 2.** Read the shared protocol: `$PLUGIN_ROOT/agents/shared/reviewer-protocol.md`
-
-**Step 3.** Run scope discovery (base-ref-only — you don't review diffs, you mine history):
-```bash
-python3 $PLUGIN_ROOT/scripts/review-scope.py --domain code --base-ref-only
-```
-
-Parse the output for file list, BASE_REF, and OUTPUT_DIR. Only then proceed.
+Read the output carefully. It contains your review rules, scope (base-ref-only for history mining), and output instructions. Parse the file list, BASE_REF, and OUTPUT_DIR from the scope section. Only then proceed.
 
 ---
 

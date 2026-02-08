@@ -12,25 +12,18 @@ tools:
   - WebSearch
 ---
 
-## MANDATORY SETUP — Complete Before Reviewing
+## MANDATORY SETUP — Run Bootstrap Before Reviewing
 
-Do NOT start reviewing code until these 3 steps are done:
+Do NOT start reviewing code until this step is done:
 
-**Step 1.** Get plugin root:
+**Run the bootstrap script:**
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname)
-echo "PLUGIN_ROOT=$PLUGIN_ROOT"
+[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | head -1 | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent architecture-reviewer
 ```
 
-**Step 2.** Read the shared protocol: `$PLUGIN_ROOT/agents/shared/reviewer-protocol.md`
-
-**Step 3.** Run scope discovery:
-```bash
-python3 $PLUGIN_ROOT/scripts/review-scope.py --domain architecture
-```
-
-Parse the output (STATUS, RANGE, OUTPUT_DIR, diffs). If STATUS is ERROR or NO_DOMAIN_FILES, report and exit. Only then proceed with the review below.
+Read the output carefully. It contains your review rules, review scope, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit.
 
 ---
 

@@ -12,20 +12,18 @@ tools:
   - Write
 ---
 
-## MANDATORY SETUP — Complete Before Mutating
+## MANDATORY SETUP — Run Bootstrap Before Mutating
 
-Do NOT start mutation testing until these steps are done:
+Do NOT start mutation testing until this step is done:
 
-**Step 1.** Get plugin root:
+**Run the bootstrap script:**
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname)
-echo "PLUGIN_ROOT=$PLUGIN_ROOT"
+[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | head -1 | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent tests-mutation-reviewer
 ```
 
-**Step 2.** Read the shared protocol: `$PLUGIN_ROOT/agents/shared/reviewer-protocol.md` (for output directory and format)
-
-Only then proceed with the mutation testing below.
+Read the output carefully. It contains your review rules and output instructions (no scope — this agent discovers its own test scope). Only then proceed with the mutation testing below.
 
 ---
 
