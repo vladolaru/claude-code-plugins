@@ -149,25 +149,63 @@ def detect_default_branch() -> str:
     return "main"  # last resort
 
 
+def freshen_base_ref(branch: str) -> str:
+    """
+    Ensure the base ref is as fresh as possible by using the remote tracking ref.
+
+    Fetches the latest state from origin (best-effort, silent on failure) and
+    returns ``origin/<branch>`` when available. Falls back to the local ref
+    if the remote ref doesn't exist or the fetch fails (e.g. offline).
+
+    This prevents stale local branch refs from inflating the review scope with
+    commits that are already on the remote default branch.
+    """
+    # Already a remote ref or a commit SHA — nothing to freshen.
+    if branch.startswith("origin/") or re.match(r"^[0-9a-f]{7,40}$", branch):
+        return branch
+
+    remote_ref = f"origin/{branch}"
+
+    # Best-effort fetch — single branch, no tags, quick timeout.
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", branch, "--no-tags"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass  # Offline or slow network — use whatever we have.
+
+    # Prefer the remote ref if it exists.
+    try:
+        run_cmd(["git", "rev-parse", "--verify", remote_ref], check=True)
+        return remote_ref
+    except RuntimeError:
+        return branch
+
+
 def detect_range() -> Tuple[str, str]:
     """
     Detect the appropriate diff range.
 
     Returns:
-        (range_spec, base_ref) — e.g. ("main..HEAD", "main") or ("--cached", "HEAD")
+        (range_spec, base_ref) — e.g. ("origin/main..HEAD", "origin/main")
+        or ("--cached", "HEAD")
 
     Raises RuntimeError if no changes found.
     """
     default_branch = detect_default_branch()
+    base_ref = freshen_base_ref(default_branch)
 
     # Check if current branch has diverged from default
     try:
         commit_count = run_cmd(
-            ["git", "rev-list", "--count", f"{default_branch}..HEAD"],
+            ["git", "rev-list", "--count", f"{base_ref}..HEAD"],
             check=True,
         )
         if int(commit_count) > 0:
-            return f"{default_branch}..HEAD", default_branch
+            return f"{base_ref}..HEAD", base_ref
     except (RuntimeError, ValueError):
         pass
 
@@ -378,9 +416,16 @@ def build_scope(args: argparse.Namespace) -> dict:
 
     # Step 1: Determine range
     if args.range:
-        range_spec = args.range
-        base_ref = detect_base_ref(range_spec)
-        # Validate the provided range is valid
+        raw_base = detect_base_ref(args.range)
+        # Freshen the base ref to avoid stale local branch refs.
+        base_ref = freshen_base_ref(raw_base)
+        # Rebuild range with the (possibly upgraded) base ref.
+        if ".." in args.range:
+            _, range_end = args.range.split("..", 1)
+            range_spec = f"{base_ref}..{range_end}"
+        else:
+            range_spec = args.range
+        # Validate the resolved base ref is valid
         try:
             run_cmd(["git", "rev-parse", base_ref], check=True)
         except RuntimeError:
