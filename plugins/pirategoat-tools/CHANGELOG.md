@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-02-09
+
+### Added
+
+- **code-review command** — Incremental branch-level code review that tracks last reviewed commit and only reviews new changes. Persists state in `.review-state.json` in the output directory. Supports `full`/`reset` arguments to force a full review, and auto-detects rebases to fall back gracefully.
+- **ingest-code-review command** — Reads review findings from `/code-review` or `/full-code-review`, validates each finding against the actual diff, filters false positives and out-of-scope noise, and proposes a prioritized action plan.
+
 ## [1.22.1] - 2026-02-09
 
 ### Fixed
