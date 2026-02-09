@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.25.0] - 2026-02-09
+
+### Added
+
+- **pr-update command** — Analyzes the current PR branch, discovers relevant artifacts (plans, reviews), respects the project's PR template, generates an accurate description proportional to PR size, validates every claim against the actual diff, and updates the PR after user approval. Supports `gh` and `ghe` (GitHub Enterprise). 8-step protocol: PR detection, branch context, template detection, artifact discovery, draft generation, validation pass, user approval gate, PR update.
+- **TestPrUpdate test class** — 12 structural tests for the pr-update command: frontmatter, PR detection, template detection, validation step, approval gate, PR edit, ghe fallback, STOP conditions, brevity calibration, artifact discovery, marketplace registration, and REVIEW_COMMANDS exclusion.
+
 ## [1.24.0] - 2026-02-09
 
 ### Added

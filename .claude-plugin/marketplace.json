@@ -13,7 +13,7 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Vlad Olaru's personal public Claude Code tools - experimental features that may eventually be extracted into standalone plugins.",
-      "version": "1.24.0",
+      "version": "1.25.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -39,7 +39,8 @@
         "./commands/fix-github-issue.md",
         "./commands/full-code-review.md",
         "./commands/code-review.md",
-        "./commands/ingest-code-review.md"
+        "./commands/ingest-code-review.md",
+        "./commands/pr-update.md"
       ],
       "agents": [
         "./agents/technical-writer.md",
