@@ -138,6 +138,17 @@ python3 plugins/pirategoat-tools/tests/eval_agent_compliance.py --dispatch --age
 
 ## Versioning & Releases
 
+### RULE 0: Every Change Gets Documented
+
+Every commit that modifies plugin behavior (features, fixes, refactors, performance) **must** include:
+
+1. **CHANGELOG.md update** — Add an entry under the appropriate version section in the plugin's `CHANGELOG.md`
+2. **Version bump in marketplace.json** — Update the plugin's `version` field following semver (`feat` = minor, `fix`/`refactor`/`perf` = patch, `BREAKING CHANGE` = major)
+
+**Coalescing rule:** If the latest version bump has not been pushed to the remote yet, fold new changes into the same version entry rather than bumping again — provided they are of similar impact (e.g., two fixes, or a feature and a closely related fix). If the new change is a higher semver impact (e.g., existing unpushed patch + new feature), upgrade the version to match.
+
+**Exempt from version bumps:** `docs`, `test`, `ci`, `style`, `chore` commits that don't change runtime behavior. Still add a changelog entry if the change is notable.
+
 ### Plugin-Prefixed Tags
 
 Since this repository may contain multiple plugins with independent version cycles, use **plugin-prefixed tags**:
