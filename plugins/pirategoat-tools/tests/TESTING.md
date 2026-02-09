@@ -10,6 +10,7 @@ tests/
 ├── __init__.py                     # Package marker
 ├── test_bootstrap_reviewer.py      # Level 1: Script evals (pytest)
 ├── test_domain_routing.py          # Level 1: Domain routing evals (pytest)
+├── test_commands.py                # Level 1: Command structure evals (pytest)
 ├── graders.py                      # Shared grading functions
 ├── test_graders.py                 # Tests for the graders themselves
 ├── eval_agent_compliance.py        # Level 2: Agent compliance evals
@@ -71,6 +72,21 @@ Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parame
 
 `OK` = STATUS: OK (domain matches files), `-` = STATUS: NO_DOMAIN_FILES (domain excludes all files)
 
+### Level 1: Command Structure Evals (`test_commands.py`)
+
+Deterministic pytest suite that validates structural properties of review command files (`full-code-review.md`, `code-review.md`, `ingest-code-review.md`). No network or model calls.
+
+| Class | What it verifies |
+|---|---|
+| `TestFrontmatter` | All commands exist, have valid YAML frontmatter with `description` field |
+| `TestAgentReferences` | Agent names in dispatch tables exist in `marketplace.json`; both dispatch commands reference the same 10 agents |
+| `TestScriptReferences` | Scripts referenced in commands (`bootstrap-reviewer.py`, `review-scope.py`) exist on disk |
+| `TestMarketplaceRegistration` | All review commands are registered in `marketplace.json` |
+| `TestCodeReviewIterative` | `code-review.md` has state file reference, incremental mode, full/reset option, rebase detection, no-new-commits guard |
+| `TestIngestCodeReview` | `ingest-code-review.md` has scope validation, false positive handling, CHANGED_FILES reference, action plan, finding categories |
+| `TestFullCodeReview` | `full-code-review.md` has default branch guard, reconciliator dispatch, no state file reference |
+| `TestStateFileGrading` | `.review-state.json` round-trip: valid state files pass, incremented counts pass, explicit ranges pass |
+
 ### Shared Graders (`graders.py`)
 
 Reusable grading functions for review output files. Used by both `test_graders.py` (validates the graders themselves) and `eval_agent_compliance.py` (grades actual agent output).
@@ -97,6 +113,7 @@ class GradeResult:
 | `grade_no_domain_files(text)` | Agent output for no-code scenario | APPROVE verdict, zero findings |
 | `grade_error_exit(text)` | Agent output for error scenario | Error indication, no STATUS: FINISHED |
 | `grade_output_pair(output_dir, reviewer_name)` | Output directory + reviewer name | Both `.json` and `.md` exist, delegates to json + markdown graders, reviewer name matches |
+| `grade_review_state(path)` | Path to `.review-state.json` | File exists, valid JSON, required fields (`last_reviewed_sha`, `last_reviewed_at`, `review_count`, `base_ref`, `git_range_used`), SHA format (7-40 hex), positive review_count, range contains `..` |
 
 ### Level 2: Agent Compliance Evals (`eval_agent_compliance.py`)
 
@@ -238,7 +255,7 @@ Never hardcode absolute paths. Tests run from any working directory.
 ### Dependencies
 
 - **pytest** — the only external dependency (stdlib otherwise)
-- **Zero model calls** in `test_bootstrap_reviewer.py` and `test_graders.py`
+- **Zero model calls** in `test_bootstrap_reviewer.py`, `test_commands.py`, and `test_graders.py`
 - `eval_agent_compliance.py --dispatch` requires the `claude` CLI
 
 ## Valid Values Reference
@@ -251,3 +268,4 @@ These are the canonical valid values used by graders. If the review output schem
 | `VALID_VERDICTS` | `approve`, `block`, `request_changes`, `comment` | `ReviewOutputBuilder._calculate_verdict()` |
 | `REQUIRED_JSON_TOP_FIELDS` | `pr_id`, `reviewer`, `verdict`, `summary`, `issues`, `meta` | `ReviewOutputBuilder.to_dict()` |
 | `REQUIRED_ISSUE_FIELDS` | `id`, `severity`, `title`, `file`, `description`, `recommendation` | `ReviewOutputBuilder.add_issue()` |
+| `REQUIRED_STATE_FIELDS` | `last_reviewed_sha`, `last_reviewed_at`, `review_count`, `base_ref`, `git_range_used` | `code-review.md` Step 5 |

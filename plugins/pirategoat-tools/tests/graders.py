@@ -7,6 +7,7 @@ Follows Anthropic eval guidance: deterministic, objective, grades outcomes not p
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -245,3 +246,72 @@ def grade_output_pair(output_dir: str, reviewer_name: str) -> GradeResult:
         checks_run=total_checks,
         checks_passed=total_passed,
     )
+
+
+REQUIRED_STATE_FIELDS = {
+    "last_reviewed_sha",
+    "last_reviewed_at",
+    "review_count",
+    "base_ref",
+    "git_range_used",
+}
+
+SHA_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def grade_review_state(path: str) -> GradeResult:
+    """Grade a .review-state.json file.
+
+    Checks: file exists, valid JSON, required fields, SHA format,
+    review_count is positive int, git_range_used contains '..'.
+    """
+    checks = []
+
+    exists = os.path.isfile(path)
+    checks.append((exists, f"File does not exist: {path}"))
+    if not exists:
+        return _grade(checks)
+
+    data = None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        checks.append((True, ""))
+    except (json.JSONDecodeError, OSError) as e:
+        checks.append((False, f"Invalid JSON: {e}"))
+        return _grade(checks)
+
+    checks.append(
+        (isinstance(data, dict), f"Top-level value is not a dict: {type(data)}")
+    )
+    if not isinstance(data, dict):
+        return _grade(checks)
+
+    # Required fields
+    for field_name in REQUIRED_STATE_FIELDS:
+        checks.append(
+            (field_name in data, f"Missing required field: {field_name}")
+        )
+
+    # SHA format
+    sha = data.get("last_reviewed_sha", "")
+    checks.append(
+        (isinstance(sha, str) and bool(SHA_PATTERN.match(sha)),
+         f"Invalid SHA format: '{sha}' (expected 7-40 hex chars)")
+    )
+
+    # review_count is positive int
+    count = data.get("review_count", None)
+    checks.append(
+        (isinstance(count, int) and count > 0,
+         f"review_count must be a positive int, got: {count!r}")
+    )
+
+    # git_range_used contains '..'
+    git_range = data.get("git_range_used", "")
+    checks.append(
+        (isinstance(git_range, str) and ".." in git_range,
+         f"git_range_used must contain '..', got: '{git_range}'")
+    )
+
+    return _grade(checks)

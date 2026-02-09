@@ -118,6 +118,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `tests/graders.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (verifies agent config still works) |
 | New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (auto-included in all parameterized tests) |
+| Any review command `.md` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` (validates structure, agent refs, script refs) |
+| `.claude-plugin/marketplace.json` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` (validates command registration, agent cross-refs) |
 
 **Run all tests:** `pytest plugins/pirategoat-tools/tests/ -v`
 

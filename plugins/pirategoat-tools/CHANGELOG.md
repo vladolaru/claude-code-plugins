@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **code-review command** — Incremental branch-level code review that tracks last reviewed commit and only reviews new changes. Persists state in `.review-state.json` in the output directory. Supports `full`/`reset` arguments to force a full review, and auto-detects rebases to fall back gracefully.
 - **ingest-code-review command** — Reads review findings from `/code-review` or `/full-code-review`, validates each finding against the actual diff, filters false positives and out-of-scope noise, and proposes a prioritized action plan.
+- **test_commands.py** — Deterministic evals for review command files: frontmatter validation, agent reference cross-checking against marketplace.json, script existence verification, dispatch consistency between commands, and command-specific content checks. 36 test cases.
+- **grade_review_state grader** — Validates `.review-state.json` files: required fields, SHA format, positive review count, range separator. 8 test cases in test_graders.py.
 
 ## [1.22.1] - 2026-02-09
 
