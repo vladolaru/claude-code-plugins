@@ -87,6 +87,11 @@ AGENT_CONFIG: Dict[str, dict] = {
         "protocols": ["reviewer"],
         "scope_flags": [],
     },
+    "dead-code-reviewer": {
+        "domain": "code",
+        "protocols": ["reviewer"],
+        "scope_flags": [],
+    },
 }
 
 # Sections to SKIP from reviewer-protocol.md.

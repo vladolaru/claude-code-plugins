@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.0] - 2026-02-11
+
+### Added
+
+- **dead-code-reviewer agent** — Identifies dead code introduced or exposed by changes: unused functions, unreachable code paths, orphaned imports, unused parameters, and code made obsolete by refactors. Uses `git grep` verification protocol (RULE 0: prove it's dead before reporting) with a comprehensive false positive checklist covering WordPress hooks, magic methods, dynamic dispatch, DI containers, and 17 other dynamic patterns. Categories: `unused-function`, `unused-import`, `unused-variable`, `unused-parameter`, `unreachable-code`, `orphaned-survivor`, `unused-export`, `unused-class`. Dispatched as the 12th reviewer agent in `/code-review` and `/full-code-review`.
+
 ## [1.25.0] - 2026-02-09
 
 ### Added

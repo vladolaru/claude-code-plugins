@@ -102,7 +102,7 @@ When running bootstrap, include these flags:
 python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
 ```
 
-Dispatch these 10 agents in parallel (one message, 10 Task calls):
+Dispatch these 11 agents in parallel (one message, 11 Task calls):
 
 | # | Agent | Focus |
 |---|-------|-------|
@@ -116,6 +116,7 @@ Dispatch these 10 agents in parallel (one message, 10 Task calls):
 | 8 | `pirategoat-tools:php-tests-reviewer` | PHPUnit test quality |
 | 9 | `pirategoat-tools:js-tests-reviewer` | Jest/Vitest test quality |
 | 10 | `pirategoat-tools:e2e-tests-reviewer` | Playwright E2E test quality |
+| 11 | `pirategoat-tools:dead-code-reviewer` | Unused functions, orphaned imports, unreachable code |
 
 Agents whose domain has no matching files will self-exit with STATUS=NO_DOMAIN_FILES. This is expected — not an error. Collect the signal from each agent (STATUS, COUNTS, VERDICT).
 
