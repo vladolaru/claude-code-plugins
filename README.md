@@ -10,8 +10,9 @@ My personal Claude Code plugins marketplace featuring specialized skills, comman
 # Add marketplace
 /plugin marketplace add vladolaru/claude-code-plugins
 
-# Install the main plugin with all skills and agents
+# Install plugins
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
+/plugin install dex@vladolaru-claude-code-plugins
 
 # Restart Claude Code to activate
 ```
@@ -37,6 +38,9 @@ Choose the plugins you need:
 
 # Prompt engineering
 /plugin install prompt-engineer@vladolaru-claude-code-plugins
+
+# Knowledge capture (compound engineering)
+/plugin install dex@vladolaru-claude-code-plugins
 ```
 
 Then restart Claude Code to activate the plugins.
@@ -112,6 +116,24 @@ Human-in-the-loop prompt optimization with evidence-grounded pattern attribution
 
 ---
 
+### dex (v1.0.1)
+
+One-click knowledge capture that compounds engineering work. Based on [compound engineering](https://every.to/guides/compound-engineering) — each unit of work should make the next one easier, not harder.
+
+**Includes:** 1 skill, 5 commands (`/dex`, `/dex:learn`, `/dex:pattern`, `/dex:init`, `/dex:status`)
+
+| Command | Purpose |
+|---------|---------|
+| `/dex` | Auto-classifies knowledge (learning, pattern, or decision) and routes to the right handler |
+| `/dex:learn` | Captures a learning — discovery, fix, gotcha, debugging insight |
+| `/dex:pattern` | Captures a reusable pattern — approach, convention, anti-pattern |
+| `/dex:init` | Scaffolds `.claude/docs/` knowledge infrastructure for a new project |
+| `/dex:status` | Shows knowledge health report — CLAUDE.md budget, doc counts, latest entries |
+
+**[Full Documentation →](plugins/dex/README.md)** | [CHANGELOG](plugins/dex/CHANGELOG.md)
+
+---
+
 ## Repository Structure
 
 ```text
@@ -132,10 +154,15 @@ vladolaru-claude-code-plugins/
 │   │   ├── CHANGELOG.md          # Version history
 │   │   ├── commands/             # Slash commands
 │   │   └── scripts/              # Optimization scripts
-│   └── prompt-engineer/
+│   ├── prompt-engineer/
+│   │   ├── CHANGELOG.md          # Version history
+│   │   ├── commands/             # Slash commands
+│   │   └── skills/               # Skills with reference docs
+│   └── dex/
 │       ├── CHANGELOG.md          # Version history
-│       ├── commands/             # Slash commands
-│       └── skills/               # Skills with reference docs
+│       ├── commands/             # 5 slash commands
+│       ├── skills/               # Knowledge capture skill
+│       └── tests/                # Structural validation tests
 ├── CLAUDE.md                     # Development instructions
 ├── LICENSE
 └── README.md
@@ -157,6 +184,7 @@ cd claude-code-plugins
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
 /plugin install image-optimizer@vladolaru-claude-code-plugins
 /plugin install prompt-engineer@vladolaru-claude-code-plugins
+/plugin install dex@vladolaru-claude-code-plugins
 ```
 
 ## Highlights
