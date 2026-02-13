@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.1] - 2026-02-13
+
+### Changed
+
+- Optimized all commands and shared skill with research-backed prompt engineering patterns: Scope Limitation, Affirmative Directives, Contrastive Examples, STOP Escalation, Pre-Work Context Analysis, Category-Based Generalization, Error Normalization, Hint-Based Guidance, and Format Strictness
+
 ## [1.0.0] - 2026-02-13
 
 ### Added
