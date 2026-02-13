@@ -97,6 +97,30 @@
       "commands": [
         "./commands/optimize-prompt.md"
       ]
+    },
+    {
+      "name": "dex",
+      "source": "./plugins/dex",
+      "description": "One-click knowledge capture that compounds engineering work. Captures learnings, patterns, and decisions from conversations into agent-first documents, with optional promotion to CLAUDE.md.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Vlad Olaru"
+      },
+      "repository": "https://github.com/vladolaru/claude-code-plugins",
+      "license": "MIT",
+      "keywords": ["knowledge-capture", "compound-engineering", "learnings", "patterns", "decisions", "claude-md"],
+      "category": "productivity",
+      "strict": true,
+      "skills": [
+        "./skills/knowledge-capture"
+      ],
+      "commands": [
+        "./commands/dex.md",
+        "./commands/init.md",
+        "./commands/learn.md",
+        "./commands/pattern.md",
+        "./commands/status.md"
+      ]
     }
   ]
 }
