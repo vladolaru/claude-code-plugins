@@ -18,20 +18,24 @@ If `.claude/docs/` does not exist, use AskUserQuestion:
 - **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`
 - **Not now** — abort capture
 
-If "Not now", stop. If "Yes", create directories with `mkdir -p` and continue.
+If "Not now", stop here. If "Yes", create directories with `mkdir -p` and continue.
 
 ## Step 2: Extract Learning from Conversation
 
-Scan the recent conversation for the relevant exchange. If `$ARGUMENTS` contains a focus hint, use it to narrow extraction.
+Before drafting, re-read the relevant conversation exchange to identify what went wrong, what was discovered, or what was non-obvious.
+
+If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
 
 Following the **Knowledge Extraction from Conversation** guidance in the `knowledge-capture` skill:
 
-1. Identify the core insight — what's the one thing an agent should know?
-2. Draft a **title** as a short directive statement
-3. Draft the **Rule** section — the actionable directive
+1. Identify the core insight — what's the one thing an agent should know next time?
+2. Draft a **title** as a short directive statement (e.g., "Always pass --user=1 for WP-CLI REST calls")
+3. Draft the **Rule** section — the actionable directive an agent can follow immediately
 4. Draft brief **Context** and **Examples** sections
 5. Identify 3-5 **tags** from the technical domain
 6. Determine the filename: `YYYY-MM-DD-slug.md`
+
+Focus on what to do differently, not on narrating the debugging session.
 
 ## Step 3: Confirm with User
 
@@ -39,7 +43,7 @@ Use AskUserQuestion:
 
 **Question:** "Capture this learning?"
 
-Show the drafted title and rule in the question description:
+Show exactly these fields in the question description:
 > **Title:** [drafted title]
 > **Rule:** [1-2 sentence rule]
 > **File:** `.claude/docs/learnings/YYYY-MM-DD-slug.md`
@@ -49,20 +53,20 @@ Show the drafted title and rule in the question description:
 - **Edit** — let user provide corrections via free text
 - **Skip** — abort capture
 
-If "Edit", apply the user's corrections and confirm again. If "Skip", stop.
+If "Edit", apply the user's corrections and confirm again. If "Skip", stop here.
 
 ## Step 4: Write the Document
 
 Write the learning to `.claude/docs/learnings/YYYY-MM-DD-slug.md` using the **Learning Format** from the `knowledge-capture` skill.
 
-Report success:
+Report:
 ```
-Written to .claude/docs/learnings/YYYY-MM-DD-slug.md
+Captured: .claude/docs/learnings/YYYY-MM-DD-slug.md
 ```
 
 ## Step 5: Suggest Promotion (Conditional)
 
-Evaluate whether the learning looks rule-worthy using the criteria from the `knowledge-capture` skill (contains do/don't directive, corrects a common mistake, applies project-wide).
+Evaluate whether the learning looks rule-worthy: does it contain a do/don't directive, correct a common mistake, or apply project-wide?
 
 **If rule-worthy**, use AskUserQuestion:
 
@@ -71,7 +75,7 @@ Evaluate whether the learning looks rule-worthy using the criteria from the `kno
 - **Yes, add to CLAUDE.md** — promote using the promotion flow from the `knowledge-capture` skill
 - **No, just keep the doc** — done
 
-**If NOT rule-worthy**, skip this step entirely. Do not ask.
+**If NOT rule-worthy**, skip this step silently. Proceed to completion.
 
 ## Step 6: Promote (If Selected)
 
@@ -81,3 +85,5 @@ Follow the **CLAUDE.md Promotion** flow from the `knowledge-capture` skill:
 2. Draft a one-liner + link
 3. Auto-place in the most relevant section
 4. Report success with new line count
+
+After promotion (or skipping it), stop. This command captures one learning per invocation.

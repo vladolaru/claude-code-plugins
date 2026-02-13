@@ -7,25 +7,27 @@ description: >
 
 # Knowledge Capture Skill
 
-This skill provides the shared logic that all `/dex:*` commands reference. It is not invoked directly by users.
+Shared logic for all `/dex:*` commands. Follow these procedures exactly — do what the calling command asks, nothing more.
 
 ## Project Discovery
 
-Every command invocation must discover the project's knowledge infrastructure by scanning the filesystem. No config files, no cached state.
+Discover the project's knowledge infrastructure fresh on every invocation. Scan the filesystem directly — no config files, no cached state.
 
 ### Discovery Steps
 
-1. **Find the project root:** Use `git rev-parse --show-toplevel` to find the repository root
-2. **Find CLAUDE.md:** Check these locations in order, use the first found:
+1. **Find the project root:** Run `git rev-parse --show-toplevel`
+2. **Find CLAUDE.md:** Check in order, use the first found:
    - `<root>/CLAUDE.md`
    - `<root>/.claude/CLAUDE.md`
 3. **Find knowledge directory:** Check for `<root>/.claude/docs/`
 4. **List existing subdirectories:** Check for `learnings/`, `patterns/`, `decisions/` within `.claude/docs/`
-5. **Count CLAUDE.md lines:** `wc -l` on the found CLAUDE.md
+5. **Count CLAUDE.md lines:** Run `wc -l` on the found CLAUDE.md
+
+If a CLAUDE.md or `.claude/docs/` does not exist, proceed with what you have. Missing infrastructure is a normal state — handle it per the calling command's instructions.
 
 ### Discovery Output
 
-Build a mental model of what exists:
+Build this mental model before proceeding:
 
 ```
 project_root:     /path/to/project
@@ -36,7 +38,7 @@ knowledge_dir:    /path/to/project/.claude/docs/
   decisions:      exists (2 files)
 ```
 
-If `.claude/docs/` doesn't exist, commands should offer scaffolding via AskUserQuestion before proceeding (except `/dex:status` which just reports the absence).
+If `.claude/docs/` doesn't exist, commands should offer scaffolding via AskUserQuestion before proceeding (except `/dex:status` which reports the absence).
 
 ### Scaffolding
 
@@ -49,7 +51,7 @@ Create empty directories only. No README files, no templates, no boilerplate.
 
 ## Document Formats
 
-All documents are **agent-first**: lead with the actionable directive so an AI agent reading only the first section gets enough to act. Context and examples follow for depth.
+All documents are **agent-first**: the first section contains the actionable directive — an AI agent reading only the Rule/Pattern/Decision section gets enough to act. Context and examples follow for depth.
 
 ### Learning Format
 
@@ -76,6 +78,27 @@ Technical explanation of the root cause.
 Code examples showing correct and incorrect approaches.
 Use CORRECT / WRONG labels for clarity.
 ```
+
+<example type="CORRECT">
+# Always pass --user=1 for WP-CLI REST calls with auth
+
+**Date:** 2026-02-13
+**Tags:** wp-cli, rest-api, authentication
+
+## Rule
+
+Always pass `--user=1` when making WP-CLI REST API calls that have
+permission callbacks. Without it, the call runs as unauthenticated.
+</example>
+
+<example type="INCORRECT">
+# WP-CLI REST API Issue
+
+Today I discovered that WP-CLI REST API calls need authentication.
+This was really confusing and took a while to debug. The error was a 403...
+</example>
+
+The incorrect example buries the actionable rule in narrative. Agent-first means Rule section leads.
 
 ### Pattern Format
 
@@ -145,15 +168,15 @@ Slug rules:
 
 ### When to Suggest Promotion
 
-After capturing a learning or pattern, evaluate whether it looks rule-worthy. Suggest promotion when the captured knowledge:
-- Contains a do/don't directive (corrects a common mistake)
-- Addresses a recurring issue (mentioned multiple times in conversation)
-- Is a project-wide constraint (applies broadly, not to one file)
+After capturing a learning or pattern, evaluate whether it looks rule-worthy. Suggest promotion only when the knowledge meets **at least one** of these criteria:
+- Contains a do/don't directive that corrects a common mistake
+- Addresses a recurring issue mentioned multiple times in conversation
+- Is a project-wide constraint that applies broadly, not to one file
 
-Do NOT suggest promotion for:
+Skip promotion silently (without asking) for:
 - Informational learnings ("here's how X works internally")
 - One-off debugging insights unlikely to recur
-- Decisions (they're reference material, not rules)
+- Decisions (they are reference material, not rules)
 
 ### Promoted Rule Format
 
@@ -180,7 +203,7 @@ Count lines in CLAUDE.md before promoting:
 |---|---|
 | **< 500** | Promote freely — add the one-liner, confirm success |
 | **500–550** | Warn via AskUserQuestion: **"CLAUDE.md is at X/500 lines."** Options: "Add anyway" / "Extract a section first" |
-| **550+** | Hard block — **"CLAUDE.md is over budget (X lines). Must extract a section before adding."** Show sections ranked by line count, offer to extract the largest |
+| **550+** | **STOP. Hard block.** Tell the user: "CLAUDE.md is over budget (X lines). Extract a section before adding new rules." Show sections ranked by line count, offer to extract the largest. Proceed with promotion only after extraction brings the count below 550 |
 
 ### Extraction Flow
 
@@ -200,19 +223,20 @@ When extracting a section from CLAUDE.md:
 
 ### How to Extract
 
-When a command needs to extract knowledge from the current conversation:
+Before drafting, re-read the relevant conversation exchange to identify the core insight. Then:
 
-1. **Scan recent messages** for the relevant exchange (fix, discovery, decision, pattern discussion)
-2. **Identify the core insight** — what's the one thing an agent should know?
-3. **Draft the title** as a short, directive statement (imperative or declarative)
-4. **Draft the key section** (Rule for learnings, Pattern for patterns, Decision for decisions)
-5. **Identify tags** from the technical domain (3-5 lowercase, hyphen-separated)
-6. **Present via AskUserQuestion** for one-click confirmation
+1. **Identify the core insight** — what's the one thing an agent should know?
+2. **Draft the title** as a short, directive statement (imperative or declarative)
+3. **Draft the key section** (Rule for learnings, Pattern for patterns, Decision for decisions)
+4. **Identify tags** from the technical domain (3-5 lowercase, hyphen-separated)
+5. **Present via AskUserQuestion** for one-click confirmation
+
+Focus on what an agent needs to act differently next time, not on narrating what happened during debugging.
 
 ### Extraction Quality
 
-The extracted document should be:
-- **Self-contained** — an agent reading it in isolation understands the rule
-- **Actionable** — tells the agent what to DO, not just what happened
-- **Specific** — includes concrete examples, file paths, or code when relevant
-- **Concise** — under 50 lines for learnings, under 80 for patterns/decisions
+**IMPORTANT:** Every extracted document must pass all four of these checks:
+1. **Self-contained** — an agent reading it in isolation understands the rule
+2. **Actionable** — tells the agent what to DO, not just what happened
+3. **Specific** — includes concrete examples, file paths, or code when relevant
+4. **Concise** — under 50 lines for learnings, under 80 for patterns/decisions

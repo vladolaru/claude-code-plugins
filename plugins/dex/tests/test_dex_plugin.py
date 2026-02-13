@@ -481,9 +481,13 @@ class TestStatusCommand:
     def test_is_read_only(self):
         """status.md should not write or modify anything."""
         content = _read_command("status.md")
-        assert "no modifications" in content.lower() or "no input" in content.lower(), (
-            "status.md: should explicitly state it makes no modifications"
-        )
+        lower = content.lower()
+        assert (
+            "no modifications" in lower
+            or "no input" in lower
+            or "read-only" in lower
+            or "modifies nothing" in lower
+        ), "status.md: should explicitly state it makes no modifications"
 
 
 # =============================================================================

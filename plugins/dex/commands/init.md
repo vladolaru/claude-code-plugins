@@ -4,7 +4,7 @@ description: Scaffold knowledge capture infrastructure for the current project
 
 # /dex:init
 
-Scaffold the `.claude/docs/` knowledge directory for the current project. Use this to set up a project for knowledge capture before you have anything to capture, or to check what already exists.
+Set up the `.claude/docs/` knowledge directory for the current project. This is a setup-only command — it creates directories and reports state, nothing else.
 
 ## Step 1: Discover Existing Infrastructure
 
@@ -17,7 +17,7 @@ Follow the **Project Discovery** steps from the `knowledge-capture` skill:
 
 ## Step 2: Report Current State
 
-Present what was found:
+Present what was found using this exact format:
 
 ```
 Knowledge Infrastructure
@@ -33,9 +33,7 @@ CLAUDE.md:        Found (root, 245 lines)
 
 ## Step 3: Scaffold If Needed
 
-**If everything already exists:**
-
-Report "Knowledge infrastructure is already set up" and show the summary. Done.
+**If everything already exists:** Report "Knowledge infrastructure is already set up." and show the summary. Stop here.
 
 **If `.claude/docs/` or any subdirectories are missing:**
 
@@ -43,12 +41,12 @@ Use AskUserQuestion:
 
 **Question:** "Create missing knowledge directories?"
 **Options:**
-- **Yes, create them** — creates all missing directories (`.claude/docs/learnings/`, `.claude/docs/patterns/`, `.claude/docs/decisions/`)
+- **Yes, create them** — creates all missing directories under `.claude/docs/`
 - **No, not now** — skip
 
 **If user selects yes:**
 
-Create the missing directories using `mkdir -p`. Create empty directories only — no README files, no templates, no boilerplate.
+Create all missing directories using `mkdir -p`. Create empty directories only — no README files, no templates, no boilerplate.
 
 Report what was created:
 
@@ -60,3 +58,5 @@ Created:
 
 Ready for knowledge capture. Use /dex:learn or /dex:pattern to start.
 ```
+
+Stop here. This command only scaffolds — it does not capture knowledge.

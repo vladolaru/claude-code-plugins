@@ -18,21 +18,26 @@ If `.claude/docs/` does not exist, use AskUserQuestion:
 - **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`
 - **Not now** — abort capture
 
-If "Not now", stop. If "Yes", create directories with `mkdir -p` and continue.
+If "Not now", stop here. If "Yes", create directories with `mkdir -p` and continue.
 
 ## Step 2: Extract Pattern from Conversation
 
-Scan the recent conversation for the relevant pattern. If `$ARGUMENTS` contains a focus hint, use it to narrow extraction.
+Before drafting, re-read the relevant conversation exchange to identify the reusable approach, convention, or anti-pattern.
+
+If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
 
 Following the **Knowledge Extraction from Conversation** guidance in the `knowledge-capture` skill:
 
 1. Identify the reusable approach — what's the pattern an agent should follow?
-2. Draft a **title** as a short pattern name
+2. Draft a **title** as a short pattern name (e.g., "Use factory pattern for test fixtures")
 3. Draft the **Pattern** section — what it is and how to apply it
-4. Draft **When to apply** and **When NOT to apply** sections
-5. Identify a **Reference implementation** if one exists in the codebase
-6. Identify 3-5 **tags** from the technical domain
-7. Determine the filename: `YYYY-MM-DD-slug.md`
+4. Draft **When to apply** — list the specific conditions or triggers where this pattern fits
+5. Draft **When NOT to apply** — list the exceptions and edge cases where this pattern would be wrong
+6. Identify a **Reference implementation** if one exists in the codebase (file path + line range)
+7. Identify 3-5 **tags** from the technical domain
+8. Determine the filename: `YYYY-MM-DD-slug.md`
+
+The "When NOT to apply" section is as important as "When to apply" — it prevents over-application of the pattern.
 
 ## Step 3: Confirm with User
 
@@ -40,7 +45,7 @@ Use AskUserQuestion:
 
 **Question:** "Capture this pattern?"
 
-Show the drafted title and pattern in the question description:
+Show exactly these fields in the question description:
 > **Title:** [drafted title]
 > **Pattern:** [1-2 sentence pattern description]
 > **File:** `.claude/docs/patterns/YYYY-MM-DD-slug.md`
@@ -50,29 +55,29 @@ Show the drafted title and pattern in the question description:
 - **Edit** — let user provide corrections via free text
 - **Skip** — abort capture
 
-If "Edit", apply the user's corrections and confirm again. If "Skip", stop.
+If "Edit", apply the user's corrections and confirm again. If "Skip", stop here.
 
 ## Step 4: Write the Document
 
 Write the pattern to `.claude/docs/patterns/YYYY-MM-DD-slug.md` using the **Pattern Format** from the `knowledge-capture` skill.
 
-Report success:
+Report:
 ```
-Written to .claude/docs/patterns/YYYY-MM-DD-slug.md
+Captured: .claude/docs/patterns/YYYY-MM-DD-slug.md
 ```
 
 ## Step 5: Suggest Promotion (Conditional)
 
-Evaluate whether the pattern looks rule-worthy using the criteria from the `knowledge-capture` skill (corrects a common mistake, applies project-wide, codifies a convention).
+Evaluate whether the pattern looks rule-worthy: does it correct a common mistake, apply project-wide, or codify a convention?
 
 **If rule-worthy**, use AskUserQuestion:
 
-**Question:** "This looks like a project rule. Add a one-liner to CLAUDE.md?"
+**Question:** "This looks like a project convention. Add a one-liner to CLAUDE.md?"
 **Options:**
 - **Yes, add to CLAUDE.md** — promote using the promotion flow from the `knowledge-capture` skill
 - **No, just keep the doc** — done
 
-**If NOT rule-worthy**, skip this step entirely. Do not ask.
+**If NOT rule-worthy**, skip this step silently. Proceed to completion.
 
 ## Step 6: Promote (If Selected)
 
@@ -82,3 +87,5 @@ Follow the **CLAUDE.md Promotion** flow from the `knowledge-capture` skill:
 2. Draft a one-liner + link
 3. Auto-place in the most relevant section
 4. Report success with new line count
+
+After promotion (or skipping it), stop. This command captures one pattern per invocation.

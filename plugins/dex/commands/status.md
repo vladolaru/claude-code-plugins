@@ -4,7 +4,7 @@ description: Show knowledge health report for the current project
 
 # /dex:status
 
-Show a knowledge health report for the current project. Fully self-contained — no input needed, no modifications made.
+Show a read-only knowledge health report for the current project. This command reads and reports — it modifies nothing.
 
 ## Step 1: Discover Project Infrastructure
 
@@ -27,7 +27,7 @@ For each component, gather:
 
 ## Step 3: Present Report
 
-Format the report as follows:
+Use this exact format:
 
 ```
 Project Knowledge Health
@@ -48,9 +48,13 @@ Decisions:        [count] docs  (.claude/docs/decisions/)
   Oldest:         [date] — [title from filename slug]
 ```
 
-**Adjustments:**
-- If `.claude/docs/` doesn't exist, report: "No knowledge directory found. Run /dex:init to set up."
-- If a subdirectory is empty, report: "[category]:  0 docs  (empty)"
-- If a subdirectory doesn't exist, report: "[category]:  not set up"
-- If CLAUDE.md is 500+ lines, add a warning: "CLAUDE.md is over budget — consider extracting sections."
-- Omit Latest/Oldest lines for empty directories
+**Adapt for missing infrastructure:**
+
+| Condition | Report |
+|---|---|
+| `.claude/docs/` missing | "No knowledge directory found. Run /dex:init to set up." |
+| Subdirectory empty | "[category]: 0 docs (empty)" — omit Latest/Oldest |
+| Subdirectory missing | "[category]: not set up" — omit Latest/Oldest |
+| CLAUDE.md 500+ lines | Append warning: "CLAUDE.md is over budget — consider extracting sections." |
+
+Stop after presenting the report. This command is read-only.
