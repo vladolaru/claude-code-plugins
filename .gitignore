@@ -1,6 +1,9 @@
 # Claude Code local settings
 .claude/settings.local.json
 
+# Serena
+.serena/
+
 # macOS
 .DS_Store
 
