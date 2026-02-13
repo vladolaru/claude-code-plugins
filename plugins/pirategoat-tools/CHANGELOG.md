@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.2] - 2026-02-13
+
+### Changed
+
+- **dead-code-reviewer agent** — Reframed as "prove reachability" (innocent until proven dead) with stronger evidence requirements. Excludes test files entirely from analysis. Added contrastive examples (correct vs incorrect findings), dynamic dispatch risk assessment (Step 0), universal search template with error handling, categorized false positive checklist (framework callbacks, language magic, dynamic dispatch, build/test infra), worked confidence scoring example, and explicit collaboration boundary rules with handoff signals.
+
 ## [1.26.1] - 2026-02-13
 
 ### Changed
