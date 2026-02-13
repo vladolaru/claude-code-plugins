@@ -12,7 +12,7 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Vlad Olaru's personal public Claude Code tools - experimental features that may eventually be extracted into standalone plugins.",
+      "description": "Code review orchestration (11 specialized agents), WordPress/WooCommerce development patterns, testing guidance, and browser automation.",
       "version": "1.26.2",
       "author": {
         "name": "Vlad Olaru"
