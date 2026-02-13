@@ -1,4 +1,4 @@
-# dex — Knowledge Capture Plugin
+# dex
 
 Make compounding knowledge a one-click habit.
 
@@ -6,9 +6,9 @@ Make compounding knowledge a one-click habit.
 
 Most codebases get harder to work with over time. Each feature adds complexity, each debugging session reveals gotchas that live in someone's head, and each architectural decision's rationale fades from memory. AI agents start every session from scratch, rediscovering the same pitfalls.
 
-## The Idea: Compound Engineering
+## The Idea
 
-[Compound engineering](https://every.to/guides/compound-engineering) inverts this — each unit of work should make the next one *easier*, not harder. The concept, developed by [Every, Inc.](https://every.to/source-code/compound-engineering-the-definitive-guide), follows a four-phase loop: **Plan → Work → Review → Compound**.
+[Compound engineering](https://every.to/guides/compound-engineering) inverts this — each unit of work should make the next one *easier*, not harder. The concept, developed by [Every, Inc.](https://every.to/source-code/compound-engineering-the-definitive-guide), follows a four-phase loop: **Plan -> Work -> Review -> Compound**.
 
 The "Compound" step is the novel piece. As [Will Larson observed](https://lethain.com/everyinc-compound-engineering/), the other three phases are well-known practices — it's the systematic capture of knowledge that creates the compounding effect.
 
@@ -18,12 +18,12 @@ The "Compound" step is the novel piece. As [Will Larson observed](https://lethai
 
 After any engineering work — fixing a bug, discovering a gotcha, establishing a convention, making an architectural choice — fire a command. dex reads the conversation, extracts the insight, and asks for one-click confirmation. That's it.
 
-Knowledge is stored as agent-first documents in `.claude/docs/` — structured so AI agents get the actionable rule in the first three lines without reading the whole file. Optionally, critical rules get promoted to a one-liner in CLAUDE.md with a link back to the full doc.
+Knowledge is stored as agent-first documents in `.claude/docs/` — structured so AI agents get the actionable rule in the first three lines without reading the whole file. Critical rules can be promoted to a one-liner in CLAUDE.md with a link back to the full doc.
 
 ## Commands
 
 | Command | Purpose |
-|---|---|
+|---------|---------|
 | `/dex` | Auto-classifies the knowledge (learning, pattern, or decision) and routes to the right handler |
 | `/dex:learn` | Captures a learning — discovery, fix, gotcha, debugging insight |
 | `/dex:pattern` | Captures a reusable pattern — approach, convention, anti-pattern |
@@ -34,7 +34,7 @@ Knowledge is stored as agent-first documents in `.claude/docs/` — structured s
 
 ### Learnings
 
-Discoveries from debugging, fixes, and non-obvious behaviors. Structured as: **Rule → Context → Examples**.
+Discoveries from debugging, fixes, and non-obvious behaviors. Structured as **Rule -> Context -> Examples**.
 
 ```markdown
 # WP-CLI REST API calls require explicit user context
@@ -57,19 +57,21 @@ pnpm wp eval '...'
 
 ### Patterns
 
-Reusable approaches and conventions. Structured as: **Pattern → When to apply → When NOT to apply → Reference implementation**.
+Reusable approaches and conventions. Structured as **Pattern -> When to apply -> When NOT to apply -> Reference implementation**.
 
 ### Decisions
 
-Architectural choices with trade-offs. Structured as: **Decision → Alternatives considered → Why this choice**.
+Architectural choices with trade-offs. Structured as **Decision -> Alternatives considered -> Why this choice**.
 
-## CLAUDE.md Management
+## CLAUDE.md Budget
 
 CLAUDE.md should be a lean routing table — concise rules with links to depth, not a knowledge dump. dex enforces this:
 
-- **Under 500 lines**: promotes freely
-- **500–550 lines**: warns and lets you choose to add or extract first
-- **550+ lines**: blocks until you extract a section into a linked doc
+| Line count | What happens |
+|-----------|-------------|
+| **Under 500** | Promotes freely |
+| **500-550** | Warns, lets you choose to add or extract first |
+| **550+** | Blocks until you extract a section into a linked doc |
 
 Promoted rules are one-liners with links:
 
@@ -90,8 +92,8 @@ Promoted rules are one-liners with links:
 - [Compound Engineering Guide](https://every.to/guides/compound-engineering) — Adoption ladder and practical workflow
 - [How Every Codes With Agents](https://every.to/chain-of-thought/compound-engineering-how-every-codes-with-agents) — The original introduction
 - [Learning from Every's Compound Engineering](https://lethain.com/everyinc-compound-engineering/) — Will Larson's analysis and critique
-- [Compound Engineering - Vinci Rufus](https://www.vincirufus.com/posts/compound-engineering/) — Productivity equation and feedback loop perspective
+- [Compound Engineering — Vinci Rufus](https://www.vincirufus.com/posts/compound-engineering/) — Productivity equation and feedback loop perspective
 
 ## License
 
-MIT
+MIT — see [LICENSE](../../LICENSE).

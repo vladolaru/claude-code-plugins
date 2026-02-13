@@ -1,186 +1,41 @@
 # prompt-engineer
 
-Human-in-the-loop prompt optimization with evidence-grounded pattern attribution using proven prompt engineering techniques.
+Systematic prompt optimization with evidence-grounded pattern attribution. Every technique recommendation comes with a quoted trigger condition from research — no guessing, no vibes.
 
-**Current Version:** 2.0.0
+Human-in-the-loop approval gates between phases prevent wasted effort. You stay in control throughout.
 
----
-
-## What It Does
-
-Optimizes prompts for Claude (and other LLMs) through a systematic 5-phase workflow:
-
-**Phase 0:** Complexity triage - avoid over-engineering simple prompts
-**Phase 1:** Evidence-grounded analysis - identify issues with quoted references
-**Phase 2:** Technique selection - apply proven patterns from research
-**Phase 3:** Optimization - generate improved version
-**Phase 4:** Verification - validate quality before presenting
-
-**Key feature:** Human approval gates between phases prevent wasted effort.
-
----
-
-## Installation
-
-### Add Marketplace
-```bash
-/plugin marketplace add vladolaru/claude-code-plugins
-```
-
-### Install Plugin
-```bash
-/plugin install prompt-engineer@vladolaru-claude-code-plugins
-```
-
----
-
-## Usage
-
-### Optimize a Prompt
+## How It Works
 
 ```bash
 /optimize-prompt path/to/prompt.md
 ```
 
-Or invoke the skill directly:
-```bash
-# Claude will load the prompt-engineer skill
-```
+Five phases, with your approval between each:
 
-### Example Workflow
+1. **Triage** — Is this prompt complex enough to need optimization? Simple prompts stay simple.
+2. **Analysis** — Identify issues with quoted evidence from the reference library
+3. **Selection** — Choose techniques that match the specific trigger conditions
+4. **Optimization** — Generate improved version with pattern attribution
+5. **Verification** — Quality check before presenting the result
 
-**Input:** Your current prompt file
+Works on any prompt — skills (SKILL.md), agent definitions, slash commands, CLAUDE.md files, API system prompts, or freeform prompts for Claude.
 
-**Process:**
-1. **Triage:** "Is this prompt complex enough to need optimization?"
-2. **Analysis:** Identify issues with quoted evidence from research
-3. **Selection:** Choose proven techniques (Chain-of-Thought, XML tags, etc.)
-4. **Optimization:** Generate improved version
-5. **Verification:** Quality check before presenting
+## What Makes It Different
 
-**Output:** Optimized prompt with technique attribution and explanation
+Every technique selection is grounded in evidence. Before recommending Chain-of-Thought, XML tags, or any other technique, the optimizer quotes the specific trigger condition from research that justifies applying it here.
 
----
+The embedded reference library covers 50+ techniques across:
 
-## Features
+| Category | Techniques |
+|----------|-----------|
+| **Structural** | Chain-of-Thought, XML tags, few-shot examples, role prompting |
+| **Output control** | Format templates, JSON schemas, length control |
+| **Quality** | Self-consistency, reasoning steps, anti-pattern detection |
+| **Advanced** | Multi-turn strategies, tool use patterns, context management |
+| **Compression** | Token efficiency, semantic deduplication |
+| **HITL** | Approval gates, feedback loops, human authority preservation |
 
-### Evidence-Grounded Analysis
-- All technique selections require quoted triggers from reference document
-- No guessing or speculation
-- Research-backed recommendations
-
-### Human-in-the-Loop Gates
-- Approval required between major phases
-- Prevents wasted effort on wrong direction
-- User can course-correct early
-
-### Comprehensive Reference Library
-Embedded research on:
-- 50+ prompt engineering techniques
-- Anti-patterns to avoid
-- Technique stacking and conflicts
-- Domain-specific applications
-- Research citations
-
-### Quality Verification
-- Open-ended verification questions
-- Surfaces potential issues before finalization
-- Ensures major changes are improvements
-
----
-
-## Prompt Types Supported
-
-### Agent Prompts (Claude Code)
-- Skills (SKILL.md files)
-- Agents (agent definitions)
-- Commands (slash commands)
-- CLAUDE.md files
-
-### API Prompts
-- System prompts
-- User prompts
-- Multi-turn conversations
-
-### General Prompts
-- Any text prompt for Claude or other LLMs
-
----
-
-## Optimization Techniques
-
-**Structural:**
-- Chain-of-Thought prompting
-- XML tags for clarity
-- Few-shot examples
-- Role prompting
-
-**Output Control:**
-- Output formatting templates
-- JSON mode with schemas
-- Length control
-
-**Quality:**
-- Self-consistency checks
-- Reasoning steps
-- Anti-pattern avoidance
-
-**Advanced:**
-- Multi-turn strategies
-- Tool use patterns
-- Context management
-
-See embedded reference library for complete catalog.
-
----
-
-## Key Principles
-
-### 1. Quote-First Evidence
-Before recommending a technique, quote the trigger condition from research:
-
-> "Use Chain-of-Thought when: The task requires multi-step reasoning"
-
-Then apply technique if trigger matches.
-
-### 2. Avoid Over-Engineering
-Phase 0 triage prevents optimizing prompts that don't need it:
-- Simple, working prompts stay simple
-- Optimization only when complexity justifies it
-
-### 3. Human Approval Gates
-User approves before:
-- Moving from analysis to optimization
-- Finalizing optimized version
-- Can stop or redirect at any phase
-
-### 4. Anti-Pattern Checking
-Actively check for and remove:
-- Anthropomorphization
-- Unnecessary politeness
-- Vague instructions
-- Conflicting directives
-
----
-
-## When to Use
-
-**Good candidates for optimization:**
-- Prompts getting inconsistent results
-- Complex multi-step workflows
-- Prompts needing better structure
-- Agent definitions for production use
-- API prompts with quality issues
-
-**Skip optimization for:**
-- Simple, working prompts
-- One-off queries
-- Exploratory prompts
-- Prompts that already follow best practices
-
----
-
-## Example Improvements
+## Example
 
 **Before:**
 ```
@@ -189,7 +44,8 @@ Please help me write tests for this code.
 
 **After:**
 ```
-You are an expert test engineer. Analyze the code below and write comprehensive tests.
+You are an expert test engineer. Analyze the code below and write
+comprehensive tests.
 
 Requirements:
 - Follow AAA pattern (Arrange, Act, Assert)
@@ -203,55 +59,21 @@ Requirements:
 Output your tests with explanations for each test case.
 ```
 
-**Techniques applied:** Role prompting, XML tags, clear structure, specific requirements
+**Techniques applied:** Role prompting, XML tags, structured requirements, output specification.
 
----
+## Installation
 
-## Documentation
+```bash
+/plugin marketplace add vladolaru/claude-code-plugins
+/plugin install prompt-engineer@vladolaru-claude-code-plugins
+```
 
-See `skills/prompt-engineer/references/` for:
-- Complete technique catalog
-- Research citations
-- Anti-patterns guide
-- Stacking strategies
+No dependencies. Works with any LLM prompt, optimized for Claude.
 
----
+## Credits
 
-## Requirements
-
-**Dependencies:** None
-
-**Compatibility:** Works with any LLM prompt (optimized for Claude)
-
----
-
-## Version History
-
-See [CHANGELOG.md](./CHANGELOG.md) for detailed version history.
-
-**Latest:** v2.0.0 - Renamed from prompt-optimizer, split reference docs
-
----
+Based on research from Anthropic's prompt engineering guides, academic papers on LLM prompting, and community best practices. Upstream source: [solatis/claude-config](https://github.com/solatis/claude-config).
 
 ## License
 
-MIT License - See [LICENSE](../../LICENSE)
-
----
-
-## Author
-
-**Vlad Olaru** - [@vladolaru](https://github.com/vladolaru)
-
-**Repository:** https://github.com/vladolaru/claude-code-plugins
-
----
-
-## Attribution
-
-Based on research from:
-- Anthropic's prompt engineering guide
-- Academic research on LLM prompting
-- Community best practices
-
-Upstream source: https://github.com/solatis/claude-config
+MIT — see [LICENSE](../../LICENSE).
