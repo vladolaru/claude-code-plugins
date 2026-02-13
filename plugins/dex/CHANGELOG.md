@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0] - 2026-02-13
+
+### Added
+
+- `/dex:sharpen` command — analyzes agent behavior for inefficiencies and captures fixes as project knowledge
+- Agent Behavior Analysis section in knowledge-capture skill with inefficiency categories and root cause classification
+
 ## [1.0.1] - 2026-02-13
 
 ### Changed

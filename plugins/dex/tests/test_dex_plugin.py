@@ -34,6 +34,7 @@ ALL_COMMANDS = [
     "init.md",
     "learn.md",
     "pattern.md",
+    "sharpen.md",
     "status.md",
 ]
 
@@ -41,6 +42,7 @@ ALL_COMMANDS = [
 CAPTURE_COMMANDS = [
     "learn.md",
     "pattern.md",
+    "sharpen.md",
 ]
 
 SKILL_PATH = SKILLS_DIR / "knowledge-capture" / "SKILL.md"
@@ -291,6 +293,39 @@ class TestSkillCoreLogic:
     def test_has_filename_convention(self, skill_content):
         assert "YYYY-MM-DD" in skill_content, "Skill missing filename date convention"
 
+    def test_has_agent_behavior_analysis_section(self, skill_content):
+        assert "Agent Behavior Analysis" in skill_content, (
+            "Skill missing Agent Behavior Analysis section"
+        )
+
+    def test_has_inefficiency_categories(self, skill_content):
+        assert "Inefficiency Categories" in skill_content, (
+            "Skill missing Inefficiency Categories subsection"
+        )
+        for category in ["Wrong tool usage", "Inefficient discovery", "Missed shortcuts"]:
+            assert category in skill_content, (
+                f"Skill missing inefficiency category: {category}"
+            )
+
+    def test_has_root_cause_classification(self, skill_content):
+        assert "Root Cause Classification" in skill_content, (
+            "Skill missing Root Cause Classification subsection"
+        )
+        assert "learnings/" in skill_content or "`.claude/docs/learnings/`" in skill_content, (
+            "Skill root cause classification missing learnings destination"
+        )
+        assert "patterns/" in skill_content or "`.claude/docs/patterns/`" in skill_content, (
+            "Skill root cause classification missing patterns destination"
+        )
+
+    def test_has_sharpen_extraction_quality(self, skill_content):
+        assert "Sharpen Extraction Quality" in skill_content, (
+            "Skill missing Sharpen Extraction Quality subsection"
+        )
+        assert "Agent-operational" in skill_content, "Skill missing Agent-operational quality check"
+        assert "Preventive" in skill_content, "Skill missing Preventive quality check"
+        assert "Non-obvious" in skill_content, "Skill missing Non-obvious quality check"
+
 
 # =============================================================================
 # Command Content — Router (dex.md)
@@ -488,6 +523,83 @@ class TestStatusCommand:
             or "read-only" in lower
             or "modifies nothing" in lower
         ), "status.md: should explicitly state it makes no modifications"
+
+
+# =============================================================================
+# Command Content — Sharpen (sharpen.md)
+# =============================================================================
+
+
+class TestSharpenCommand:
+    """sharpen.md analyzes agent behavior and captures efficiency fixes."""
+
+    def test_references_shared_skill(self):
+        content = _read_command("sharpen.md")
+        assert "knowledge-capture" in content, (
+            "sharpen.md: missing reference to knowledge-capture skill"
+        )
+
+    def test_has_behavior_analysis_step(self):
+        content = _read_command("sharpen.md")
+        content_lower = content.lower()
+        assert "inefficien" in content_lower, (
+            "sharpen.md: missing inefficiency analysis step"
+        )
+        assert "behavior" in content_lower or "behaviour" in content_lower, (
+            "sharpen.md: missing behavior analysis reference"
+        )
+
+    def test_has_root_cause_classification(self):
+        content = _read_command("sharpen.md")
+        assert "Root Cause" in content or "root cause" in content.lower(), (
+            "sharpen.md: missing root cause classification reference"
+        )
+
+    def test_uses_ask_user_question(self):
+        content = _read_command("sharpen.md")
+        assert "AskUserQuestion" in content, (
+            "sharpen.md: missing AskUserQuestion for confirmation"
+        )
+
+    def test_has_promotion_flow(self):
+        content = _read_command("sharpen.md")
+        assert "CLAUDE.md" in content, "sharpen.md: missing CLAUDE.md promotion"
+        assert "Promot" in content or "promot" in content, (
+            "sharpen.md: missing promotion flow"
+        )
+
+    def test_writes_to_knowledge_dirs(self):
+        content = _read_command("sharpen.md")
+        assert "learnings/" in content or "patterns/" in content, (
+            "sharpen.md: missing reference to learnings/ or patterns/ output"
+        )
+
+    def test_identifies_inefficiency_types(self):
+        """Must mention at least 3 inefficiency categories by reference."""
+        content = _read_command("sharpen.md")
+        assert "Inefficiency Categories" in content, (
+            "sharpen.md: must reference Inefficiency Categories from skill"
+        )
+
+    def test_handles_no_inefficiencies(self):
+        content = _read_command("sharpen.md")
+        content_lower = content.lower()
+        assert "no inefficien" in content_lower or "none" in content_lower, (
+            "sharpen.md: must handle the 'nothing found' case"
+        )
+
+    def test_has_early_exit(self):
+        content = _read_command("sharpen.md")
+        content_lower = content.lower()
+        assert "stop" in content_lower or "abort" in content_lower, (
+            "sharpen.md: must have early exit path for no inefficiencies"
+        )
+
+    def test_references_document_formats(self):
+        content = _read_command("sharpen.md")
+        assert "Learning Format" in content or "Pattern Format" in content, (
+            "sharpen.md: must reference standard document formats from skill"
+        )
 
 
 # =============================================================================

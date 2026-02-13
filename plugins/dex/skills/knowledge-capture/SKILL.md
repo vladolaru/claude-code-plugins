@@ -240,3 +240,45 @@ Focus on what an agent needs to act differently next time, not on narrating what
 2. **Actionable** — tells the agent what to DO, not just what happened
 3. **Specific** — includes concrete examples, file paths, or code when relevant
 4. **Concise** — under 50 lines for learnings, under 80 for patterns/decisions
+
+## Agent Behavior Analysis
+
+Shared logic for analyzing agent behavior in a conversation to find inefficiencies and capture fixes as project knowledge. Used by `/dex:sharpen`.
+
+### Inefficiency Categories
+
+Scan the conversation for these categories of wasted effort:
+
+| Category | What to look for |
+|----------|-----------------|
+| Wrong tool usage | Used Bash when Grep/Glob/Read was better; used `find` instead of Glob; used `cat` instead of Read |
+| Inefficient discovery | Took 5+ searches to find something findable in 1-2; didn't use IDE index tools when available |
+| Missed shortcuts | Didn't leverage existing project scripts, aliases, or conventions documented in CLAUDE.md |
+| Rediscovering known info | Debugged something already documented in CLAUDE.md or `.claude/docs/` |
+| Incorrect assumptions | Assumed wrong file structure, API shape, or convention — then had to backtrack |
+| Unnecessary confirmation loops | Asked the user things that could be inferred from context or existing docs |
+| Over-broad scope | Read entire files when only a section was needed; searched too widely before narrowing |
+
+For each inefficiency found, note three things:
+1. **What happened** — the specific moment of waste
+2. **What should have happened** — the efficient alternative
+3. **Why** — the missing knowledge that caused the inefficiency
+
+### Root Cause Classification
+
+Map each identified inefficiency to its fix destination:
+
+| Root cause | Output destination |
+|-----------|-------------------|
+| Missing rule (do/don't directive) | CLAUDE.md promotion candidate |
+| Missing knowledge (debugging insight, gotcha) | `.claude/docs/learnings/` |
+| Missing approach (reusable workflow) | `.claude/docs/patterns/` |
+| Skill gap (agent needs better instructions) | `.claude/docs/learnings/` tagged `skill-improvement` |
+
+### Sharpen Extraction Quality
+
+In addition to the standard four quality checks (self-contained, actionable, specific, concise), sharpen documents must pass three additional checks:
+
+1. **Agent-operational** — focuses on how the agent should work, not domain knowledge about the codebase
+2. **Preventive** — tells the agent what to do *before* hitting the inefficiency, not how to recover after
+3. **Non-obvious** — captures something that isn't common sense for any AI agent (e.g., "use Read instead of cat" is obvious; "this project's test runner requires --user=1" is not)

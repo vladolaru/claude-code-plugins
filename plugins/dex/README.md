@@ -27,6 +27,7 @@ Knowledge is stored as agent-first documents in `.claude/docs/` — structured s
 | `/dex` | Auto-classifies the knowledge (learning, pattern, or decision) and routes to the right handler |
 | `/dex:learn` | Captures a learning — discovery, fix, gotcha, debugging insight |
 | `/dex:pattern` | Captures a reusable pattern — approach, convention, anti-pattern |
+| `/dex:sharpen` | Analyzes agent behavior for inefficiencies and captures fixes as project knowledge |
 | `/dex:init` | Scaffolds `.claude/docs/` knowledge infrastructure for a new project |
 | `/dex:status` | Shows knowledge health report — CLAUDE.md budget, doc counts, latest entries |
 
@@ -62,6 +63,19 @@ Reusable approaches and conventions. Structured as **Pattern -> When to apply ->
 ### Decisions
 
 Architectural choices with trade-offs. Structured as **Decision -> Alternatives considered -> Why this choice**.
+
+### Agent Improvements
+
+`/dex:sharpen` scans the current conversation for agent inefficiencies — wrong tool usage, slow discovery, missed shortcuts — and captures fixes as learnings or patterns. Example output:
+
+```markdown
+# Use Glob instead of find for file discovery
+
+## Rule
+Always use the Glob tool instead of Bash find when searching for files
+by name pattern. Glob is faster, respects .gitignore, and returns
+results sorted by modification time.
+```
 
 ## CLAUDE.md Budget
 
