@@ -21,12 +21,12 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 ## Plugins
 
-| Plugin | What it does | Version |
-|--------|-------------|---------|
-| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 15 review agents, 9 skills (testing-patterns, software-architecture, WordPress), rich feedback loops | 1.26.0 |
-| [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs | 1.0.1 |
-| [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates | 2.1.0 |
-| [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow | 1.1.0 |
+| Plugin | What it does |
+|--------|-------------|
+| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 15 review agents, 9 skills (testing-patterns, software-architecture, WordPress), rich feedback loops |
+| [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
+| [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
+| [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
 
 ### pirategoat-tools
 
