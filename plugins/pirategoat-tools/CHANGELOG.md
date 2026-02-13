@@ -5,6 +5,15 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.1] - 2026-02-13
+
+### Changed
+
+- **review-scope.py** — Added `--preflight` mode that checks all 10 domains in a single invocation (one `git diff --name-only` call) and outputs `DISPATCH_DOMAINS` / `SKIP_DOMAINS` lists. Supports both text and JSON (`--format json`) output formats.
+- **full-code-review command** — Added Step 3.5 (pre-flight scope check) before agent dispatch. Agents whose domain has no matching files are skipped entirely instead of launched and self-exiting. Domain column added to agent table for clarity.
+- **code-review command** — Same pre-flight scope check and conditional dispatch changes as full-code-review.
+- **test_domain_routing.py** — Added `TestPreflight` class with 8 tests: text/JSON output format, no-domain-required, cross-validation against individual domain checks (all 9 fixtures × 10 domains), dispatch/skip consistency, and all-skip scenarios.
+
 ## [1.26.0] - 2026-02-11
 
 ### Added

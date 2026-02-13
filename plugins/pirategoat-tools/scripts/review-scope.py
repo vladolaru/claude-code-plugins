@@ -11,6 +11,8 @@ Usage:
     python3 review-scope.py --domain php-tests --range main..feature-branch
     python3 review-scope.py --domain security --max-lines 3000
     python3 review-scope.py --domain patterns --base-ref-only
+    python3 review-scope.py --preflight --range main..HEAD
+    python3 review-scope.py --preflight --range main..HEAD --format json
 
 Exit codes:
     0  Success — scope determined, output on stdout
@@ -678,6 +680,98 @@ def format_json_output(scope: dict) -> str:
     return json.dumps(output, indent=2)
 
 
+def build_preflight(args: argparse.Namespace) -> dict:
+    """
+    Check all domains at once without fetching diffs.
+
+    Returns a structured dict with per-domain file counts and
+    dispatch/skip lists for the review orchestrator.
+    """
+    # Step 0: Verify we're in a git repository
+    try:
+        run_cmd(["git", "rev-parse", "--git-dir"], check=True)
+    except RuntimeError:
+        raise RuntimeError("NOT_GIT_REPO: Not inside a git repository. Run from a git repo root.")
+
+    # Step 1: Determine range (same logic as build_scope)
+    if args.range:
+        raw_base = detect_base_ref(args.range)
+        base_ref = freshen_base_ref(raw_base)
+        if ".." in args.range:
+            _, range_end = args.range.split("..", 1)
+            range_spec = f"{base_ref}..{range_end}"
+        else:
+            range_spec = args.range
+        try:
+            run_cmd(["git", "rev-parse", base_ref], check=True)
+        except RuntimeError:
+            raise RuntimeError(
+                f"Invalid range '{range_spec}': base ref '{base_ref}' does not exist."
+            )
+    else:
+        range_spec, base_ref = detect_range()
+
+    # Step 2: Get changed files
+    all_files = get_changed_files(range_spec)
+    if not all_files:
+        raise RuntimeError("NO_CHANGES: Range resolved but no files changed.")
+
+    # Step 3: Filter noise
+    after_noise, noise_skipped = filter_noise(all_files)
+
+    # Step 4: Check every domain
+    domains = {}
+    dispatch_domains = []
+    skip_domains = []
+
+    for domain_name in sorted(DOMAIN_CATALOG.keys()):
+        matched, _ = filter_domain(after_noise, domain_name)
+        file_count = len(matched)
+        if file_count > 0:
+            domains[domain_name] = {"status": "OK", "file_count": file_count}
+            dispatch_domains.append(domain_name)
+        else:
+            domains[domain_name] = {"status": "NO_FILES", "file_count": 0}
+            skip_domains.append(domain_name)
+
+    return {
+        "range": range_spec,
+        "files_changed": len(all_files),
+        "noise_skipped": len(noise_skipped),
+        "reviewable_files": len(after_noise),
+        "domains": domains,
+        "dispatch_domains": dispatch_domains,
+        "skip_domains": skip_domains,
+    }
+
+
+def format_preflight_text(preflight: dict) -> str:
+    """Format preflight results as structured text."""
+    lines = []
+    lines.append("=== PREFLIGHT SCOPE CHECK ===")
+    lines.append(f"RANGE: {preflight['range']}")
+    lines.append(f"FILES_CHANGED: {preflight['files_changed']}")
+    lines.append(f"NOISE_SKIPPED: {preflight['noise_skipped']}")
+    lines.append(f"REVIEWABLE_FILES: {preflight['reviewable_files']}")
+    lines.append("")
+    lines.append("DOMAIN_STATUS:")
+
+    for domain_name in sorted(preflight["domains"].keys()):
+        info = preflight["domains"][domain_name]
+        lines.append(f"  {domain_name}: {info['status']} ({info['file_count']} files)")
+
+    lines.append("")
+    lines.append(f"DISPATCH_DOMAINS: {', '.join(preflight['dispatch_domains'])}")
+    lines.append(f"SKIP_DOMAINS: {', '.join(preflight['skip_domains'])}")
+
+    return "\n".join(lines)
+
+
+def format_preflight_json(preflight: dict) -> str:
+    """Format preflight results as JSON."""
+    return json.dumps(preflight, indent=2)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Review Scope — efficient diff scoping for review agents.",
@@ -686,7 +780,7 @@ def main():
     parser.add_argument(
         "--domain",
         choices=sorted(DOMAIN_CATALOG.keys()),
-        help="Domain filter to apply (determines which file types to include). Required unless --list-domains.",
+        help="Domain filter to apply (determines which file types to include). Required unless --list-domains or --preflight.",
     )
     parser.add_argument(
         "--range",
@@ -725,6 +819,11 @@ def main():
         action="store_true",
         help="List all available domains with descriptions and exit.",
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Pre-flight scope check: test all domains at once, output dispatch/skip lists. No diffs fetched.",
+    )
 
     args = parser.parse_args()
 
@@ -737,8 +836,44 @@ def main():
                 print(f"  {'':20s} exclude: {spec['exclude']}")
         sys.exit(0)
 
+    # Handle --preflight
+    if args.preflight:
+        try:
+            preflight = build_preflight(args)
+            if args.format == "json":
+                print(format_preflight_json(preflight))
+            else:
+                print(format_preflight_text(preflight))
+            sys.exit(0)
+        except RuntimeError as e:
+            error_msg = str(e)
+            error_output = (
+                f"=== PREFLIGHT SCOPE CHECK ===\n"
+                f"STATUS: ERROR\n"
+                f"ERROR: {error_msg}\n"
+            )
+            if error_msg.startswith("NO_CHANGES:"):
+                error_output += "ACTION: APPROVE and exit — nothing to review.\n"
+                print(error_output)
+                print(error_output, file=sys.stderr)
+                sys.exit(2)
+            error_output += "ACTION: Report this error to the caller. Do NOT proceed with review.\n"
+            print(error_output)
+            print(error_output, file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            error_output = (
+                f"=== PREFLIGHT SCOPE CHECK ===\n"
+                f"STATUS: ERROR\n"
+                f"ERROR: Unexpected error: {type(e).__name__}: {e}\n"
+                f"ACTION: Report this error to the caller. Do NOT proceed with review.\n"
+            )
+            print(error_output)
+            print(error_output, file=sys.stderr)
+            sys.exit(1)
+
     if not args.domain:
-        parser.error("--domain is required (unless using --list-domains)")
+        parser.error("--domain is required (unless using --list-domains or --preflight)")
         sys.exit(1)
 
     try:

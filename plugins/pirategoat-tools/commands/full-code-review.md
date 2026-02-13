@@ -60,9 +60,23 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --domain code --summary --
 
 Present a brief summary: number of files changed, lines added/removed. Note that only committed changes in the range are reviewed — uncommitted changes are excluded.
 
-## Step 4: Dispatch All Reviewer Agents in Parallel
+## Step 3.5: Pre-flight Scope Check
 
-**CRITICAL: You MUST dispatch ALL agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**
+Determine which agents have files to review before dispatching:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --preflight --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
+```
+
+Parse the `DISPATCH_DOMAINS` and `SKIP_DOMAINS` lines from the output. Only dispatch agents whose domain appears in `DISPATCH_DOMAINS`. Always dispatch agents with domain `(none)` — they are not subject to pre-flight filtering.
+
+If agents are skipped, note it briefly: "Skipping N agents with no files in scope: [list]"
+
+## Step 4: Dispatch Reviewer Agents in Parallel
+
+**CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**
+
+Based on the pre-flight check in Step 3.5, dispatch only agents whose domain has matching files. Always include agents with domain `(none)`.
 
 Each agent receives this context in its prompt:
 ```
@@ -74,27 +88,25 @@ When running bootstrap, include these flags:
 python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
 ```
 
-Dispatch these 11 agents in parallel (one message, 11 Task calls):
+| # | Agent | Domain | Focus |
+|---|-------|--------|-------|
+| 1 | `pirategoat-tools:pr-reviewer` | code | Goal alignment, bugs, code quality |
+| 2 | `pirategoat-tools:security-reviewer` | security | XSS, SQL injection, CSRF, sanitization |
+| 3 | `pirategoat-tools:performance-reviewer` | performance | N+1 queries, caching, optimization |
+| 4 | `pirategoat-tools:architecture-reviewer` | architecture | SOLID, design patterns, coupling |
+| 5 | `pirategoat-tools:wp-architecture-reviewer` | wp-architecture | Hooks, WPCS, backwards compatibility |
+| 6 | `pirategoat-tools:patterns-reviewer` | patterns | Existing patterns, consolidation |
+| 7 | `pirategoat-tools:history-insights-reviewer` | code | Git history precedents, lessons learned |
+| 8 | `pirategoat-tools:php-tests-reviewer` | php-tests | PHPUnit test quality |
+| 9 | `pirategoat-tools:js-tests-reviewer` | js-tests | Jest/Vitest test quality |
+| 10 | `pirategoat-tools:e2e-tests-reviewer` | e2e-tests | Playwright E2E test quality |
+| 11 | `pirategoat-tools:dead-code-reviewer` | dead-code | Unused functions, orphaned imports, unreachable code |
 
-| # | Agent | Focus |
-|---|-------|-------|
-| 1 | `pirategoat-tools:pr-reviewer` | Goal alignment, bugs, code quality |
-| 2 | `pirategoat-tools:security-reviewer` | XSS, SQL injection, CSRF, sanitization |
-| 3 | `pirategoat-tools:performance-reviewer` | N+1 queries, caching, optimization |
-| 4 | `pirategoat-tools:architecture-reviewer` | SOLID, design patterns, coupling |
-| 5 | `pirategoat-tools:wp-architecture-reviewer` | Hooks, WPCS, backwards compatibility |
-| 6 | `pirategoat-tools:patterns-reviewer` | Existing patterns, consolidation |
-| 7 | `pirategoat-tools:history-insights-reviewer` | Git history precedents, lessons learned |
-| 8 | `pirategoat-tools:php-tests-reviewer` | PHPUnit test quality |
-| 9 | `pirategoat-tools:js-tests-reviewer` | Jest/Vitest test quality |
-| 10 | `pirategoat-tools:e2e-tests-reviewer` | Playwright E2E test quality |
-| 11 | `pirategoat-tools:dead-code-reviewer` | Unused functions, orphaned imports, unreachable code |
-
-Agents whose domain has no matching files will self-exit with STATUS=NO_DOMAIN_FILES. This is expected and normal — not an error. Collect the signal from each agent that returns (STATUS, COUNTS, VERDICT).
+Agents not dispatched (domain had no files) are recorded as `STATUS=SKIPPED` in the agent signals for the reconciliator.
 
 ## Step 5: Reconcile Findings
 
-After ALL agents have returned their signals, dispatch the reconciliator:
+After ALL dispatched agents have returned their signals, dispatch the reconciliator:
 
 ```
 Task tool:
@@ -104,7 +116,8 @@ Task tool:
     Mode: summary
 
     Agent Signals:
-    <list all agent signals from Step 4, including NO_DOMAIN_FILES agents>
+    <list all agent signals from Step 4>
+    <for each skipped agent: "<agent>: STATUS=SKIPPED (no files in <domain> domain)">
 ```
 
 The reconciliator reads all review files from the output directory, reconciles findings (multi-source = high confidence), and returns a condensed summary.
