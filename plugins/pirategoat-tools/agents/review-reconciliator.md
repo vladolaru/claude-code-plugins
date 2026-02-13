@@ -56,8 +56,9 @@ If you are about to add a finding, STOP. Every finding in your output must trace
 ### Setup
 
 ```python
-import sys, os, json
-sys.path.insert(0, '/Users/vladolaru/Work/a8c/claude-code-plugins/lib')
+import sys, os, json, subprocess
+repo_root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip()
+sys.path.insert(0, os.path.join(repo_root, 'lib'))
 from review_output_simple import ReviewOutputBuilder
 
 builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
