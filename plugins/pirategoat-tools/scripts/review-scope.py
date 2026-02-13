@@ -48,6 +48,11 @@ DOMAIN_CATALOG = {
         "include": r"\.(php|js|ts|jsx|tsx|py|java|rb|go|sql)$",
         "exclude": None,
     },
+    "dead-code": {
+        "description": "Production code only, excluding tests (dead-code-reviewer)",
+        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
+        "exclude": r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$|_test\.php$)",
+    },
     "architecture": {
         "description": "Implementation files, excluding tests",
         "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb)$",
@@ -499,8 +504,13 @@ def build_scope(args: argparse.Namespace) -> dict:
             diffs[filepath] = diff_text
             total_lines += diff_lines
 
-    # Step 7: Detect output directory
-    output_dir, pr_number = detect_output_dir()
+    # Step 7: Detect output directory (skip network calls when --output-dir provided)
+    if args.output_dir:
+        output_dir = args.output_dir
+        pr_number = None
+        os.makedirs(output_dir, exist_ok=True)
+    else:
+        output_dir, pr_number = detect_output_dir()
 
     return {
         "status": "OK",
@@ -704,6 +714,11 @@ def main():
         "--base-ref-only",
         action="store_true",
         help="Only output the base ref and file list (no diffs). For agents that explore preexisting code.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Override output directory. Skips gh/ghe PR detection when provided.",
     )
     parser.add_argument(
         "--list-domains",

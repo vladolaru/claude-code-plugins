@@ -88,7 +88,7 @@ AGENT_CONFIG: Dict[str, dict] = {
         "scope_flags": [],
     },
     "dead-code-reviewer": {
-        "domain": "code",
+        "domain": "dead-code",
         "protocols": ["reviewer"],
         "scope_flags": [],
     },
@@ -225,6 +225,7 @@ def run_scope_discovery(
     domain: str,
     extra_flags: List[str],
     git_range: Optional[str],
+    output_dir: Optional[str] = None,
 ) -> Tuple[int, str]:
     """Run review-scope.py and return (exit_code, output)."""
     script = os.path.join(plugin_root, "scripts", "review-scope.py")
@@ -234,6 +235,8 @@ def run_scope_discovery(
     cmd = [sys.executable, script, "--domain", domain] + extra_flags
     if git_range:
         cmd.extend(["--range", git_range])
+    if output_dir:
+        cmd.extend(["--output-dir", output_dir])
 
     rc, stdout, stderr = run_cmd(cmd, timeout=60)
     # Script outputs to stdout for agent consumption
@@ -450,7 +453,8 @@ def main():
         # Run primary scope discovery
         scope_flags = list(config.get("scope_flags", []))
         rc, scope_output = run_scope_discovery(
-            plugin_root, config["domain"], scope_flags, args.range
+            plugin_root, config["domain"], scope_flags, args.range,
+            output_dir=args.output_dir,
         )
 
         if rc != 0 and rc != 2:
@@ -472,7 +476,8 @@ def main():
         if "extra_scope" in config:
             extra_flags = config["extra_scope"]
             _, exploration_scope = run_scope_discovery(
-                plugin_root, config["domain"], extra_flags, args.range
+                plugin_root, config["domain"], extra_flags, args.range,
+                output_dir=args.output_dir,
             )
     else:
         # No domain (tests-mutation-reviewer) — detect output dir manually
