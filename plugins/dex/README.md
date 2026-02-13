@@ -1,6 +1,6 @@
 # dex
 
-Make compounding knowledge a one-click habit.
+Make compounding knowledge a frictionless habit.
 
 ## The Problem
 
@@ -16,7 +16,7 @@ The "Compound" step is the novel piece. As [Will Larson observed](https://lethai
 
 ## How It Works
 
-After any engineering work — fixing a bug, discovering a gotcha, establishing a convention, making an architectural choice — fire a command. dex reads the conversation, extracts the insight, and asks for one-click confirmation. That's it.
+After any engineering work — fixing a bug, discovering a gotcha, establishing a convention, making an architectural choice — fire a command. dex reads the conversation, extracts the insight, and asks for a single confirmation. That's it.
 
 Knowledge is stored as agent-first documents in `.claude/docs/` — structured so AI agents get the actionable rule in the first three lines without reading the whole file. Critical rules can be promoted to a one-liner in CLAUDE.md with a link back to the full doc.
 

@@ -101,7 +101,7 @@
     {
       "name": "dex",
       "source": "./plugins/dex",
-      "description": "One-click knowledge capture that compounds engineering work. Captures learnings, patterns, and decisions from conversations into agent-first documents, with optional promotion to CLAUDE.md.",
+      "description": "Frictionless knowledge capture that compounds engineering work. Captures learnings, patterns, and decisions from conversations into agent-first documents, with optional promotion to CLAUDE.md.",
       "version": "1.0.1",
       "author": {
         "name": "Vlad Olaru"

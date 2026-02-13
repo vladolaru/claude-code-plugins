@@ -229,7 +229,7 @@ Before drafting, re-read the relevant conversation exchange to identify the core
 2. **Draft the title** as a short, directive statement (imperative or declarative)
 3. **Draft the key section** (Rule for learnings, Pattern for patterns, Decision for decisions)
 4. **Identify tags** from the technical domain (3-5 lowercase, hyphen-separated)
-5. **Present via AskUserQuestion** for one-click confirmation
+5. **Present via AskUserQuestion** for confirmation
 
 Focus on what an agent needs to act differently next time, not on narrating what happened during debugging.
 

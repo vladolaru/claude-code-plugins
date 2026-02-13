@@ -12,8 +12,8 @@
 
 - `/dex` command — thin router that auto-classifies knowledge type (learning, pattern, or decision) and delegates to the right handler
 - `/dex:init` command — scaffolds `.claude/docs/` knowledge directory with `learnings/`, `patterns/`, `decisions/` subdirectories
-- `/dex:learn` command — captures learnings from conversation context with one-click confirmation via AskUserQuestion
-- `/dex:pattern` command — captures reusable patterns from conversation context with one-click confirmation
+- `/dex:learn` command — captures learnings from conversation context with single-confirmation via AskUserQuestion
+- `/dex:pattern` command — captures reusable patterns from conversation context with single-confirmation
 - `/dex:status` command — knowledge health report showing CLAUDE.md budget, doc counts, and latest/oldest entries
 - `knowledge-capture` skill — shared core logic for project discovery, agent-first document formats, CLAUDE.md budget management, and promotion flow
 - Inline promotion flow — after capturing a learning or pattern, optionally promote to a one-liner rule in CLAUDE.md

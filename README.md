@@ -24,7 +24,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 | Plugin | What it does | Version |
 |--------|-------------|---------|
 | [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 15 review agents, 9 skills (testing-patterns, software-architecture, WordPress), rich feedback loops | 1.26.0 |
-| [**dex**](plugins/dex/README.md) | Knowledge capture — one-click learnings, patterns, and decisions from conversations into agent-first docs | 1.0.1 |
+| [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs | 1.0.1 |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates | 2.1.0 |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow | 1.1.0 |
 
@@ -36,7 +36,7 @@ The main plugin. 15 specialized review agents that run in parallel, 9 skills cov
 
 ### dex
 
-One-click knowledge capture based on [compound engineering](https://every.to/guides/compound-engineering) — each unit of work should make the next one easier, not harder. Fire `/dex` after any engineering work, confirm with one click, done. Knowledge lives as agent-first documents in `.claude/docs/` with optional promotion to CLAUDE.md.
+Frictionless knowledge capture based on [compound engineering](https://every.to/guides/compound-engineering) — each unit of work should make the next one easier, not harder. Fire `/dex` after any engineering work, confirm with a single selection, done. Knowledge lives as agent-first documents in `.claude/docs/` with optional promotion to CLAUDE.md.
 
 **[Full documentation →](plugins/dex/README.md)** | [Changelog](plugins/dex/CHANGELOG.md)
 
