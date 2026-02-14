@@ -19,7 +19,7 @@ Re-read the recent conversation and classify the knowledge into one of these cat
 
 If `$ARGUMENTS` contains a focus hint (e.g., "cache invalidation"), narrow the extraction to that topic.
 
-If the conversation contains multiple types, pick the most prominent one. The user can override via the confirmation step.
+If the conversation contains multiple knowledge types, pick the most prominent one. Ambiguity between learning and pattern is normal — pick learning if the knowledge is about a specific situation, pattern if it describes a reusable approach. The user can override via the confirmation step.
 
 ## Step 2: Confirm Classification
 
@@ -35,6 +35,8 @@ Present your best guess first with "(Recommended)":
 - **Decision (Recommended)** — a choice with trade-offs worth remembering *(only if classified as decision)*
 
 Always show all three options. Mark only the auto-classified one as "(Recommended)".
+
+**Note:** If the user wants to improve agent behavior (tool usage, discovery efficiency, workflow), use `/dex:sharpen` instead — it extracts operational knowledge, not domain knowledge.
 
 ## Step 3: Delegate
 

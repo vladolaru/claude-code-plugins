@@ -259,7 +259,13 @@ Scan the conversation for these categories of wasted effort:
 | Unnecessary confirmation loops | Asked the user things that could be inferred from context or existing docs |
 | Over-broad scope | Read entire files when only a section was needed; searched too widely before narrowing |
 
-For each inefficiency found, note three things:
+Flag only inefficiencies that meet **both** criteria:
+1. Cost significant time or tokens (multiple wasted tool calls, 3+ minutes of backtracking)
+2. Would likely recur in future sessions without a fix
+
+Skip: one-time wrong guesses, normal exploration overhead, reasonable first attempts that didn't pan out.
+
+For each flagged inefficiency, note three things:
 1. **What happened** — the specific moment of waste
 2. **What should have happened** — the efficient alternative
 3. **Why** — the missing knowledge that caused the inefficiency
@@ -282,3 +288,17 @@ In addition to the standard four quality checks (self-contained, actionable, spe
 1. **Agent-operational** — focuses on how the agent should work, not domain knowledge about the codebase
 2. **Preventive** — tells the agent what to do *before* hitting the inefficiency, not how to recover after
 3. **Non-obvious** — captures something that isn't common sense for any AI agent (e.g., "use Read instead of cat" is obvious; "this project's test runner requires --user=1" is not)
+
+<example type="CORRECT" label="agent-operational">
+Rule: "In this project, always use `pnpm wp --user=1` for REST API calls in WP-CLI"
+
+Agent-operational: tells the agent how to run commands in this project.
+Preventive: specifies what to do before making the call.
+</example>
+
+<example type="INCORRECT" label="domain knowledge — use /dex:learn instead">
+Rule: "The REST API returns 403 when permissions are missing"
+
+This is domain knowledge (how WordPress works), not operational knowledge
+(how the agent should work). Capture via `/dex:learn` instead.
+</example>

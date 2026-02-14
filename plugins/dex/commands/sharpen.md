@@ -22,16 +22,20 @@ If "Not now", stop here. If "Yes", create directories with `mkdir -p` and contin
 
 ## Step 2: Analyze Agent Behavior
 
-Re-read the conversation history and scan for inefficiencies using the **Inefficiency Categories** from the `knowledge-capture` skill.
+Before scanning, check `.claude/docs/` for existing documents tagged `agent-efficiency`. Avoid duplicating knowledge already captured.
+
+Re-read the conversation history and scan for inefficiencies using the **Inefficiency Categories** from the `knowledge-capture` skill. Focus on moments that cost significant time or tokens — minor suboptimal choices (e.g., reading 10 extra lines of a file) are normal exploration, not inefficiencies worth capturing.
 
 If `$ARGUMENTS` contains a focus hint, narrow the analysis to that area.
+
+Hint: The highest-value inefficiencies are ones that would recur in future sessions without a fix. A one-time wrong guess is noise; a systematic pattern of wrong guesses is signal.
 
 For each inefficiency found, note:
 1. **What happened** — the specific moment of waste
 2. **What should have happened** — the efficient alternative
 3. **Why** — the missing knowledge that caused the inefficiency
 
-If no inefficiencies are found, say so briefly and stop. Do not force-find problems where none exist.
+If no inefficiencies are found or everything found is minor/one-time, say so briefly and stop. Do not force-find problems where none exist.
 
 ## Step 3: Classify Root Cause and Draft Fix
 
@@ -42,6 +46,30 @@ Draft the fix using the appropriate document format from the `knowledge-capture`
 - **Pattern Format** — for missing reusable workflows or approaches
 
 Every drafted fix must pass the standard four quality checks AND the three **Sharpen Extraction Quality** checks from the `knowledge-capture` skill.
+
+<example type="CORRECT" label="agent-operational fix">
+# Use Glob instead of find for file discovery in this project
+
+**Tags:** agent-efficiency, tool-usage, file-discovery
+
+## Rule
+
+Use Glob tool with patterns like `**/*.php` instead of Bash `find` commands.
+Glob is faster, returns sorted results, and the project CLAUDE.md already
+specifies this preference.
+</example>
+
+<example type="INCORRECT" label="domain knowledge, not operational">
+# File discovery
+
+**Tags:** tools
+
+## Rule
+
+Sometimes find doesn't work well. Try using other tools.
+</example>
+
+The correct example is agent-operational (how to work), preventive (do this instead), and specific (names the tool and pattern). The incorrect one is vague, lacks actionability, and misses the operational focus.
 
 Tag all sharpen-originated documents with `agent-efficiency` plus domain-specific tags. Tag skill gap fixes additionally with `skill-improvement`.
 

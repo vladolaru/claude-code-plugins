@@ -1,11 +1,17 @@
 # Changelog
 
-## [1.1.0] - 2026-02-13
+## [1.1.0] - 2026-02-14
 
 ### Added
 
 - `/dex:sharpen` command — analyzes agent behavior for inefficiencies and captures fixes as project knowledge
 - Agent Behavior Analysis section in knowledge-capture skill with inefficiency categories and root cause classification
+
+### Changed
+
+- Optimized sharpen command and agent behavior analysis with prompt engineering patterns: Pre-Work Context Analysis, Scope Limitation, Hint-Based Guidance, Error Normalization, Contrastive Examples, and Category-Based Generalization
+- Added sharpen discoverability note to `/dex` router
+- Added classification heuristic for learning-vs-pattern ambiguity in router
 
 ## [1.0.1] - 2026-02-13
 
