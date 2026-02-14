@@ -102,7 +102,7 @@
       "name": "dex",
       "source": "./plugins/dex",
       "description": "Frictionless knowledge capture that compounds engineering work. Captures learnings, patterns, and decisions from conversations into agent-first documents, with optional promotion to CLAUDE.md.",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "author": {
         "name": "Vlad Olaru"
       },

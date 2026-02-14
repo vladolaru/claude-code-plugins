@@ -1,0 +1,2 @@
+{"type":"message","timestamp":"2026-02-14T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"compact operation"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}

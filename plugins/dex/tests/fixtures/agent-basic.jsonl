@@ -1,0 +1,4 @@
+{"type":"message","timestamp":"2026-02-14T10:00:00Z","model":"claude-sonnet-4-5-20250929","message":{"role":"user","content":[{"type":"text","text":"Explore the codebase and find all Python files"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Read","input":{"file_path":"/src/main.py"}}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_1","content":"file contents here"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:10Z","usage":{"input_tokens":500,"output_tokens":200},"message":{"role":"assistant","content":[{"type":"text","text":"Found the Python files."}]}}

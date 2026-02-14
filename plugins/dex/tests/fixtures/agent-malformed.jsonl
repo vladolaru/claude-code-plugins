@@ -1,0 +1,5 @@
+{"type":"message","timestamp":"2026-02-14T10:00:00Z","model":"claude-sonnet-4-5-20250929","message":{"role":"user","content":[{"type":"text","text":"Do something"}]}}
+this is not valid json at all
+{"type":"message","timestamp":"2026-02-14T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Glob","input":{"pattern":"**/*.py"}}]}}
+{"incomplete json
+{"type":"message","timestamp":"2026-02-14T10:00:10Z","usage":{"input_tokens":300,"output_tokens":100},"message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}

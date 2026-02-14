@@ -1,0 +1,6 @@
+{"type":"message","timestamp":"2026-02-14T10:00:00Z","model":"claude-sonnet-4-5-20250929","message":{"role":"user","content":[{"type":"text","text":"Fix the build errors in the project"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"npm run build"}}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Error: Module not found"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"package.json"}}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"{}"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:08Z","usage":{"input_tokens":400,"output_tokens":150},"message":{"role":"assistant","content":[{"type":"text","text":"Found the issue."}]}}

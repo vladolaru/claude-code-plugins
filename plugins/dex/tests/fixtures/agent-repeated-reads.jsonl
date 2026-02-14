@@ -1,0 +1,10 @@
+{"type":"message","timestamp":"2026-02-14T10:00:00Z","model":"claude-sonnet-4-5-20250929","message":{"role":"user","content":[{"type":"text","text":"Review the sharpen command implementation"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"plugins/dex/commands/sharpen.md"}}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"sharpen content"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"plugins/dex/commands/sharpen.md"}}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"sharpen content"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:08Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Read","input":{"file_path":"plugins/dex/commands/sharpen.md"}}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:09Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"sharpen content"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:11Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t4","name":"Read","input":{"file_path":"plugins/dex/commands/sharpen.md"}}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:12Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"sharpen content"}]}}
+{"type":"message","timestamp":"2026-02-14T10:00:15Z","usage":{"input_tokens":2000,"output_tokens":500},"message":{"role":"assistant","content":[{"type":"text","text":"Review complete."}]}}

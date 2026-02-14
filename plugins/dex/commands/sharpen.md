@@ -20,11 +20,29 @@ If `.claude/docs/` does not exist, use AskUserQuestion:
 
 If "Not now", stop here. If "Yes", create directories with `mkdir -p` and continue.
 
-## Step 2: Analyze Agent Behavior
+## Step 2: Analyze Sub-Agent Behavior
+
+If sub-agents were dispatched in this session (via Task tool), run the analyzer:
+
+```bash
+python3 ${PLUGIN_ROOT}/scripts/analyze-subagents.py --project-dir $(git rev-parse --show-toplevel)
+```
+
+Where `${PLUGIN_ROOT}` is this plugin's root directory (the directory containing this command file's parent `commands/` directory).
+
+If the script exits with code 2 (no data), skip this step. If exit code 0, incorporate
+flagged patterns into Step 3's analysis — they map to Inefficiency Categories:
+- `BASH_FOR_FILES` — Wrong tool usage
+- `HIGH_TOOL_COUNT` / `BASH_HEAVY` — Inefficient discovery
+- `REPEATED_READS` — Over-broad scope
+- `HIGH_TOKEN_USAGE` — Over-broad scope
+- `FAILED_TOOLS` — Incorrect assumptions
+
+## Step 3: Analyze Agent Behavior
 
 Before scanning, read `.claude/docs/.sharpen-log.md` if it exists — this is the audit log of previously captured findings. Also check `.claude/docs/` for existing documents tagged `agent-efficiency`. Avoid duplicating knowledge already captured in either the audit log or existing documents.
 
-Re-read the conversation history and scan for inefficiencies using the **Inefficiency Categories** from the `knowledge-capture` skill. Focus on moments that cost significant time or tokens — minor suboptimal choices (e.g., reading 10 extra lines of a file) are normal exploration, not inefficiencies worth capturing.
+Re-read the conversation history **and the sub-agent analysis from Step 2 (if available)** and scan for inefficiencies using the **Inefficiency Categories** from the `knowledge-capture` skill. Focus on moments that cost significant time or tokens — minor suboptimal choices (e.g., reading 10 extra lines of a file) are normal exploration, not inefficiencies worth capturing.
 
 If `$ARGUMENTS` contains a focus hint, narrow the analysis to that area.
 
@@ -37,7 +55,7 @@ For each inefficiency found, note:
 
 If no inefficiencies are found or everything found is minor/one-time, say so briefly and stop. Do not force-find problems where none exist.
 
-## Step 3: Classify Root Cause and Draft Fix
+## Step 4: Classify Root Cause and Draft Fix
 
 For each inefficiency, use the **Root Cause Classification** from the `knowledge-capture` skill to determine the output type.
 
@@ -73,7 +91,7 @@ The correct example is agent-operational (how to work), preventive (do this inst
 
 Tag all sharpen-originated documents with `agent-efficiency` plus domain-specific tags. Tag skill gap fixes additionally with `skill-improvement`.
 
-## Step 4: Confirm with User
+## Step 5: Confirm with User
 
 Use AskUserQuestion to present all findings at once.
 
@@ -94,7 +112,7 @@ If multiple fixes were found, present them all. Number each fix.
 
 If "Edit", apply corrections and confirm again. If "Skip", stop here.
 
-## Step 5: Write the Documents
+## Step 6: Write the Documents
 
 Write each confirmed fix to the appropriate `.claude/docs/` subdirectory using the document format from the `knowledge-capture` skill.
 
@@ -104,11 +122,11 @@ Captured: .claude/docs/learnings/YYYY-MM-DD-slug.md
 Captured: .claude/docs/patterns/YYYY-MM-DD-slug.md
 ```
 
-## Step 5.5: Update Audit Log
+## Step 6.5: Update Audit Log
 
 Append an entry to `.claude/docs/.sharpen-log.md` for each captured fix, following the **Sharpen Audit Log** format from the `knowledge-capture` skill. Create the file if it does not exist.
 
-## Step 6: Suggest Promotion (Conditional)
+## Step 7: Suggest Promotion (Conditional)
 
 For each captured document, evaluate whether it looks rule-worthy: does it contain a do/don't directive that corrects a recurring agent mistake, or apply project-wide?
 
@@ -120,7 +138,7 @@ Show which fixes are promotion candidates. The user confirms or declines per fix
 
 **If NO fix is rule-worthy**, skip this step silently. Proceed to completion.
 
-## Step 7: Promote (If Selected)
+## Step 8: Promote (If Selected)
 
 Follow the **CLAUDE.md Promotion** flow from the `knowledge-capture` skill:
 

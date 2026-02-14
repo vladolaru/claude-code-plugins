@@ -601,6 +601,25 @@ class TestSharpenCommand:
             "sharpen.md: must reference standard document formats from skill"
         )
 
+    def test_references_subagent_analyzer(self):
+        content = _read_command("sharpen.md")
+        assert "analyze-subagents" in content, (
+            "sharpen.md: must reference sub-agent analyzer script"
+        )
+
+
+# =============================================================================
+# Script Existence
+# =============================================================================
+
+
+class TestScriptExists:
+    """Plugin scripts exist on disk."""
+
+    def test_analyze_subagents_exists(self):
+        path = PLUGIN_ROOT / "scripts" / "analyze-subagents.py"
+        assert path.is_file(), f"Script not found: {path}"
+
 
 # =============================================================================
 # Cross-Cutting Concerns
@@ -632,11 +651,15 @@ class TestCrossCutting:
         )
 
     @pytest.mark.parametrize("command", ALL_COMMANDS)
-    def test_no_agents_referenced(self, command):
-        """dex commands should not dispatch subagents."""
+    def test_no_agent_dispatching(self, command):
+        """dex commands should not dispatch subagents via Task tool."""
         content = _read_command(command)
-        assert "subagent" not in content.lower(), (
-            f"{command}: dex commands should not reference subagents"
+        assert "subagent_type" not in content.lower(), (
+            f"{command}: dex commands should not dispatch subagents"
+        )
+        # Check for Task tool invocation patterns (but not analysis of traces)
+        assert "Task tool" not in content or "analyze" in content.lower(), (
+            f"{command}: dex commands should not dispatch via Task tool"
         )
 
     def test_changelog_exists(self):

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1] - 2026-02-14
+
+### Added
+
+- Sub-agent behavior analyzer (`scripts/analyze-subagents.py`) — reads Claude Code sub-agent JSONL traces and detects behavioral anti-patterns (wrong tool usage, repeated reads, high token consumption, bash overuse)
+- `/dex:sharpen` now runs the sub-agent analyzer as Step 2 before main conversation analysis, mapping flagged patterns to Inefficiency Categories for cross-agent visibility
+
 ## [1.2.0] - 2026-02-14
 
 ### Added
