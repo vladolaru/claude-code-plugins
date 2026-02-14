@@ -57,4 +57,26 @@ Decisions:        [count] docs  (.claude/docs/decisions/)
 | Subdirectory missing | "[category]: not set up" — omit Latest/Oldest |
 | CLAUDE.md 500+ lines | Append warning: "CLAUDE.md is over budget — consider extracting sections." |
 
+## Step 4: Freshness Analysis
+
+Parse the `YYYY-MM-DD` date prefix from each document filename across all three subdirectories. Calculate the age of each document relative to today.
+
+**Staleness threshold:** 90 days. Any document older than 90 days is considered stale.
+
+If stale documents exist, append a freshness section to the report:
+
+```
+Freshness:
+  Stale (>90 days):  [count] docs
+  Consider reviewing: [list oldest 3 filenames]
+```
+
+**Freshness warnings:**
+
+| Condition | Warning |
+|---|---|
+| 1+ docs older than 90 days | "N docs are older than 90 days — consider reviewing for accuracy." |
+| >50% of docs are stale | "Most knowledge is over 90 days old — consider a review pass with /dex:status." |
+| No stale docs | Omit the freshness section entirely |
+
 Stop after presenting the report. This command is read-only.

@@ -302,3 +302,28 @@ Rule: "The REST API returns 403 when permissions are missing"
 This is domain knowledge (how WordPress works), not operational knowledge
 (how the agent should work). Capture via `/dex:learn` instead.
 </example>
+
+### Sharpen Audit Log
+
+Running log at `.claude/docs/.sharpen-log.md` that tracks efficiency fixes across sessions. Used by `/dex:sharpen` to avoid duplicating previously captured knowledge.
+
+#### Audit Log Format
+
+```markdown
+# Sharpen Audit Log
+
+## YYYY-MM-DD
+
+- **[category]:** [1-sentence summary] → `[file path]`
+- **[category]:** [1-sentence summary] → `[file path]`
+```
+
+Each entry records: the inefficiency category (from the Inefficiency Categories table), a one-sentence summary of the fix, and the path to the captured document.
+
+#### Reading the Audit Log
+
+Before analyzing, read `.claude/docs/.sharpen-log.md` if it exists. Compare previous findings against current conversation to skip inefficiencies already captured. If the log does not exist, proceed normally — it will be created after capture.
+
+#### Writing to the Audit Log
+
+After capturing fixes, append a dated section to `.claude/docs/.sharpen-log.md`. Create the file if it does not exist. Each entry is one line per captured fix.

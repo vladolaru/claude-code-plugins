@@ -59,4 +59,23 @@ Created:
 Ready for knowledge capture. Use /dex:learn or /dex:pattern to start.
 ```
 
+## Step 4: Suggest Capture Directive (Conditional)
+
+If a CLAUDE.md file was found in Step 1, check whether it already contains a `/dex` capture directive (search for `/dex` in the file). If a directive is already present, skip this step silently.
+
+If no directive exists, use AskUserQuestion:
+
+**Question:** "Add a knowledge capture reminder to CLAUDE.md?"
+
+Show in the description:
+> This adds a one-liner that reminds future agents to suggest `/dex` after significant debugging, decisions, or pattern discovery.
+>
+> **Directive:** `- After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using /dex to capture the knowledge.`
+
+**Options:**
+- **Yes, add it** — appends the directive to the most relevant section in CLAUDE.md
+- **Skip** — no changes to CLAUDE.md
+
+If "Yes", follow the **Auto-Placement** logic from the `knowledge-capture` skill to place the one-liner in the most relevant section.
+
 Stop here. This command only scaffolds — it does not capture knowledge.

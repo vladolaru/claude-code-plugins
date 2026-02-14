@@ -30,7 +30,7 @@ MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 # Constants
 # ---------------------------------------------------------------------------
 ALL_COMMANDS = [
-    "dex.md",
+    "grok.md",
     "init.md",
     "learn.md",
     "pattern.md",
@@ -332,36 +332,36 @@ class TestSkillCoreLogic:
 # =============================================================================
 
 
-class TestDexRouter:
-    """dex.md routes to the correct handlers."""
+class TestGrokRouter:
+    """grok.md routes to the correct handlers."""
 
     def test_classifies_three_types(self):
-        content = _read_command("dex.md")
+        content = _read_command("grok.md")
         content_lower = content.lower()
-        assert "learning" in content_lower, "dex.md: missing 'learning' classification"
-        assert "pattern" in content_lower, "dex.md: missing 'pattern' classification"
-        assert "decision" in content_lower, "dex.md: missing 'decision' classification"
+        assert "learning" in content_lower, "grok.md: missing 'learning' classification"
+        assert "pattern" in content_lower, "grok.md: missing 'pattern' classification"
+        assert "decision" in content_lower, "grok.md: missing 'decision' classification"
 
     def test_uses_ask_user_question(self):
-        content = _read_command("dex.md")
-        assert "AskUserQuestion" in content, "dex.md: missing AskUserQuestion for classification"
+        content = _read_command("grok.md")
+        assert "AskUserQuestion" in content, "grok.md: missing AskUserQuestion for classification"
 
     def test_delegates_to_learn(self):
-        content = _read_command("dex.md")
+        content = _read_command("grok.md")
         assert "dex:learn" in content or "learn command" in content.lower(), (
-            "dex.md: missing delegation to learn"
+            "grok.md: missing delegation to learn"
         )
 
     def test_delegates_to_pattern(self):
-        content = _read_command("dex.md")
+        content = _read_command("grok.md")
         assert "dex:pattern" in content or "pattern command" in content.lower(), (
-            "dex.md: missing delegation to pattern"
+            "grok.md: missing delegation to pattern"
         )
 
     def test_decision_uses_decision_format(self):
-        content = _read_command("dex.md")
+        content = _read_command("grok.md")
         assert "Decision Format" in content or "decision" in content.lower(), (
-            "dex.md: missing decision format handling"
+            "grok.md: missing decision format handling"
         )
 
 
@@ -646,3 +646,127 @@ class TestCrossCutting:
     def test_readme_exists(self):
         path = PLUGIN_ROOT / "README.md"
         assert path.is_file(), "README.md not found"
+
+
+# =============================================================================
+# Gap 1: Capture Automation — Init Proactive Directive
+# =============================================================================
+
+
+class TestInitCaptureDirective:
+    """init.md offers to add a proactive /dex capture directive to CLAUDE.md."""
+
+    def test_mentions_capture_directive(self):
+        """init.md should offer a CLAUDE.md directive for proactive capture."""
+        content = _read_command("init.md")
+        assert "/dex" in content and "CLAUDE.md" in content, (
+            "init.md: must mention adding /dex reference to CLAUDE.md"
+        )
+        # Must mention the concept of proactive/automatic suggestion
+        content_lower = content.lower()
+        assert any(word in content_lower for word in [
+            "proactive", "suggest", "remind", "directive", "nudge",
+        ]), (
+            "init.md: must describe proactive capture suggestion"
+        )
+
+    def test_checks_for_existing_dex_directive(self):
+        """Before offering, should check if CLAUDE.md already has a /dex reference."""
+        content = _read_command("init.md")
+        # Must explicitly mention checking CLAUDE.md for an existing capture directive
+        # The word "directive" must appear in context of checking/skipping
+        assert "directive" in content.lower(), (
+            "init.md: must mention checking for existing capture directive in CLAUDE.md"
+        )
+
+    def test_uses_ask_user_question_for_directive(self):
+        """The directive offer should use AskUserQuestion for confirmation."""
+        content = _read_command("init.md")
+        # Already has one AskUserQuestion for scaffolding; should have a second
+        count = content.count("AskUserQuestion")
+        assert count >= 2, (
+            f"init.md: expected at least 2 AskUserQuestion calls (scaffolding + directive), found {count}"
+        )
+
+
+# =============================================================================
+# Gap 2: Cross-Session Intelligence — Sharpen Audit Log
+# =============================================================================
+
+
+class TestSharpenAuditLog:
+    """sharpen.md writes an audit log for cross-session intelligence."""
+
+    def test_sharpen_mentions_audit_log(self):
+        """sharpen.md should reference an audit log mechanism."""
+        content = _read_command("sharpen.md")
+        content_lower = content.lower()
+        assert "audit" in content_lower or "log" in content_lower, (
+            "sharpen.md: must reference audit log for cross-session tracking"
+        )
+        assert ".sharpen-log" in content or "sharpen-log" in content_lower, (
+            "sharpen.md: must reference .sharpen-log file"
+        )
+
+    def test_sharpen_reads_existing_log(self):
+        """sharpen.md should read the audit log to avoid duplicating previous findings."""
+        content = _read_command("sharpen.md")
+        content_lower = content.lower()
+        assert any(phrase in content_lower for phrase in [
+            "existing log", "previous findings", "previously captured",
+            "read the audit", "check the audit", "read .sharpen-log",
+        ]), (
+            "sharpen.md: must read existing audit log for deduplication"
+        )
+
+    def test_sharpen_appends_to_log(self):
+        """sharpen.md should append entries to the audit log after capturing."""
+        content = _read_command("sharpen.md")
+        content_lower = content.lower()
+        assert "append" in content_lower and ".sharpen-log" in content_lower, (
+            "sharpen.md: must append new entries to the .sharpen-log audit log"
+        )
+
+    def test_skill_has_audit_log_format(self):
+        """knowledge-capture SKILL.md should define the audit log format."""
+        content = _read_file(SKILL_PATH)
+        assert "Sharpen Audit Log" in content or "Audit Log" in content, (
+            "SKILL.md: must define the sharpen audit log format"
+        )
+
+
+# =============================================================================
+# Gap 3: Knowledge Hygiene — Status Freshness Warnings
+# =============================================================================
+
+
+class TestStatusFreshness:
+    """status.md includes freshness warnings for stale knowledge."""
+
+    def test_mentions_freshness_or_staleness(self):
+        """status.md should include freshness analysis."""
+        content = _read_command("status.md")
+        content_lower = content.lower()
+        assert any(word in content_lower for word in [
+            "freshness", "stale", "staleness", "age", "aging", "outdated",
+        ]), (
+            "status.md: must include freshness/staleness analysis"
+        )
+
+    def test_has_age_threshold(self):
+        """status.md should define when a doc is considered stale."""
+        content = _read_command("status.md")
+        # Should mention a specific number of days as threshold
+        assert any(f"{n} day" in content.lower() for n in [30, 60, 90, 120, 180]) or "day" in content.lower(), (
+            "status.md: must define an age threshold for staleness (e.g., 90 days)"
+        )
+
+    def test_warns_about_stale_docs(self):
+        """status.md should produce a warning when docs are stale."""
+        content = _read_command("status.md")
+        content_lower = content.lower()
+        assert any(phrase in content_lower for phrase in [
+            "review", "refresh", "update", "may be outdated", "consider reviewing",
+        ]), (
+            "status.md: must suggest reviewing stale documents"
+        )

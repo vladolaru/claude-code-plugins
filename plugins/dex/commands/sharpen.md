@@ -22,7 +22,7 @@ If "Not now", stop here. If "Yes", create directories with `mkdir -p` and contin
 
 ## Step 2: Analyze Agent Behavior
 
-Before scanning, check `.claude/docs/` for existing documents tagged `agent-efficiency`. Avoid duplicating knowledge already captured.
+Before scanning, read `.claude/docs/.sharpen-log.md` if it exists — this is the audit log of previously captured findings. Also check `.claude/docs/` for existing documents tagged `agent-efficiency`. Avoid duplicating knowledge already captured in either the audit log or existing documents.
 
 Re-read the conversation history and scan for inefficiencies using the **Inefficiency Categories** from the `knowledge-capture` skill. Focus on moments that cost significant time or tokens — minor suboptimal choices (e.g., reading 10 extra lines of a file) are normal exploration, not inefficiencies worth capturing.
 
@@ -103,6 +103,10 @@ Report each file written:
 Captured: .claude/docs/learnings/YYYY-MM-DD-slug.md
 Captured: .claude/docs/patterns/YYYY-MM-DD-slug.md
 ```
+
+## Step 5.5: Update Audit Log
+
+Append an entry to `.claude/docs/.sharpen-log.md` for each captured fix, following the **Sharpen Audit Log** format from the `knowledge-capture` skill. Create the file if it does not exist.
 
 ## Step 6: Suggest Promotion (Conditional)
 

@@ -3,9 +3,9 @@ description: Capture knowledge from the current conversation — auto-classifies
 argument-hint: "[optional: focus hint]"
 ---
 
-# /dex
+# /dex:grok
 
-Classify the knowledge in the current conversation and delegate to the right capture flow. This command asks one question, then hands off — keep it fast.
+Deeply understand the current conversation, classify the knowledge, and delegate to the right capture flow. This command asks one question, then hands off — keep it fast.
 
 ## Step 1: Classify
 
