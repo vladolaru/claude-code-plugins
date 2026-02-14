@@ -24,7 +24,7 @@ Knowledge is stored as agent-first documents in `.claude/docs/` — structured s
 
 | Command | Purpose |
 |---------|---------|
-| `/dex` | Auto-classifies the knowledge (learning, pattern, or decision) and routes to the right handler |
+| `/dex:grok` | Auto-classifies the knowledge (learning, pattern, or decision) and routes to the right handler |
 | `/dex:learn` | Captures a learning — discovery, fix, gotcha, debugging insight |
 | `/dex:pattern` | Captures a reusable pattern — approach, convention, anti-pattern |
 | `/dex:sharpen` | Analyzes agent behavior for inefficiencies and captures fixes as project knowledge |

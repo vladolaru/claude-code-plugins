@@ -4,7 +4,7 @@
 
 ### Added
 
-- Proactive capture directive in `/dex:init` — offers to add a CLAUDE.md reminder for future agents to suggest `/dex` after significant debugging or decisions
+- Proactive capture directive in `/dex:init` — offers to add a CLAUDE.md reminder for future agents to suggest `/dex:grok` after significant debugging or decisions
 - Sharpen audit log (`.claude/docs/.sharpen-log.md`) — cross-session memory for `/dex:sharpen` to avoid duplicating previously captured efficiency fixes
 - Freshness analysis in `/dex:status` — warns about stale docs older than 90 days and suggests review when most knowledge is outdated
 
