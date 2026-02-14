@@ -100,6 +100,12 @@ Parse the `DISPATCH_DOMAINS` and `SKIP_DOMAINS` lines from the output. Only disp
 
 If agents are skipped, note it briefly: "Skipping N agents with no files in scope: [list]"
 
+**Stale branch check (conditional):** Parse the `BRANCH_FRESHNESS:` section from the preflight output. Only act on staleness if the `history-insights-reviewer` is in the `DISPATCH_DOMAINS` list (domain: `code`). If the history-insights-reviewer is being skipped, the stale branch warning adds no value — skip this check.
+
+If acting on staleness:
+- If `IS_STALE: true` and `RANGE_REBASED: true`: Tell the user: "Branch is N commits behind base. Review scope adjusted to merge-base to exclude unrelated trunk files. Consider rebasing before your next review iteration."
+- If `IS_STALE: false`: proceed normally, no message needed.
+
 ## Step 4: Dispatch Reviewer Agents in Parallel
 
 **CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**

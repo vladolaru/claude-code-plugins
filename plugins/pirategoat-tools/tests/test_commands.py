@@ -278,6 +278,12 @@ class TestCodeReviewIterative:
             "code-review.md: missing 'no new commits' guard"
         )
 
+    def test_has_conditional_stale_branch_handling(self):
+        content = _read_command("code-review.md")
+        assert "BRANCH_FRESHNESS" in content or "stale" in content.lower()
+        # Stale check should be conditional on history-insights-reviewer
+        assert "history-insights" in content.lower()
+
 
 class TestIngestCodeReview:
     """ingest-code-review.md has validation-specific content."""
@@ -338,6 +344,14 @@ class TestFullCodeReview:
         assert ".review-state.json" not in content, (
             "full-code-review.md: should NOT reference .review-state.json"
         )
+
+    def test_has_stale_branch_handling(self):
+        content = _read_command("full-code-review.md")
+        assert "BRANCH_FRESHNESS" in content or "stale" in content.lower()
+
+    def test_has_merge_base_reference(self):
+        content = _read_command("full-code-review.md")
+        assert "merge-base" in content.lower() or "RANGE_REBASED" in content
 
 
 # =============================================================================

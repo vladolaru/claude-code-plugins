@@ -5,6 +5,16 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0] - 2026-02-15
+
+### Added
+
+- **Stale branch detection** — `review-scope.py` now detects when a feature branch is far behind the base branch (>10 commits) and automatically rebases the diff range to the merge-base (common ancestor). This excludes unrelated trunk files from leaking into review scope. Adds `BRANCH_FRESHNESS:` section to preflight output with `AHEAD`, `BEHIND`, `IS_STALE`, `MERGE_BASE`, and `RANGE_REBASED` fields. JSON output includes `branch_freshness` dict. New `--no-merge-base` flag disables the automatic adjustment.
+- **full-code-review command** — Step 3.5 now parses `BRANCH_FRESHNESS` from preflight output, informs the user when scope was adjusted, and suggests rebasing.
+- **code-review command** — Step 3.5 adds conditional stale branch check (only acts when `history-insights-reviewer` is dispatched).
+- **TestBranchFreshness** — 6 new tests in `test_domain_routing.py`: stale detection, non-stale detection, merge-base range rebasing, `--no-merge-base` bypass, JSON output validation, and non-stale no-rebase.
+- **Structural tests** — 3 new tests in `test_commands.py`: stale branch handling in full-code-review, merge-base reference in full-code-review, conditional stale handling in code-review.
+
 ## [1.26.2] - 2026-02-13
 
 ### Changed

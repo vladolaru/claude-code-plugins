@@ -72,6 +72,12 @@ Parse the `DISPATCH_DOMAINS` and `SKIP_DOMAINS` lines from the output. Only disp
 
 If agents are skipped, note it briefly: "Skipping N agents with no files in scope: [list]"
 
+**Stale branch check:** Parse the `BRANCH_FRESHNESS:` section from the preflight output.
+- If `IS_STALE: true` and `RANGE_REBASED: true`: the scope has been automatically adjusted to use the merge-base (common ancestor) to exclude unrelated trunk changes.
+  - Tell the user: "Branch is N commits behind base. Review scope adjusted to merge-base to exclude unrelated trunk files."
+  - **Offer to freshen the base branch before suggesting rebase:** The local base ref may itself be out of date. Run `git fetch origin <base_branch>` and check if new commits arrived. If so, tell the user: "Local base branch was also outdated — fetched M new commits from origin. Consider rebasing: `git rebase origin/<base_branch>`". If already up to date, just suggest: "Consider rebasing before opening a PR: `git rebase origin/<base_branch>`"
+- If `IS_STALE: false`: proceed normally, no message needed.
+
 ## Step 4: Dispatch Reviewer Agents in Parallel
 
 **CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**

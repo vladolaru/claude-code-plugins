@@ -427,3 +427,162 @@ class TestPreflight:
         assert reported_domains == set(ALL_DOMAINS), (
             f"Preflight domains {reported_domains} != catalog domains {set(ALL_DOMAINS)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Branch Freshness helpers
+# ---------------------------------------------------------------------------
+_freshness_repo_cache: dict = {}
+
+
+@pytest.fixture(autouse=True, scope="module")
+def cleanup_freshness_repos():
+    """Clean up all cached freshness repos after the module finishes."""
+    yield
+    for path in _freshness_repo_cache.values():
+        shutil.rmtree(path, ignore_errors=True)
+    _freshness_repo_cache.clear()
+
+
+def _setup_stale_branch_repo(behind_count: int) -> str:
+    """Create a repo where main has advanced N commits past the branch point.
+
+    Layout:
+        initial commit (common ancestor)
+          ├── main: N extra commits (each adding a .php file)
+          └── feature: 1 commit (adding feature.php)
+
+    Returns the repo path (cached by behind_count).
+    """
+    cache_key = f"stale-{behind_count}"
+    if cache_key in _freshness_repo_cache:
+        return _freshness_repo_cache[cache_key]
+
+    tmp = tempfile.mkdtemp(prefix="test-freshness-")
+
+    def _git(*args):
+        return subprocess.run(
+            ["git"] + list(args),
+            cwd=tmp, capture_output=True, text=True, check=True,
+        )
+
+    _git("init", "-b", "main")
+    _git("config", "user.email", "test@test.com")
+    _git("config", "user.name", "Test")
+    _git("config", "commit.gpgsign", "false")
+
+    # Initial commit (common ancestor)
+    readme = os.path.join(tmp, "README.md")
+    with open(readme, "w") as f:
+        f.write("# Test Project\n")
+    _git("add", ".")
+    _git("commit", "-m", "initial")
+
+    # Create feature branch from this point
+    _git("branch", "feature")
+
+    # Advance main with N commits
+    for i in range(behind_count):
+        filepath = os.path.join(tmp, f"trunk-file-{i}.php")
+        with open(filepath, "w") as f:
+            f.write(f"<?php // trunk change {i}\n")
+        _git("add", ".")
+        _git("commit", "-m", f"trunk commit {i}")
+
+    # Switch to feature branch and add 1 commit
+    _git("checkout", "feature")
+    feature_file = os.path.join(tmp, "feature.php")
+    with open(feature_file, "w") as f:
+        f.write("<?php // feature change\n")
+    _git("add", ".")
+    _git("commit", "-m", "feature commit")
+
+    _freshness_repo_cache[cache_key] = tmp
+    return tmp
+
+
+# ---------------------------------------------------------------------------
+# Branch Freshness tests
+# ---------------------------------------------------------------------------
+class TestBranchFreshness:
+    """Tests for stale branch detection and merge-base range rebasing."""
+
+    def test_freshness_detects_stale_branch(self):
+        """15 commits behind → IS_STALE: true, BEHIND: 15."""
+        repo = _setup_stale_branch_repo(15)
+        result = subprocess.run(
+            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
+             "--preflight", "--range", "main..HEAD"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        assert "IS_STALE: true" in result.stdout
+        assert "BEHIND: 15" in result.stdout
+
+    def test_freshness_not_stale_when_close(self):
+        """3 commits behind → IS_STALE: false."""
+        repo = _setup_stale_branch_repo(3)
+        result = subprocess.run(
+            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
+             "--preflight", "--range", "main..HEAD"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        assert "IS_STALE: false" in result.stdout
+
+    def test_stale_branch_range_is_rebased_to_merge_base(self):
+        """15 behind → RANGE_REBASED: true, only feature file in scope."""
+        repo = _setup_stale_branch_repo(15)
+        result = subprocess.run(
+            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
+             "--domain", "code", "--range", "main..HEAD"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        assert "RANGE_REBASED: true" in result.stdout
+        # Only the feature file should be in scope (not trunk files)
+        assert "FILES_CHANGED: 1" in result.stdout
+
+    def test_no_merge_base_includes_trunk_files(self):
+        """--no-merge-base → all trunk + feature files in scope."""
+        repo = _setup_stale_branch_repo(15)
+        result = subprocess.run(
+            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
+             "--domain", "code", "--range", "main..HEAD", "--no-merge-base"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        # 15 trunk .php files + 1 feature .php file = 16
+        assert "FILES_CHANGED: 16" in result.stdout
+
+    def test_freshness_in_json_output(self):
+        """JSON output has branch_freshness with all expected fields."""
+        repo = _setup_stale_branch_repo(15)
+        result = subprocess.run(
+            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
+             "--preflight", "--range", "main..HEAD", "--format", "json"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert "branch_freshness" in data
+        bf = data["branch_freshness"]
+        assert bf["ahead"] == 1
+        assert bf["behind"] == 15
+        assert bf["is_stale"] is True
+        assert len(bf["merge_base"]) >= 7  # SHA
+        assert bf["range_rebased"] is True
+
+    def test_non_stale_branch_no_range_rebase(self):
+        """3 behind → range_rebased: false."""
+        repo = _setup_stale_branch_repo(3)
+        result = subprocess.run(
+            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
+             "--preflight", "--range", "main..HEAD", "--format", "json"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        bf = data["branch_freshness"]
+        assert bf["is_stale"] is False
+        assert bf["range_rebased"] is False

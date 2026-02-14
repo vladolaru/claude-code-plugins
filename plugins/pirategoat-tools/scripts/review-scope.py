@@ -105,6 +105,10 @@ NOISE_PATTERNS = [
     r"(^dist/|^build/|^\.idea/|^\.vscode/|\.DS_Store$)",
 ]
 
+# Stale branch threshold — branches this many commits behind the base
+# may include unrelated files in the diff.
+STALE_BRANCH_THRESHOLD = 10
+
 
 def run_cmd(cmd: List[str], check: bool = True, capture_stderr: bool = True) -> str:
     """Run a command and return stdout. Raises on failure if check=True."""
@@ -190,6 +194,62 @@ def freshen_base_ref(branch: str) -> str:
         return remote_ref
     except RuntimeError:
         return branch
+
+
+def check_branch_freshness(base_ref: str) -> dict:
+    """Check how far HEAD is behind the base ref.
+
+    Returns:
+        ahead: commits on branch not in base
+        behind: commits on base not in branch
+        is_stale: behind > STALE_BRANCH_THRESHOLD
+        merge_base: the merge-base commit SHA (common ancestor)
+    """
+    ahead = 0
+    behind = 0
+    merge_base_sha = ""
+
+    try:
+        behind_str = run_cmd(
+            ["git", "rev-list", "--count", f"HEAD..{base_ref}"], check=True,
+        )
+        behind = int(behind_str)
+    except (RuntimeError, ValueError):
+        pass
+
+    try:
+        ahead_str = run_cmd(
+            ["git", "rev-list", "--count", f"{base_ref}..HEAD"], check=True,
+        )
+        ahead = int(ahead_str)
+    except (RuntimeError, ValueError):
+        pass
+
+    try:
+        merge_base_sha = run_cmd(
+            ["git", "merge-base", base_ref, "HEAD"], check=True,
+        )
+    except RuntimeError:
+        pass
+
+    return {
+        "ahead": ahead,
+        "behind": behind,
+        "is_stale": behind > STALE_BRANCH_THRESHOLD,
+        "merge_base": merge_base_sha,
+    }
+
+
+def rebase_range_to_merge_base(range_spec: str, merge_base: str) -> str:
+    """Replace the base ref in a range spec with the merge-base SHA.
+
+    "origin/trunk..HEAD" + merge_base "abc1234" → "abc1234..HEAD".
+    Returns original range_spec if no '..' or empty merge_base.
+    """
+    if not merge_base or ".." not in range_spec:
+        return range_spec
+    _, range_end = range_spec.split("..", 1)
+    return f"{merge_base}..{range_end}"
 
 
 def detect_range() -> Tuple[str, str]:
@@ -442,6 +502,16 @@ def build_scope(args: argparse.Namespace) -> dict:
     else:
         range_spec, base_ref = detect_range()
 
+    # Step 1.5: Check branch freshness
+    freshness = check_branch_freshness(base_ref)
+    range_rebased = False
+    if (freshness["is_stale"]
+            and freshness["merge_base"]
+            and ".." in range_spec
+            and not getattr(args, "no_merge_base", False)):
+        range_spec = rebase_range_to_merge_base(range_spec, freshness["merge_base"])
+        range_rebased = True
+
     # Step 2: Get changed files
     all_files = get_changed_files(range_spec)
     if not all_files:
@@ -471,6 +541,13 @@ def build_scope(args: argparse.Namespace) -> dict:
             "skipped_files": {
                 "noise": noise_skipped,
                 "domain": domain_excluded,
+            },
+            "branch_freshness": {
+                "ahead": freshness["ahead"],
+                "behind": freshness["behind"],
+                "is_stale": freshness["is_stale"],
+                "merge_base": freshness["merge_base"],
+                "range_rebased": range_rebased,
             },
         }
 
@@ -537,6 +614,13 @@ def build_scope(args: argparse.Namespace) -> dict:
             "domain": domain_excluded,
             "budget": budget_exceeded_files,
         },
+        "branch_freshness": {
+            "ahead": freshness["ahead"],
+            "behind": freshness["behind"],
+            "is_stale": freshness["is_stale"],
+            "merge_base": freshness["merge_base"],
+            "range_rebased": range_rebased,
+        },
     }
 
 
@@ -554,6 +638,13 @@ def format_text_output(scope: dict) -> str:
     if scope.get("pr_number"):
         lines.append(f"PR_NUMBER: {scope['pr_number']}")
     lines.append(f"OUTPUT_DIR: {scope.get('output_dir', '/tmp')}")
+
+    freshness = scope.get("branch_freshness")
+    if freshness and freshness.get("is_stale"):
+        lines.append("")
+        lines.append(f"BRANCH_FRESHNESS: STALE ({freshness['behind']} commits behind base)")
+        if freshness.get("range_rebased"):
+            lines.append(f"RANGE_REBASED: true (using merge-base {freshness.get('merge_base', '')[:12]} as anchor)")
 
     lines.append("")
     lines.append(f"FILES_CHANGED: {scope.get('total_changed', 0)}")
@@ -711,6 +802,16 @@ def build_preflight(args: argparse.Namespace) -> dict:
     else:
         range_spec, base_ref = detect_range()
 
+    # Step 1.5: Check branch freshness
+    freshness = check_branch_freshness(base_ref)
+    range_rebased = False
+    if (freshness["is_stale"]
+            and freshness["merge_base"]
+            and ".." in range_spec
+            and not getattr(args, "no_merge_base", False)):
+        range_spec = rebase_range_to_merge_base(range_spec, freshness["merge_base"])
+        range_rebased = True
+
     # Step 2: Get changed files
     all_files = get_changed_files(range_spec)
     if not all_files:
@@ -742,6 +843,13 @@ def build_preflight(args: argparse.Namespace) -> dict:
         "domains": domains,
         "dispatch_domains": dispatch_domains,
         "skip_domains": skip_domains,
+        "branch_freshness": {
+            "ahead": freshness["ahead"],
+            "behind": freshness["behind"],
+            "is_stale": freshness["is_stale"],
+            "merge_base": freshness["merge_base"],
+            "range_rebased": range_rebased,
+        },
     }
 
 
@@ -753,6 +861,22 @@ def format_preflight_text(preflight: dict) -> str:
     lines.append(f"FILES_CHANGED: {preflight['files_changed']}")
     lines.append(f"NOISE_SKIPPED: {preflight['noise_skipped']}")
     lines.append(f"REVIEWABLE_FILES: {preflight['reviewable_files']}")
+
+    freshness = preflight.get("branch_freshness")
+    if freshness:
+        lines.append("")
+        lines.append("BRANCH_FRESHNESS:")
+        lines.append(f"  AHEAD: {freshness['ahead']}")
+        lines.append(f"  BEHIND: {freshness['behind']}")
+        lines.append(f"  IS_STALE: {'true' if freshness['is_stale'] else 'false'}")
+        if freshness.get("merge_base"):
+            lines.append(f"  MERGE_BASE: {freshness['merge_base'][:12]}")
+        if freshness.get("range_rebased"):
+            lines.append("  RANGE_REBASED: true")
+            lines.append("  NOTE: Range rebased to merge-base to exclude unrelated base branch files.")
+        if freshness["is_stale"] and not freshness.get("range_rebased"):
+            lines.append(f"  WARNING: Branch is {freshness['behind']} commits behind base.")
+
     lines.append("")
     lines.append("DOMAIN_STATUS:")
 
@@ -823,6 +947,11 @@ def main():
         "--preflight",
         action="store_true",
         help="Pre-flight scope check: test all domains at once, output dispatch/skip lists. No diffs fetched.",
+    )
+    parser.add_argument(
+        "--no-merge-base",
+        action="store_true",
+        help="Disable automatic merge-base range adjustment for stale branches.",
     )
 
     args = parser.parse_args()
