@@ -296,6 +296,11 @@ class TestSkillCoreLogic:
         assert "500" in skill_content, "Skill missing 500-line budget reference"
         assert "550" in skill_content, "Skill missing 550-line hard block reference"
 
+    def test_has_promotion_digraph(self, skill_content):
+        assert "digraph promotion_decision" in skill_content, (
+            "Skill missing promotion decision digraph"
+        )
+
     def test_has_auto_placement(self, skill_content):
         assert "Auto-Placement" in skill_content, "Skill missing Auto-Placement section"
 
@@ -398,6 +403,13 @@ class TestGrokRouter:
         )
         assert "upgrade to pattern" in content.lower(), (
             "grok.md: missing upgrade-to-pattern AskUserQuestion option"
+        )
+
+    def test_has_routing_digraph(self):
+        """grok.md has a digraph for the routing decision flow."""
+        content = _read_command("grok.md")
+        assert "digraph grok_routing" in content, (
+            "grok.md: missing routing digraph"
         )
 
     def test_decision_uses_decision_format(self):
@@ -640,6 +652,13 @@ class TestStatusCommand:
 
 class TestSharpenCommand:
     """sharpen.md analyzes agent behavior and captures efficiency fixes."""
+
+    def test_has_flow_digraph(self):
+        """sharpen.md has a digraph for the early-exit decision flow."""
+        content = _read_command("sharpen.md")
+        assert "digraph sharpen_flow" in content, (
+            "sharpen.md: missing flow digraph"
+        )
 
     def test_references_shared_skill(self):
         content = _read_command("sharpen.md")

@@ -241,21 +241,50 @@ Slug rules:
 
 ### When to Suggest Promotion
 
-After capturing a learning or pattern, evaluate whether it looks rule-worthy.
+```dot
+digraph promotion_decision {
+    "Document captured" [shape=doublecircle];
+    "What type?" [shape=diamond];
+    "Always offer promotion" [shape=box];
+    "Meets promotion criteria?" [shape=diamond];
+    "Offer promotion" [shape=box];
+    "Skip silently" [shape=doublecircle];
+    "No promotion" [shape=doublecircle];
+    "Count CLAUDE.md lines" [shape=box];
+    "Lines < 500?" [shape=diamond];
+    "Promote freely" [shape=doublecircle];
+    "Lines 500-550?" [shape=diamond];
+    "Warn: near budget" [shape=box];
+    "STOP: Over budget — extract first" [shape=octagon, style=filled, fillcolor=red, fontcolor=white];
 
-**Patterns**: Always offer promotion. Patterns are reusable conventions — without a CLAUDE.md one-liner, agents won't discover them. The `/dex:pattern` command handles this directly.
+    "Document captured" -> "What type?";
+    "What type?" -> "Always offer promotion" [label="Pattern"];
+    "What type?" -> "Meets promotion criteria?" [label="Learning"];
+    "What type?" -> "No promotion" [label="Decision/Research"];
+    "Meets promotion criteria?" -> "Offer promotion" [label="yes"];
+    "Meets promotion criteria?" -> "Skip silently" [label="no"];
+    "Always offer promotion" -> "Count CLAUDE.md lines";
+    "Offer promotion" -> "Count CLAUDE.md lines";
+    "Count CLAUDE.md lines" -> "Lines < 500?";
+    "Lines < 500?" -> "Promote freely" [label="yes"];
+    "Lines < 500?" -> "Lines 500-550?" [label="no"];
+    "Lines 500-550?" -> "Warn: near budget" [label="yes"];
+    "Lines 500-550?" -> "STOP: Over budget — extract first" [label="no"];
+}
+```
 
-**Graduation flow**: The `/dex:grok` router may offer to upgrade a learning to a pattern when reusability signals are detected. When this happens, the capture delegates to `/dex:pattern` which handles the Alternatives and When to apply sections.
+**Graduation flow**: `/dex:grok` may offer to upgrade a learning to a pattern when reusability signals are detected. Delegates to `/dex:pattern` for Alternatives and When to apply sections.
 
-**Learnings**: Suggest promotion only when the knowledge meets **at least one** of these criteria:
+**Learning promotion criteria** — at least one:
 - Contains a do/don't directive that corrects a common mistake
 - Addresses a recurring issue mentioned multiple times in conversation
 - Is a project-wide constraint that applies broadly, not to one file
 
-Skip promotion silently (without asking) for:
-- Informational learnings ("here's how X works internally")
-- One-off debugging insights unlikely to recur
-- Decisions (they are reference material, not rules)
+**Skip promotion silently** for informational learnings, one-off debugging insights, decisions, and research.
+
+**Budget 500–550**: Warn via AskUserQuestion — "CLAUDE.md is at X/500 lines." Options: "Add anyway" / "Extract a section first"
+
+**Budget 550+**: Hard block. Tell user to extract sections first. Show sections ranked by line count, offer to extract largest. Proceed only after extraction brings count below 550.
 
 ### Promoted Rule Format
 
@@ -281,16 +310,6 @@ When promoting a rule to CLAUDE.md:
 2. Match the rule's tags and topic against section headings and content to find the most relevant section
 3. Append the one-liner at the end of that section (before the next `##` heading)
 4. If no section is a clear match, append under the last section
-
-### Budget Enforcement
-
-Count lines in CLAUDE.md before promoting:
-
-| Line count | Behavior |
-|---|---|
-| **< 500** | Promote freely — add the one-liner, confirm success |
-| **500–550** | Warn via AskUserQuestion: **"CLAUDE.md is at X/500 lines."** Options: "Add anyway" / "Extract a section first" |
-| **550+** | **STOP. Hard block.** Tell the user: "CLAUDE.md is over budget (X lines). Extract a section before adding new rules." Show sections ranked by line count, offer to extract the largest. Proceed with promotion only after extraction brings the count below 550 |
 
 ### Extraction Flow
 

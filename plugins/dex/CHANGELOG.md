@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1] - 2026-02-15
+
+### Changed
+
+- Grok router: added routing digraph showing full decision flow from start to delegation — makes classification, graduation, and delegation paths unambiguous
+- Knowledge-capture skill: unified promotion decision and budget enforcement into a single digraph — agents trace one graph instead of cross-referencing two separate sections
+- Sharpen command: added early-exit digraph showing all stop points and conditional sub-agent analysis — prevents reading past termination branches
+
 ## [1.4.0] - 2026-02-15
 
 ### Changed

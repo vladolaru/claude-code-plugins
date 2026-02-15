@@ -7,6 +7,47 @@ argument-hint: "[optional: focus on specific inefficiency]"
 
 Analyze agent behavior in the current conversation, find inefficiencies, and capture concrete fixes as project knowledge. This is an operational extraction strategy — it captures how the agent should work, not domain knowledge about the codebase.
 
+```dot
+digraph sharpen_flow {
+    "Start" [shape=doublecircle];
+    ".claude/docs/ exists?" [shape=diamond];
+    "User wants scaffolding?" [shape=diamond];
+    "Create directories" [shape=box];
+    "Stop" [shape=doublecircle];
+    "Sub-agents dispatched?" [shape=diamond];
+    "Run analyzer" [shape=box];
+    "Scan conversation for inefficiencies" [shape=box];
+    "Inefficiencies found?" [shape=diamond];
+    "Nothing found — stop" [shape=doublecircle];
+    "Classify and draft fixes" [shape=box];
+    "Confirm with user" [shape=box];
+    "Write docs + update audit log" [shape=box];
+    "Any fix rule-worthy?" [shape=diamond];
+    "Offer promotion" [shape=box];
+    "Done" [shape=doublecircle];
+
+    "Start" -> ".claude/docs/ exists?";
+    ".claude/docs/ exists?" -> "Sub-agents dispatched?" [label="yes"];
+    ".claude/docs/ exists?" -> "User wants scaffolding?" [label="no"];
+    "User wants scaffolding?" -> "Create directories" [label="yes"];
+    "User wants scaffolding?" -> "Stop" [label="no"];
+    "Create directories" -> "Sub-agents dispatched?";
+    "Sub-agents dispatched?" -> "Run analyzer" [label="yes"];
+    "Sub-agents dispatched?" -> "Scan conversation for inefficiencies" [label="no"];
+    "Run analyzer" -> "Scan conversation for inefficiencies";
+    "Scan conversation for inefficiencies" -> "Inefficiencies found?";
+    "Inefficiencies found?" -> "Nothing found — stop" [label="no"];
+    "Inefficiencies found?" -> "Classify and draft fixes" [label="yes"];
+    "Classify and draft fixes" -> "Confirm with user";
+    "Confirm with user" -> "Write docs + update audit log" [label="accepted"];
+    "Confirm with user" -> "Stop" [label="skip"];
+    "Write docs + update audit log" -> "Any fix rule-worthy?";
+    "Any fix rule-worthy?" -> "Offer promotion" [label="yes"];
+    "Any fix rule-worthy?" -> "Done" [label="no"];
+    "Offer promotion" -> "Done";
+}
+```
+
 ## Step 1: Discover Project Infrastructure
 
 Follow the **Project Discovery** steps from the `knowledge-capture` skill.

@@ -7,6 +7,41 @@ argument-hint: "[optional: focus hint]"
 
 Deeply understand the current conversation, classify the knowledge, and delegate to the right capture flow. This command asks one question, then hands off — keep it fast.
 
+```dot
+digraph grok_routing {
+    "Start" [shape=doublecircle];
+    "Agent behavior topic?" [shape=diamond];
+    "Delegate to /dex:sharpen" [shape=doublecircle];
+    "Knowledge signals found?" [shape=diamond];
+    "Nothing to capture" [shape=doublecircle];
+    "Classify type" [shape=box];
+    "Confirm with user" [shape=box];
+    "User selected?" [shape=diamond];
+    "Reusability signals?" [shape=diamond];
+    "Upgrade to pattern?" [shape=diamond];
+    "Execute /dex:learn" [shape=doublecircle];
+    "Execute /dex:pattern" [shape=doublecircle];
+    "Execute /dex:research" [shape=doublecircle];
+    "Execute decision flow" [shape=doublecircle];
+
+    "Start" -> "Agent behavior topic?";
+    "Agent behavior topic?" -> "Delegate to /dex:sharpen" [label="yes"];
+    "Agent behavior topic?" -> "Knowledge signals found?" [label="no"];
+    "Knowledge signals found?" -> "Nothing to capture" [label="none"];
+    "Knowledge signals found?" -> "Classify type" [label="found"];
+    "Classify type" -> "Confirm with user";
+    "Confirm with user" -> "User selected?";
+    "User selected?" -> "Reusability signals?" [label="Learning"];
+    "User selected?" -> "Execute /dex:pattern" [label="Pattern"];
+    "User selected?" -> "Execute decision flow" [label="Decision"];
+    "User selected?" -> "Execute /dex:research" [label="Research"];
+    "Reusability signals?" -> "Upgrade to pattern?" [label="yes"];
+    "Reusability signals?" -> "Execute /dex:learn" [label="no"];
+    "Upgrade to pattern?" -> "Execute /dex:pattern" [label="yes"];
+    "Upgrade to pattern?" -> "Execute /dex:learn" [label="no (default)"];
+}
+```
+
 ## Step 1: Classify
 
 If the conversation is primarily about agent behavior (wrong tools, inefficient discovery, missed shortcuts), route to `/dex:sharpen` instead. Grok captures domain knowledge; sharpen captures operational knowledge.
