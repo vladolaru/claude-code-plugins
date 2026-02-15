@@ -8,6 +8,10 @@
 - Knowledge-capture skill: unified promotion decision and budget enforcement into a single digraph — agents trace one graph instead of cross-referencing two separate sections
 - Sharpen command: added early-exit digraph showing all stop points and conditional sub-agent analysis — prevents reading past termination branches
 
+### Tests
+
+- Added 9 tests for `_compute_duration_seconds` in analyze-subagents — covers Z-suffix, fractional seconds, empty inputs, reversed timestamps, garbage input, large durations
+
 ## [1.4.0] - 2026-02-15
 
 ### Changed
