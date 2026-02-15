@@ -24,6 +24,9 @@
 - Grok router: added Error Normalization for conversations with nothing to capture
 - Grok router: added Pattern vs. Decision disambiguation heuristic (Category-Based Generalization)
 - Grok router: restructured overloaded Decision delegation as "overrides" list (Format Strictness)
+- Learn command: Rule and Context/Examples drafting hints now specify content and format expectations (Hint-Based Guidance)
+- Learn command: extraction quality checklist referenced before user confirmation to reduce edit cycles (Completeness Checkpoint Tags)
+- Learn command: "not on narrating" reframed as "focus on the behavioral change" (Affirmative Directives)
 
 ## [1.3.0] - 2026-02-15
 

@@ -30,12 +30,14 @@ Following the **Knowledge Extraction from Conversation** guidance in the `knowle
 
 1. Identify the core insight — what's the one thing an agent should know next time?
 2. Draft a **title** as a short directive statement (e.g., "Always pass --user=1 for WP-CLI REST calls")
-3. Draft the **Rule** section — the actionable directive an agent can follow immediately
-4. Draft brief **Context** and **Examples** sections
+3. Draft the **Rule** section — a specific, actionable directive: what to do and why, in 1-3 sentences
+4. Draft brief **Context** (why this matters, root cause) and **Examples** (correct vs. incorrect approaches)
 5. Identify 3-5 **tags** from the technical domain
 6. Determine the filename: `YYYY-MM-DD-slug.md`
 
-Focus on what to do differently, not on narrating the debugging session.
+Verify the draft passes the `<extraction_quality_checklist>` from the `knowledge-capture` skill before presenting to the user.
+
+Focus on the behavioral change: what should an agent do differently next time?
 
 ## Step 3: Confirm with User
 
