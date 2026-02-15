@@ -32,7 +32,7 @@ Following the **Knowledge Extraction from Conversation** guidance in the `knowle
 2. Draft a **title** as a short pattern name (e.g., "Use factory pattern for test fixtures")
 3. Draft the **Pattern** section — the reusable approach in concrete terms: what to do, when, and how, in 2-4 sentences
 4. Draft **When to apply** — observable signals that indicate this pattern is needed (what you'd see in code, errors, or task requirements)
-5. Draft **When NOT to apply** — list the exceptions and edge cases where this pattern would be wrong
+5. Draft **When NOT to apply** — exceptions where this pattern causes harm (simpler alternatives exist, wrong scale, or conflicting constraints)
 6. Identify a **Reference implementation** if one exists in the codebase — direct `file:line` reference (e.g., `src/gateway.php:45-60`)
 7. Identify 3-5 **tags** from the technical domain
 8. Determine the filename: `YYYY-MM-DD-slug.md`
@@ -50,6 +50,7 @@ Use AskUserQuestion:
 Show exactly these fields in the question description:
 > **Title:** [drafted title]
 > **Pattern:** [1-2 sentence pattern description]
+> **Applies when:** [1-sentence trigger summary]
 > **File:** `.claude/docs/patterns/YYYY-MM-DD-slug.md`
 
 **Options:**

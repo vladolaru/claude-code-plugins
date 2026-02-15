@@ -38,6 +38,8 @@
 - Sharpen command: "Avoid duplicating" → "Skip already captured", "Re-read" → "Scan" (Affirmative Directives)
 - Sharpen command: post-example explanation compressed to one sentence linking to named quality checks (Token Compression)
 - Sharpen command: promotion criteria now references skill's **When to Suggest Promotion** section (Hint-Based Guidance)
+- Pattern command: confirmation preview now includes "Applies when" summary for informed approval (HITL Pre-Execution Checkpoint)
+- Pattern command: "When NOT to apply" hint now names exception categories — simpler alternatives, wrong scale, conflicting constraints (Hint-Based Guidance)
 
 ## [1.3.0] - 2026-02-15
 
