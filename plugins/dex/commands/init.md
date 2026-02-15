@@ -8,12 +8,7 @@ Set up the `.claude/docs/` knowledge directory for the current project. This is 
 
 ## Step 1: Discover Existing Infrastructure
 
-Follow the **Project Discovery** steps from the `knowledge-capture` skill:
-
-1. Find the project root via `git rev-parse --show-toplevel`
-2. Find CLAUDE.md (check root, then `.claude/CLAUDE.md`)
-3. Check for `.claude/docs/` and its subdirectories (`learnings/`, `patterns/`, `decisions/`, `research/`)
-4. Count CLAUDE.md lines
+Follow the **Project Discovery** steps from the `knowledge-capture` skill.
 
 ## Step 2: Report Current State
 
@@ -34,7 +29,7 @@ CLAUDE.md:        Found (root, 245 lines)
 
 ## Step 3: Scaffold If Needed
 
-**If everything already exists:** Report "Knowledge infrastructure is already set up." and show the summary. Stop here.
+**If everything already exists:** Report "Knowledge infrastructure is already set up." and show the summary. Continue to Step 4.
 
 **If `.claude/docs/` or any subdirectories are missing:**
 

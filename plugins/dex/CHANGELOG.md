@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Init command: removed duplicated Project Discovery steps — delegates to skill like all other commands (Token Compression)
+- Init command: "already set up" branch now continues to capture directive check instead of premature stop (Conditional Sections)
 - Grok router: confirmation step now shows "Detected:" summary so user can validate classification (HITL Pre-Execution Checkpoint)
 - Grok router: removed redundant per-option `(Recommended)` labels and `*(only if ...)*` annotations — standalone instruction already controls behavior (Token Compression)
 - Status command: freshness warnings reordered most-severe-first with explicit "first matching row" precedence (Format Strictness)
