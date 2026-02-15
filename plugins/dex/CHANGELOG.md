@@ -27,6 +27,9 @@
 - Learn command: Rule and Context/Examples drafting hints now specify content and format expectations (Hint-Based Guidance)
 - Learn command: extraction quality checklist referenced before user confirmation to reduce edit cycles (Completeness Checkpoint Tags)
 - Learn command: "not on narrating" reframed as "focus on the behavioral change" (Affirmative Directives)
+- Pattern command: Pattern, When to apply, and Reference implementation drafting hints strengthened with format/content expectations (Hint-Based Guidance)
+- Pattern command: extraction quality checklist referenced before user confirmation (Completeness Checkpoint Tags)
+- Pattern command: boundary emphasis reframed as consequence — "a pattern without boundaries will be misapplied" (Affirmative Directives)
 
 ## [1.3.0] - 2026-02-15
 

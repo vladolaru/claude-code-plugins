@@ -30,14 +30,16 @@ Following the **Knowledge Extraction from Conversation** guidance in the `knowle
 
 1. Identify the reusable approach — what's the pattern an agent should follow?
 2. Draft a **title** as a short pattern name (e.g., "Use factory pattern for test fixtures")
-3. Draft the **Pattern** section — what it is and how to apply it
-4. Draft **When to apply** — list the specific conditions or triggers where this pattern fits
+3. Draft the **Pattern** section — the reusable approach in concrete terms: what to do, when, and how, in 2-4 sentences
+4. Draft **When to apply** — observable signals that indicate this pattern is needed (what you'd see in code, errors, or task requirements)
 5. Draft **When NOT to apply** — list the exceptions and edge cases where this pattern would be wrong
-6. Identify a **Reference implementation** if one exists in the codebase (file path + line range)
+6. Identify a **Reference implementation** if one exists in the codebase — direct `file:line` reference (e.g., `src/gateway.php:45-60`)
 7. Identify 3-5 **tags** from the technical domain
 8. Determine the filename: `YYYY-MM-DD-slug.md`
 
-The "When NOT to apply" section is as important as "When to apply" — it prevents over-application of the pattern.
+Verify the draft passes the `<extraction_quality_checklist>` from the `knowledge-capture` skill before presenting to the user.
+
+Include "When NOT to apply" — a pattern without boundaries will be misapplied.
 
 ## Step 3: Confirm with User
 
