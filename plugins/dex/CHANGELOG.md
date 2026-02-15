@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.1] - 2026-02-15
+
+### Changed
+
+- Document formats optimized for AI agent token efficiency: plain metadata labels (`Date:` not `**Date:**`), bare path references, direct `file:line` notation
+- Added Token Efficiency design principle section codifying bare paths, plain metadata, direct references, and no prose filler
+- Fixed extraction flow to use bare paths (`Full details: path`) instead of markdown links, matching the skill's own promoted rule format
+- Extraction quality checks restructured as `<extraction_quality_checklist>` completeness checkpoint (Completeness Checkpoint Tags pattern)
+- Added `<pre_extraction_analysis>` step before drafting knowledge documents (Pre-Work Context Analysis pattern)
+- Audit log format stripped of bold markers to match Token Efficiency principles (Format Strictness)
+- Sharpen quality section now explicitly names standard checks before adding sharpen-specific ones (Hint-Based Guidance pattern)
+- Removed redundant post-example explanations — contrastive examples teach through demonstration (Token Compression)
+- Non-obvious check reframed with affirmative language (Affirmative Directives pattern)
+
 ## [1.3.0] - 2026-02-15
 
 ### Added

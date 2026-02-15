@@ -55,6 +55,15 @@ Create empty directories only. No README files, no templates, no boilerplate.
 
 All documents are **agent-first**: the first section contains the actionable directive — an AI agent reading only the Rule/Pattern/Decision section gets enough to act. Context and examples follow for depth.
 
+### Token Efficiency
+
+These docs are consumed by AI agents, not read by humans. Every formatting choice must earn its tokens:
+
+- **Bare paths over markdown links** — `Details: path/to/file.md` not `[details](path/to/file.md)`. Agents don't click links.
+- **Plain metadata** — `Date: 2026-02-13` not `**Date:** 2026-02-13`. Bold markers serve human eyes only.
+- **Direct file:line references** — `src/gateway.php:45` not "see the gateway file". Include line numbers when relevant.
+- **No prose filler** — omit transitions, summaries of what follows, and empty template sections.
+
 ### Learning Format
 
 Use for: discoveries, fixes, gotchas, debugging insights, non-obvious behaviors.
@@ -62,8 +71,8 @@ Use for: discoveries, fixes, gotchas, debugging insights, non-obvious behaviors.
 ```markdown
 # Short directive title
 
-**Date:** YYYY-MM-DD
-**Tags:** tag1, tag2, tag3
+Date: YYYY-MM-DD
+Tags: tag1, tag2, tag3
 
 ## Rule
 
@@ -84,8 +93,8 @@ Use CORRECT / WRONG labels for clarity.
 <example type="CORRECT">
 # Always pass --user=1 for WP-CLI REST calls with auth
 
-**Date:** 2026-02-13
-**Tags:** wp-cli, rest-api, authentication
+Date: 2026-02-13
+Tags: wp-cli, rest-api, authentication
 
 ## Rule
 
@@ -100,8 +109,6 @@ Today I discovered that WP-CLI REST API calls need authentication.
 This was really confusing and took a while to debug. The error was a 403...
 </example>
 
-The incorrect example buries the actionable rule in narrative. Agent-first means Rule section leads.
-
 ### Pattern Format
 
 Use for: reusable approaches, conventions, anti-patterns, recurring solutions.
@@ -109,8 +116,8 @@ Use for: reusable approaches, conventions, anti-patterns, recurring solutions.
 ```markdown
 # Short pattern name
 
-**Date:** YYYY-MM-DD
-**Tags:** tag1, tag2, tag3
+Date: YYYY-MM-DD
+Tags: tag1, tag2, tag3
 
 ## Pattern
 
@@ -128,7 +135,7 @@ The reusable approach — what it is and how to apply it.
 
 ## Reference implementation
 
-File path and line range, or inline code example.
+Direct file:line reference (e.g., `src/gateway.php:45-60`), or inline code example.
 ```
 
 ### Decision Format
@@ -138,8 +145,8 @@ Use for: architectural choices, trade-off decisions, technology selections.
 ```markdown
 # Short decision statement
 
-**Date:** YYYY-MM-DD
-**Tags:** tag1, tag2, tag3
+Date: YYYY-MM-DD
+Tags: tag1, tag2, tag3
 
 ## Decision
 
@@ -163,10 +170,10 @@ Use for: extensive investigations, multi-hour debugging sessions, API exploratio
 ```markdown
 # Short title describing what was researched
 
-**Date:** YYYY-MM-DD
-**Tags:** tag1, tag2, tag3
-**Environment:** key versions, OS, configs that matter
-**Status:** current
+Date: YYYY-MM-DD
+Tags: tag1, tag2, tag3
+Environment: key versions, OS, configs that matter
+Status: current
 
 ## Summary
 2-3 sentence overview of key findings for quick scanning.
@@ -196,10 +203,10 @@ Key differences from Learning:
 <example type="CORRECT">
 # PHP 8.3 readonly property behavior with WooCommerce hooks
 
-**Date:** 2026-02-15
-**Tags:** php-8.3, readonly, woocommerce, hooks
-**Environment:** PHP 8.3.4, WooCommerce 9.6.0, WordPress 6.7
-**Status:** current
+Date: 2026-02-15
+Tags: php-8.3, readonly, woocommerce, hooks
+Environment: PHP 8.3.4, WooCommerce 9.6.0, WordPress 6.7
+Status: current
 
 ## Summary
 PHP 8.3 readonly properties cannot be re-initialized after clone. WooCommerce
@@ -219,8 +226,6 @@ Use backed enums or private properties with getters instead of readonly.
 Today I spent a few hours looking into PHP 8.3. I tried a bunch of
 things and some worked and some didn't. Here's what I found...
 </example>
-
-The incorrect example reads like a journal entry. Research docs are structured findings, not narratives.
 
 ### Filename Convention
 
@@ -288,10 +293,10 @@ When extracting a section from CLAUDE.md:
 1. List all `##` sections with their line counts
 2. AskUserQuestion: "Which section to extract?" — show sections ranked by size
 3. Move the section content to `.claude/docs/` as a standalone doc
-4. Replace the section in CLAUDE.md with a 1-2 line summary + link:
+4. Replace the section in CLAUDE.md with a 1-2 line summary + bare path:
    ```markdown
    ## Section Name
-   See [full details](.claude/docs/section-name.md).
+   Full details: .claude/docs/section-name.md
    ```
 5. Report the new line count
 
@@ -299,23 +304,33 @@ When extracting a section from CLAUDE.md:
 
 ### How to Extract
 
-Before drafting, re-read the relevant conversation exchange to identify the core insight. Then:
+Before drafting, analyze the relevant conversation exchange:
 
-1. **Identify the core insight** — what's the one thing an agent should know?
-2. **Draft the title** as a short, directive statement (imperative or declarative)
-3. **Draft the key section** (Rule for learnings, Pattern for patterns, Decision for decisions)
-4. **Identify tags** from the technical domain (3-5 lowercase, hyphen-separated)
-5. **Present via AskUserQuestion** for confirmation
+<pre_extraction_analysis>
+- What type of insight is this? (rule, approach, choice, or investigation)
+- What triggered the discovery? (error, surprise, repeated friction)
+- What behavioral change should result? (do X instead of Y, always check Z)
+</pre_extraction_analysis>
+
+Then draft:
+
+1. **Title** — short directive statement (imperative or declarative)
+2. **Key section** — Rule for learnings, Pattern for patterns, Decision for decisions, Summary for research
+3. **Tags** — 3-5 from the technical domain (lowercase, hyphen-separated)
+4. **Present via AskUserQuestion** for confirmation
 
 Focus on what an agent needs to act differently next time, not on narrating what happened during debugging.
 
 ### Extraction Quality
 
-**IMPORTANT:** Every extracted document must pass all four of these checks:
-1. **Self-contained** — an agent reading it in isolation understands the rule
-2. **Actionable** — tells the agent what to DO, not just what happened
-3. **Specific** — includes concrete examples, file paths, or code when relevant
-4. **Concise** — under 50 lines for learnings, under 80 for patterns/decisions. Research docs have no line limit but every section must earn its place — remove empty sections
+Before saving any document, verify it passes all four checks. If any check fails, revise before saving.
+
+<extraction_quality_checklist>
+- Self-contained: an agent reading this in isolation knows what to do
+- Actionable: tells the agent what to DO, not what happened
+- Specific: includes concrete examples, file paths, or code
+- Concise: under 50 lines (learnings), under 80 (patterns/decisions). Research: no limit but omit empty sections
+</extraction_quality_checklist>
 
 ## Agent Behavior Analysis
 
@@ -359,11 +374,11 @@ Map each identified inefficiency to its fix destination:
 
 ### Sharpen Extraction Quality
 
-In addition to the standard four quality checks (self-contained, actionable, specific, concise), sharpen documents must pass three additional checks:
+Apply the standard extraction quality checklist (self-contained, actionable, specific, concise) PLUS these three additional checks:
 
 1. **Agent-operational** — focuses on how the agent should work, not domain knowledge about the codebase
 2. **Preventive** — tells the agent what to do *before* hitting the inefficiency, not how to recover after
-3. **Non-obvious** — captures something that isn't common sense for any AI agent (e.g., "use Read instead of cat" is obvious; "this project's test runner requires --user=1" is not)
+3. **Non-obvious** — captures project-specific knowledge an agent wouldn't discover without experience (e.g., "this project's test runner requires --user=1" qualifies; generic tool preferences do not)
 
 <example type="CORRECT" label="agent-operational">
 Rule: "In this project, always use `pnpm wp --user=1` for REST API calls in WP-CLI"
@@ -390,11 +405,9 @@ Running log at `.claude/docs/.sharpen-log.md` that tracks efficiency fixes acros
 
 ## YYYY-MM-DD
 
-- **[category]:** [1-sentence summary] → `[file path]`
-- **[category]:** [1-sentence summary] → `[file path]`
+- [category]: [1-sentence summary] → [file path]
+- [category]: [1-sentence summary] → [file path]
 ```
-
-Each entry records: the inefficiency category (from the Inefficiency Categories table), a one-sentence summary of the fix, and the path to the captured document.
 
 #### Reading the Audit Log
 
