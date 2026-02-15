@@ -7,6 +7,7 @@ Validates:
 - JSONL trace parsing (valid, malformed, missing fields)
 - Agent type detection from prompt keywords
 - Pattern detection for each anti-pattern code
+- Duration computation from ISO timestamps
 - Output formatting with expected sections and markers
 - Integration: subprocess invocation against fixture directory
 """
@@ -41,6 +42,7 @@ parse_trace = mod.parse_trace
 detect_agent_type = mod.detect_agent_type
 detect_patterns = mod.detect_patterns
 format_output = mod.format_output
+_compute_duration_seconds = mod._compute_duration_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -536,6 +538,64 @@ class TestFormatOutput:
         assert "..." in output
         # Should not contain the full 200 A's
         assert "A" * 200 not in output
+
+
+# =============================================================================
+# TestComputeDurationSeconds
+# =============================================================================
+
+
+class TestComputeDurationSeconds:
+    """_compute_duration_seconds parses ISO timestamps and computes deltas."""
+
+    def test_z_suffix_seconds(self):
+        """Standard Z-suffix timestamps without fractional seconds."""
+        result = _compute_duration_seconds(
+            "2026-02-14T10:00:00Z", "2026-02-14T10:00:30Z"
+        )
+        assert result == 30.0
+
+    def test_z_suffix_fractional(self):
+        """Z-suffix timestamps with fractional seconds."""
+        result = _compute_duration_seconds(
+            "2026-02-14T10:00:00.000Z", "2026-02-14T10:00:05.500Z"
+        )
+        assert result == 5.5
+
+    def test_empty_first_returns_zero(self):
+        """Empty first timestamp returns 0."""
+        assert _compute_duration_seconds("", "2026-02-14T10:00:00Z") == 0.0
+
+    def test_empty_last_returns_zero(self):
+        """Empty last timestamp returns 0."""
+        assert _compute_duration_seconds("2026-02-14T10:00:00Z", "") == 0.0
+
+    def test_both_empty_returns_zero(self):
+        """Both empty returns 0."""
+        assert _compute_duration_seconds("", "") == 0.0
+
+    def test_reversed_timestamps_clamped_to_zero(self):
+        """When last < first, result is clamped to 0 (not negative)."""
+        result = _compute_duration_seconds(
+            "2026-02-14T10:00:30Z", "2026-02-14T10:00:00Z"
+        )
+        assert result == 0.0
+
+    def test_garbage_input_returns_zero(self):
+        """Unparseable strings return 0 without raising."""
+        assert _compute_duration_seconds("garbage", "also garbage") == 0.0
+
+    def test_large_duration(self):
+        """Multi-hour gap computes correctly."""
+        result = _compute_duration_seconds(
+            "2026-02-14T10:00:00Z", "2026-02-14T12:30:00Z"
+        )
+        assert result == 9000.0  # 2.5 hours
+
+    def test_same_timestamp_returns_zero(self):
+        """Identical timestamps produce 0 duration."""
+        ts = "2026-02-14T10:00:00Z"
+        assert _compute_duration_seconds(ts, ts) == 0.0
 
 
 # =============================================================================
