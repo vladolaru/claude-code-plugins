@@ -15,7 +15,7 @@ If `.claude/docs/` does not exist, use AskUserQuestion:
 
 **Question:** "No knowledge directory found. Create it?"
 **Options:**
-- **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`
+- **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`, `research/`
 - **Not now** — abort capture
 
 If "Not now", stop here. If "Yes", create directories with `mkdir -p` and continue.
@@ -68,7 +68,7 @@ Every drafted fix must pass the standard four quality checks AND the three **Sha
 <example type="CORRECT" label="agent-operational fix">
 # Use Glob instead of find for file discovery in this project
 
-**Tags:** agent-efficiency, tool-usage, file-discovery
+Tags: agent-efficiency, tool-usage, file-discovery
 
 ## Rule
 

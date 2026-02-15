@@ -22,9 +22,9 @@ If "Not now", stop here. If "Yes", create directories with `mkdir -p` and contin
 
 ## Step 2: Extract Research from Conversation
 
-Before drafting, re-read the relevant conversation exchange to identify the investigation — what was explored, what was tried, what worked, what failed, and what remains open.
+Run the `<pre_extraction_analysis>` from the `knowledge-capture` skill on the relevant conversation exchange. If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
 
-If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
+If the conversation contains nothing extractable as research (no investigation, no empirical findings), say so briefly and stop. Do not fabricate knowledge.
 
 Following the **Knowledge Extraction from Conversation** guidance in the `knowledge-capture` skill:
 
@@ -65,7 +65,7 @@ If "Edit", apply the user's corrections and confirm again. If "Skip", stop here.
 
 ## Step 4: Write the Document
 
-Write the research to `.claude/docs/research/YYYY-MM-DD-slug.md` using the **Research Format** from the `knowledge-capture` skill. Set `**Status:** current`.
+Write the research to `.claude/docs/research/YYYY-MM-DD-slug.md` using the **Research Format** from the `knowledge-capture` skill. Set `Status: current`.
 
 Report:
 ```

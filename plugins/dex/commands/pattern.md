@@ -15,16 +15,16 @@ If `.claude/docs/` does not exist, use AskUserQuestion:
 
 **Question:** "No knowledge directory found. Create it?"
 **Options:**
-- **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`
+- **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`, `research/`
 - **Not now** — abort capture
 
 If "Not now", stop here. If "Yes", create directories with `mkdir -p` and continue.
 
 ## Step 2: Extract Pattern from Conversation
 
-Before drafting, re-read the relevant conversation exchange to identify the reusable approach, convention, or anti-pattern.
+Run the `<pre_extraction_analysis>` from the `knowledge-capture` skill on the relevant conversation exchange. If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
 
-If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
+If the conversation contains nothing extractable as a pattern (no reusable approach, convention, or anti-pattern), say so briefly and stop. Do not fabricate knowledge.
 
 Following the **Knowledge Extraction from Conversation** guidance in the `knowledge-capture` skill:
 
@@ -68,7 +68,7 @@ Captured: .claude/docs/patterns/YYYY-MM-DD-slug.md
 
 ## Step 5: Suggest Promotion (Conditional)
 
-Evaluate whether the pattern looks rule-worthy: does it correct a common mistake, apply project-wide, or codify a convention?
+Evaluate whether the pattern looks rule-worthy (per the **When to Suggest Promotion** criteria in the `knowledge-capture` skill): does it correct a common mistake, apply project-wide, or codify a convention?
 
 **If rule-worthy**, use AskUserQuestion:
 

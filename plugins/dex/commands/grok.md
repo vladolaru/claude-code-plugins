@@ -9,7 +9,9 @@ Deeply understand the current conversation, classify the knowledge, and delegate
 
 ## Step 1: Classify
 
-Re-read the recent conversation and classify the knowledge into one of these categories:
+If the conversation is primarily about agent behavior (wrong tools, inefficient discovery, missed shortcuts), route to `/dex:sharpen` instead. Grok captures domain knowledge; sharpen captures operational knowledge.
+
+Scan the recent conversation for knowledge signals — surprises, mistakes, trade-off discussions, repeated friction, or investigation results — and classify into one of these categories:
 
 | Category | Signal in conversation |
 |---|---|
@@ -20,9 +22,12 @@ Re-read the recent conversation and classify the knowledge into one of these cat
 
 If `$ARGUMENTS` contains a focus hint (e.g., "cache invalidation"), narrow the extraction to that topic.
 
+If the conversation contains no knowledge worth capturing (routine operations, pure Q&A, nothing surprising or non-obvious), say so briefly and stop. Do not force-classify when there is nothing to classify.
+
 If the conversation contains multiple knowledge types, pick the most prominent one. Disambiguation heuristics:
 - **Learning vs. Pattern:** pick learning if the knowledge is about a specific situation, pattern if it describes a reusable approach.
 - **Learning vs. Research:** pick learning if one key insight; pick research if multiple approaches were tried across environments and findings are empirical.
+- **Pattern vs. Decision:** pick pattern if the knowledge prescribes HOW to do something; pick decision if it explains WHY one option was chosen over alternatives.
 
 The user can override via the confirmation step.
 
@@ -42,13 +47,11 @@ Present your best guess first with "(Recommended)":
 
 Always show all four options. Mark only the auto-classified one as "(Recommended)".
 
-**Note:** If the user wants to improve agent behavior (tool usage, discovery efficiency, workflow), use `/dex:sharpen` instead — it extracts operational knowledge, not domain knowledge.
-
 ## Step 3: Delegate
 
 Based on the user's selection:
 
 - **Learning** → Execute the full `/dex:learn` flow
 - **Pattern** → Execute the full `/dex:pattern` flow
-- **Decision** → Execute the `/dex:learn` flow but use the **Decision Format** from the `knowledge-capture` skill instead of the Learning Format. Write to `.claude/docs/decisions/YYYY-MM-DD-slug.md`. Skip the promotion step entirely — decisions are reference material, not rules.
+- **Decision** → Execute the `/dex:learn` flow with these overrides: use the **Decision Format** from the `knowledge-capture` skill, write to `.claude/docs/decisions/`, and skip the promotion step (decisions are reference material, not rules)
 - **Research** → Execute the full `/dex:research` flow

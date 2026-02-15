@@ -15,16 +15,16 @@ If `.claude/docs/` does not exist, use AskUserQuestion:
 
 **Question:** "No knowledge directory found. Create it?"
 **Options:**
-- **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`
+- **Yes, create `.claude/docs/`** — scaffolds `learnings/`, `patterns/`, `decisions/`, `research/`
 - **Not now** — abort capture
 
 If "Not now", stop here. If "Yes", create directories with `mkdir -p` and continue.
 
 ## Step 2: Extract Learning from Conversation
 
-Before drafting, re-read the relevant conversation exchange to identify what went wrong, what was discovered, or what was non-obvious.
+Run the `<pre_extraction_analysis>` from the `knowledge-capture` skill on the relevant conversation exchange. If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
 
-If `$ARGUMENTS` contains a focus hint, narrow extraction to that topic.
+If the conversation contains nothing extractable as a learning (no discovery, fix, or gotcha), say so briefly and stop. Do not fabricate knowledge.
 
 Following the **Knowledge Extraction from Conversation** guidance in the `knowledge-capture` skill:
 
@@ -66,7 +66,7 @@ Captured: .claude/docs/learnings/YYYY-MM-DD-slug.md
 
 ## Step 5: Suggest Promotion (Conditional)
 
-Evaluate whether the learning looks rule-worthy: does it contain a do/don't directive, correct a common mistake, or apply project-wide?
+Evaluate whether the learning looks rule-worthy (per the **When to Suggest Promotion** criteria in the `knowledge-capture` skill): does it contain a do/don't directive, correct a common mistake, or apply project-wide?
 
 **If rule-worthy**, use AskUserQuestion:
 

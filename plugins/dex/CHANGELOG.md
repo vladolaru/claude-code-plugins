@@ -13,6 +13,17 @@
 - Sharpen quality section now explicitly names standard checks before adding sharpen-specific ones (Hint-Based Guidance pattern)
 - Removed redundant post-example explanations — contrastive examples teach through demonstration (Token Compression)
 - Non-obvious check reframed with affirmative language (Affirmative Directives pattern)
+- Commands now reference skill's `<pre_extraction_analysis>` instead of vague "re-read" prose (Pre-Work Context Analysis)
+- Added Error Normalization to learn, pattern, and research commands — stop gracefully when nothing extractable exists
+- Fixed bold metadata in sharpen example (`**Tags:**` → `Tags:`) and research write step (`**Status:**` → `Status:`) for Token Efficiency consistency
+- Fixed scaffolding in learn, pattern, and sharpen to include `research/` directory (was only listed in research and init)
+- Promotion criteria in learn and pattern now reference the skill's **When to Suggest Promotion** section to prevent divergence
+- Fixed circular self-reference in status freshness warning ("consider a review pass with /dex:status" → actionable guidance)
+- Grok router: sharpen routing check moved before classification (STOP Escalation) with domain-vs-operational knowledge distinction
+- Grok router: replaced vague "Re-read" with signal-oriented scan (Pre-Work Context Analysis)
+- Grok router: added Error Normalization for conversations with nothing to capture
+- Grok router: added Pattern vs. Decision disambiguation heuristic (Category-Based Generalization)
+- Grok router: restructured overloaded Decision delegation as "overrides" list (Format Strictness)
 
 ## [1.3.0] - 2026-02-15
 

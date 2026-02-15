@@ -80,7 +80,7 @@ Freshness:
 | Condition | Warning |
 |---|---|
 | 1+ docs older than 90 days | "N docs are older than 90 days — consider reviewing for accuracy." |
-| >50% of docs are stale | "Most knowledge is over 90 days old — consider a review pass with /dex:status." |
+| >50% of docs are stale | "Most knowledge is over 90 days old — consider reviewing and updating stale documents." |
 | No stale docs | Omit the freshness section entirely |
 
 Stop after presenting the report. This command is read-only.
