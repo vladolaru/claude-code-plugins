@@ -128,10 +128,10 @@ The reusable approach — what it is and how to apply it.
 - Condition 1
 - Condition 2
 
-## When NOT to apply
+## Alternatives
 
-- Exception 1
-- Exception 2
+- When [condition 1], prefer [alternative approach] instead
+- When [condition 2], [simpler method] works better because [reason]
 
 ## Reference implementation
 
@@ -241,7 +241,13 @@ Slug rules:
 
 ### When to Suggest Promotion
 
-After capturing a learning or pattern, evaluate whether it looks rule-worthy. Suggest promotion only when the knowledge meets **at least one** of these criteria:
+After capturing a learning or pattern, evaluate whether it looks rule-worthy.
+
+**Patterns**: Always offer promotion. Patterns are reusable conventions — without a CLAUDE.md one-liner, agents won't discover them. The `/dex:pattern` command handles this directly.
+
+**Graduation flow**: The `/dex:grok` router may offer to upgrade a learning to a pattern when reusability signals are detected. When this happens, the capture delegates to `/dex:pattern` which handles the Alternatives and When to apply sections.
+
+**Learnings**: Suggest promotion only when the knowledge meets **at least one** of these criteria:
 - Contains a do/don't directive that corrects a common mistake
 - Addresses a recurring issue mentioned multiple times in conversation
 - Is a project-wide constraint that applies broadly, not to one file

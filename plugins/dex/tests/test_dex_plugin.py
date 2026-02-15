@@ -252,7 +252,7 @@ class TestSkillDocumentFormats:
     def test_has_pattern_format(self, skill_content):
         assert "## Pattern" in skill_content, "Skill missing Pattern format"
         assert "When to apply" in skill_content, "Skill missing Pattern format (When to apply)"
-        assert "When NOT to apply" in skill_content, "Skill missing Pattern format (When NOT to apply)"
+        assert "Alternatives" in skill_content, "Skill missing Pattern format (Alternatives)"
         assert "Reference implementation" in skill_content, "Skill missing Pattern format (Reference implementation)"
 
     def test_has_decision_format(self, skill_content):
@@ -388,6 +388,16 @@ class TestGrokRouter:
         content = _read_command("grok.md")
         assert "dex:research" in content or "research command" in content.lower(), (
             "grok.md: missing delegation to research"
+        )
+
+    def test_has_graduation_prompt(self):
+        """grok.md offers to upgrade a learning to pattern when reusability signals are detected."""
+        content = _read_command("grok.md")
+        assert "reusability" in content.lower() or "graduation" in content.lower(), (
+            "grok.md: missing graduation/reusability language"
+        )
+        assert "upgrade to pattern" in content.lower(), (
+            "grok.md: missing upgrade-to-pattern AskUserQuestion option"
         )
 
     def test_decision_uses_decision_format(self):

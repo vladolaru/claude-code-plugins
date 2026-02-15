@@ -32,14 +32,14 @@ Following the **Knowledge Extraction from Conversation** guidance in the `knowle
 2. Draft a **title** as a short pattern name (e.g., "Use factory pattern for test fixtures")
 3. Draft the **Pattern** section — the reusable approach in concrete terms: what to do, when, and how, in 2-4 sentences
 4. Draft **When to apply** — observable signals that indicate this pattern is needed (what you'd see in code, errors, or task requirements)
-5. Draft **When NOT to apply** — exceptions where this pattern causes harm (simpler alternatives exist, wrong scale, or conflicting constraints)
+5. Draft **Alternatives** — conditions where a different approach works better, naming the preferred alternative for each (e.g., "When the dataset is small, prefer a simple array lookup instead")
 6. Identify a **Reference implementation** if one exists in the codebase — direct `file:line` reference (e.g., `src/gateway.php:45-60`)
 7. Identify 3-5 **tags** from the technical domain
 8. Determine the filename: `YYYY-MM-DD-slug.md`
 
 Verify the draft passes the `<extraction_quality_checklist>` from the `knowledge-capture` skill before presenting to the user.
 
-Include "When NOT to apply" — a pattern without boundaries will be misapplied.
+Include Alternatives — a pattern without boundaries will be misapplied.
 
 ## Step 3: Confirm with User
 
@@ -69,18 +69,16 @@ Report:
 Captured: .claude/docs/patterns/YYYY-MM-DD-slug.md
 ```
 
-## Step 5: Suggest Promotion (Conditional)
+## Step 5: Suggest Promotion
 
-Evaluate whether the pattern looks rule-worthy (per the **When to Suggest Promotion** criteria in the `knowledge-capture` skill): does it correct a common mistake, apply project-wide, or codify a convention?
+Patterns are reusable conventions — without promotion to CLAUDE.md, agents won't discover them. Always offer promotion.
 
-**If rule-worthy**, use AskUserQuestion:
+Use AskUserQuestion:
 
-**Question:** "This looks like a project convention. Add a one-liner to CLAUDE.md?"
+**Question:** "Promote to CLAUDE.md so agents discover this pattern?"
 **Options:**
-- **Yes, add to CLAUDE.md** — promote using the promotion flow from the `knowledge-capture` skill
-- **No, just keep the doc** — done
-
-**If NOT rule-worthy**, skip this step silently. Proceed to completion.
+- **Yes, add to CLAUDE.md (Recommended)** — promote using the promotion flow from the `knowledge-capture` skill
+- **No, just keep the doc** — pattern stays in `.claude/docs/patterns/` only
 
 ## Step 6: Promote (If Selected)
 

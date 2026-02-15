@@ -25,7 +25,7 @@ If `$ARGUMENTS` contains a focus hint (e.g., "cache invalidation"), narrow the e
 If the conversation contains no knowledge worth capturing (routine operations, pure Q&A, nothing surprising or non-obvious), say so briefly and stop. Do not force-classify when there is nothing to classify.
 
 If the conversation contains multiple knowledge types, pick the most prominent one. Disambiguation heuristics:
-- **Learning vs. Pattern:** pick learning if the knowledge is about a specific situation, pattern if it describes a reusable approach.
+- **Learning vs. Pattern:** default to learning. Only auto-classify as pattern when the insight is purely a convention or approach with no discovery element (rare — most insights start as learnings).
 - **Learning vs. Research:** pick learning if one key insight; pick research if multiple approaches were tried across environments and findings are empirical.
 - **Pattern vs. Decision:** pick pattern if the knowledge prescribes HOW to do something; pick decision if it explains WHY one option was chosen over alternatives.
 
@@ -47,6 +47,23 @@ Show in the question description:
 - **Research** — extensive investigation with empirical findings
 
 Always show all four options. Mark only the auto-classified one as "(Recommended)".
+
+## Step 2.5: Graduation Check
+
+If the user selected Learning, check for reusability signals:
+- Describes an approach that applies beyond the original situation
+- Contains "always", "never", "prefer", or convention language
+- Could benefit from explicit alternatives (conditions where a different approach is better)
+
+If reusability signals are present, use AskUserQuestion:
+
+**Question:** "This insight looks reusable. Capture as a pattern with applicability boundaries?"
+
+**Options:**
+- **No, keep as learning (Recommended)** — captures as-is
+- **Yes, upgrade to pattern** — adds Alternatives and When to apply sections
+
+If "Yes", delegate to `/dex:pattern` flow. Otherwise continue with `/dex:learn`.
 
 ## Step 3: Delegate
 

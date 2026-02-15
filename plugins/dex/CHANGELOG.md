@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.4.0] - 2026-02-15
+
+### Changed
+
+- Pattern format: renamed "When NOT to apply" to "Alternatives" with affirmative framing — prescribes what to do instead (e.g., "When X, prefer Y") rather than negative instructions LLMs handle poorly
+- Pattern promotion: always offered now, not conditional on rule-worthiness — unpromoted patterns are invisible to agents, defeating compound engineering
+- Knowledge-capture skill: promotion guidance now documents patterns-always-promote policy separately from learnings' conditional promotion
+- Grok router: learning-vs-pattern heuristic now defaults to learning when ambiguous — most insights start as learnings and can graduate to patterns
+- Grok router: added graduation check (Step 2.5) that offers to upgrade a learning to pattern when reusability signals are detected, keeping the default as "keep as learning" to avoid friction
+
 ## [1.3.1] - 2026-02-15
 
 ### Changed
