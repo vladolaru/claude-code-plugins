@@ -154,9 +154,9 @@ What was chosen and the one-line rationale.
 
 ## Alternatives considered
 
-- **Option A**: Description — why rejected
-- **Option B** (chosen): Description — why chosen
-- **Option C**: Description — why rejected
+- Option A: Description — why rejected
+- Option B (chosen): Description — why chosen
+- Option C: Description — why rejected
 
 ## Why this choice
 
@@ -272,7 +272,7 @@ One-liner + bare path to the source document:
 When promoting a rule to CLAUDE.md:
 
 1. Read CLAUDE.md and identify all `##` section headings
-2. Analyze the rule's tags and content to find the most relevant section
+2. Match the rule's tags and topic against section headings and content to find the most relevant section
 3. Append the one-liner at the end of that section (before the next `##` heading)
 4. If no section is a clear match, append under the last section
 
@@ -385,6 +385,7 @@ Rule: "In this project, always use `pnpm wp --user=1` for REST API calls in WP-C
 
 Agent-operational: tells the agent how to run commands in this project.
 Preventive: specifies what to do before making the call.
+Non-obvious: project-specific pnpm wrapper isn't discoverable without experience.
 </example>
 
 <example type="INCORRECT" label="domain knowledge — use /dex:learn instead">

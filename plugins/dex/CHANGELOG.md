@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Knowledge-capture skill: stripped bold from Decision Format option labels to match Token Efficiency principles (Format Strictness)
+- Knowledge-capture skill: auto-placement step now hints at matching tags/topic against section headings (Hint-Based Guidance)
+- Knowledge-capture skill: sharpen CORRECT example now demonstrates all three quality checks including Non-obvious (Completeness Checkpoint)
 - Init command: removed duplicated Project Discovery steps — delegates to skill like all other commands (Token Compression)
 - Init command: "already set up" branch now continues to capture directive check instead of premature stop (Conditional Sections)
 - Grok router: confirmation step now shows "Detected:" summary so user can validate classification (HITL Pre-Execution Checkpoint)
