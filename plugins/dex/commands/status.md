@@ -17,7 +17,7 @@ For each component, gather:
 **CLAUDE.md:**
 - Line count
 - Location (root or `.claude/CLAUDE.md`)
-- Count of nested CLAUDE.md files (glob for `**/CLAUDE.md` excluding node_modules, vendor, etc.)
+- Count of nested CLAUDE.md files (glob for `**/CLAUDE.md` excluding dependency and build directories — node_modules, vendor, .git, dist, build)
 
 **Knowledge directories** (for each of `learnings/`, `patterns/`, `decisions/`, `research/`):
 - Whether the directory exists
@@ -75,12 +75,12 @@ Freshness:
   Consider reviewing: [list oldest 3 filenames]
 ```
 
-**Freshness warnings:**
+**Freshness warnings** (use the first matching row):
 
 | Condition | Warning |
 |---|---|
-| 1+ docs older than 90 days | "N docs are older than 90 days — consider reviewing for accuracy." |
 | >50% of docs are stale | "Most knowledge is over 90 days old — consider reviewing and updating stale documents." |
+| 1+ docs older than 90 days | "N docs are older than 90 days — consider reviewing for accuracy." |
 | No stale docs | Omit the freshness section entirely |
 
 Stop after presenting the report. This command is read-only.

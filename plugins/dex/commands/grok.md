@@ -37,13 +37,14 @@ Use AskUserQuestion:
 
 **Question:** "What kind of knowledge to capture?"
 
-Present your best guess first with "(Recommended)":
+Show in the question description:
+> **Detected:** [1-sentence summary of the knowledge signal found]
 
 **Options:**
-- **Learning (Recommended)** — something you just discovered or fixed *(only if classified as learning)*
-- **Pattern (Recommended)** — a reusable approach or convention *(only if classified as pattern)*
-- **Decision (Recommended)** — a choice with trade-offs worth remembering *(only if classified as decision)*
-- **Research (Recommended)** — extensive investigation with empirical findings *(only if classified as research)*
+- **Learning** — something you just discovered or fixed
+- **Pattern** — a reusable approach or convention
+- **Decision** — a choice with trade-offs worth remembering
+- **Research** — extensive investigation with empirical findings
 
 Always show all four options. Mark only the auto-classified one as "(Recommended)".
 

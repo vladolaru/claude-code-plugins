@@ -4,6 +4,10 @@
 
 ### Changed
 
+- Grok router: confirmation step now shows "Detected:" summary so user can validate classification (HITL Pre-Execution Checkpoint)
+- Grok router: removed redundant per-option `(Recommended)` labels and `*(only if ...)*` annotations — standalone instruction already controls behavior (Token Compression)
+- Status command: freshness warnings reordered most-severe-first with explicit "first matching row" precedence (Format Strictness)
+- Status command: vague `etc.` in CLAUDE.md exclusion list replaced with named category — "dependency and build directories" (Category-Based Generalization)
 - Document formats optimized for AI agent token efficiency: plain metadata labels (`Date:` not `**Date:**`), bare path references, direct `file:line` notation
 - Added Token Efficiency design principle section codifying bare paths, plain metadata, direct references, and no prose filler
 - Fixed extraction flow to use bare paths (`Full details: path`) instead of markdown links, matching the skill's own promoted rule format
