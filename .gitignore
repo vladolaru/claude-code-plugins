@@ -4,6 +4,9 @@
 # Serena
 .serena/
 
+# IDE
+.idea/
+
 # macOS
 .DS_Store
 
