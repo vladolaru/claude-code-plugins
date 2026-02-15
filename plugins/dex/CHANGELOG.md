@@ -30,6 +30,10 @@
 - Pattern command: Pattern, When to apply, and Reference implementation drafting hints strengthened with format/content expectations (Hint-Based Guidance)
 - Pattern command: extraction quality checklist referenced before user confirmation (Completeness Checkpoint Tags)
 - Pattern command: boundary emphasis reframed as consequence — "a pattern without boundaries will be misapplied" (Affirmative Directives)
+- Research command: Environment hint now emphasizes future-relevance with concrete example format (Hint-Based Guidance)
+- Research command: What Works hint specifies evidence types — commands, configs, code (Hint-Based Guidance)
+- Research command: extraction quality checklist referenced before user confirmation (Completeness Checkpoint Tags)
+- Research command: "not narrating" reframed as three-part empirical structure — tried, evidence, unknown (Affirmative Directives)
 
 ## [1.3.0] - 2026-02-15
 

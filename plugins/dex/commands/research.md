@@ -31,8 +31,8 @@ Following the **Knowledge Extraction from Conversation** guidance in the `knowle
 1. Identify the **topic** — what was being investigated or debugged?
 2. Draft a **title** as a short descriptive statement (e.g., "PHP 8.3 readonly property behavior with WooCommerce hooks")
 3. Draft a **Summary** — 2-3 sentence overview of key findings
-4. Identify the **Environment** — versions, OS, configs that matter for reproducibility
-5. Draft **What Works** — proven approaches with evidence
+4. Identify the **Environment** — specific versions and configs (e.g., "PHP 8.3.4, WooCommerce 9.6.0") that determine whether findings still apply
+5. Draft **What Works** — proven approaches with evidence (commands, configs, or code that succeeded)
 6. Draft **What Doesn't Work** — failed approaches and WHY they failed
 7. Draft **Key Findings** — detailed empirical observations, numbered for reference
 8. Draft **Reproduction Steps** — how to verify or reproduce the findings
@@ -42,7 +42,9 @@ Following the **Knowledge Extraction from Conversation** guidance in the `knowle
 
 Omit any section that has no content — empty sections waste reader attention.
 
-Focus on structured empirical findings, not narrating the investigation session.
+Verify the draft passes the `<extraction_quality_checklist>` from the `knowledge-capture` skill before presenting to the user.
+
+Focus on structured empirical findings: what was tried, what the evidence showed, and what remains unknown.
 
 ## Step 3: Confirm with User
 
