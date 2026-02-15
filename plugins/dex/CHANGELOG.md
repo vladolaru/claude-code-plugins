@@ -34,6 +34,10 @@
 - Research command: What Works hint specifies evidence types — commands, configs, code (Hint-Based Guidance)
 - Research command: extraction quality checklist referenced before user confirmation (Completeness Checkpoint Tags)
 - Research command: "not narrating" reframed as three-part empirical structure — tried, evidence, unknown (Affirmative Directives)
+- Sharpen command: merged "Step 6.5" into Step 6 — clean 8-step numbering (Format Strictness)
+- Sharpen command: "Avoid duplicating" → "Skip already captured", "Re-read" → "Scan" (Affirmative Directives)
+- Sharpen command: post-example explanation compressed to one sentence linking to named quality checks (Token Compression)
+- Sharpen command: promotion criteria now references skill's **When to Suggest Promotion** section (Hint-Based Guidance)
 
 ## [1.3.0] - 2026-02-15
 

@@ -40,9 +40,9 @@ flagged patterns into Step 3's analysis — they map to Inefficiency Categories:
 
 ## Step 3: Analyze Agent Behavior
 
-Before scanning, read `.claude/docs/.sharpen-log.md` if it exists — this is the audit log of previously captured findings. Also check `.claude/docs/` for existing documents tagged `agent-efficiency`. Avoid duplicating knowledge already captured in either the audit log or existing documents.
+Before scanning, read `.claude/docs/.sharpen-log.md` if it exists — this is the audit log of previously captured findings. Also check `.claude/docs/` for existing documents tagged `agent-efficiency`. Skip inefficiencies already captured in the audit log or existing documents.
 
-Re-read the conversation history **and the sub-agent analysis from Step 2 (if available)** and scan for inefficiencies using the **Inefficiency Categories** from the `knowledge-capture` skill. Focus on moments that cost significant time or tokens — minor suboptimal choices (e.g., reading 10 extra lines of a file) are normal exploration, not inefficiencies worth capturing.
+Scan the conversation history **and the sub-agent analysis from Step 2 (if available)** for inefficiencies using the **Inefficiency Categories** from the `knowledge-capture` skill. Focus on moments that cost significant time or tokens — minor suboptimal choices (e.g., reading 10 extra lines of a file) are normal exploration, not inefficiencies worth capturing.
 
 If `$ARGUMENTS` contains a focus hint, narrow the analysis to that area.
 
@@ -87,7 +87,7 @@ specifies this preference.
 Sometimes find doesn't work well. Try using other tools.
 </example>
 
-The correct example is agent-operational (how to work), preventive (do this instead), and specific (names the tool and pattern). The incorrect one is vague, lacks actionability, and misses the operational focus.
+The correct example demonstrates all three sharpen quality checks: agent-operational, preventive, specific.
 
 Tag all sharpen-originated documents with `agent-efficiency` plus domain-specific tags. Tag skill gap fixes additionally with `skill-improvement`.
 
@@ -112,7 +112,7 @@ If multiple fixes were found, present them all. Number each fix.
 
 If "Edit", apply corrections and confirm again. If "Skip", stop here.
 
-## Step 6: Write the Documents
+## Step 6: Write the Documents and Update Audit Log
 
 Write each confirmed fix to the appropriate `.claude/docs/` subdirectory using the document format from the `knowledge-capture` skill.
 
@@ -122,13 +122,11 @@ Captured: .claude/docs/learnings/YYYY-MM-DD-slug.md
 Captured: .claude/docs/patterns/YYYY-MM-DD-slug.md
 ```
 
-## Step 6.5: Update Audit Log
-
-Append an entry to `.claude/docs/.sharpen-log.md` for each captured fix, following the **Sharpen Audit Log** format from the `knowledge-capture` skill. Create the file if it does not exist.
+After writing, append an entry to `.claude/docs/.sharpen-log.md` for each captured fix, following the **Sharpen Audit Log** format from the `knowledge-capture` skill. Create the file if it does not exist.
 
 ## Step 7: Suggest Promotion (Conditional)
 
-For each captured document, evaluate whether it looks rule-worthy: does it contain a do/don't directive that corrects a recurring agent mistake, or apply project-wide?
+For each captured document, evaluate whether it looks rule-worthy (per the **When to Suggest Promotion** criteria in the `knowledge-capture` skill): does it contain a do/don't directive that corrects a recurring agent mistake, or apply project-wide?
 
 **If rule-worthy**, use AskUserQuestion:
 
