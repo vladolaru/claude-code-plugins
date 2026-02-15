@@ -24,9 +24,10 @@ Knowledge is stored as agent-first documents in `.claude/docs/` — structured s
 
 | Command | Purpose |
 |---------|---------|
-| `/dex:grok` | Auto-classifies the knowledge (learning, pattern, or decision) and routes to the right handler |
+| `/dex:grok` | Auto-classifies the knowledge (learning, pattern, decision, or research) and routes to the right handler |
 | `/dex:learn` | Captures a learning — discovery, fix, gotcha, debugging insight |
 | `/dex:pattern` | Captures a reusable pattern — approach, convention, anti-pattern |
+| `/dex:research` | Captures research findings — investigations, debugging sessions, trial-and-error explorations |
 | `/dex:sharpen` | Analyzes agent behavior for inefficiencies and captures fixes as project knowledge |
 | `/dex:init` | Scaffolds `.claude/docs/` knowledge infrastructure for a new project |
 | `/dex:status` | Shows knowledge health report — CLAUDE.md budget, doc counts, latest entries |
@@ -64,6 +65,10 @@ Reusable approaches and conventions. Structured as **Pattern -> When to apply ->
 
 Architectural choices with trade-offs. Structured as **Decision -> Alternatives considered -> Why this choice**.
 
+### Research
+
+Extensive investigation findings from debugging sessions, API explorations, and trial-and-error work. Structured as **Summary -> What Works -> What Doesn't Work -> Key Findings -> Reproduction Steps -> Open Questions**. Includes `Environment` and `Status` fields for assessing relevance over time. Research documents are reference material — no CLAUDE.md promotion.
+
 ### Agent Improvements
 
 `/dex:sharpen` scans the current conversation for agent inefficiencies — wrong tool usage, slow discovery, missed shortcuts — and captures fixes as learnings or patterns. Example output:
@@ -90,7 +95,7 @@ CLAUDE.md should be a lean routing table — concise rules with links to depth, 
 Promoted rules are one-liners with links:
 
 ```markdown
-- Always pass `--user=1` for WP-CLI REST calls with auth. See [details](.claude/docs/learnings/2026-02-13-wp-cli-rest-auth.md).
+- Always pass `--user=1` for WP-CLI REST calls with auth. Details: .claude/docs/learnings/2026-02-13-wp-cli-rest-auth.md
 ```
 
 ## Installation

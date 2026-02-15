@@ -12,7 +12,7 @@ Follow the **Project Discovery** steps from the `knowledge-capture` skill:
 
 1. Find the project root via `git rev-parse --show-toplevel`
 2. Find CLAUDE.md (check root, then `.claude/CLAUDE.md`)
-3. Check for `.claude/docs/` and its subdirectories (`learnings/`, `patterns/`, `decisions/`)
+3. Check for `.claude/docs/` and its subdirectories (`learnings/`, `patterns/`, `decisions/`, `research/`)
 4. Count CLAUDE.md lines
 
 ## Step 2: Report Current State
@@ -29,6 +29,7 @@ CLAUDE.md:        Found (root, 245 lines)
   learnings/      [exists: 7 files] or [missing]
   patterns/       [exists: 3 files] or [missing]
   decisions/      [exists: 2 files] or [missing]
+  research/       [exists: 1 file] or [missing]
 ```
 
 ## Step 3: Scaffold If Needed
@@ -55,8 +56,9 @@ Created:
   .claude/docs/learnings/
   .claude/docs/patterns/
   .claude/docs/decisions/
+  .claude/docs/research/
 
-Ready for knowledge capture. Use /dex:learn or /dex:pattern to start.
+Ready for knowledge capture. Use /dex:learn, /dex:pattern, or /dex:research to start.
 ```
 
 ## Step 4: Suggest Capture Directive (Conditional)

@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0] - 2026-02-15
+
+### Added
+
+- `/dex:research` command — captures extensive investigation findings (debugging sessions, API explorations, trial-and-error work) with Environment, Status, What Works, What Doesn't Work, Key Findings, Reproduction Steps, and Open Questions sections
+- Research Format in knowledge-capture skill with contrastive examples and structured template
+- Research as 4th classification type in `/dex:grok` router with disambiguation heuristic (learning if one insight, research if multiple empirical approaches)
+- `research/` directory in init scaffolding, status reporting, and project discovery
+
+### Changed
+
+- Promoted Rule Format now uses bare paths (`Details: path`) instead of markdown links (`See [details](path)`) to save tokens in CLAUDE.md
+
 ## [1.2.1] - 2026-02-14
 
 ### Added

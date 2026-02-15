@@ -20,7 +20,7 @@ Discover the project's knowledge infrastructure fresh on every invocation. Scan 
    - `<root>/CLAUDE.md`
    - `<root>/.claude/CLAUDE.md`
 3. **Find knowledge directory:** Check for `<root>/.claude/docs/`
-4. **List existing subdirectories:** Check for `learnings/`, `patterns/`, `decisions/` within `.claude/docs/`
+4. **List existing subdirectories:** Check for `learnings/`, `patterns/`, `decisions/`, `research/` within `.claude/docs/`
 5. **Count CLAUDE.md lines:** Run `wc -l` on the found CLAUDE.md
 
 If a CLAUDE.md or `.claude/docs/` does not exist, proceed with what you have. Missing infrastructure is a normal state — handle it per the calling command's instructions.
@@ -36,6 +36,7 @@ knowledge_dir:    /path/to/project/.claude/docs/
   learnings:      exists (7 files)
   patterns:       exists (3 files)
   decisions:      exists (2 files)
+  research:       exists (1 file)
 ```
 
 If `.claude/docs/` doesn't exist, commands should offer scaffolding via AskUserQuestion before proceeding (except `/dex:status` which reports the absence).
@@ -46,6 +47,7 @@ When scaffolding is needed, create these directories:
 - `.claude/docs/learnings/`
 - `.claude/docs/patterns/`
 - `.claude/docs/decisions/`
+- `.claude/docs/research/`
 
 Create empty directories only. No README files, no templates, no boilerplate.
 
@@ -154,6 +156,72 @@ What was chosen and the one-line rationale.
 Detailed reasoning, trade-offs, and constraints that led to this choice.
 ```
 
+### Research Format
+
+Use for: extensive investigations, multi-hour debugging sessions, API explorations, trial-and-error findings across environments.
+
+```markdown
+# Short title describing what was researched
+
+**Date:** YYYY-MM-DD
+**Tags:** tag1, tag2, tag3
+**Environment:** key versions, OS, configs that matter
+**Status:** current
+
+## Summary
+2-3 sentence overview of key findings for quick scanning.
+
+## What Works
+Proven approaches with evidence (commands, configs, code).
+
+## What Doesn't Work
+Failed approaches and WHY they failed.
+
+## Key Findings
+Detailed empirical observations, numbered for reference.
+
+## Reproduction Steps
+How to verify or reproduce the findings.
+
+## Open Questions
+Unresolved issues or areas needing further investigation.
+```
+
+Key differences from Learning:
+- `Environment` field — versions, OS, configs for assessing relevance over time
+- `Status` field — `current` / `outdated` / `superseded` for freshness tracking
+- No line limit (but every section must earn its place — omit empty sections)
+- No CLAUDE.md promotion (reference material, not rules)
+
+<example type="CORRECT">
+# PHP 8.3 readonly property behavior with WooCommerce hooks
+
+**Date:** 2026-02-15
+**Tags:** php-8.3, readonly, woocommerce, hooks
+**Environment:** PHP 8.3.4, WooCommerce 9.6.0, WordPress 6.7
+**Status:** current
+
+## Summary
+PHP 8.3 readonly properties cannot be re-initialized after clone. WooCommerce
+hook callbacks that clone objects hit fatal errors with readonly properties.
+
+## What Works
+Use backed enums or private properties with getters instead of readonly.
+
+## What Doesn't Work
+- `clone $order` with readonly properties → Fatal error
+- Reflection-based workaround → works but fragile across PHP versions
+</example>
+
+<example type="INCORRECT">
+# PHP research
+
+Today I spent a few hours looking into PHP 8.3. I tried a bunch of
+things and some worked and some didn't. Here's what I found...
+</example>
+
+The incorrect example reads like a journal entry. Research docs are structured findings, not narratives.
+
 ### Filename Convention
 
 All files follow: `YYYY-MM-DD-slug.md`
@@ -180,11 +248,19 @@ Skip promotion silently (without asking) for:
 
 ### Promoted Rule Format
 
-One-liner + link to the source document:
+One-liner + bare path to the source document:
 
 ```markdown
-- Always pass `--user=1` for WP-CLI REST calls with auth. See [details](.claude/docs/learnings/2026-02-13-wp-cli-rest-auth.md).
+- Always pass `--user=1` for WP-CLI REST calls with auth. Details: .claude/docs/learnings/2026-02-13-wp-cli-rest-auth.md
 ```
+
+<example type="CORRECT" label="bare path saves tokens">
+- Always pass `--user=1` for WP-CLI REST calls with auth. Details: .claude/docs/learnings/2026-02-13-wp-cli-rest-auth.md
+</example>
+
+<example type="INCORRECT" label="redundant markdown link wastes tokens">
+- Always pass `--user=1` for WP-CLI REST calls with auth. See [details](.claude/docs/learnings/2026-02-13-wp-cli-rest-auth.md).
+</example>
 
 ### Auto-Placement
 
@@ -239,7 +315,7 @@ Focus on what an agent needs to act differently next time, not on narrating what
 1. **Self-contained** — an agent reading it in isolation understands the rule
 2. **Actionable** — tells the agent what to DO, not just what happened
 3. **Specific** — includes concrete examples, file paths, or code when relevant
-4. **Concise** — under 50 lines for learnings, under 80 for patterns/decisions
+4. **Concise** — under 50 lines for learnings, under 80 for patterns/decisions. Research docs have no line limit but every section must earn its place — remove empty sections
 
 ## Agent Behavior Analysis
 

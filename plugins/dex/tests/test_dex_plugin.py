@@ -34,6 +34,7 @@ ALL_COMMANDS = [
     "init.md",
     "learn.md",
     "pattern.md",
+    "research.md",
     "sharpen.md",
     "status.md",
 ]
@@ -42,6 +43,7 @@ ALL_COMMANDS = [
 CAPTURE_COMMANDS = [
     "learn.md",
     "pattern.md",
+    "research.md",
     "sharpen.md",
 ]
 
@@ -258,6 +260,15 @@ class TestSkillDocumentFormats:
         assert "Alternatives considered" in skill_content, "Skill missing Decision format (Alternatives)"
         assert "Why this choice" in skill_content, "Skill missing Decision format (Why this choice)"
 
+    def test_has_research_format(self, skill_content):
+        assert "### Research Format" in skill_content, "Skill missing Research Format section"
+        assert "## Summary" in skill_content, "Skill missing Research format (Summary)"
+        assert "What Works" in skill_content, "Skill missing Research format (What Works)"
+        assert "What Doesn't Work" in skill_content, "Skill missing Research format (What Doesn't Work)"
+        assert "Key Findings" in skill_content, "Skill missing Research format (Key Findings)"
+        assert "Environment" in skill_content, "Skill missing Research format (Environment)"
+        assert "Status" in skill_content, "Skill missing Research format (Status)"
+
 
 # =============================================================================
 # Skill Content — Core Logic
@@ -276,6 +287,7 @@ class TestSkillCoreLogic:
         assert "learnings" in skill_content
         assert "patterns" in skill_content
         assert "decisions" in skill_content
+        assert "research" in skill_content
 
     def test_has_promotion_section(self, skill_content):
         assert "Promotion" in skill_content, "Skill missing Promotion section"
@@ -292,6 +304,19 @@ class TestSkillCoreLogic:
 
     def test_has_filename_convention(self, skill_content):
         assert "YYYY-MM-DD" in skill_content, "Skill missing filename date convention"
+
+    def test_promotion_uses_bare_path(self, skill_content):
+        assert "Details:" in skill_content, (
+            "Skill promoted rule format should use bare path (Details: path)"
+        )
+        # The promoted rule format section should not use markdown link syntax
+        # Find the Promoted Rule Format section and check its code block
+        promo_idx = skill_content.find("### Promoted Rule Format")
+        assert promo_idx != -1, "Skill missing Promoted Rule Format section"
+        promo_section = skill_content[promo_idx:promo_idx + 500]
+        assert "Details:" in promo_section, (
+            "Promoted Rule Format section should use bare path format"
+        )
 
     def test_has_agent_behavior_analysis_section(self, skill_content):
         assert "Agent Behavior Analysis" in skill_content, (
@@ -335,12 +360,13 @@ class TestSkillCoreLogic:
 class TestGrokRouter:
     """grok.md routes to the correct handlers."""
 
-    def test_classifies_three_types(self):
+    def test_classifies_four_types(self):
         content = _read_command("grok.md")
         content_lower = content.lower()
         assert "learning" in content_lower, "grok.md: missing 'learning' classification"
         assert "pattern" in content_lower, "grok.md: missing 'pattern' classification"
         assert "decision" in content_lower, "grok.md: missing 'decision' classification"
+        assert "research" in content_lower, "grok.md: missing 'research' classification"
 
     def test_uses_ask_user_question(self):
         content = _read_command("grok.md")
@@ -356,6 +382,12 @@ class TestGrokRouter:
         content = _read_command("grok.md")
         assert "dex:pattern" in content or "pattern command" in content.lower(), (
             "grok.md: missing delegation to pattern"
+        )
+
+    def test_delegates_to_research(self):
+        content = _read_command("grok.md")
+        assert "dex:research" in content or "research command" in content.lower(), (
+            "grok.md: missing delegation to research"
         )
 
     def test_decision_uses_decision_format(self):
@@ -377,11 +409,12 @@ class TestInitCommand:
         content = _read_command("init.md")
         assert ".claude/docs" in content, "init.md: missing .claude/docs reference"
 
-    def test_creates_three_directories(self):
+    def test_creates_four_directories(self):
         content = _read_command("init.md")
         assert "learnings" in content, "init.md: missing learnings directory"
         assert "patterns" in content, "init.md: missing patterns directory"
         assert "decisions" in content, "init.md: missing decisions directory"
+        assert "research" in content, "init.md: missing research directory"
 
     def test_uses_ask_user_question(self):
         content = _read_command("init.md")
@@ -478,6 +511,70 @@ class TestPatternCommand:
 
 
 # =============================================================================
+# Command Content — Research (research.md)
+# =============================================================================
+
+
+class TestResearchCommand:
+    """research.md captures research findings without promotion."""
+
+    def test_references_skill(self):
+        content = _read_command("research.md")
+        assert "knowledge-capture" in content, "research.md: missing reference to knowledge-capture skill"
+
+    def test_has_discovery_step(self):
+        content = _read_command("research.md")
+        assert "Discovery" in content or "Discover" in content, "research.md: missing discovery step"
+
+    def test_has_extraction_step(self):
+        content = _read_command("research.md")
+        assert "Extract" in content, "research.md: missing extraction step"
+
+    def test_uses_ask_user_question(self):
+        content = _read_command("research.md")
+        assert "AskUserQuestion" in content, "research.md: missing AskUserQuestion"
+        assert "Accept" in content, "research.md: missing Accept option"
+
+    def test_writes_to_research_dir(self):
+        content = _read_command("research.md")
+        assert "research/" in content, "research.md: missing research/ output path"
+
+    def test_no_promotion_step(self):
+        content = _read_command("research.md")
+        content_lower = content.lower()
+        assert "no" in content_lower and "promotion" in content_lower, (
+            "research.md: must explicitly state no CLAUDE.md promotion"
+        )
+
+    def test_environment_field(self):
+        content = _read_command("research.md")
+        assert "Environment" in content, "research.md: missing Environment field extraction"
+
+    def test_status_field(self):
+        content = _read_command("research.md")
+        assert "Status" in content, "research.md: missing Status field"
+        assert "current" in content, "research.md: should set Status to current"
+
+    def test_summary_not_rule(self):
+        """Research extracts Summary, not Rule — it's reference material."""
+        content = _read_command("research.md")
+        assert "Summary" in content, "research.md: missing Summary extraction"
+
+    def test_what_works_and_doesnt(self):
+        content = _read_command("research.md")
+        assert "What Works" in content, "research.md: missing What Works section"
+        assert "What Doesn't Work" in content or "What Doesn't Work" in content, (
+            "research.md: missing What Doesn't Work section"
+        )
+
+    def test_offers_scaffolding(self):
+        content = _read_command("research.md")
+        assert "scaffold" in content.lower() or "Create" in content, (
+            "research.md: missing first-run scaffolding"
+        )
+
+
+# =============================================================================
 # Command Content — Status (status.md)
 # =============================================================================
 
@@ -500,6 +597,7 @@ class TestStatusCommand:
         assert "learnings" in content.lower(), "status.md: missing learnings count"
         assert "patterns" in content.lower(), "status.md: missing patterns count"
         assert "decisions" in content.lower(), "status.md: missing decisions count"
+        assert "research" in content.lower(), "status.md: missing research count"
 
     def test_reports_latest_oldest(self):
         content = _read_command("status.md")
