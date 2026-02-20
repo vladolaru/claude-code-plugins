@@ -5,6 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.0] - 2026-02-20
+
+### Added
+
+- **go-tests-reviewer agent** — New specialized reviewer for Go test quality: standard `testing` package patterns, table-driven tests, subtests, test helpers (`t.Helper()`), `httptest`, interface-based mocking, benchmarks, fuzz testing, and bubbletea TUI testing. Dispatched as the 12th reviewer agent (13 total with dead-code) in `/code-review` and `/full-code-review`.
+- **go-testing-patterns skill** — User-facing skill with Go assertion quick reference, red flags table, table-driven test template, and interface-based mocking guidance.
+- **go-testing-patterns.md reference** — ~420-line deep reference covering the full Go testing ecosystem: table-driven tests, subtests, `TestMain`, cleanup/isolation (`t.TempDir`, `t.Setenv`, `t.Cleanup`), parallel tests, `httptest`, interface-based mocking, benchmarks, fuzz testing, bubbletea TUI testing, `testdata/` conventions, race detection, and build tags.
+- **go-tests domain** — `review-scope.py` now recognizes `_test.go` files as the `go-tests` domain for preflight filtering and scope discovery. Also added `_test.go` to the `dead-code` domain exclude pattern.
+- **Go test fixtures** — `go-test-only.diff` and `go-source.diff` fixtures for domain routing tests.
+- **Test updates** — All 3 test files updated: `go-tests-reviewer` in `TEST_AGENTS` and name derivation, agent count 11→12, `go-tests` domain in `ALL_DOMAINS` and all routing matrix entries (11 fixtures × 11 domains). 352 tests pass (up from 320).
+
 ## [1.27.0] - 2026-02-15
 
 ### Added

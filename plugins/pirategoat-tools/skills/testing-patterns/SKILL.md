@@ -15,6 +15,7 @@ Use for language-agnostic test quality: philosophy, smells, structure, mocking s
 - `php-testing-patterns` — PHPUnit, WordPress, WooCommerce
 - `js-testing-patterns` — Jest, Vitest, React Testing Library
 - `e2e-testing-patterns` — Playwright, Page Object Model
+- `go-testing-patterns` — Go testing package, table-driven tests, httptest
 
 ## Test Smell -> Reference Routing (Section-Targeted References)
 
@@ -101,6 +102,7 @@ references/test-layers.md          # Unit/Integration/System strategy
 references/phpunit-patterns.md     # PHPUnit + WordPress + WooCommerce
 references/jest-vitest-patterns.md # Jest, Vitest, React Testing Library
 references/playwright-patterns.md  # E2E patterns, Page Object Model
+references/go-testing-patterns.md  # Go testing package patterns
 ```
 
 Use the routing table above to read only relevant sections.

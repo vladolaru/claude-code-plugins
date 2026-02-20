@@ -2,7 +2,7 @@
 Domain routing tests — verify review-scope.py routes fixtures to correct domains.
 
 Deterministic pytest suite. For each fixture, creates a temp git repo, applies the
-diff, and runs review-scope.py --domain <X> for all 10 domains. Asserts STATUS is
+diff, and runs review-scope.py --domain <X> for all 11 domains. Asserts STATUS is
 OK or NO_DOMAIN_FILES.
 
 Also tests --preflight mode which checks all domains in one invocation.
@@ -34,6 +34,7 @@ ALL_DOMAINS = [
     "code",
     "dead-code",
     "e2e-tests",
+    "go-tests",
     "js-tests",
     "patterns",
     "performance",
@@ -59,6 +60,7 @@ ROUTING_MATRIX = {
         "php-tests": "NO_DOMAIN_FILES",
         "js-tests": "NO_DOMAIN_FILES",
         "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "js-ts-source.diff": {
@@ -71,6 +73,7 @@ ROUTING_MATRIX = {
         "php-tests": "NO_DOMAIN_FILES",
         "js-tests": "NO_DOMAIN_FILES",
         "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "php-test-only.diff": {
@@ -83,6 +86,7 @@ ROUTING_MATRIX = {
         "php-tests": "OK",
         "js-tests": "NO_DOMAIN_FILES",
         "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "js-test-only.diff": {
@@ -95,6 +99,7 @@ ROUTING_MATRIX = {
         "php-tests": "NO_DOMAIN_FILES",
         "js-tests": "OK",
         "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "e2e-test-only.diff": {
@@ -107,6 +112,33 @@ ROUTING_MATRIX = {
         "php-tests": "NO_DOMAIN_FILES",
         "js-tests": "NO_DOMAIN_FILES",  # spec.ts excluded by e2e/ prefix
         "e2e-tests": "OK",
+        "go-tests": "NO_DOMAIN_FILES",
+        "patterns": "OK",
+    },
+    "go-test-only.diff": {
+        "code": "OK",
+        "dead-code": "NO_DOMAIN_FILES",  # _test.go excluded
+        "security": "OK",
+        "performance": "OK",
+        "architecture": "NO_DOMAIN_FILES",  # _test.go contains "test" → excluded
+        "wp-architecture": "NO_DOMAIN_FILES",
+        "php-tests": "NO_DOMAIN_FILES",
+        "js-tests": "NO_DOMAIN_FILES",
+        "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "OK",
+        "patterns": "OK",
+    },
+    "go-source.diff": {
+        "code": "OK",
+        "dead-code": "OK",
+        "security": "OK",
+        "performance": "OK",
+        "architecture": "OK",
+        "wp-architecture": "NO_DOMAIN_FILES",
+        "php-tests": "NO_DOMAIN_FILES",
+        "js-tests": "NO_DOMAIN_FILES",
+        "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "mixed-code-and-tests.diff": {
@@ -119,6 +151,7 @@ ROUTING_MATRIX = {
         "php-tests": "OK",
         "js-tests": "OK",
         "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "wp-hooks-and-i18n.diff": {
@@ -131,6 +164,7 @@ ROUTING_MATRIX = {
         "php-tests": "NO_DOMAIN_FILES",
         "js-tests": "NO_DOMAIN_FILES",
         "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "multi-file-realistic.diff": {
@@ -143,6 +177,7 @@ ROUTING_MATRIX = {
         "php-tests": "OK",
         "js-tests": "OK",
         "e2e-tests": "OK",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
     "no-code-changes.diff": {
@@ -155,6 +190,7 @@ ROUTING_MATRIX = {
         "php-tests": "NO_DOMAIN_FILES",
         "js-tests": "NO_DOMAIN_FILES",
         "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
         "patterns": "NO_DOMAIN_FILES",
     },
 }

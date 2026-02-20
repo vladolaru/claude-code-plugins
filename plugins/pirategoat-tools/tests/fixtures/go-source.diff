@@ -1,0 +1,48 @@
+diff --git a/internal/handler/handler.go b/internal/handler/handler.go
+new file mode 100644
+--- /dev/null
++++ b/internal/handler/handler.go
+@@ -0,0 +1,22 @@
++package handler
++
++import (
++	"encoding/json"
++	"net/http"
++)
++
++// HealthHandler returns the service health status.
++func HealthHandler(w http.ResponseWriter, r *http.Request) {
++	w.WriteHeader(http.StatusOK)
++	w.Write([]byte("ok"))
++}
++
++// UserHandler returns user data as JSON.
++func UserHandler(w http.ResponseWriter, r *http.Request) {
++	user := map[string]string{
++		"id":   r.URL.Query().Get("id"),
++		"name": "Test User",
++	}
++	w.Header().Set("Content-Type", "application/json")
++	json.NewEncoder(w).Encode(user)
++}
+diff --git a/internal/model/order.go b/internal/model/order.go
+new file mode 100644
+--- /dev/null
++++ b/internal/model/order.go
+@@ -0,0 +1,15 @@
++package model
++
++// Order represents a customer order.
++type Order struct {
++	ItemID       string
++	Quantity     int
++	PricePerUnit float64
++}
++
++// NewOrder creates a new order.
++func NewOrder(itemID string, quantity int) *Order {
++	return &Order{
++		ItemID:   itemID,
++		Quantity: quantity,
++	}
++}

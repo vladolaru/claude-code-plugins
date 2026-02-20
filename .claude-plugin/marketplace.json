@@ -12,8 +12,8 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Code review orchestration (11 specialized agents), WordPress/WooCommerce development patterns, testing guidance, and browser automation.",
-      "version": "1.27.0",
+      "description": "Code review orchestration (12 specialized agents), WordPress/WooCommerce development patterns, testing guidance, and browser automation.",
+      "version": "1.28.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -32,6 +32,7 @@
         "./skills/php-testing-patterns",
         "./skills/js-testing-patterns",
         "./skills/e2e-testing-patterns",
+        "./skills/go-testing-patterns",
         "./skills/software-architecture"
       ],
       "commands": [
@@ -53,6 +54,7 @@
         "./agents/php-tests-reviewer.md",
         "./agents/js-tests-reviewer.md",
         "./agents/e2e-tests-reviewer.md",
+        "./agents/go-tests-reviewer.md",
         "./agents/gemini-reviewer.md",
         "./agents/codex-reviewer.md",
         "./agents/review-reconciliator.md",

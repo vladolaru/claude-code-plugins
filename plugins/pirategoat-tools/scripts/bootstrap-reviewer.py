@@ -71,6 +71,11 @@ AGENT_CONFIG: Dict[str, dict] = {
         "protocols": ["reviewer", "tests-reviewer"],
         "scope_flags": [],
     },
+    "go-tests-reviewer": {
+        "domain": "go-tests",
+        "protocols": ["reviewer", "tests-reviewer"],
+        "scope_flags": [],
+    },
     "patterns-reviewer": {
         "domain": "patterns",
         "protocols": ["reviewer"],

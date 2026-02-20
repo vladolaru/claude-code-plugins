@@ -53,7 +53,7 @@ DOMAIN_CATALOG = {
     "dead-code": {
         "description": "Production code only, excluding tests (dead-code-reviewer)",
         "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
-        "exclude": r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$|_test\.php$)",
+        "exclude": r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$|_test\.php$|_test\.go$)",
     },
     "architecture": {
         "description": "Implementation files, excluding tests",
@@ -78,6 +78,11 @@ DOMAIN_CATALOG = {
     "e2e-tests": {
         "description": "Playwright E2E test files",
         "include": r"(^e2e/|/e2e/|playwright\.config|Page\.(js|ts)$|PageObject\.(js|ts)$)",
+        "exclude": None,
+    },
+    "go-tests": {
+        "description": "Go test files only",
+        "include": r"_test\.go$",
         "exclude": None,
     },
     "patterns": {

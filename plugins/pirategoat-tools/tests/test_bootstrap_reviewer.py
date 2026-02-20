@@ -40,9 +40,9 @@ build_error_output = _mod.build_error_output
 AGENT_CONFIG = _mod.AGENT_CONFIG
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
-# All 11 reviewer agents (from AGENT_CONFIG)
+# All reviewer agents (from AGENT_CONFIG)
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
-TEST_AGENTS = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer"]
+TEST_AGENTS = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
 
 
 # =============================================================================
@@ -64,6 +64,7 @@ class TestDeriveReviewerName:
             ("php-tests-reviewer", "php-tests"),
             ("js-tests-reviewer", "js-tests"),
             ("e2e-tests-reviewer", "e2e-tests"),
+            ("go-tests-reviewer", "go-tests"),
             ("patterns-reviewer", "patterns"),
             ("history-insights-reviewer", "history-insights"),
             ("tests-mutation-reviewer", "tests-mutation"),
@@ -356,7 +357,7 @@ def run_bootstrap(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
 
 
 class TestOutputStructure:
-    """All 11 agents produce correct section markers."""
+    """All agents produce correct section markers."""
 
     @pytest.mark.parametrize("agent_name", ALL_AGENTS)
     def test_section_markers(self, agent_name):
