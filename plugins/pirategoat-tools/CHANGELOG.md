@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.28.1] - 2026-02-22
+
+### Changed
+
+- **software-architecture skill library** — Compressed 16 reference files from 21,772 to 2,886 lines (86.7% reduction) for AI agent token efficiency. Removed pattern history, UML diagrams, metaphors, quotes, generic OOP examples (Java/C#/Python), "further reading" sections, and definition paragraphs that Claude already knows from training. Kept all WordPress/PHP and JS/TS/React code examples, When to Use / When NOT to Use decision criteria, Common Mistakes with WRONG/RIGHT pairs, and pattern relationship maps. Added JS/TS examples to Composite (React component tree), Decorator (HOC), Facade (module re-export), and Factory (React component factory). Fixed patterns/README.md to only reference files that exist (removed 18 aspirational entries for unwritten pattern files). All SKILL.md routing table headings verified intact.
+
 ## [1.28.0] - 2026-02-20
 
 ### Added
