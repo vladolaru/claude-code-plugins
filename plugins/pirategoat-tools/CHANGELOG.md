@@ -5,6 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.0] - 2026-02-23
+
+### Fixed
+
+- **review-scope.py merge-base always active** — Merge-base range rebasing now happens unconditionally when a merge-base exists, not only when the branch is >10 commits behind. Previously, any divergence from the base branch (even 1 commit) could cause review agents to flag unrelated files from trunk. The `STALE_BRANCH_THRESHOLD` now only controls the advisory warning message. `--no-merge-base` remains as an escape hatch. Text output now shows `RANGE_REBASED` even for non-stale branches.
+
+### Added
+
+- **pr-reviewing skill merge-base anchoring** — Step 1 now computes `MERGE_BASE` after fetching branches. Steps 7 and 8 use `${MERGE_BASE}..HEAD` for all diffs and agent dispatch (replacing `<baseRefName>...<headRefName>`). Agent context template includes an authoritative changed files list with a constraint that agents must only review listed files (defense-in-depth against wrong ranges).
+- **Expanded noise filters** — `package-lock.json`, `pnpm-lock.yaml`, `npm-shrinkwrap.json`, `go.sum`, `.po` translation files, `.yarn/` directory, `__pycache__/` directory, coverage directories (`coverage/`, `.nyc_output/`, `htmlcov/`), `.cache/` directory, `tsconfig.tsbuildinfo`, `.eslintcache`, and `.stylelintcache`.
+- **test_review_scope.py** — 57 new tests: pure function unit tests (`rebase_range_to_merge_base`, `detect_base_ref`, `count_diff_lines`, `filter_noise`, `filter_domain`) and integration tests for the merge-base gating fix (non-stale rebase, `--no-merge-base` escape hatch, stale warning decoupling, text/JSON output format, range rewriting).
+
+### Changed
+
+- **test_domain_routing.py** — Updated `test_non_stale_branch_no_range_rebase` → `test_non_stale_branch_still_rebased` to match new unconditional merge-base behavior.
+
 ## [1.29.1] - 2026-02-23
 
 ### Changed
