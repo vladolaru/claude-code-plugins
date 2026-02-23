@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.29.0] - 2026-02-23
+
+### Added
+
+- **browser-interaction token efficiency guidance** — New RULE 1 with decision flow for choosing snapshots vs screenshots, token cost formula (`width × height / 750`), comparison table of snapshot vs screenshot trade-offs, and warning about heavy-navigation pages where snapshots can exceed screenshot costs. Updated code examples to prefer element-targeted screenshots (`uid` parameter) over full-page captures.
+- **token efficiency analysis doc** — Research analysis documenting the investigation into image tokenization behavior, grayscale/format experiments, and findings that led to the skill update.
+
 ## [1.28.1] - 2026-02-22
 
 ### Changed

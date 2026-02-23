@@ -59,6 +59,38 @@ Navigate → Snapshot → Interact → Verify
 
 **Why:** Element refs (`uid="1_5"`) regenerate per snapshot. Old refs match DIFFERENT elements after navigation.
 
+## RULE 1: Token-Efficient Interaction
+
+Images are expensive. Claude tokenizes images by pixel dimensions only: `tokens = (width × height) / 750`. Format, compression, quality, and color depth have **zero effect** on token count — a grayscale JPEG and a full-color PNG of the same dimensions cost identical tokens.
+
+**Decision flow:**
+
+```dot
+digraph token_efficiency {
+  "What do you need?" [shape=diamond];
+  "Snapshot (text, ~50-500 tokens)" [shape=box];
+  "Screenshot with uid (~300-1300 tokens)" [shape=box];
+  "Full viewport screenshot (~1500-1900 tokens)" [shape=box];
+
+  "What do you need?" -> "Snapshot (text, ~50-500 tokens)" [label="interact\n(click/fill/read)"];
+  "What do you need?" -> "Screenshot with uid (~300-1300 tokens)" [label="visual check\n(layout/styling)"];
+  "What do you need?" -> "Full viewport screenshot (~1500-1900 tokens)" [label="full page context\n(last resort)"];
+}
+```
+
+**Always target elements, not full viewport.** Use the `uid` parameter on `take_screenshot` to capture only the relevant section. On WP admin pages, target the `<main>` element to skip the sidebar (~250 nav elements, ~80% of page noise).
+
+**Snapshot vs screenshot trade-offs:**
+
+| | Snapshot | Screenshot |
+|---|---|---|
+| **Tokens** | ~50-500 (simple) to ~3,000+ (complex admin pages) | `(w×h)/750` — typically ~1,300-1,900 |
+| **Gives UIDs** | Yes — can click/fill | No — read-only visual |
+| **Visual info** | None (semantic text only) | Full (layout, icons, colors) |
+| **Best for** | All interaction tasks | Visual verification only |
+
+**Warning:** On pages with heavy navigation (WP admin, WooCommerce), snapshots can be MORE expensive than targeted screenshots because the a11y tree includes every sidebar/toolbar link. Prefer element-targeted screenshots for visual checks on these pages.
+
 ## Common Operations
 
 **Navigate and inspect:**
@@ -67,9 +99,15 @@ mcp__chrome-devtools__navigate_page(type: "url", url: "http://localhost:9001/wp-
 mcp__chrome-devtools__take_snapshot()
 ```
 
-**Take screenshot:**
+**Screenshot of specific element (preferred over full page):**
 ```
-mcp__chrome-devtools__take_screenshot(filePath: "/tmp/screenshot.png", fullPage: true)
+# Use uid from snapshot to target main content area
+mcp__chrome-devtools__take_screenshot(uid: "3_272")
+```
+
+**Full viewport screenshot (only when full page context is needed):**
+```
+mcp__chrome-devtools__take_screenshot()
 ```
 
 **Click element:**
