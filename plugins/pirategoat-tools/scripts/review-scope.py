@@ -94,24 +94,30 @@ DOMAIN_CATALOG = {
 
 # Noise patterns — files no reviewer should waste context on
 NOISE_PATTERNS = [
-    # Images, fonts, media, binary assets
+    # Lock files (all flavors) and images, fonts, media, binary assets
     r"\.(lock|png|jpg|jpeg|gif|svg|ico|webp|avif|bmp|woff|woff2|ttf|eot|otf|map)$",
+    r"(package-lock\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json|go\.sum)$",
     # Archives and compiled binaries
     r"\.(zip|tar|gz|tgz|jar|war|wasm|pyc|pyo|so|dylib|dll|exe)$",
-    # Documents and non-code artifacts
-    r"\.(pdf|mo|pot)$",
+    # Documents, translations, and non-code artifacts
+    r"\.(pdf|mo|po|pot)$",
     # Jest snapshots (large, noisy)
     r"\.snap$",
-    # Dependency directories
-    r"(^|/)(vendor|node_modules)/",
+    # Dependency and cache directories
+    r"(^|/)(vendor|node_modules|\.yarn|__pycache__)/",
+    # Coverage and tool cache directories
+    r"(^|/)(\.cache|\.nyc_output|coverage|htmlcov)/",
     # Minified assets and source maps
     r"\.min\.(js|css)$",
-    # Build artifacts and IDE/OS config
+    # Build artifacts, caches, and IDE/OS config
     r"(^dist/|^build/|^\.idea/|^\.vscode/|\.DS_Store$)",
+    # Build and linter caches
+    r"(tsconfig\.tsbuildinfo|\.eslintcache|\.stylelintcache)$",
 ]
 
 # Stale branch threshold — branches this many commits behind the base
-# may include unrelated files in the diff.
+# trigger a warning message. Merge-base rebasing happens unconditionally
+# (the threshold only controls the advisory warning, not the rebase decision).
 STALE_BRANCH_THRESHOLD = 10
 
 
@@ -207,7 +213,8 @@ def check_branch_freshness(base_ref: str) -> dict:
     Returns:
         ahead: commits on branch not in base
         behind: commits on base not in branch
-        is_stale: behind > STALE_BRANCH_THRESHOLD
+        is_stale: behind > STALE_BRANCH_THRESHOLD (advisory — used for
+            warning messages only, NOT for gating merge-base rebasing)
         merge_base: the merge-base commit SHA (common ancestor)
     """
     ahead = 0
@@ -507,11 +514,10 @@ def build_scope(args: argparse.Namespace) -> dict:
     else:
         range_spec, base_ref = detect_range()
 
-    # Step 1.5: Check branch freshness
+    # Step 1.5: Check branch freshness and rebase to merge-base
     freshness = check_branch_freshness(base_ref)
     range_rebased = False
-    if (freshness["is_stale"]
-            and freshness["merge_base"]
+    if (freshness["merge_base"]
             and ".." in range_spec
             and not getattr(args, "no_merge_base", False)):
         range_spec = rebase_range_to_merge_base(range_spec, freshness["merge_base"])
@@ -645,11 +651,13 @@ def format_text_output(scope: dict) -> str:
     lines.append(f"OUTPUT_DIR: {scope.get('output_dir', '/tmp')}")
 
     freshness = scope.get("branch_freshness")
-    if freshness and freshness.get("is_stale"):
+    if freshness and freshness.get("range_rebased"):
         lines.append("")
+        lines.append(f"RANGE_REBASED: true (using merge-base {freshness.get('merge_base', '')[:12]} as anchor)")
+    if freshness and freshness.get("is_stale"):
+        if not freshness.get("range_rebased"):
+            lines.append("")
         lines.append(f"BRANCH_FRESHNESS: STALE ({freshness['behind']} commits behind base)")
-        if freshness.get("range_rebased"):
-            lines.append(f"RANGE_REBASED: true (using merge-base {freshness.get('merge_base', '')[:12]} as anchor)")
 
     lines.append("")
     lines.append(f"FILES_CHANGED: {scope.get('total_changed', 0)}")
@@ -807,11 +815,10 @@ def build_preflight(args: argparse.Namespace) -> dict:
     else:
         range_spec, base_ref = detect_range()
 
-    # Step 1.5: Check branch freshness
+    # Step 1.5: Check branch freshness and rebase to merge-base
     freshness = check_branch_freshness(base_ref)
     range_rebased = False
-    if (freshness["is_stale"]
-            and freshness["merge_base"]
+    if (freshness["merge_base"]
             and ".." in range_spec
             and not getattr(args, "no_merge_base", False)):
         range_spec = rebase_range_to_merge_base(range_spec, freshness["merge_base"])
@@ -956,7 +963,7 @@ def main():
     parser.add_argument(
         "--no-merge-base",
         action="store_true",
-        help="Disable automatic merge-base range adjustment for stale branches.",
+        help="Disable automatic merge-base range adjustment (use raw two-dot range as-is).",
     )
 
     args = parser.parse_args()

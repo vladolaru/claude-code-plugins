@@ -609,8 +609,8 @@ class TestBranchFreshness:
         assert len(bf["merge_base"]) >= 7  # SHA
         assert bf["range_rebased"] is True
 
-    def test_non_stale_branch_no_range_rebase(self):
-        """3 behind → range_rebased: false."""
+    def test_non_stale_branch_still_rebased(self):
+        """3 behind → range_rebased: true (merge-base rebase is unconditional)."""
         repo = _setup_stale_branch_repo(3)
         result = subprocess.run(
             [sys.executable, str(REVIEW_SCOPE_SCRIPT),
@@ -621,4 +621,4 @@ class TestBranchFreshness:
         data = json.loads(result.stdout)
         bf = data["branch_freshness"]
         assert bf["is_stale"] is False
-        assert bf["range_rebased"] is False
+        assert bf["range_rebased"] is True

@@ -280,6 +280,16 @@ If the PR branch doesn't exist locally:
 git checkout -b <headRefName> origin/<headRefName>
 ```
 
+**Compute merge-base (common ancestor):**
+
+While on the PR branch, compute the merge-base between the target and PR branches. This is the authoritative anchor for all diffs — it ensures you only see changes from the PR, not unrelated commits that landed on the target branch after the PR forked.
+
+```bash
+MERGE_BASE=$(git merge-base origin/<baseRefName> <headRefName>)
+```
+
+Store `MERGE_BASE` alongside the saved branch — you'll use it in steps 7 and 8.
+
 **Check for build instructions and run build:**
 
 Look for AI instructions in the repo:
@@ -523,13 +533,20 @@ Combine all gathered information into a final summary:
 
 Before reviewing, assess the PR size (excluding documentation).
 
+Use the `MERGE_BASE` computed in step 1 for accurate diffs:
+
 ```bash
-# Get full diff stats
-git diff --stat <baseRefName>...<headRefName>
+# Get full diff stats (merge-base ensures only PR changes)
+git diff --stat ${MERGE_BASE}..HEAD
 
 # Get code-only stats (exclude docs)
-git diff --stat <baseRefName>...<headRefName> -- . ':!*.md' ':!*.txt' ':!*.rst' ':!docs/' ':!documentation/' ':!README*' ':!CHANGELOG*' ':!LICENSE*'
+git diff --stat ${MERGE_BASE}..HEAD -- . ':!*.md' ':!*.txt' ':!*.rst' ':!docs/' ':!documentation/' ':!README*' ':!CHANGELOG*' ':!LICENSE*'
+
+# Get the authoritative file list for this PR
+git diff --name-only ${MERGE_BASE}..HEAD
 ```
+
+**Save the file list** — you'll pass it to agents in step 8 as the authoritative scope constraint.
 
 **Size categories:**
 
@@ -665,35 +682,35 @@ Task tool (PARALLEL - single message with multiple Tool calls):
   prompt: |
     PR ID: <PR_NUMBER>
     Output Directory: /tmp/pr-review-<PR_NUMBER>
-    Git Range: <baseRefName>..<headRefName>
+    Git Range: ${MERGE_BASE}..<headRefName>
     Focus: sanitization, escaping, nonces, capabilities, SQL injection
 
   subagent_type: pirategoat-tools:performance-reviewer
   prompt: |
     PR ID: <PR_NUMBER>
     Output Directory: /tmp/pr-review-<PR_NUMBER>
-    Git Range: <baseRefName>..<headRefName>
+    Git Range: ${MERGE_BASE}..<headRefName>
     Focus: N+1 queries, caching, autoloaded options, WP_Query
 
   subagent_type: pirategoat-tools:wp-architecture-reviewer
   prompt: |
     PR ID: <PR_NUMBER>
     Output Directory: /tmp/pr-review-<PR_NUMBER>
-    Git Range: <baseRefName>..<headRefName>
+    Git Range: ${MERGE_BASE}..<headRefName>
     Focus: hooks/filters, coding standards, backwards compatibility, i18n
 
   subagent_type: pirategoat-tools:patterns-reviewer
   prompt: |
     PR ID: <PR_NUMBER>
     Output Directory: /tmp/pr-review-<PR_NUMBER>
-    Git Range: <baseRefName>..<headRefName>
+    Git Range: ${MERGE_BASE}..<headRefName>
     Focus: existing patterns, git history precedents, naming conventions, consolidation
 
   subagent_type: pirategoat-tools:history-insights-reviewer
   prompt: |
     PR ID: <PR_NUMBER>
     Output Directory: /tmp/pr-review-<PR_NUMBER>
-    Git Range: <baseRefName>..<headRefName>
+    Git Range: ${MERGE_BASE}..<headRefName>
     Focus: similar fixes, enhancements, and lessons learned from git history
 ```
 
@@ -835,7 +852,7 @@ Task tool:
   prompt: |
     PR ID: <PR_NUMBER>
     Output Directory: /tmp/pr-review-<PR_NUMBER>
-    Git Range: <baseRefName>..<headRefName>
+    Git Range: ${MERGE_BASE}..<headRefName>
     Test Scope: auto-detect from diff
     Test Command: <from CLAUDE.md or auto-detect>
     Max Mutations: 20
@@ -907,7 +924,14 @@ Standard concise output without reasoning blocks.
 ### Branches
 - PR branch: <headRefName>
 - Target branch: <baseRefName>
+- Merge base: ${MERGE_BASE}
+- Git range: ${MERGE_BASE}..<headRefName>
 - Commits to focus on (if focused): <commit list>
+
+### Changed Files (from merge-base diff — authoritative)
+<list of files from step 7's `git diff --name-only ${MERGE_BASE}..HEAD`>
+
+CONSTRAINT: Only review files on this list. Files not listed here are NOT part of this PR.
 
 ### Key Verification Points
 - [ ] <From step 6 checklist>
