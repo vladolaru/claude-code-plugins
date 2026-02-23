@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.29.1] - 2026-02-23
+
+### Changed
+
+- **browser-interaction skill restructured for clarity** — Consolidated 3 entry-point sections (Prerequisites, Quick Start, MCP Detection) into single Prerequisites. Merged RULE 0 with Common Operations so workflow loop and code examples appear together. Streamlined RULE 1 with action-first decision table (removed dot graph, demoted non-actionable explanation). Moved Chrome DevTools Profile Locations to Reference section at bottom. Removed vague "When to Use" section (covered by frontmatter). 167 → 118 lines, same content.
+
 ## [1.29.0] - 2026-02-23
 
 ### Added
