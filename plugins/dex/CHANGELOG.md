@@ -4,7 +4,12 @@
 
 ### Added
 
-- AGENTS.md indirection support in Project Discovery — if CLAUDE.md is a symlink to AGENTS.md or contains only `@AGENTS.md`, all operations (reading, writing, line counting, budget enforcement, promotion, extraction) target AGENTS.md instead, with user-facing messages reflecting the resolved filename
+- AGENTS.md indirection support in Project Discovery — if CLAUDE.md is a symlink to AGENTS.md or contains only `@AGENTS.md`, all operations target AGENTS.md instead
+- Deterministic `ai_dir` derivation — CLAUDE.md → `.claude/`, AGENTS.md → `.ai/`, resolved in Project Discovery step 3 and used for all knowledge directory paths
+- Variable Substitution note — all commands substitute resolved `ai_dir` and instructions filename in paths and user-facing messages without per-command edits
+- Migration mismatch detection — when `ai_dir` is `.ai` but knowledge exists in `.claude/docs/`, flag for init and status to surface
+- `/dex:init` migration step (Step 3.5) — offers to move `.claude/docs/` → `.ai/docs/` when mismatch is detected
+- `/dex:status` mismatch warning — reports when knowledge directory doesn't match the resolved `ai_dir`, suggests running `/dex:init`
 
 ## [1.4.1] - 2026-02-15
 

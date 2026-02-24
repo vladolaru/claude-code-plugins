@@ -19,14 +19,18 @@ Discover the project's knowledge infrastructure fresh on every invocation. Scan 
 2. **Find CLAUDE.md:** Check in order, use the first found:
    - `<root>/CLAUDE.md`
    - `<root>/.claude/CLAUDE.md`
-3. **Resolve AGENTS.md indirection:** If CLAUDE.md was found, check whether it redirects to AGENTS.md:
-   - **Symlink:** Run `readlink <claude_md_path>`. If the target filename is `AGENTS.md`, use the symlink target as the edit target.
-   - **Include directive:** Read the file content. If the entire content is a single `@AGENTS.md` line (with optional whitespace/newlines), find the referenced AGENTS.md relative to CLAUDE.md's directory and use it as the edit target.
-   - If AGENTS.md indirection is detected, all subsequent operations (reading, writing, line counting, budget enforcement, promotion, extraction) target the resolved file. Use the resolved filename in all user-facing messages (e.g., "Add to AGENTS.md?" instead of "Add to CLAUDE.md?").
-   - If no indirection is detected, continue using CLAUDE.md as the edit target.
-4. **Find knowledge directory:** Check for `<root>/.claude/docs/`
-5. **List existing subdirectories:** Check for `learnings/`, `patterns/`, `decisions/`, `research/` within `.claude/docs/`
-6. **Count lines:** Run `wc -l` on the resolved edit target
+3. **Resolve instructions file and `ai_dir`:**
+   a. Check whether CLAUDE.md redirects to AGENTS.md:
+      - **Symlink:** Run `readlink <claude_md_path>`. If the target filename is `AGENTS.md`, use the symlink target.
+      - **Include directive:** Read the file content. If the entire content is a single `@AGENTS.md` line (with optional whitespace/newlines), find the referenced AGENTS.md relative to CLAUDE.md's directory.
+      - If no indirection is detected, continue using CLAUDE.md.
+   b. Derive `ai_dir` from the resolved instructions file:
+      - CLAUDE.md → `ai_dir` = `.claude`
+      - AGENTS.md → `ai_dir` = `.ai`
+4. **Find knowledge directory:** Check for `<root>/<ai_dir>/docs/`
+   - **Migration check:** If `ai_dir` is `.ai` but `<root>/.ai/docs/` does not exist and `<root>/.claude/docs/` does exist, flag a migration mismatch. Use `.claude/docs/` as the active knowledge directory for now, but record the mismatch for `init` and `status` to surface.
+5. **List existing subdirectories:** Check for `learnings/`, `patterns/`, `decisions/`, `research/` within the knowledge directory
+6. **Count lines:** Run `wc -l` on the resolved instructions file
 
 If a CLAUDE.md or `.claude/docs/` does not exist, proceed with what you have. Missing infrastructure is a normal state — handle it per the calling command's instructions.
 
@@ -35,28 +39,49 @@ If a CLAUDE.md or `.claude/docs/` does not exist, proceed with what you have. Mi
 Build this mental model before proceeding:
 
 ```
-project_root:     /path/to/project
-claude_md:        /path/to/project/CLAUDE.md  (387 lines)
-knowledge_dir:    /path/to/project/.claude/docs/
-  learnings:      exists (7 files)
-  patterns:       exists (3 files)
-  decisions:      exists (2 files)
-  research:       exists (1 file)
+project_root:       /path/to/project
+instructions_file:  /path/to/project/CLAUDE.md  (387 lines)
+ai_dir:             .claude
+knowledge_dir:      /path/to/project/.claude/docs/
+  learnings:        exists (7 files)
+  patterns:         exists (3 files)
+  decisions:        exists (2 files)
+  research:         exists (1 file)
 ```
 
 If AGENTS.md indirection was resolved:
 
 ```
-project_root:     /path/to/project
-claude_md:        /path/to/project/AGENTS.md  (387 lines, resolved from CLAUDE.md)
-knowledge_dir:    /path/to/project/.claude/docs/
-  learnings:      exists (7 files)
-  patterns:       exists (3 files)
-  decisions:      exists (2 files)
-  research:       exists (1 file)
+project_root:       /path/to/project
+instructions_file:  /path/to/project/AGENTS.md  (387 lines, resolved from CLAUDE.md)
+ai_dir:             .ai
+knowledge_dir:      /path/to/project/.ai/docs/
+  learnings:        exists (7 files)
+  patterns:         exists (3 files)
+  decisions:        exists (2 files)
+  research:         exists (1 file)
 ```
 
-Throughout this skill and all `/dex:*` commands, "CLAUDE.md" refers to the resolved edit target. If AGENTS.md indirection was detected during discovery, substitute the resolved filename in all user-facing text (e.g., "Promote to AGENTS.md?" instead of "Promote to CLAUDE.md?").
+If migration mismatch was detected (AGENTS.md + existing `.claude/docs/`):
+
+```
+project_root:       /path/to/project
+instructions_file:  /path/to/project/AGENTS.md  (387 lines, resolved from CLAUDE.md)
+ai_dir:             .ai
+knowledge_dir:      /path/to/project/.claude/docs/  (migration available → .ai/docs/)
+  learnings:        exists (7 files)
+  patterns:         exists (3 files)
+  decisions:        exists (2 files)
+  research:         exists (1 file)
+```
+
+### Variable Substitution
+
+Throughout this skill and all `/dex:*` commands:
+- "CLAUDE.md" refers to the resolved instructions file (CLAUDE.md or AGENTS.md)
+- `.claude/` and `.claude/docs/` refer to the resolved `ai_dir` (`<ai_dir>/` and `<ai_dir>/docs/`)
+
+Substitute the resolved values in all paths and user-facing messages. For example, when `ai_dir` is `.ai`: "Promote to AGENTS.md?", "Create `.ai/docs/`?", scaffolding creates `.ai/docs/learnings/` etc.
 
 If `.claude/docs/` doesn't exist, commands should offer scaffolding via AskUserQuestion before proceeding (except `/dex:status` which reports the absence).
 

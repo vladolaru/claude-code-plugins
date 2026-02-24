@@ -56,6 +56,25 @@ Created:
 Ready for knowledge capture. Use /dex:learn, /dex:pattern, or /dex:research to start.
 ```
 
+## Step 3.5: Offer Migration (If Mismatch Detected)
+
+If discovery flagged a migration mismatch (instructions file resolved to AGENTS.md but knowledge exists in `.claude/docs/`, not `.ai/docs/`):
+
+Use AskUserQuestion:
+
+**Question:** "Knowledge is in `.claude/docs/` but project uses AGENTS.md. Migrate to `.ai/docs/`?"
+
+Show in the description:
+> This moves `.claude/docs/` → `.ai/docs/` for consistency with the AGENTS.md setup. All existing knowledge documents are preserved.
+
+**Options:**
+- **Yes, migrate** — creates `.ai/` if needed, moves `.claude/docs/` to `.ai/docs/` via `mv`
+- **Keep as-is** — continues using `.claude/docs/`
+
+If "Yes", run `mkdir -p <root>/.ai && mv <root>/.claude/docs <root>/.ai/docs`. Report what was moved. Update the active `knowledge_dir` to `.ai/docs/` for the rest of this command.
+
+If no mismatch was detected, skip this step silently.
+
 ## Step 4: Suggest Capture Directive (Conditional)
 
 If a CLAUDE.md file was found in Step 1, check whether it already contains a `/dex:grok` capture directive (search for `/dex:grok` in the file). If a directive is already present, skip this step silently.

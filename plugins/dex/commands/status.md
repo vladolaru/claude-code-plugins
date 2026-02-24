@@ -60,6 +60,7 @@ Research:         [count] docs  (.claude/docs/research/)
 | Subdirectory empty | "[category]: 0 docs (empty)" — omit Latest/Oldest |
 | Subdirectory missing | "[category]: not set up" — omit Latest/Oldest |
 | CLAUDE.md 500+ lines | Append warning: "CLAUDE.md is over budget — consider extracting sections." |
+| Migration mismatch detected | Append warning: "Knowledge is in `.claude/docs/` but project uses AGENTS.md — run `/dex:init` to migrate to `.ai/docs/`." |
 
 ## Step 4: Freshness Analysis
 

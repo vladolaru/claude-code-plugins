@@ -299,6 +299,36 @@ class TestSkillCoreLogic:
             "Skill must specify using resolved filename in user-facing text"
         )
 
+    def test_has_ai_dir_derivation(self, skill_content):
+        """Skill must derive ai_dir from the resolved instructions file."""
+        assert "ai_dir" in skill_content, (
+            "Skill missing ai_dir variable derivation"
+        )
+        # Must map CLAUDE.md → .claude and AGENTS.md → .ai
+        assert ".ai" in skill_content, (
+            "Skill must map AGENTS.md to .ai directory"
+        )
+        # Must show the mapping is deterministic from instructions file
+        content_lower = skill_content.lower()
+        assert "claude.md" in content_lower and ".claude" in content_lower, (
+            "Skill must map CLAUDE.md to .claude directory"
+        )
+
+    def test_has_directory_substitution_note(self, skill_content):
+        """Skill must instruct commands to substitute .claude/ with resolved ai_dir."""
+        content_lower = skill_content.lower()
+        # Must mention that .claude/docs/ references should use the resolved ai_dir
+        assert ".claude/docs/" in skill_content and ".ai/docs/" in skill_content, (
+            "Skill must mention both .claude/docs/ and .ai/docs/ in substitution note"
+        )
+
+    def test_has_migration_mismatch_detection(self, skill_content):
+        """Skill must detect and flag migration mismatch (AGENTS.md + .claude/docs/)."""
+        content_lower = skill_content.lower()
+        assert "migration" in content_lower or "mismatch" in content_lower, (
+            "Skill must handle migration mismatch between ai_dir and existing knowledge directory"
+        )
+
     def test_has_scaffolding_section(self, skill_content):
         assert "Scaffolding" in skill_content, "Skill missing Scaffolding section"
         assert "learnings" in skill_content
@@ -466,6 +496,17 @@ class TestInitCommand:
     def test_references_knowledge_capture_skill(self):
         content = _read_command("init.md")
         assert "knowledge-capture" in content, "init.md: missing reference to knowledge-capture skill"
+
+    def test_offers_migration(self):
+        """init.md should offer to migrate .claude/docs/ → .ai/docs/ when mismatch detected."""
+        content = _read_command("init.md")
+        content_lower = content.lower()
+        assert "migrat" in content_lower, (
+            "init.md: must offer migration when ai_dir mismatch is detected"
+        )
+        assert ".ai/docs" in content, (
+            "init.md: must reference .ai/docs/ as migration target"
+        )
 
 
 # =============================================================================
@@ -648,6 +689,14 @@ class TestStatusCommand:
         content_lower = content.lower()
         assert "not" in content_lower or "missing" in content_lower or "no " in content_lower, (
             "status.md: missing handling for absent .claude/docs/"
+        )
+
+    def test_reports_mismatch_warning(self):
+        """status.md should warn when ai_dir doesn't match existing knowledge directory."""
+        content = _read_command("status.md")
+        content_lower = content.lower()
+        assert "mismatch" in content_lower or "migrat" in content_lower, (
+            "status.md: must warn about ai_dir mismatch (e.g., AGENTS.md + .claude/docs/)"
         )
 
     def test_is_read_only(self):
