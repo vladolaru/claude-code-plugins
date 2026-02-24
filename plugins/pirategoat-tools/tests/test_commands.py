@@ -39,15 +39,21 @@ REVIEW_COMMANDS = [
     "full-code-review.md",
     "code-review.md",
     "ingest-code-review.md",
-    "pr-review.md",
 ]
 
-# Commands that dispatch agents (have agent tables)
+# Commands that dispatch agents directly (have agent tables)
 DISPATCH_COMMANDS = [
     "full-code-review.md",
     "code-review.md",
+]
+
+# Commands that orchestrate other commands/skills (no inline agent tables)
+ORCHESTRATOR_COMMANDS = [
     "pr-review.md",
 ]
+
+# All review-related commands (for shared structural tests)
+ALL_REVIEW_COMMANDS = REVIEW_COMMANDS + ORCHESTRATOR_COMMANDS
 
 # Agent name pattern in markdown tables: `pirategoat-tools:<name>`
 AGENT_REF_PATTERN = re.compile(r"`pirategoat-tools:([\w-]+)`")
@@ -145,19 +151,19 @@ def marketplace_commands():
 class TestFrontmatter:
     """All review commands have valid frontmatter."""
 
-    @pytest.mark.parametrize("command", REVIEW_COMMANDS)
+    @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
     def test_command_file_exists(self, command):
         path = COMMANDS_DIR / command
         assert path.is_file(), f"Command file not found: {path}"
 
-    @pytest.mark.parametrize("command", REVIEW_COMMANDS)
+    @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
     def test_has_frontmatter(self, command):
         content = _read_command(command)
         assert content.startswith("---"), f"{command}: missing frontmatter delimiter"
         end = content.find("---", 3)
         assert end > 3, f"{command}: unclosed frontmatter"
 
-    @pytest.mark.parametrize("command", REVIEW_COMMANDS)
+    @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
     def test_has_description(self, command):
         content = _read_command(command)
         fm = _parse_frontmatter(content)
@@ -238,7 +244,7 @@ class TestScriptReferences:
 class TestMarketplaceRegistration:
     """Review commands are registered in marketplace.json."""
 
-    @pytest.mark.parametrize("command", REVIEW_COMMANDS)
+    @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
     def test_command_in_marketplace(self, command, marketplace_commands):
         assert command in marketplace_commands, (
             f"{command}: not registered in marketplace.json commands: {marketplace_commands}"
@@ -517,14 +523,16 @@ class TestPrUpdate:
 
 
 # =============================================================================
-# PR Review Command Tests (End-to-End Pipeline)
+# PR Review Command Tests (End-to-End Orchestrator)
 # =============================================================================
 
 
 class TestPrReview:
-    """pr-review.md has expected structure and content."""
+    """pr-review.md orchestrates existing skill + commands without duplication."""
 
     COMMAND = "pr-review.md"
+
+    # --- Structural ---
 
     def test_file_exists(self):
         path = COMMANDS_DIR / self.COMMAND
@@ -537,96 +545,46 @@ class TestPrReview:
         assert "description" in fm, f"{self.COMMAND}: frontmatter missing 'description'"
         assert len(fm["description"]) > 10, f"{self.COMMAND}: description too short"
 
-    def test_has_pr_detection(self):
-        """Should use gh pr view for PR details."""
-        content = _read_command(self.COMMAND)
-        assert "gh pr view" in content, (
-            f"{self.COMMAND}: missing 'gh pr view' for PR detection"
+    def test_registered_in_marketplace(self, marketplace_commands):
+        assert self.COMMAND in marketplace_commands, (
+            f"{self.COMMAND}: not registered in marketplace.json: {marketplace_commands}"
         )
 
-    def test_has_merge_base(self):
-        """Should compute merge-base for accurate diffs."""
+    # --- Composition: references existing skill + commands ---
+
+    def test_references_pr_reviewing_skill(self):
+        """Phase 1 should delegate to the pr-reviewing skill."""
         content = _read_command(self.COMMAND)
-        assert "MERGE_BASE" in content, (
-            f"{self.COMMAND}: missing merge-base computation"
+        assert "pr-reviewing" in content, (
+            f"{self.COMMAND}: missing reference to pr-reviewing skill"
         )
 
-    def test_has_issue_context(self):
-        """Should extract and fetch linked issue."""
+    def test_references_full_code_review(self):
+        """Phase 2 should delegate to full-code-review command."""
         content = _read_command(self.COMMAND)
-        content_lower = content.lower()
-        assert "linked issue" in content_lower or "issue context" in content_lower or "issue references" in content_lower, (
-            f"{self.COMMAND}: missing issue context gathering"
+        assert "full-code-review" in content, (
+            f"{self.COMMAND}: missing reference to full-code-review command"
         )
 
-    def test_has_reconciliator(self):
-        """Should dispatch reconciliator after agents."""
+    def test_references_ingest_code_review(self):
+        """Phase 3 should delegate to ingest-code-review command."""
         content = _read_command(self.COMMAND)
-        assert "review-reconciliator" in content, (
-            f"{self.COMMAND}: missing reconciliator dispatch"
+        assert "ingest-code-review" in content, (
+            f"{self.COMMAND}: missing reference to ingest-code-review command"
         )
 
-    def test_has_finding_validation(self):
-        """Should validate findings against actual code (ingest phase)."""
+    def test_does_not_duplicate_agent_table(self, marketplace_agents):
+        """Should NOT inline the 12-agent dispatch table (that lives in full-code-review)."""
         content = _read_command(self.COMMAND)
-        assert "CHANGED_FILES" in content, (
-            f"{self.COMMAND}: missing CHANGED_FILES validation reference"
+        agent_refs = AGENT_REF_PATTERN.findall(content)
+        # Filter out skill references — only check for reviewer agent refs
+        reviewer_refs = [r for r in agent_refs if r in marketplace_agents]
+        assert len(reviewer_refs) == 0, (
+            f"{self.COMMAND}: found inline agent references {reviewer_refs} — "
+            f"should delegate to full-code-review instead of duplicating"
         )
 
-    def test_has_false_positive_handling(self):
-        """Should filter false positives."""
-        content = _read_command(self.COMMAND)
-        assert "FALSE POSITIVE" in content or "FALSE_POSITIVE" in content, (
-            f"{self.COMMAND}: missing false positive handling"
-        )
-
-    def test_has_action_plan(self):
-        """Should produce an action plan."""
-        content = _read_command(self.COMMAND)
-        assert "Action Plan" in content, (
-            f"{self.COMMAND}: missing Action Plan"
-        )
-
-    def test_has_finding_categorization(self):
-        """Should categorize findings like ingest-code-review."""
-        content = _read_command(self.COMMAND)
-        categories = ["CONFIRMED", "LIKELY VALID", "FALSE POSITIVE", "OUT OF SCOPE"]
-        found = [c for c in categories if c in content]
-        assert len(found) >= 4, (
-            f"{self.COMMAND}: expected 4+ finding categories, found {len(found)}: {found}"
-        )
-
-    def test_has_document_generation(self):
-        """Should save a review document to file."""
-        content = _read_command(self.COMMAND)
-        assert "review-report.md" in content, (
-            f"{self.COMMAND}: missing review-report.md output file reference"
-        )
-
-    def test_has_cleanup(self):
-        """Should restore workspace after review."""
-        content = _read_command(self.COMMAND)
-        content_lower = content.lower()
-        assert "cleanup" in content_lower or "restore" in content_lower, (
-            f"{self.COMMAND}: missing cleanup/restore step"
-        )
-
-    def test_non_interactive_during_review(self):
-        """AskUserQuestion should only appear in the final cleanup step, not during review phases."""
-        content = _read_command(self.COMMAND)
-        # Split at Phase 4 (output) — everything before should be non-interactive
-        phase4_marker = "## Phase 4"
-        assert phase4_marker in content, f"{self.COMMAND}: missing Phase 4 marker"
-        before_phase4 = content.split(phase4_marker)[0]
-        assert "AskUserQuestion" not in before_phase4, (
-            f"{self.COMMAND}: AskUserQuestion found before Phase 4 (review should be non-interactive)"
-        )
-        # Phase 4 should have exactly one AskUserQuestion (branch restore)
-        phase4_content = content.split(phase4_marker)[1]
-        ask_count = phase4_content.count("AskUserQuestion")
-        assert ask_count == 1, (
-            f"{self.COMMAND}: expected 1 AskUserQuestion in Phase 4, found {ask_count}"
-        )
+    # --- Phase 1: PR-specific inline content ---
 
     def test_has_pr_state_guards(self):
         """Should guard against draft, merged, closed PRs."""
@@ -635,15 +593,65 @@ class TestPrReview:
         assert "draft" in content_lower, f"{self.COMMAND}: missing draft PR guard"
         assert "merged" in content_lower, f"{self.COMMAND}: missing merged PR guard"
 
-    def test_has_scope_check(self):
-        """Should use review-scope.py for pre-flight."""
+    def test_has_non_interactive_overrides(self):
+        """Should document overrides that make the skill non-interactive."""
         content = _read_command(self.COMMAND)
-        assert "review-scope.py" in content, (
-            f"{self.COMMAND}: missing review-scope.py reference"
+        content_lower = content.lower()
+        assert "auto-stash" in content_lower, f"{self.COMMAND}: missing auto-stash override"
+        assert "always" in content_lower and "full review" in content_lower, (
+            f"{self.COMMAND}: missing 'always full review' override"
         )
 
-    def test_registered_in_marketplace(self, marketplace_commands):
-        """pr-review.md should be registered in marketplace.json."""
-        assert self.COMMAND in marketplace_commands, (
-            f"{self.COMMAND}: not registered in marketplace.json: {marketplace_commands}"
+    def test_has_merge_base(self):
+        """Should reference MERGE_BASE for accurate diffs."""
+        content = _read_command(self.COMMAND)
+        assert "MERGE_BASE" in content, (
+            f"{self.COMMAND}: missing MERGE_BASE reference"
+        )
+
+    def test_has_changed_files(self):
+        """Should carry CHANGED_FILES through the pipeline."""
+        content = _read_command(self.COMMAND)
+        assert "CHANGED_FILES" in content, (
+            f"{self.COMMAND}: missing CHANGED_FILES reference"
+        )
+
+    # --- Phase 4: unique output ---
+
+    def test_has_document_generation(self):
+        """Should save a review document to file."""
+        content = _read_command(self.COMMAND)
+        assert "review-report.md" in content, (
+            f"{self.COMMAND}: missing review-report.md output file reference"
+        )
+
+    def test_has_branch_restore_question(self):
+        """Should ask user about restoring previous branch at the end."""
+        content = _read_command(self.COMMAND)
+        content_lower = content.lower()
+        assert "restore" in content_lower, (
+            f"{self.COMMAND}: missing branch restore step"
+        )
+
+    def test_non_interactive_during_review(self):
+        """AskUserQuestion should only appear in Phase 4, not during review."""
+        content = _read_command(self.COMMAND)
+        phase4_marker = "## Phase 4"
+        assert phase4_marker in content, f"{self.COMMAND}: missing Phase 4 marker"
+        before_phase4 = content.split(phase4_marker)[0]
+        assert "AskUserQuestion" not in before_phase4, (
+            f"{self.COMMAND}: AskUserQuestion found before Phase 4"
+        )
+        phase4_content = content.split(phase4_marker)[1]
+        ask_count = phase4_content.count("AskUserQuestion")
+        assert ask_count == 1, (
+            f"{self.COMMAND}: expected 1 AskUserQuestion in Phase 4, found {ask_count}"
+        )
+
+    def test_has_four_phases(self):
+        """Should have exactly 4 phases."""
+        content = _read_command(self.COMMAND)
+        phases = [m for m in re.finditer(r"^## Phase \d", content, re.MULTILINE)]
+        assert len(phases) == 4, (
+            f"{self.COMMAND}: expected 4 phases, found {len(phases)}"
         )

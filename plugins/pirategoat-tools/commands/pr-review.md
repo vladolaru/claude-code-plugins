@@ -2,16 +2,11 @@
 description: End-to-end PR review — gathers context, dispatches all review agents, validates findings, and saves a comprehensive review document
 ---
 
-You are a PR review orchestrator. Your mission: gather full PR context, dispatch all specialized reviewer agents, validate their findings, and produce a comprehensive review document — all in one non-interactive pipeline.
+You are a PR review orchestrator. Your mission: chain together the pr-reviewing skill, the full-code-review agent pipeline, and the ingest-code-review validation into a single uninterrupted run that produces a saved review document.
 
-This command combines three workflows into a single uninterrupted run:
-1. **Context gathering** (from the pr-reviewing skill)
-2. **Multi-agent code review** (from full-code-review)
-3. **Finding validation and action planning** (from ingest-code-review)
+**Design principle: no interruptions during the review pipeline.** Phases 1-3 run end-to-end without stopping for user input. All decisions use sensible defaults. The only user interaction is at the very end (Phase 4) when asking about branch restoration.
 
-**Design principle: ZERO interruptions.** This runs end-to-end without stopping for user input. All decisions use sensible defaults. The result is a saved review document.
-
-## Phase 1: Context Gathering
+## Phase 1: Context Gathering (via pr-reviewing skill)
 
 ### Step 1: Parse Arguments
 
@@ -19,265 +14,60 @@ This command combines three workflows into a single uninterrupted run:
 - Required: PR URL (e.g., `https://github.com/org/repo/pull/123`) or PR number (if CWD is the correct repo)
 - If empty: STOP. Tell the user: "Usage: `/pr-review <PR_URL_or_number>`"
 
-### Step 2: Get PR Details and Verify Repo
+### Step 2: Gather Full PR Context
 
-```bash
-gh pr view <PR_URL_or_number> --json state,isDraft,author,title,body,labels,url,number,headRepository,headRepositoryOwner,headRefName,baseRefName
-```
+**Invoke the `pirategoat-tools:pr-reviewing` skill** and follow its workflow (steps 1 through 7) with these non-interactive overrides:
 
-Extract: `PR_NUMBER`, `PR_TITLE`, `headRefName`, `baseRefName`, `author`, `body`, `state`, `isDraft`.
+| Skill step | Override |
+|------------|----------|
+| Step 0 (Ask for PR URL) | **Skip** — URL provided in step 1 above |
+| Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking |
+| Step 3 (Ask how to proceed) | **Always "Full review"** — skip the question |
+| Step 7 (Very Large PR ask) | **Note in report, proceed anyway** — no stopping |
 
-**Verify CWD matches PR repo:**
+All other skill steps execute as documented: verify repo, check PR state (draft/merged/closed → STOP), fetch branches, compute MERGE_BASE, build check, review state, linked issue context, context summary, PR size assessment.
 
-```bash
-git remote get-url origin
-```
+**After Phase 1, you should have:** `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED` (bool), `MERGE_BASE`, `GIT_RANGE`, `CHANGED_FILES`, `PR_SIZE`, and the compiled context summary.
 
-Compare against `headRepositoryOwner.login/headRepository.name`. If repos don't match → STOP. Tell the user: "PR is for `<owner>/<repo>` but CWD is a different repo."
-
-**Check PR state:**
-
-| State | Action |
-|-------|--------|
-| `isDraft: true` | STOP — "PR #X is a draft. Mark as ready for review first." |
-| `state: MERGED` | STOP — "PR #X is already merged." |
-| `state: CLOSED` | STOP — "PR #X is closed." |
-| Otherwise | Continue |
-
-### Step 3: Prepare Workspace
-
-**Save current branch:**
-
-```bash
-ORIGINAL_BRANCH=$(git branch --show-current)
-```
-
-**Auto-stash uncommitted changes (no user prompt):**
-
-```bash
-# Check for uncommitted changes
-git status --porcelain
-```
-
-If output is non-empty:
-```bash
-git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"
-# Remember: STASHED=true
-```
-
-**Fetch and update branches:**
-
-```bash
-git fetch origin
-
-# Update target branch
-git checkout <baseRefName>
-git pull origin <baseRefName>
-
-# Checkout PR branch
-git checkout <headRefName> 2>/dev/null || git checkout -b <headRefName> origin/<headRefName>
-git pull origin <headRefName>
-```
-
-**Compute merge-base (authoritative anchor for all diffs):**
-
-```bash
-MERGE_BASE=$(git merge-base origin/<baseRefName> <headRefName>)
-```
-
-Store: `PR_NUMBER`, `ORIGINAL_BRANCH`, `STASHED`, `MERGE_BASE`, `GIT_RANGE` = `${MERGE_BASE}..<headRefName>`.
-
-### Step 4: Build Check
-
-Look for AI instructions in the repo (`CLAUDE.md`, `.claude/`, etc.). If build instructions found, run the build on the PR branch. Note result (pass/fail) but **continue regardless** — a failing build is review feedback, not a reason to stop.
-
-### Step 5: Gather Review State and Issue Context
-
-**Review state (informational, not a decision point):**
-
-```bash
-gh api user --jq .login
-gh pr view <PR_URL> --json reviews,reviewRequests,comments
-```
-
-Summarize: number of human reviews, AI reviews, pending reviewers, unresolved conversations. This is context for the report.
-
-**Extract linked issue references from PR body:**
-- Linear: `WOOPRD-1234`, `WOOPLUG-5678`, `WOOPMNT-999`
-- GitHub: `Closes #123`, `Fixes #456`, `Refs #789`
-
-**Fetch issue details (if linked):**
-
-Use context-a8c or gh CLI to fetch issue with comments. Extract: problem being solved, acceptance criteria, related context.
-
-If tool unavailable or issue not found: note it and continue. Not a stopping point.
-
-### Step 6: Create Output Directory and Compile Context
+**Set the output directory:**
 
 ```bash
 OUTPUT_DIR="/tmp/pr-review-${PR_NUMBER}"
 mkdir -p "$OUTPUT_DIR"
 ```
 
-Compile the context summary (used in agent prompts and the final report):
+## Phase 2: Multi-Agent Code Review (via full-code-review)
 
-```markdown
-## PR Review Context
+### Step 3: Dispatch Agents and Reconcile
 
-**PR:** #<number> - <title>
-**Author:** <author>
-**Branches:** <headRefName> → <baseRefName>
-**Merge Base:** <MERGE_BASE>
+**Read `${CLAUDE_PLUGIN_ROOT}/commands/full-code-review.md`** and follow its steps 3 through 5 (scope summary, pre-flight scope check, agent dispatch, and reconciliation) using `GIT_RANGE` and `OUTPUT_DIR` from Phase 1.
 
-### Problem Being Solved
-<From linked issue or PR body>
+**PR-specific additions to each agent's prompt context:**
 
-### Build Status
-<Pass / Fail (with errors) / No build instructions>
-
-### Existing Review State
-<N human reviews, M AI reviews, P pending>
-
-### Key Verification Points
-- [ ] Acceptance criteria met?
-- [ ] Pending change requests addressed?
-- [ ] Tests added/updated?
-```
-
-## Phase 2: Multi-Agent Code Review
-
-### Step 7: Assess PR Size
-
-```bash
-# Full diff stats from merge-base
-git diff --stat ${MERGE_BASE}..HEAD
-
-# Code-only stats (exclude docs)
-git diff --stat ${MERGE_BASE}..HEAD -- . ':!*.md' ':!*.txt' ':!*.rst' ':!docs/' ':!documentation/' ':!README*' ':!CHANGELOG*' ':!LICENSE*'
-
-# Authoritative file list
-git diff --name-only ${MERGE_BASE}..HEAD
-```
-
-| Category | Files | Lines | Note |
-|----------|-------|-------|------|
-| Small | 1-5 | < 200 | Standard review |
-| Medium | 6-15 | 200-500 | Standard review |
-| Large | 16-30 | 500-1000 | Note in report |
-| Very Large | 30+ | 1000+ | Warn in report, proceed anyway |
-
-Save `PR_SIZE` category and `CHANGED_FILES` list.
-
-### Step 8: Pre-flight Scope Check
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --preflight --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
-```
-
-Parse `DISPATCH_DOMAINS` and `SKIP_DOMAINS`. Only dispatch agents whose domain has matching files. Always dispatch agents with domain `(none)`.
-
-If agents skipped: note in report — "Skipping N agents with no files in scope: [list]"
-
-**Stale branch check:** Parse `BRANCH_FRESHNESS:` section. If stale, note in report and fetch latest:
-```bash
-git fetch origin <baseRefName>
-```
-
-### Step 9: Dispatch All Review Agents in Parallel
-
-**CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**
-
-Each agent receives this context in its prompt:
 ```
 PR ID: <PR_NUMBER>
-Output Directory: <OUTPUT_DIR>
-Git Range: <GIT_RANGE>
 Review Type: PR review (full context available)
 PR Goal: <from context summary>
-Changed Files (authoritative): <file list from step 7>
+Changed Files (authoritative): <CHANGED_FILES from Phase 1>
 
 CONSTRAINT: Only review files on the changed files list. Files not listed are NOT part of this PR.
-
-When running bootstrap, include these flags:
-python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
 ```
 
-| # | Agent | Domain | Focus |
-|---|-------|--------|-------|
-| 1 | `pirategoat-tools:pr-reviewer` | code | Goal alignment, bugs, code quality |
-| 2 | `pirategoat-tools:security-reviewer` | security | XSS, SQL injection, CSRF, sanitization |
-| 3 | `pirategoat-tools:performance-reviewer` | performance | N+1 queries, caching, optimization |
-| 4 | `pirategoat-tools:architecture-reviewer` | architecture | SOLID, design patterns, coupling |
-| 5 | `pirategoat-tools:wp-architecture-reviewer` | wp-architecture | Hooks, WPCS, backwards compatibility |
-| 6 | `pirategoat-tools:patterns-reviewer` | patterns | Existing patterns, consolidation |
-| 7 | `pirategoat-tools:history-insights-reviewer` | code | Git history precedents, lessons learned |
-| 8 | `pirategoat-tools:php-tests-reviewer` | php-tests | PHPUnit test quality |
-| 9 | `pirategoat-tools:js-tests-reviewer` | js-tests | Jest/Vitest test quality |
-| 10 | `pirategoat-tools:e2e-tests-reviewer` | e2e-tests | Playwright E2E test quality |
-| 11 | `pirategoat-tools:go-tests-reviewer` | go-tests | Go test quality |
-| 12 | `pirategoat-tools:dead-code-reviewer` | dead-code | Unused functions, orphaned imports |
+Everything else — the 12-agent dispatch table, parallel execution rules, pre-flight filtering via `review-scope.py`, bootstrap via `bootstrap-reviewer.py`, reconciliator dispatch — follows full-code-review exactly.
 
-Agents not dispatched (domain had no files) are recorded as `STATUS=SKIPPED` in agent signals.
+## Phase 3: Validation and Action Planning (via ingest-code-review)
 
-### Step 10: Reconcile Findings
+### Step 4: Validate Findings and Build Action Plan
 
-After ALL agents return signals, dispatch the reconciliator:
+**Read `${CLAUDE_PLUGIN_ROOT}/commands/ingest-code-review.md`** and follow its steps 3 through 6 (read reconciled review, validate every finding, categorize, propose action plan).
 
-```
-Task tool:
-  subagent_type: pirategoat-tools:review-reconciliator
-  prompt: |
-    Output Directory: <OUTPUT_DIR>
-    Mode: summary
+Use `OUTPUT_DIR`, `GIT_RANGE`, and `CHANGED_FILES` from Phase 1 — no need to recompute.
 
-    Agent Signals:
-    <list all agent signals from Step 9>
-    <for each skipped agent: "<agent>: STATUS=SKIPPED (no files in <domain> domain)">
-```
-
-## Phase 3: Validation and Action Planning
-
-### Step 11: Validate Every Finding
-
-**RULE 0: Trust nothing. Verify everything against actual code.**
-
-Read the reconciled output:
-
-```bash
-cat "${OUTPUT_DIR}/reconciled.json"
-```
-
-If not present, fall back to `reconciled.md`, then individual agent files.
-
-**For EACH finding, perform these checks:**
-
-1. **File in scope?** — Compare `file` against `CHANGED_FILES`. Not changed → OUT OF SCOPE.
-2. **About changed code?** — Check if finding's line falls in diff hunks (`git diff <GIT_RANGE> -- <file>`). Pre-existing unchanged code → OUT OF SCOPE (unless the change directly interacts with it).
-3. **Accurate?** — Read the actual code at the referenced location. Does it do what the finding claims?
-4. **Confidence?** — Multi-agent (2+) = higher trust. Single-agent low-confidence (<0.6) = skeptical.
-
-### Step 12: Categorize and Plan
-
-**Categorize each finding:**
-
-| Category | Criteria |
-|----------|----------|
-| **CONFIRMED** | Verified against actual code, in scope, accurate |
-| **LIKELY VALID** | In scope, plausible, not fully verified |
-| **FALSE POSITIVE** | Inaccurate or based on misunderstanding |
-| **OUT OF SCOPE** | About code not changed in this PR |
-| **STYLE/PREFERENCE** | Subjective, not a defect |
-
-**Build action plan from CONFIRMED and LIKELY VALID findings only:**
-
-1. **Critical / Must Fix** — Security vulnerabilities, data loss, crashes
-2. **Important / Should Fix** — Bugs, performance, significant quality issues
-3. **Consider** — LIKELY VALID but uncertain
-4. **Dismissed** — FALSE POSITIVE and OUT OF SCOPE with explanations
+Everything else — the validation checks (file in scope, about changed code, accurate, confidence), the categorization buckets (CONFIRMED, LIKELY VALID, FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE), and the action plan format (Critical / Important / Consider / Dismissed) — follows ingest-code-review exactly.
 
 ## Phase 4: Output
 
-### Step 13: Generate Review Document
+### Step 5: Generate Review Document
 
 Write the comprehensive review document to `${OUTPUT_DIR}/review-report.md`:
 
@@ -365,7 +155,7 @@ All agent review files are in: `<OUTPUT_DIR>/`
 - Individual agents: `<agent>-review.json`
 ```
 
-### Step 14: Present Results and Ask About Workspace Restore
+### Step 6: Present Results and Ask About Workspace Restore
 
 **Present brief summary to user:**
 
