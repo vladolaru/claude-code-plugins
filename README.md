@@ -23,14 +23,14 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 | Plugin | What it does |
 |--------|-------------|
-| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 17 review agents, 9 skills (testing-patterns, software-architecture, WordPress), rich feedback loops |
+| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 17 review agents, 15 skills (testing-patterns, software-architecture, WordPress), rich feedback loops |
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
 
 ### pirategoat-tools
 
-The main plugin. 17 specialized review agents that run in parallel, 9 skills covering testing patterns (77KB reference library), software architecture (716KB pattern library), WordPress/WooCommerce development, and browser automation. Agents integrate with linters, coverage tools, and security scanners for ground-truth validation.
+The main plugin. 17 specialized review agents that run in parallel, 15 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, and browser automation. Agents integrate with linters, coverage tools, and security scanners for ground-truth validation.
 
 **[Full documentation →](plugins/pirategoat-tools/README.md)** | [Changelog](plugins/pirategoat-tools/CHANGELOG.md)
 
@@ -59,8 +59,8 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 17 agents, 9 skills, 6 commands
-│   ├── dex/                      # 5 commands, 1 skill, tests
+│   ├── pirategoat-tools/         # 17 agents, 15 skills, 6 commands
+│   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   └── image-optimizer/          # 1 command, optimization scripts
 ├── CLAUDE.md
@@ -85,7 +85,7 @@ cd claude-code-plugins
 
 - **[solatis/claude-config](https://github.com/solatis/claude-config)** — prompt-engineer skill and reference documents
 - **[zl190/md-slides](https://github.com/zl190/md-slides)** — creating-md-slides and marp-slide-quality skills
-- **[Jim Humelsine's blog](https://jhumelsine.github.io)** — testing-patterns (77KB) and software-architecture (716KB) reference libraries, synthesized from his excellent architecture and testing series
+- **[Jim Humelsine's blog](https://jhumelsine.github.io)** — testing-patterns (190KB) and software-architecture (87KB) reference libraries, synthesized from his excellent architecture and testing series
 - **[Every, Inc.](https://every.to/guides/compound-engineering)** — compound engineering methodology that inspired dex
 
 ## Resources

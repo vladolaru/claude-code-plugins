@@ -12,43 +12,49 @@ These run in parallel by default — total review time equals the slowest agent,
 
 | Agent | Focus | Model |
 |-------|-------|-------|
-| **pr-reviewer** | Generalist — validates changes against stated goals, catches cross-cutting issues | Opus |
-| **security-reviewer** | WordPress security — SQL injection, XSS, CSRF, capabilities, sanitization | Sonnet |
-| **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | Opus |
-| **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | Opus |
-| **performance-reviewer** | N+1 queries, caching, autoloaded options, WP_Query optimization | Sonnet |
-| **php-tests-reviewer** | PHPUnit test quality, WordPress factories, WooCommerce patterns | Sonnet |
-| **js-tests-reviewer** | Jest/Vitest quality, React Testing Library queries, async patterns | Sonnet |
-| **e2e-tests-reviewer** | Playwright quality — locators, Page Object Model, auto-waiting | Sonnet |
-| **go-tests-reviewer** | Go testing idioms, table-driven tests, httptest, benchmarks | Haiku |
-| **patterns-reviewer** | Codebase archaeology — finds existing patterns, prevents reinventing the wheel | Opus |
-| **dead-code-reviewer** | Unused functions, unreachable paths, orphaned imports | Sonnet |
-| **history-insights-reviewer** | Mines git history for relevant prior fixes and lessons learned | Opus |
-| **tests-mutation-reviewer** | Fault injection to verify tests catch real bugs (runs solo) | Sonnet |
-| **gemini-reviewer** | Cross-validates via Google Gemini CLI for independent perspective | Haiku |
-| **codex-reviewer** | Cross-validates via OpenAI Codex CLI for independent perspective | Haiku |
-| **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | Sonnet |
-| **technical-writer** | Creates documentation after feature completion | Haiku |
+| **pr-reviewer** | Generalist — validates changes against stated goals, catches cross-cutting issues | inherit |
+| **security-reviewer** | WordPress security — SQL injection, XSS, CSRF, capabilities, sanitization | sonnet |
+| **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | inherit |
+| **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | inherit |
+| **performance-reviewer** | N+1 queries, caching, autoloaded options, WP_Query optimization | sonnet |
+| **php-tests-reviewer** | PHPUnit test quality, WordPress factories, WooCommerce patterns | sonnet |
+| **js-tests-reviewer** | Jest/Vitest quality, React Testing Library queries, async patterns | sonnet |
+| **e2e-tests-reviewer** | Playwright quality — locators, Page Object Model, auto-waiting | sonnet |
+| **go-tests-reviewer** | Go testing idioms, table-driven tests, httptest, benchmarks | haiku |
+| **patterns-reviewer** | Codebase archaeology — finds existing patterns, prevents reinventing the wheel | inherit |
+| **dead-code-reviewer** | Unused functions, unreachable paths, orphaned imports | sonnet |
+| **history-insights-reviewer** | Mines git history for relevant prior fixes and lessons learned | inherit |
+| **tests-mutation-reviewer** | Fault injection to verify tests catch real bugs (runs solo) | sonnet |
+| **gemini-reviewer** | Cross-validates via Google Gemini CLI for independent perspective | haiku |
+| **codex-reviewer** | Cross-validates via OpenAI Codex CLI for independent perspective | haiku |
+| **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | sonnet |
+| **technical-writer** | Creates documentation after feature completion | haiku |
 
 #### Model Tiers
 
 Not all review work requires the same level of reasoning. Agents are assigned to model tiers based on what their task actually demands:
 
-- **Opus** (5 agents) — Deep judgment work. The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. Architecture reviewers need structural reasoning about SOLID violations and ecosystem impact. The patterns and history-insights reviewers do genuine codebase archaeology — recognizing analogues across git history, not just keyword matching.
-- **Sonnet** (8 agents) — Structured analysis against well-defined checklists. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). Test reviewers check against catalogued smells. The mutation reviewer follows a rigid 5-phase protocol. All of these benefit from competence but don't need the deep ambiguity-resolution that Opus provides.
-- **Haiku** (4 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
+- **inherit** (5 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. Architecture reviewers need structural reasoning about SOLID violations and ecosystem impact. The patterns and history-insights reviewers do genuine codebase archaeology — recognizing analogues across git history, not just keyword matching.
+- **sonnet** (8 agents) — Structured analysis against well-defined checklists. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). Test reviewers check against catalogued smells. The mutation reviewer follows a rigid 5-phase protocol. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
+- **haiku** (4 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
 
-### 9 Skills
+### 15 Skills
 
 | Skill | What it brings |
 |-------|---------------|
-| **testing-patterns** | Test quality patterns with a 77KB reference library — philosophy, smells, TDD workflow, PHPUnit/Jest/Playwright |
-| **software-architecture** | GoF patterns, SOLID, hexagonal architecture with a 716KB pattern library |
+| **testing-patterns** | Test quality patterns with a 190KB reference library — philosophy, smells, TDD workflow |
+| **php-testing-patterns** | PHPUnit assertions, WordPress test utilities, WooCommerce patterns, Brain Monkey |
+| **js-testing-patterns** | Jest/Vitest assertions, React Testing Library queries, async patterns, snapshots |
+| **e2e-testing-patterns** | Playwright locators, Page Object Model, auto-waiting, network interception |
+| **go-testing-patterns** | Standard testing package, table-driven tests, httptest, benchmarks, fuzz testing |
+| **software-architecture** | GoF patterns, SOLID, hexagonal architecture with an 87KB pattern library |
 | **wordpress-backend-dev** | WPCS coding standards, security patterns, i18n, hooks API, REST API |
 | **pr-reviewing** | Structured PR review workflow with parallel agent spawning |
 | **browser-interaction** | Browser automation via MCP servers (chrome-devtools, playwright) |
 | **woocommerce-browser-interaction** | WooCommerce-specific browser workflows — login, admin, checkout |
 | **dig-into-linear-issue** | Linear issue investigation with RCA templates |
+| **date-time-wrangling** | Time zone reasoning, date calculations, temporal logic for scheduling |
+| **decision-critic** | Structured decision analysis for technical trade-offs |
 | **creating-md-slides** | Markdown presentations via Marp (PDF, PPTX, HTML) |
 | **marp-slide-quality** | SlideGauge integration for presentation analysis |
 
@@ -110,10 +116,12 @@ Agents use ground truth results at confidence 1.0 and fall back to manual analys
 pirategoat-tools/
 ├── agents/           # 17 review agent definitions
 ├── commands/         # 6 slash commands
-├── skills/           # 9 skills with SKILL.md files
-│   ├── testing-patterns/references/      # 77KB test quality library
-│   └── software-architecture/patterns/   # 716KB design pattern library
+├── skills/           # 15 skills with SKILL.md files
+│   ├── testing-patterns/references/      # 190KB test quality library
+│   └── software-architecture/patterns/   # 87KB design pattern library
 ├── scripts/          # Helper scripts (review, parsing, linting)
+├── hooks/            # Git hook integrations
+├── schemas/          # JSON schemas for review output
 ├── docs/             # Documentation and guides
 ├── tests/            # Deterministic eval suite
 └── CHANGELOG.md
