@@ -365,18 +365,7 @@ All agent review files are in: `<OUTPUT_DIR>/`
 - Individual agents: `<agent>-review.json`
 ```
 
-### Step 14: Restore Workspace and Present Results
-
-**Restore workspace to pre-review state:**
-
-```bash
-git checkout ${ORIGINAL_BRANCH}
-```
-
-If changes were stashed earlier:
-```bash
-git stash pop
-```
+### Step 14: Present Results and Ask About Workspace Restore
 
 **Present brief summary to user:**
 
@@ -388,4 +377,33 @@ Findings: X critical, Y important, Z consider (W dismissed)
 
 Full report: <OUTPUT_DIR>/review-report.md
 All review files: <OUTPUT_DIR>/
+
+Currently on branch: <headRefName> (PR branch)
+Your previous branch: <ORIGINAL_BRANCH>
 ```
+
+**Ask the user whether to restore the previous branch:**
+
+```
+AskUserQuestion:
+  question: "You're currently on the PR branch (<headRefName>). Would you like to switch back to your previous branch (<ORIGINAL_BRANCH>)?"
+  header: "Restore previous branch?"
+  options:
+    - label: "Restore previous branch"
+      description: "Switch back to <ORIGINAL_BRANCH> and pop stash if applicable"
+    - label: "Stay on PR branch"
+      description: "Keep <headRefName> checked out (useful if you want to fix issues now)"
+```
+
+**If user chooses "Restore previous branch":**
+
+```bash
+git checkout ${ORIGINAL_BRANCH}
+```
+
+If changes were stashed earlier:
+```bash
+git stash pop
+```
+
+**If user chooses "Stay on PR branch":** Do nothing. If changes were stashed, remind the user: "Note: You have stashed changes from `<ORIGINAL_BRANCH>`. Run `git stash pop` after switching back."

@@ -611,11 +611,21 @@ class TestPrReview:
             f"{self.COMMAND}: missing cleanup/restore step"
         )
 
-    def test_non_interactive(self):
-        """Should NOT use AskUserQuestion (non-interactive design)."""
+    def test_non_interactive_during_review(self):
+        """AskUserQuestion should only appear in the final cleanup step, not during review phases."""
         content = _read_command(self.COMMAND)
-        assert "AskUserQuestion" not in content, (
-            f"{self.COMMAND}: should be non-interactive (no AskUserQuestion)"
+        # Split at Phase 4 (output) — everything before should be non-interactive
+        phase4_marker = "## Phase 4"
+        assert phase4_marker in content, f"{self.COMMAND}: missing Phase 4 marker"
+        before_phase4 = content.split(phase4_marker)[0]
+        assert "AskUserQuestion" not in before_phase4, (
+            f"{self.COMMAND}: AskUserQuestion found before Phase 4 (review should be non-interactive)"
+        )
+        # Phase 4 should have exactly one AskUserQuestion (branch restore)
+        phase4_content = content.split(phase4_marker)[1]
+        ask_count = phase4_content.count("AskUserQuestion")
+        assert ask_count == 1, (
+            f"{self.COMMAND}: expected 1 AskUserQuestion in Phase 4, found {ask_count}"
         )
 
     def test_has_pr_state_guards(self):
