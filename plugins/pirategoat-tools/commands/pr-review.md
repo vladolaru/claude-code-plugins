@@ -2,11 +2,11 @@
 description: End-to-end PR review — gathers context, dispatches all review agents, validates findings, and saves a comprehensive review document
 ---
 
-You are a PR review orchestrator. Your mission: chain together the pr-reviewing skill, the full-code-review agent pipeline, and the ingest-code-review validation into a single uninterrupted run that produces a saved review document.
+You are a PR review orchestrator. Your mission: chain together the pr-reviewing skill and the ingest-code-review validation into a single uninterrupted run that produces a saved review document.
 
-**Design principle: no interruptions during the review pipeline.** Phases 1-3 run end-to-end without stopping for user input. All decisions use sensible defaults. The only user interaction is at the very end (Phase 4) when asking about branch restoration.
+**Design principle: no interruptions during the review pipeline.** Phases 1-2 run end-to-end without stopping for user input. All decisions use sensible defaults. The only user interaction is at the very end (Phase 3) when asking about branch restoration.
 
-## Phase 1: Context Gathering (via pr-reviewing skill)
+## Phase 1: PR Context and Code Review (via pr-reviewing skill)
 
 ### Step 1: Parse Arguments
 
@@ -14,9 +14,9 @@ You are a PR review orchestrator. Your mission: chain together the pr-reviewing 
 - Required: PR URL (e.g., `https://github.com/org/repo/pull/123`) or PR number (if CWD is the correct repo)
 - If empty: STOP. Tell the user: "Usage: `/pr-review <PR_URL_or_number>`"
 
-### Step 2: Gather Full PR Context
+### Step 2: Invoke pr-reviewing Skill
 
-**Invoke the `pirategoat-tools:pr-reviewing` skill** and follow its workflow (steps 1 through 7) with these non-interactive overrides:
+**Invoke the `pirategoat-tools:pr-reviewing` skill** and follow its full workflow (steps 1 through 8, including agent dispatch and reconciliation) with these non-interactive overrides:
 
 | Skill step | Override |
 |------------|----------|
@@ -24,40 +24,15 @@ You are a PR review orchestrator. Your mission: chain together the pr-reviewing 
 | Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking |
 | Step 3 (Ask how to proceed) | **Always "Full review"** — skip the question |
 | Step 7 (Very Large PR ask) | **Note in report, proceed anyway** — no stopping |
+| Step 8 (Agent selection by size) | **Always dispatch all specialists** — treat every PR as Large regardless of size, so all 12 agents run |
 
-All other skill steps execute as documented: verify repo, check PR state (draft/merged/closed → STOP), fetch branches, compute MERGE_BASE, build check, review state, linked issue context, context summary, PR size assessment.
+All other skill steps execute as documented: verify repo, check PR state (draft/merged/closed → STOP), fetch branches, compute MERGE_BASE, build check, review state, linked issue context, context summary, PR size assessment, pre-flight scope check, parallel agent dispatch, and reconciliation.
 
-**After Phase 1, you should have:** `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED` (bool), `MERGE_BASE`, `GIT_RANGE`, `CHANGED_FILES`, `PR_SIZE`, and the compiled context summary.
+**After Phase 1, you should have:** `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED` (bool), `MERGE_BASE`, `GIT_RANGE`, `OUTPUT_DIR` (`/tmp/pr-review-${PR_NUMBER}`), `CHANGED_FILES`, `PR_SIZE`, the compiled context summary, and the reconciled review output in `OUTPUT_DIR`.
 
-**Set the output directory:**
+## Phase 2: Validation and Action Planning (via ingest-code-review)
 
-```bash
-OUTPUT_DIR="/tmp/pr-review-${PR_NUMBER}"
-mkdir -p "$OUTPUT_DIR"
-```
-
-## Phase 2: Multi-Agent Code Review (via full-code-review)
-
-### Step 3: Dispatch Agents and Reconcile
-
-**Read `${CLAUDE_PLUGIN_ROOT}/commands/full-code-review.md`** and follow its steps 3 through 5 (scope summary, pre-flight scope check, agent dispatch, and reconciliation) using `GIT_RANGE` and `OUTPUT_DIR` from Phase 1.
-
-**PR-specific additions to each agent's prompt context:**
-
-```
-PR ID: <PR_NUMBER>
-Review Type: PR review (full context available)
-PR Goal: <from context summary>
-Changed Files (authoritative): <CHANGED_FILES from Phase 1>
-
-CONSTRAINT: Only review files on the changed files list. Files not listed are NOT part of this PR.
-```
-
-Everything else — the 12-agent dispatch table, parallel execution rules, pre-flight filtering via `review-scope.py`, bootstrap via `bootstrap-reviewer.py`, reconciliator dispatch — follows full-code-review exactly.
-
-## Phase 3: Validation and Action Planning (via ingest-code-review)
-
-### Step 4: Validate Findings and Build Action Plan
+### Step 3: Validate Findings and Build Action Plan
 
 **Read `${CLAUDE_PLUGIN_ROOT}/commands/ingest-code-review.md`** and follow its steps 3 through 6 (read reconciled review, validate every finding, categorize, propose action plan).
 
@@ -65,9 +40,9 @@ Use `OUTPUT_DIR`, `GIT_RANGE`, and `CHANGED_FILES` from Phase 1 — no need to r
 
 Everything else — the validation checks (file in scope, about changed code, accurate, confidence), the categorization buckets (CONFIRMED, LIKELY VALID, FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE), and the action plan format (Critical / Important / Consider / Dismissed) — follows ingest-code-review exactly.
 
-## Phase 4: Output
+## Phase 3: Output
 
-### Step 5: Generate Review Document
+### Step 4: Generate Review Document
 
 Write the comprehensive review document to `${OUTPUT_DIR}/review-report.md`:
 
@@ -155,7 +130,7 @@ All agent review files are in: `<OUTPUT_DIR>/`
 - Individual agents: `<agent>-review.json`
 ```
 
-### Step 6: Present Results and Ask About Workspace Restore
+### Step 5: Present Results and Ask About Workspace Restore
 
 **Present brief summary to user:**
 

@@ -553,35 +553,28 @@ class TestPrReview:
     # --- Composition: references existing skill + commands ---
 
     def test_references_pr_reviewing_skill(self):
-        """Phase 1 should delegate to the pr-reviewing skill."""
+        """Phase 1 should delegate to the pr-reviewing skill for context + dispatch."""
         content = _read_command(self.COMMAND)
         assert "pr-reviewing" in content, (
             f"{self.COMMAND}: missing reference to pr-reviewing skill"
         )
 
-    def test_references_full_code_review(self):
-        """Phase 2 should delegate to full-code-review command."""
-        content = _read_command(self.COMMAND)
-        assert "full-code-review" in content, (
-            f"{self.COMMAND}: missing reference to full-code-review command"
-        )
-
     def test_references_ingest_code_review(self):
-        """Phase 3 should delegate to ingest-code-review command."""
+        """Phase 2 should delegate to ingest-code-review command for validation."""
         content = _read_command(self.COMMAND)
         assert "ingest-code-review" in content, (
             f"{self.COMMAND}: missing reference to ingest-code-review command"
         )
 
     def test_does_not_duplicate_agent_table(self, marketplace_agents):
-        """Should NOT inline the 12-agent dispatch table (that lives in full-code-review)."""
+        """Should NOT inline the agent dispatch table (skill handles dispatch)."""
         content = _read_command(self.COMMAND)
         agent_refs = AGENT_REF_PATTERN.findall(content)
         # Filter out skill references — only check for reviewer agent refs
         reviewer_refs = [r for r in agent_refs if r in marketplace_agents]
         assert len(reviewer_refs) == 0, (
             f"{self.COMMAND}: found inline agent references {reviewer_refs} — "
-            f"should delegate to full-code-review instead of duplicating"
+            f"pr-reviewing skill handles dispatch, no need to duplicate"
         )
 
     # --- Phase 1: PR-specific inline content ---
@@ -616,7 +609,7 @@ class TestPrReview:
             f"{self.COMMAND}: missing CHANGED_FILES reference"
         )
 
-    # --- Phase 4: unique output ---
+    # --- Phase 3: unique output ---
 
     def test_has_document_generation(self):
         """Should save a review document to file."""
@@ -634,24 +627,26 @@ class TestPrReview:
         )
 
     def test_non_interactive_during_review(self):
-        """AskUserQuestion should only appear in Phase 4, not during review."""
+        """AskUserQuestion should only appear in the final phase, not during review."""
         content = _read_command(self.COMMAND)
-        phase4_marker = "## Phase 4"
-        assert phase4_marker in content, f"{self.COMMAND}: missing Phase 4 marker"
-        before_phase4 = content.split(phase4_marker)[0]
-        assert "AskUserQuestion" not in before_phase4, (
-            f"{self.COMMAND}: AskUserQuestion found before Phase 4"
+        # Find the last phase marker
+        phase_markers = list(re.finditer(r"^## Phase \d", content, re.MULTILINE))
+        assert len(phase_markers) >= 2, f"{self.COMMAND}: too few phases"
+        last_phase_start = phase_markers[-1].start()
+        before_last = content[:last_phase_start]
+        assert "AskUserQuestion" not in before_last, (
+            f"{self.COMMAND}: AskUserQuestion found before final phase"
         )
-        phase4_content = content.split(phase4_marker)[1]
-        ask_count = phase4_content.count("AskUserQuestion")
+        last_phase_content = content[last_phase_start:]
+        ask_count = last_phase_content.count("AskUserQuestion")
         assert ask_count == 1, (
-            f"{self.COMMAND}: expected 1 AskUserQuestion in Phase 4, found {ask_count}"
+            f"{self.COMMAND}: expected 1 AskUserQuestion in final phase, found {ask_count}"
         )
 
-    def test_has_four_phases(self):
-        """Should have exactly 4 phases."""
+    def test_has_three_phases(self):
+        """Should have exactly 3 phases."""
         content = _read_command(self.COMMAND)
         phases = [m for m in re.finditer(r"^## Phase \d", content, re.MULTILINE)]
-        assert len(phases) == 4, (
-            f"{self.COMMAND}: expected 4 phases, found {len(phases)}"
+        assert len(phases) == 3, (
+            f"{self.COMMAND}: expected 3 phases, found {len(phases)}"
         )
