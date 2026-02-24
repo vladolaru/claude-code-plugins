@@ -23,8 +23,6 @@ You are a PR review orchestrator. Your mission: chain together the pr-reviewing 
 | Step 0 (Ask for PR URL) | **Skip** — URL provided in step 1 above |
 | Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking |
 | Step 3 (Ask how to proceed) | **Always "Full review"** — skip the question |
-| Step 7 (Very Large PR ask) | **Note in report, proceed anyway** — no stopping |
-| Step 8 (Agent selection by size) | **Always dispatch all specialists** — treat every PR as Large regardless of size, so all 12 agents run |
 
 All other skill steps execute as documented: verify repo, check PR state (draft/merged/closed → STOP), fetch branches, compute MERGE_BASE, build check, review state, linked issue context, context summary, PR size assessment, pre-flight scope check, parallel agent dispatch, and reconciliation.
 
