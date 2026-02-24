@@ -39,12 +39,14 @@ REVIEW_COMMANDS = [
     "full-code-review.md",
     "code-review.md",
     "ingest-code-review.md",
+    "pr-review.md",
 ]
 
 # Commands that dispatch agents (have agent tables)
 DISPATCH_COMMANDS = [
     "full-code-review.md",
     "code-review.md",
+    "pr-review.md",
 ]
 
 # Agent name pattern in markdown tables: `pirategoat-tools:<name>`
@@ -185,14 +187,17 @@ class TestAgentReferences:
             )
 
     def test_dispatch_agents_consistent(self):
-        """full-code-review and code-review dispatch the same agents."""
-        full_refs = set(_extract_agent_refs(_read_command("full-code-review.md")))
-        incr_refs = set(_extract_agent_refs(_read_command("code-review.md")))
-        assert full_refs == incr_refs, (
-            f"Agent mismatch between commands.\n"
-            f"Only in full-code-review: {full_refs - incr_refs}\n"
-            f"Only in code-review: {incr_refs - full_refs}"
-        )
+        """All dispatch commands should dispatch the same set of agents."""
+        agent_sets = {}
+        for cmd in DISPATCH_COMMANDS:
+            agent_sets[cmd] = set(_extract_agent_refs(_read_command(cmd)))
+        first_cmd = DISPATCH_COMMANDS[0]
+        for cmd in DISPATCH_COMMANDS[1:]:
+            assert agent_sets[first_cmd] == agent_sets[cmd], (
+                f"Agent mismatch between {first_cmd} and {cmd}.\n"
+                f"Only in {first_cmd}: {agent_sets[first_cmd] - agent_sets[cmd]}\n"
+                f"Only in {cmd}: {agent_sets[cmd] - agent_sets[first_cmd]}"
+            )
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
     def test_dispatches_12_agents(self, command):
@@ -508,4 +513,127 @@ class TestPrUpdate:
         """pr-update.md should be registered in marketplace.json."""
         assert self.COMMAND in marketplace_commands, (
             f"{self.COMMAND}: not registered in marketplace.json commands: {marketplace_commands}"
+        )
+
+
+# =============================================================================
+# PR Review Command Tests (End-to-End Pipeline)
+# =============================================================================
+
+
+class TestPrReview:
+    """pr-review.md has expected structure and content."""
+
+    COMMAND = "pr-review.md"
+
+    def test_file_exists(self):
+        path = COMMANDS_DIR / self.COMMAND
+        assert path.is_file(), f"Command file not found: {path}"
+
+    def test_has_frontmatter_with_description(self):
+        content = _read_command(self.COMMAND)
+        assert content.startswith("---"), f"{self.COMMAND}: missing frontmatter delimiter"
+        fm = _parse_frontmatter(content)
+        assert "description" in fm, f"{self.COMMAND}: frontmatter missing 'description'"
+        assert len(fm["description"]) > 10, f"{self.COMMAND}: description too short"
+
+    def test_has_pr_detection(self):
+        """Should use gh pr view for PR details."""
+        content = _read_command(self.COMMAND)
+        assert "gh pr view" in content, (
+            f"{self.COMMAND}: missing 'gh pr view' for PR detection"
+        )
+
+    def test_has_merge_base(self):
+        """Should compute merge-base for accurate diffs."""
+        content = _read_command(self.COMMAND)
+        assert "MERGE_BASE" in content, (
+            f"{self.COMMAND}: missing merge-base computation"
+        )
+
+    def test_has_issue_context(self):
+        """Should extract and fetch linked issue."""
+        content = _read_command(self.COMMAND)
+        content_lower = content.lower()
+        assert "linked issue" in content_lower or "issue context" in content_lower or "issue references" in content_lower, (
+            f"{self.COMMAND}: missing issue context gathering"
+        )
+
+    def test_has_reconciliator(self):
+        """Should dispatch reconciliator after agents."""
+        content = _read_command(self.COMMAND)
+        assert "review-reconciliator" in content, (
+            f"{self.COMMAND}: missing reconciliator dispatch"
+        )
+
+    def test_has_finding_validation(self):
+        """Should validate findings against actual code (ingest phase)."""
+        content = _read_command(self.COMMAND)
+        assert "CHANGED_FILES" in content, (
+            f"{self.COMMAND}: missing CHANGED_FILES validation reference"
+        )
+
+    def test_has_false_positive_handling(self):
+        """Should filter false positives."""
+        content = _read_command(self.COMMAND)
+        assert "FALSE POSITIVE" in content or "FALSE_POSITIVE" in content, (
+            f"{self.COMMAND}: missing false positive handling"
+        )
+
+    def test_has_action_plan(self):
+        """Should produce an action plan."""
+        content = _read_command(self.COMMAND)
+        assert "Action Plan" in content, (
+            f"{self.COMMAND}: missing Action Plan"
+        )
+
+    def test_has_finding_categorization(self):
+        """Should categorize findings like ingest-code-review."""
+        content = _read_command(self.COMMAND)
+        categories = ["CONFIRMED", "LIKELY VALID", "FALSE POSITIVE", "OUT OF SCOPE"]
+        found = [c for c in categories if c in content]
+        assert len(found) >= 4, (
+            f"{self.COMMAND}: expected 4+ finding categories, found {len(found)}: {found}"
+        )
+
+    def test_has_document_generation(self):
+        """Should save a review document to file."""
+        content = _read_command(self.COMMAND)
+        assert "review-report.md" in content, (
+            f"{self.COMMAND}: missing review-report.md output file reference"
+        )
+
+    def test_has_cleanup(self):
+        """Should restore workspace after review."""
+        content = _read_command(self.COMMAND)
+        content_lower = content.lower()
+        assert "cleanup" in content_lower or "restore" in content_lower, (
+            f"{self.COMMAND}: missing cleanup/restore step"
+        )
+
+    def test_non_interactive(self):
+        """Should NOT use AskUserQuestion (non-interactive design)."""
+        content = _read_command(self.COMMAND)
+        assert "AskUserQuestion" not in content, (
+            f"{self.COMMAND}: should be non-interactive (no AskUserQuestion)"
+        )
+
+    def test_has_pr_state_guards(self):
+        """Should guard against draft, merged, closed PRs."""
+        content = _read_command(self.COMMAND)
+        content_lower = content.lower()
+        assert "draft" in content_lower, f"{self.COMMAND}: missing draft PR guard"
+        assert "merged" in content_lower, f"{self.COMMAND}: missing merged PR guard"
+
+    def test_has_scope_check(self):
+        """Should use review-scope.py for pre-flight."""
+        content = _read_command(self.COMMAND)
+        assert "review-scope.py" in content, (
+            f"{self.COMMAND}: missing review-scope.py reference"
+        )
+
+    def test_registered_in_marketplace(self, marketplace_commands):
+        """pr-review.md should be registered in marketplace.json."""
+        assert self.COMMAND in marketplace_commands, (
+            f"{self.COMMAND}: not registered in marketplace.json: {marketplace_commands}"
         )

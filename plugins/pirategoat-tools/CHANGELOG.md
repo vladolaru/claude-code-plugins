@@ -5,7 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.30.1] - 2026-02-24
+## [1.31.0] - 2026-02-24
+
+### Added
+
+- **`/pr-review` command** — End-to-end PR review pipeline that runs without interruption. Gathers full PR context (details, issue, review state), dispatches all 12 review agents in parallel, reconciles findings, validates each finding against actual code (filtering false positives and out-of-scope items), and saves a comprehensive review document to `/tmp/pr-review-<PR_NUMBER>/review-report.md`. Combines the pr-reviewing skill, full-code-review, and ingest-code-review workflows into a single non-interactive command.
 
 ### Changed
 
