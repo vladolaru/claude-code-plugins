@@ -32,7 +32,7 @@ All other skill steps execute as documented: verify repo, check PR state (draft/
 
 ### Step 3: Validate Findings and Build Action Plan
 
-**Follow the `/ingest-code-review` command** using `OUTPUT_DIR`, `GIT_RANGE`, and `CHANGED_FILES` from Phase 1 — skip its location and range detection steps since those are already resolved.
+Apply `/ingest-code-review`.
 
 ## Phase 3: Output
 
