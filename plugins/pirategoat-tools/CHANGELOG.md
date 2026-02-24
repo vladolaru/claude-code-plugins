@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.30.1] - 2026-02-24
+
+### Changed
+
+- **Tiered model assignments for reviewer agents** — Assigned models based on reasoning complexity to reduce cost and latency. Orchestration and pattern-matching agents (gemini-reviewer, codex-reviewer, technical-writer, go-tests-reviewer) downgraded to haiku. Checklist-driven agents (security, performance, dead-code, tests-mutation, php/js/e2e-tests reviewers) set to sonnet. Deep-reasoning agents (pr-reviewer, architecture, wp-architecture, patterns, history-insights) remain on inherit (Opus).
+
 ## [1.30.0] - 2026-02-23
 
 ### Fixed

@@ -1,7 +1,7 @@
 ---
 name: js-tests-reviewer
 description: JavaScript/TypeScript test quality review for Jest/Vitest assertions, React Testing Library queries, module mocking, async patterns, and snapshot discipline
-model: inherit
+model: sonnet
 color: green
 tools:
   - Read

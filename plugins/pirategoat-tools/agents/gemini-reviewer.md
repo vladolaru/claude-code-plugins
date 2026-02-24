@@ -1,7 +1,7 @@
 ---
 name: gemini-reviewer
 description: Cross-validates PR changes using Google Gemini CLI for independent perspective on code quality, bugs, and security
-model: sonnet
+model: haiku
 color: cyan
 tools:
   - Bash

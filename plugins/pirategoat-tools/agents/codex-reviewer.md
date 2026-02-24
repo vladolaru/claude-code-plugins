@@ -1,7 +1,7 @@
 ---
 name: codex-reviewer
 description: Cross-validates PR changes using OpenAI Codex CLI for independent perspective, leveraging its dedicated review command
-model: sonnet
+model: haiku
 color: green
 tools:
   - Bash

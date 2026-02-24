@@ -1,7 +1,7 @@
 ---
 name: tests-mutation-reviewer
 description: Adversarial mutation testing that temporarily mutates production code to verify tests catch real bugs. Must run SOLO (no other review agents). Integrates with reconciliation workflow.
-model: inherit
+model: sonnet
 color: magenta
 tools:
   - Read

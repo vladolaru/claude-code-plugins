@@ -1,7 +1,7 @@
 ---
 name: php-tests-reviewer
 description: PHP test quality review for PHPUnit assertions, WordPress test utilities (WP_UnitTestCase, factories), WooCommerce test patterns, and Brain Monkey isolation
-model: inherit
+model: sonnet
 color: green
 tools:
   - Read

@@ -1,7 +1,7 @@
 ---
 name: go-tests-reviewer
 description: Go test quality review for standard testing package patterns, table-driven tests, test helpers, httptest, benchmarks, and interface-based mocking
-model: inherit
+model: haiku
 color: green
 tools:
   - Read

@@ -1,7 +1,7 @@
 ---
 name: security-reviewer
 description: WordPress security-focused code review for sanitization, escaping, nonces, capabilities, SQL injection, and data exposure
-model: inherit
+model: sonnet
 color: red
 tools:
   - Read
