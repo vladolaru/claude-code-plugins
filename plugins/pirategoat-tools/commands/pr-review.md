@@ -4,7 +4,15 @@ description: End-to-end PR review — gathers context, dispatches all review age
 
 You are a PR review orchestrator. Your mission: chain together the pr-reviewing skill and the ingest-code-review validation into a single uninterrupted run that produces a saved review document.
 
-**Design principle: no interruptions during the review pipeline.** Phases 1-2 run end-to-end without stopping for user input. All decisions use sensible defaults. The only user interaction is at the very end (Phase 3) when asking about branch restoration.
+**RULE 0: Run Phases 1–2 autonomously.** Use sensible defaults for every decision point. The only user interaction is at the very end (Phase 3) when asking about branch restoration.
+
+### Pipeline
+
+```
+Phase 1  →  PR context + code review    (pr-reviewing skill + /full-code-review dispatch)
+Phase 2  →  Validate findings            (/ingest-code-review)
+Phase 3  →  Generate review-report.md + ask about branch restore
+```
 
 ## Phase 1: PR Context and Code Review (via pr-reviewing skill)
 
@@ -23,10 +31,11 @@ You are a PR review orchestrator. Your mission: chain together the pr-reviewing 
 | Step 0 (Ask for PR URL) | **Skip** — URL provided in step 1 above |
 | Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking |
 | Step 3 (Ask how to proceed) | **Always "Full review"** — skip the question |
+| Step 8 (Agent dispatch) | **Use `/full-code-review` dispatch** (steps 3.5–5) instead of the skill's selective dispatch — ensures all 12 agents run regardless of PR size |
 
-All other skill steps execute as documented: verify repo, check PR state (draft/merged/closed → STOP), fetch branches, compute MERGE_BASE, build check, review state, linked issue context, context summary, PR size assessment, pre-flight scope check, parallel agent dispatch, and reconciliation.
+All other skill steps execute as documented.
 
-**After Phase 1, you should have:** `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED` (bool), `MERGE_BASE`, `GIT_RANGE`, `OUTPUT_DIR` (`/tmp/pr-review-${PR_NUMBER}`), `CHANGED_FILES`, `PR_SIZE`, the compiled context summary, and the reconciled review output in `OUTPUT_DIR`.
+**State after Phase 1:** `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED` (bool), `MERGE_BASE`, `GIT_RANGE`, `OUTPUT_DIR` (`/tmp/pr-review-${PR_NUMBER}`), `CHANGED_FILES`, `PR_SIZE`, the compiled context summary, and the reconciled review output in `OUTPUT_DIR`.
 
 ## Phase 2: Validation and Action Planning (via ingest-code-review)
 
@@ -165,4 +174,4 @@ If changes were stashed earlier:
 git stash pop
 ```
 
-**If user chooses "Stay on PR branch":** Do nothing. If changes were stashed, remind the user: "Note: You have stashed changes from `<ORIGINAL_BRANCH>`. Run `git stash pop` after switching back."
+**If user chooses "Stay on PR branch":** If changes were stashed, remind the user: "Note: You have stashed changes from `<ORIGINAL_BRANCH>`. Run `git stash pop` after switching back."

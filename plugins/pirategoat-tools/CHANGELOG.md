@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`/pr-review` prompt optimizations** — Applied research-backed prompt engineering patterns: RULE 0 emphasis for autonomy constraint, pipeline overview (Skeleton-of-Thought), compressed redundant step enumeration, and restored `/full-code-review` dispatch override to ensure all 12 agents run regardless of PR size.
 - **Tiered model assignments for reviewer agents** — Assigned models based on reasoning complexity to reduce cost and latency. Orchestration and pattern-matching agents (gemini-reviewer, codex-reviewer, technical-writer, go-tests-reviewer) downgraded to haiku. Checklist-driven agents (security, performance, dead-code, tests-mutation, php/js/e2e-tests reviewers) set to sonnet. Deep-reasoning agents (pr-reviewer, architecture, wp-architecture, patterns, history-insights) remain on inherit (Opus).
 
 ## [1.30.0] - 2026-02-23

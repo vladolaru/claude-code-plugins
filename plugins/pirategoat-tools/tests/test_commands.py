@@ -566,6 +566,13 @@ class TestPrReview:
             f"{self.COMMAND}: missing reference to ingest-code-review command"
         )
 
+    def test_references_full_code_review(self):
+        """Should reference /full-code-review for comprehensive agent dispatch."""
+        content = _read_command(self.COMMAND)
+        assert "full-code-review" in content, (
+            f"{self.COMMAND}: missing reference to full-code-review command"
+        )
+
     def test_does_not_duplicate_agent_table(self, marketplace_agents):
         """Should NOT inline the agent dispatch table (skill handles dispatch)."""
         content = _read_command(self.COMMAND)
@@ -578,13 +585,9 @@ class TestPrReview:
         )
 
     # --- Phase 1: PR-specific inline content ---
-
-    def test_has_pr_state_guards(self):
-        """Should guard against draft, merged, closed PRs."""
-        content = _read_command(self.COMMAND)
-        content_lower = content.lower()
-        assert "draft" in content_lower, f"{self.COMMAND}: missing draft PR guard"
-        assert "merged" in content_lower, f"{self.COMMAND}: missing merged PR guard"
+    # Note: PR state guards (draft/merged/closed) are owned by the pr-reviewing
+    # skill, not this orchestrator command.  test_references_pr_reviewing_skill
+    # verifies the delegation.
 
     def test_has_non_interactive_overrides(self):
         """Should document overrides that make the skill non-interactive."""
