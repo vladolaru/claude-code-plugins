@@ -19,9 +19,14 @@ Discover the project's knowledge infrastructure fresh on every invocation. Scan 
 2. **Find CLAUDE.md:** Check in order, use the first found:
    - `<root>/CLAUDE.md`
    - `<root>/.claude/CLAUDE.md`
-3. **Find knowledge directory:** Check for `<root>/.claude/docs/`
-4. **List existing subdirectories:** Check for `learnings/`, `patterns/`, `decisions/`, `research/` within `.claude/docs/`
-5. **Count CLAUDE.md lines:** Run `wc -l` on the found CLAUDE.md
+3. **Resolve AGENTS.md indirection:** If CLAUDE.md was found, check whether it redirects to AGENTS.md:
+   - **Symlink:** Run `readlink <claude_md_path>`. If the target filename is `AGENTS.md`, use the symlink target as the edit target.
+   - **Include directive:** Read the file content. If the entire content is a single `@AGENTS.md` line (with optional whitespace/newlines), find the referenced AGENTS.md relative to CLAUDE.md's directory and use it as the edit target.
+   - If AGENTS.md indirection is detected, all subsequent operations (reading, writing, line counting, budget enforcement, promotion, extraction) target the resolved file. Use the resolved filename in all user-facing messages (e.g., "Add to AGENTS.md?" instead of "Add to CLAUDE.md?").
+   - If no indirection is detected, continue using CLAUDE.md as the edit target.
+4. **Find knowledge directory:** Check for `<root>/.claude/docs/`
+5. **List existing subdirectories:** Check for `learnings/`, `patterns/`, `decisions/`, `research/` within `.claude/docs/`
+6. **Count lines:** Run `wc -l` on the resolved edit target
 
 If a CLAUDE.md or `.claude/docs/` does not exist, proceed with what you have. Missing infrastructure is a normal state — handle it per the calling command's instructions.
 
@@ -38,6 +43,20 @@ knowledge_dir:    /path/to/project/.claude/docs/
   decisions:      exists (2 files)
   research:       exists (1 file)
 ```
+
+If AGENTS.md indirection was resolved:
+
+```
+project_root:     /path/to/project
+claude_md:        /path/to/project/AGENTS.md  (387 lines, resolved from CLAUDE.md)
+knowledge_dir:    /path/to/project/.claude/docs/
+  learnings:      exists (7 files)
+  patterns:       exists (3 files)
+  decisions:      exists (2 files)
+  research:       exists (1 file)
+```
+
+Throughout this skill and all `/dex:*` commands, "CLAUDE.md" refers to the resolved edit target. If AGENTS.md indirection was detected during discovery, substitute the resolved filename in all user-facing text (e.g., "Promote to AGENTS.md?" instead of "Promote to CLAUDE.md?").
 
 If `.claude/docs/` doesn't exist, commands should offer scaffolding via AskUserQuestion before proceeding (except `/dex:status` which reports the absence).
 

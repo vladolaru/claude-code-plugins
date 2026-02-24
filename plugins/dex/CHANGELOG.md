@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.0] - 2026-02-24
+
+### Added
+
+- AGENTS.md indirection support in Project Discovery — if CLAUDE.md is a symlink to AGENTS.md or contains only `@AGENTS.md`, all operations (reading, writing, line counting, budget enforcement, promotion, extraction) target AGENTS.md instead, with user-facing messages reflecting the resolved filename
+
 ## [1.4.1] - 2026-02-15
 
 ### Changed

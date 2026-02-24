@@ -282,6 +282,23 @@ class TestSkillCoreLogic:
         assert "Project Discovery" in skill_content, "Skill missing Project Discovery section"
         assert "git rev-parse" in skill_content, "Skill missing git root detection"
 
+    def test_has_agents_md_resolution(self, skill_content):
+        """Skill must handle AGENTS.md indirection (symlink or @AGENTS.md include)."""
+        assert "AGENTS.md" in skill_content, (
+            "Skill missing AGENTS.md resolution in Project Discovery"
+        )
+        # Must handle both symlink and include directive cases
+        assert "symlink" in skill_content.lower(), (
+            "Skill must handle CLAUDE.md symlinked to AGENTS.md"
+        )
+        assert "readlink" in skill_content, (
+            "Skill must use readlink to detect symlinks"
+        )
+        # Must specify that resolved filename is used in user-facing text
+        assert "user-facing" in skill_content.lower() or "user facing" in skill_content.lower(), (
+            "Skill must specify using resolved filename in user-facing text"
+        )
+
     def test_has_scaffolding_section(self, skill_content):
         assert "Scaffolding" in skill_content, "Skill missing Scaffolding section"
         assert "learnings" in skill_content
