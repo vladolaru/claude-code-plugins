@@ -111,7 +111,7 @@
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["knowledge-capture", "compound-engineering", "learnings", "patterns", "decisions", "research", "claude-md"],
+      "keywords": ["knowledge-capture", "compound-engineering", "learnings", "patterns", "decisions", "research", "claude-md", "agents-md"],
       "category": "productivity",
       "strict": true,
       "skills": [
