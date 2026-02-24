@@ -18,7 +18,14 @@ The "Compound" step is the novel piece. As [Will Larson observed](https://lethai
 
 After any engineering work — fixing a bug, discovering a gotcha, establishing a convention, making an architectural choice — fire a command. dex reads the conversation, extracts the insight, and asks for a single confirmation. That's it.
 
-Knowledge is stored as agent-first documents in `.claude/docs/` — structured so AI agents get the actionable rule in the first three lines without reading the whole file. Critical rules can be promoted to a one-liner in CLAUDE.md with a link back to the full doc.
+Knowledge is stored as agent-first documents in `<ai_dir>/docs/` — structured so AI agents get the actionable rule in the first three lines without reading the whole file. Critical rules can be promoted to a one-liner in the instructions file with a link back to the full doc.
+
+dex automatically detects your project setup and adapts:
+
+| Setup | Instructions file | Knowledge dir |
+|-------|-------------------|---------------|
+| `CLAUDE.md` | CLAUDE.md | `.claude/docs/` |
+| `AGENTS.md` (via symlink or `@AGENTS.md` in CLAUDE.md) | AGENTS.md | `.ai/docs/` |
 
 ## Commands
 
@@ -29,8 +36,8 @@ Knowledge is stored as agent-first documents in `.claude/docs/` — structured s
 | `/dex:pattern` | Captures a reusable pattern — approach, convention, anti-pattern |
 | `/dex:research` | Captures research findings — investigations, debugging sessions, trial-and-error explorations |
 | `/dex:sharpen` | Analyzes agent behavior for inefficiencies and captures fixes as project knowledge |
-| `/dex:init` | Scaffolds `.claude/docs/` knowledge infrastructure for a new project |
-| `/dex:status` | Shows knowledge health report — CLAUDE.md budget, doc counts, latest entries |
+| `/dex:init` | Scaffolds knowledge infrastructure, offers migration from `.claude/docs/` → `.ai/docs/` for AGENTS.md projects |
+| `/dex:status` | Shows knowledge health report — budget, doc counts, freshness, migration warnings |
 
 ## What Gets Captured
 
@@ -82,9 +89,9 @@ by name pattern. Glob is faster, respects .gitignore, and returns
 results sorted by modification time.
 ```
 
-## CLAUDE.md Budget
+## Instructions File Budget
 
-CLAUDE.md should be a lean routing table — concise rules with links to depth, not a knowledge dump. dex enforces this:
+Your instructions file (CLAUDE.md or AGENTS.md) should be a lean routing table — concise rules with links to depth, not a knowledge dump. dex enforces this:
 
 | Line count | What happens |
 |-----------|-------------|
