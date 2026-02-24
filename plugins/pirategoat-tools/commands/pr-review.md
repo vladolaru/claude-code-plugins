@@ -32,11 +32,7 @@ All other skill steps execute as documented: verify repo, check PR state (draft/
 
 ### Step 3: Validate Findings and Build Action Plan
 
-**Read `${CLAUDE_PLUGIN_ROOT}/commands/ingest-code-review.md`** and follow its steps 3 through 6 (read reconciled review, validate every finding, categorize, propose action plan).
-
-Use `OUTPUT_DIR`, `GIT_RANGE`, and `CHANGED_FILES` from Phase 1 — no need to recompute.
-
-Everything else — the validation checks (file in scope, about changed code, accurate, confidence), the categorization buckets (CONFIRMED, LIKELY VALID, FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE), and the action plan format (Critical / Important / Consider / Dismissed) — follows ingest-code-review exactly.
+**Follow the `/ingest-code-review` command** using `OUTPUT_DIR`, `GIT_RANGE`, and `CHANGED_FILES` from Phase 1 — skip its location and range detection steps since those are already resolved.
 
 ## Phase 3: Output
 
