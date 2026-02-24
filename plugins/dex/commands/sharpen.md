@@ -69,7 +69,7 @@ If sub-agents were dispatched in this session (via Task tool), run the analyzer:
 python3 ${PLUGIN_ROOT}/scripts/analyze-subagents.py --project-dir $(git rev-parse --show-toplevel)
 ```
 
-Where `${PLUGIN_ROOT}` is this plugin's root directory (the directory containing this command file's parent `commands/` directory).
+Resolve `${PLUGIN_ROOT}`: navigate up from this command file to the directory containing `scripts/`. Verify that `${PLUGIN_ROOT}/scripts/analyze-subagents.py` exists before running. If the script is missing, skip this step and continue with Step 3.
 
 If the script exits with code 2 (no data), skip this step. If exit code 0, incorporate
 flagged patterns into Step 3's analysis — they map to Inefficiency Categories:

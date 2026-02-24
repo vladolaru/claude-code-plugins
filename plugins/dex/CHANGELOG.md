@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.2] - 2026-02-24
+
+### Changed
+
+- Grok router: renumbered Step 2.5 (Graduation Check) to Step 3, Step 3 (Delegate) to Step 4 — clean integer step numbering (Format Strictness)
+- Sharpen command: tightened `${PLUGIN_ROOT}` resolution with explicit existence check for `analyze-subagents.py` and graceful skip on missing script (Error Normalization)
+- Knowledge-capture skill: added Write Failure Recovery guidance — on file write failure, display intended content for manual save instead of undefined behavior (Error Normalization)
+
 ## [1.5.1] - 2026-02-24
 
 ### Added

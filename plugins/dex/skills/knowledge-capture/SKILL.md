@@ -401,6 +401,10 @@ Before saving any document, verify it passes all four checks. If any check fails
 - Concise: under 50 lines (learnings), under 80 (patterns/decisions). Research: no limit but omit empty sections
 </extraction_quality_checklist>
 
+### Write Failure Recovery
+
+If writing a document file fails (permissions, disk full, invalid path), report the error and display the intended file path and full document content so the user can save it manually. Do not retry — the user may need to fix permissions or path issues first.
+
 ## Agent Behavior Analysis
 
 Shared logic for analyzing agent behavior in a conversation to find inefficiencies and capture fixes as project knowledge. Used by `/dex:sharpen`.

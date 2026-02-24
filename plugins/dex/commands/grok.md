@@ -83,7 +83,7 @@ Show in the question description:
 
 Always show all four options. Mark only the auto-classified one as "(Recommended)".
 
-## Step 2.5: Graduation Check
+## Step 3: Graduation Check
 
 If the user selected Learning, check for reusability signals:
 - Describes an approach that applies beyond the original situation
@@ -100,7 +100,7 @@ If reusability signals are present, use AskUserQuestion:
 
 If "Yes", delegate to `/dex:pattern` flow. Otherwise continue with `/dex:learn`.
 
-## Step 3: Delegate
+## Step 4: Delegate
 
 Based on the user's selection:
 

@@ -403,6 +403,19 @@ class TestSkillCoreLogic:
         assert "Preventive" in skill_content, "Skill missing Preventive quality check"
         assert "Non-obvious" in skill_content, "Skill missing Non-obvious quality check"
 
+    def test_has_write_failure_recovery(self, skill_content):
+        """Skill must define graceful behavior when file writes fail."""
+        assert "Write Failure Recovery" in skill_content, (
+            "Skill missing Write Failure Recovery section"
+        )
+        content_lower = skill_content.lower()
+        assert "manually" in content_lower, (
+            "Skill write failure recovery must mention manual save as fallback"
+        )
+        assert "do not retry" in content_lower, (
+            "Skill write failure recovery must instruct not to retry"
+        )
+
 
 # =============================================================================
 # Command Content — Router (dex.md)
