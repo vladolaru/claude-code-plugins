@@ -58,14 +58,16 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | **creating-md-slides** | Markdown presentations via Marp (PDF, PPTX, HTML) |
 | **marp-slide-quality** | SlideGauge integration for presentation analysis |
 
-### 6 Commands
+### 8 Commands
 
 | Command | Purpose |
 |---------|---------|
 | `/full-code-review` | Run all review agents in parallel on current branch changes |
 | `/code-review` | Incremental review of new commits since the last review |
 | `/ingest-code-review` | Analyze review findings, filter false positives, propose action plan |
+| `/pr-review` | End-to-end PR review pipeline (context + agents + validation) |
 | `/pr-update` | Update PR description with accurate summary of current changes |
+| `/copy-as [content] [slack]` | Copy content to clipboard — standard markdown or Slack mrkdwn |
 | `/fix-github-issue <number>` | Analyze and fix a GitHub issue end-to-end |
 | `/execute-plan <plan>` | Execute an implementation plan through delegation and QA |
 
@@ -115,7 +117,7 @@ Agents use ground truth results at confidence 1.0 and fall back to manual analys
 ```
 pirategoat-tools/
 ├── agents/           # 17 review agent definitions
-├── commands/         # 6 slash commands
+├── commands/         # 8 slash commands
 ├── skills/           # 15 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library

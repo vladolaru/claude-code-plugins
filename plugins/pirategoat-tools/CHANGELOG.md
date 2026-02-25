@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.32.0] - 2026-02-25
+
+### Added
+
+- **`/copy-as` command** — Copies content to clipboard formatted for the target destination. Defaults to standard markdown (pass-through); when `slack` is specified, converts to Slack's mrkdwn syntax via a 14-rule conversion checklist — bold/italic syntax differences (`**` → `*`, `*` → `_`), link inversion (`[text](url)` → `<url|text>`), heading removal (→ bold text), table conversion (→ preformatted code blocks), strikethrough (`~~` → `~`), code block language identifier stripping, HTML tag removal, and special character escaping with explicit code span protection. Prompt-engineered with Identity Establishment, Scope Limitation, Completeness Checkpoint Tags, Emphasis Hierarchy (RULE 0), Contrastive Examples, and Confidence Building patterns.
+
 ## [1.31.1] - 2026-02-24
 
 ### Changed

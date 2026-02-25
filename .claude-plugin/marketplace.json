@@ -13,7 +13,7 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Code review orchestration (12 specialized agents), WordPress/WooCommerce development patterns, testing guidance, and browser automation.",
-      "version": "1.31.1",
+      "version": "1.32.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -42,7 +42,8 @@
         "./commands/code-review.md",
         "./commands/ingest-code-review.md",
         "./commands/pr-update.md",
-        "./commands/pr-review.md"
+        "./commands/pr-review.md",
+        "./commands/copy-as.md"
       ],
       "agents": [
         "./agents/technical-writer.md",
