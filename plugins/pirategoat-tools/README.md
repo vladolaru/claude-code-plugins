@@ -67,7 +67,7 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | `/ingest-code-review` | Analyze review findings, filter false positives, propose action plan |
 | `/pr-review` | End-to-end PR review pipeline (context + agents + validation) |
 | `/pr-update` | Update PR description with accurate summary of current changes |
-| `/copy-as [content] [slack]` | Copy content to clipboard — standard markdown or Slack mrkdwn |
+| `/copy-as [content] [slack\|p2]` | Copy content to clipboard — markdown, Slack mrkdwn, or P2 HTML |
 | `/fix-github-issue <number>` | Analyze and fix a GitHub issue end-to-end |
 | `/execute-plan <plan>` | Execute an implementation plan through delegation and QA |
 

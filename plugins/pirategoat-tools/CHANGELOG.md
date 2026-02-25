@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.0] - 2026-02-25
+
+### Added
+
+- **`/copy-as` P2/Gutenberg HTML format** — New `p2` target for the `/copy-as` command. Converts markdown to semantic HTML (15 element rules) and uses a Swift NSPasteboard script to set both `public.html` and `public.utf8-plain-text` on the clipboard. Gutenberg auto-converts pasted HTML to blocks, so users can Cmd+V directly into P2 posts and comments without needing Cmd+Shift+V for plain text paste.
+
 ## [1.32.0] - 2026-02-25
 
 ### Added
