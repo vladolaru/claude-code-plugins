@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.32.3] - 2026-02-26
+
+### Changed
+
+- **`/full-code-review` auto-ingests findings** — Added Step 7 that automatically invokes `pirategoat-tools:ingest-code-review` after the reconciliator finishes. Previously users had to manually run `/ingest-code-review` as a follow-up. The ingest step now runs back-to-back with Step 6 without waiting for user input.
+
 ## [1.32.2] - 2026-02-26
 
 ### Fixed
