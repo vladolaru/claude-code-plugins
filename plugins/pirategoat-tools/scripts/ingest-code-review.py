@@ -33,8 +33,9 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
     # Common state requirement for steps 2+
     state_requirement = (
         "CONTEXT REQUIREMENT: Your --thoughts from this step must include ALL finding IDs (F1, F2...), "
-        "their scope status (IN_SCOPE/OUT_OF_SCOPE), and any verification questions and statuses "
-        "from previous steps. This accumulated state is essential for workflow continuity."
+        "their scope status (IN_SCOPE/OUT_OF_SCOPE), verification questions, answers, rationale, and "
+        "status markers (VERIFIED/FAILED/UNCERTAIN) from previous steps. "
+        "This accumulated state is essential for workflow continuity."
     )
 
     # SETUP PHASE — Step 1
@@ -74,7 +75,7 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
                 "  GIT_RANGE=<range>",
                 "  CHANGED_FILES=[file1, file2, ...]",
             ],
-            "next": "Step 2: Parse findings and assign stable IDs.",
+            "next": f"Step {next_step}: Parse findings and assign stable IDs.",
             "academic_note": None,
         }
 
@@ -109,7 +110,7 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
                 "",
                 state_requirement,
             ],
-            "next": "Step 3: Classify each finding as IN_SCOPE or OUT_OF_SCOPE.",
+            "next": f"Step {next_step}: Classify each finding as IN_SCOPE or OUT_OF_SCOPE.",
             "academic_note": None,
         }
 
@@ -151,7 +152,7 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
                 "",
                 state_requirement,
             ],
-            "next": "Step 4: Generate verification questions for IN_SCOPE findings.",
+            "next": f"Step {next_step}: Generate verification questions for IN_SCOPE findings.",
             "academic_note": None,
         }
 
@@ -182,9 +183,14 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
                 "    Q1: <does the code at file:line actually do Y?>",
                 "    Q2: <does the codebase have protection Z already?>",
                 "",
+                "EXAMPLE:",
+                "  F3 [IN_SCOPE]: Missing nonce verification in AJAX handler",
+                "    Q1: Does the handler at the referenced line call wp_verify_nonce() or check_ajax_referer()?",
+                "    Q2: Is any nonce verification present earlier in the request lifecycle for this action?",
+                "",
                 state_requirement,
             ],
-            "next": "Step 5: Answer each question independently with factored verification.",
+            "next": f"Step {next_step}: Answer each question independently with factored verification.",
             "academic_note": (
                 "Chain-of-Verification (Dhuliawala et al., 2023): \"Plan verification questions "
                 "to check its work, and then systematically answer those questions.\""
@@ -208,7 +214,9 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
                 "  Answer using ONLY:",
                 "    (a) The actual code at the referenced location — use the Read tool to examine the file",
                 "    (b) Stated context from --thoughts (git range, CHANGED_FILES, constraints)",
-                "    (c) Established domain knowledge (security patterns, WP conventions, etc.)",
+                "    (c) Established domain knowledge — only when the actual code is insufficient",
+                "        to answer the question (e.g., verifying whether a WP nonce is required at",
+                "        all, not whether this specific code uses one correctly)",
                 "",
                 "  Do NOT assume the finding is correct and work backward.",
                 "  Do NOT assume the finding is wrong and seek to disprove.",
@@ -233,7 +241,7 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
                 "",
                 state_requirement,
             ],
-            "next": "Step 6: Categorize all findings and produce the action plan.",
+            "next": f"Step {next_step}: Categorize all findings and produce the action plan.",
             "academic_note": (
                 "Chain-of-Verification: \"Factored variants which separate out verification steps, "
                 "in terms of which context is attended to, give further performance gains.\""
@@ -255,6 +263,8 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
                 "  FALSE POSITIVE = IN_SCOPE + FAILED (finding is inaccurate)",
                 "  OUT OF SCOPE  = OUT_OF_SCOPE (from step 3)",
                 "  STYLE/PREFERENCE = IN_SCOPE + VERIFIED but subjective/non-defect",
+                "      STYLE/PREFERENCE applies ONLY to formatting, naming, or coding style with no",
+                "      correctness or security impact. When uncertain between CONFIRMED and STYLE, use CONFIRMED.",
                 "",
                 "PRESENT validation summary table:",
                 "",

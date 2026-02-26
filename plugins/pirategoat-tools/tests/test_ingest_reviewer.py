@@ -55,7 +55,7 @@ class TestGetStepGuidance:
         g = _mod.get_step_guidance(6, 6, None, "prior state")
         assert g["step_title"] == "Categorize & Plan"
 
-    def test_step_1_has_no_next_for_step_6(self):
+    def test_step_6_has_no_next(self):
         g = _mod.get_step_guidance(6, 6, None, "")
         assert g["next"] is None
 
