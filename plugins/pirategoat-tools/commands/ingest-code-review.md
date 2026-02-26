@@ -38,6 +38,8 @@ python3 scripts/ingest-code-review.py \
 
 ## Starting the Workflow
 
+You will run `scripts/ingest-code-review.py` once per step. The script prints the instructions for that step; you execute them, then call the script again for the next step. Six calls total.
+
 **Parse arguments:** `$ARGUMENTS`
 - If a path is provided: use it as `--output-dir`
 - If empty: use `--output-dir auto`
@@ -52,4 +54,9 @@ python3 scripts/ingest-code-review.py \
   --thoughts ""
 ```
 
-Execute the instructions printed by the script. After completing each step's work, call the script with `--step-number N+1` and pass ALL accumulated state in `--thoughts`. Continue until Step 6 completes.
+**If the script exits with an error** (e.g., "No review output found at …"), STOP. Report the error to the user and do not proceed to Step 2.
+
+**After each step — repeat until Step 6 completes:**
+1. Read the instructions printed by the script
+2. Execute those instructions completely
+3. Call the script again with `--step-number N+1` and ALL accumulated state in `--thoughts`
