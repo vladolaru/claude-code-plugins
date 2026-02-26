@@ -242,6 +242,14 @@ Copy the relevant sections from CHANGELOG.md for the release notes.
 3. **Scalability** - Add more plugins without version conflicts
 4. **Standard Practice** - Common pattern for monorepos
 
+## Design Patterns
+
+Established patterns for building skills and commands live in `.claude/docs/patterns/`. Consult them before implementing similar functionality.
+
+| Pattern | When to use |
+|---|---|
+| [step-by-step-prompt-injection](.claude/docs/patterns/step-by-step-prompt-injection.md) | Multi-phase analytical workflows where later steps must be independent of earlier conclusions — e.g., verify before judge, gather before synthesize. Includes script template, skill file structure, testing checklist, and two reference implementations. |
+
 ## Knowledge Capture
 
 - After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using `/dex:grok` to capture the knowledge.
