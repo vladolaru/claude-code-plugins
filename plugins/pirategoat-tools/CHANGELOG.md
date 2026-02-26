@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.32.2] - 2026-02-26
+
+### Fixed
+
+- **`/copy-as` content quality** — Two Step 2 refinements: (1) default to human-readable form — extract prose/structured output rather than raw data (JSON, logs, tool output) unless explicitly requested; (2) no hard line breaks — output each paragraph/list item/heading as a single continuous line so paste targets reflow correctly.
+
 ## [1.32.1] - 2026-02-25
 
 ### Added

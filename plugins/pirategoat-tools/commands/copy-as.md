@@ -26,7 +26,11 @@ If the content reference is ambiguous, ask the user to clarify.
 
 Extract the content. If it comes from a file, read it. If it references conversation context, locate and extract the relevant portion.
 
+**Default to human-readable form.** Unless the user explicitly asks for raw output (JSON, code, logs, tool output), extract the prose or structured representation that a person would read — not the underlying data. If both exist (e.g., a summary and a JSON payload), copy the summary.
+
 Strip tool artifacts (Read output line numbers, tool wrappers) so the clipboard contains clean, ready-to-paste content.
+
+Do not introduce hard line breaks. Output each paragraph, list item, or heading as a single continuous line — paste targets handle their own reflowing.
 
 ## Step 3: Format for Target
 
