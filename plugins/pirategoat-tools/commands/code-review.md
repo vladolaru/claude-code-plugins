@@ -191,3 +191,15 @@ Task tool:
     Mode: focused
     Focus Topic: <topic>
 ```
+
+## Step 7: Ingest Review Findings
+
+After presenting the reconciled summary, automatically invoke the ingest skill to validate findings, filter false positives, and produce an action plan:
+
+```
+Skill tool:
+  skill: pirategoat-tools:ingest-code-review
+  args: <OUTPUT_DIR>
+```
+
+Do not wait for user input between Step 6 and Step 7 — run them back-to-back.
