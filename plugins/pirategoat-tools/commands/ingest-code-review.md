@@ -33,8 +33,8 @@ python3 scripts/ingest-code-review.py \
 | --- | --- | --- |
 | `--step-number` | Yes | Current step (1–6) |
 | `--total-steps` | Yes | Always 6 |
-| `--output-dir` | Step 1 | Path to review output directory, or `auto` to detect from current branch |
-| `--thoughts` | Yes | All accumulated state (finding IDs, scope status, verification results) |
+| `--output-dir` | Step 1 only | Path to review output directory, or `auto` to detect from current branch. Steps 2-6 read it from `--thoughts` instead. |
+| `--thoughts` | Yes | All accumulated state (finding IDs, scope status, verification results). Pass `""` on step 1. |
 
 ## Starting the Workflow
 

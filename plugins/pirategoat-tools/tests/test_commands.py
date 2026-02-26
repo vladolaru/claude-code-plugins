@@ -333,6 +333,17 @@ class TestIngestCodeReview:
             f"ingest-code-review.md: expected 4+ categories, found {len(found)}: {found}"
         )
 
+    def test_references_step_injector_script(self):
+        """ingest-code-review.md should reference the step injector script."""
+        content = _read_command("ingest-code-review.md")
+        assert "ingest-code-review.py" in content, (
+            "ingest-code-review.md: missing reference to ingest-code-review.py script"
+        )
+        script_path = SCRIPTS_DIR / "ingest-code-review.py"
+        assert script_path.is_file(), (
+            f"ingest-code-review.py not found at {script_path}"
+        )
+
 
 class TestFullCodeReview:
     """full-code-review.md has expected structure."""
