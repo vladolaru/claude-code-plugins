@@ -13,13 +13,21 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Code review orchestration (12 specialized agents), WordPress/WooCommerce development patterns, testing guidance, and browser automation.",
-      "version": "1.33.0",
+      "version": "1.33.1",
       "author": {
         "name": "Vlad Olaru"
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["wordpress", "project-management", "code-review", "browser-automation", "linear", "architecture", "design-patterns"],
+      "keywords": [
+        "wordpress",
+        "project-management",
+        "code-review",
+        "browser-automation",
+        "linear",
+        "architecture",
+        "design-patterns"
+      ],
       "category": "development-tools",
       "strict": true,
       "skills": [
@@ -75,7 +83,13 @@
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["image-optimization", "imageoptim", "svgo", "compression", "lossless"],
+      "keywords": [
+        "image-optimization",
+        "imageoptim",
+        "svgo",
+        "compression",
+        "lossless"
+      ],
       "category": "productivity",
       "strict": true,
       "commands": [
@@ -92,7 +106,15 @@
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["prompt-engineering", "optimization", "claude", "ai-prompts", "compression", "hitl", "subagents"],
+      "keywords": [
+        "prompt-engineering",
+        "optimization",
+        "claude",
+        "ai-prompts",
+        "compression",
+        "hitl",
+        "subagents"
+      ],
       "category": "productivity",
       "strict": true,
       "skills": [
@@ -112,7 +134,16 @@
       },
       "repository": "https://github.com/vladolaru/claude-code-plugins",
       "license": "MIT",
-      "keywords": ["knowledge-capture", "compound-engineering", "learnings", "patterns", "decisions", "research", "claude-md", "agents-md"],
+      "keywords": [
+        "knowledge-capture",
+        "compound-engineering",
+        "learnings",
+        "patterns",
+        "decisions",
+        "research",
+        "claude-md",
+        "agents-md"
+      ],
       "category": "productivity",
       "strict": true,
       "skills": [

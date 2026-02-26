@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.1] - 2026-02-26
+
+### Changed
+
+- **`/ingest-code-review` prompt strengthened** — Added pre-work context sentence establishing the 6-call loop before step 1 runs; added explicit STOP escalation when the script exits with an error; replaced the passive loop-continuation paragraph with a labeled affirmative-directive numbered list.
+
 ## [1.33.0] - 2026-02-26
 
 ### Changed
