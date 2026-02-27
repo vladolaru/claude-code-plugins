@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.4] - 2026-02-27
+
+### Changed
+
+- **`/copy-as` strips review process artifacts from PR comments** — PR review comments now omit internal review methodology (agent counts, tool names), finding IDs (F1, F3+F4), and label-like prefixes (Verdict:, Approach:, Suggestion:). Uses descriptive headings and natural prose instead of machine-readable references.
+
 ## [1.33.3] - 2026-02-27
 
 ### Changed

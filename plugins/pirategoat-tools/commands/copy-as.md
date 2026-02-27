@@ -82,8 +82,11 @@ Write as a fellow engineer talking to a peer. The PR author knows their own PR �
 - **Omit the verdict** (approve / request changes) — that's a separate GitHub action, not prose.
 - **Omit restating what the PR does** — the author wrote it. Jump straight into observations, questions, or suggestions.
 - **Omit filler** like "Great work!", "Thanks for this PR!", "Overall this looks good." Say something substantive or say nothing.
+- **Omit your review methodology** — "11 specialist agents", "browser testing with live Stripe data", review tool names, agent counts — these are internal process. The reader cares about findings, not how you found them.
+- **Omit finding IDs and internal references** — no "F1", "F3+F4", "F9". These are machine artifacts. Use descriptive headings instead ("No test covers the overrides mechanic").
+- **Omit label-like prefixes** — no "Verdict:", "Approach:", "Suggestion:". Write in prose. Instead of "Suggestion: add a test", write "Worth adding a test that..."
 
-The voice is direct, specific, and trusting. Point out what matters; skip the ceremony.
+The voice is direct, specific, and trusting. Point out what matters; skip the ceremony. A human reviewer doesn't number their findings or explain their process — they just say what they noticed.
 
 Strip tool artifacts (Read output line numbers, tool wrappers) so the clipboard contains clean, ready-to-paste content.
 
