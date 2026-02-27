@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.33.3] - 2026-02-27
+
+### Changed
+
+- **`/copy-as` dual-audience PR content** — When copying for PR descriptions or review comments, content is now structured with a human-scannable recap (3-5 bullets, ~100 words) followed by detailed AI-friendly context below a separator. Includes contrastive before/after example showing wall-of-text vs. recap+details structure. Explicitly reconciles this with the "default to human-readable" rule via exception clause. PR review comments specifically strip contextually obvious details (PR number, verdict, restating what the PR does, filler praise) and use a direct peer-to-peer voice.
+
 ## [1.33.2] - 2026-02-27
 
 ### Changed

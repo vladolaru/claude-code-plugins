@@ -28,6 +28,63 @@ Extract the content. If it comes from a file, read it. If it references conversa
 
 **Default to human-readable form.** Unless the user explicitly asks for raw output (JSON, code, logs, tool output), extract the prose or structured representation that a person would read — not the underlying data. If both exist (e.g., a summary and a JSON payload), copy the summary.
 
+### PR descriptions, review comments, and similar dual-audience content
+
+**Exception to the default above.** PR content serves two audiences with different needs: human reviewers who need a quick scannable recap, and future AI sessions that benefit from rich context. Human reviewers won't read walls of text; AI sessions need detail to work effectively. Serve both by structuring content:
+
+**1. Lead with a human recap** — 3-5 short bullets covering what changed, why, and anything the reviewer should pay attention to. This is the part a human actually reads. Keep it under ~100 words.
+
+**2. Follow with detailed context** — Below a `---` separator (or a `<details>` block), include the richer description: implementation approach, trade-offs, affected areas, test coverage notes. This section serves future AI sessions and thorough reviewers.
+
+**3. Use the recap + details structure for anything over ~150 words.** Unseparated walls of prose signal AI slop — reviewers skip the entire thing.
+
+#### Verification: Before/After Example
+
+**Source content (verbose PR description):**
+
+> This PR refactors the payment gateway integration to use the new WooCommerce Checkout API. The previous implementation relied on legacy hooks that were deprecated in WC 8.0. The refactor touches three main areas: the gateway class, the checkout block integration, and the settings page. The gateway class now implements PaymentMethodInterface instead of extending the legacy abstract class. This required updating the process_payment method signature and moving saved payment method handling into a separate trait. The checkout block integration was rewritten to use the new registerPaymentMethod API.
+
+<example type="INCORRECT">
+## Summary
+
+This PR refactors the payment gateway integration to use the new WooCommerce Checkout API. The previous implementation relied on legacy hooks that were deprecated in WC 8.0. The refactor touches three main areas: the gateway class, the checkout block integration, and the settings page. The gateway class now implements PaymentMethodInterface instead of extending the legacy abstract class. This required updating the process_payment method signature and moving saved payment method handling into a separate trait. The checkout block integration was rewritten to use the new registerPaymentMethod API.
+</example>
+
+<example type="CORRECT">
+## Summary
+
+- Migrate payment gateway from legacy hooks to WC Checkout API
+- Replace deprecated abstract class with PaymentMethodInterface
+- Rewrite checkout block integration for registerPaymentMethod API
+
+---
+
+<details><summary>Context for reviewers and future sessions</summary>
+
+The previous implementation relied on legacy hooks deprecated in WC 8.0. Three areas affected:
+
+**Gateway class** — Now implements PaymentMethodInterface. process_payment signature updated; saved payment method handling extracted to a separate trait.
+
+**Checkout block** — Rewritten for registerPaymentMethod API.
+
+**Settings page** — Updated to reflect new gateway configuration options.
+
+</details>
+</example>
+
+The INCORRECT example dumps everything into one undifferentiated block. The CORRECT example gives humans a 3-bullet recap they'll actually read, then tucks rich context into a collapsible section for AI and thorough reviewers.
+
+#### PR review comments specifically
+
+Write as a fellow engineer talking to a peer. The PR author knows their own PR — strip anything obvious from context:
+
+- **Omit the PR number** — you're already on the PR page.
+- **Omit the verdict** (approve / request changes) — that's a separate GitHub action, not prose.
+- **Omit restating what the PR does** — the author wrote it. Jump straight into observations, questions, or suggestions.
+- **Omit filler** like "Great work!", "Thanks for this PR!", "Overall this looks good." Say something substantive or say nothing.
+
+The voice is direct, specific, and trusting. Point out what matters; skip the ceremony.
+
 Strip tool artifacts (Read output line numbers, tool wrappers) so the clipboard contains clean, ready-to-paste content.
 
 Do not introduce hard line breaks. Output each paragraph, list item, or heading as a single continuous line — paste targets handle their own reflowing.
