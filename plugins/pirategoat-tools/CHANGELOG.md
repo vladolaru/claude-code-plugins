@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.2] - 2026-02-28
+
+### Changed
+
+- **`a11y-reviewer` agent — Prompt engineering optimization** — Applied 10 research-backed patterns: Affirmative Directives (setup and confidence scoring), STOP Escalation (AP-01/AP-02 metacognitive checkpoints after RULE 0), Contrastive Examples (WRONG/RIGHT code for AP-01, AP-02, AP-07), UX-Justified Defaults (keyboard traps, tabindex, aria-hidden impact), Error Normalization ("Insufficient Context Is Normal" section), Conditional Sections (WordPress-only markers on P2 items and AP-14/AP-16), Completeness Checkpoint (keyboard protocol with named steps: Reach/Activate/Escape/Understand/Return), Numbered Rule Priority (assigned AP-17/18/19 to unnumbered entries, sorted table by severity), Hint-Based Guidance (attention primers before each sweep), Affirmative confidence scoring.
+
 ## [1.35.1] - 2026-02-28
 
 ### Changed
