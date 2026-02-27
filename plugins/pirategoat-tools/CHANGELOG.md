@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.0] - 2026-02-27
+
+### Added
+
+- **`accessible-frontend-dev` skill** — Comprehensive accessibility skill for writing WCAG 2.2 AA-compliant frontend code. Includes decision trees (ARIA vs HTML, focus strategy, announcements, disabled state), universal rules distilled from 450+ Gutenberg a11y bug fixes, component pattern quick reference, and Gutenberg infrastructure reference (`useConstrainedTabbing`, `useFocusReturn`, `speak()`, etc.). Heavy reference file covers 13 APG component patterns with full ARIA, keyboard, and focus specifications.
+- **`a11y-reviewer` agent** — Accessibility-focused code review agent (the 14th review agent). Runs P0/P1/P2 checklists against changed files, applies 13 anti-pattern detection heuristics from real Gutenberg bugs, confidence-scores each finding, and follows the "keyboard-only thought experiment" methodology. Integrates with the existing review orchestration system via bootstrap script and `a11y` domain in review-scope.
+
 ## [1.33.4] - 2026-02-27
 
 ### Changed

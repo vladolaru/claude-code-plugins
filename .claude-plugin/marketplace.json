@@ -12,8 +12,8 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Code review orchestration (12 specialized agents), WordPress/WooCommerce development patterns, testing guidance, and browser automation.",
-      "version": "1.33.4",
+      "description": "Code review orchestration (14 specialized agents), WordPress/WooCommerce development patterns, accessibility guidance, testing patterns, and browser automation.",
+      "version": "1.34.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -26,7 +26,10 @@
         "browser-automation",
         "linear",
         "architecture",
-        "design-patterns"
+        "design-patterns",
+        "accessibility",
+        "a11y",
+        "wcag"
       ],
       "category": "development-tools",
       "strict": true,
@@ -41,7 +44,8 @@
         "./skills/js-testing-patterns",
         "./skills/e2e-testing-patterns",
         "./skills/go-testing-patterns",
-        "./skills/software-architecture"
+        "./skills/software-architecture",
+        "./skills/accessible-frontend-dev"
       ],
       "commands": [
         "./commands/execute-plan.md",
@@ -70,7 +74,8 @@
         "./agents/review-reconciliator.md",
         "./agents/tests-mutation-reviewer.md",
         "./agents/history-insights-reviewer.md",
-        "./agents/dead-code-reviewer.md"
+        "./agents/dead-code-reviewer.md",
+        "./agents/a11y-reviewer.md"
       ]
     },
     {

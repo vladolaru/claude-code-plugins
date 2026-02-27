@@ -90,6 +90,11 @@ DOMAIN_CATALOG = {
         "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go)$",
         "exclude": None,
     },
+    "a11y": {
+        "description": "Frontend files for accessibility review (JS/TS/JSX/TSX/CSS)",
+        "include": r"\.(js|ts|jsx|tsx|css|scss)$",
+        "exclude": None,
+    },
 }
 
 # Noise patterns — files no reviewer should waste context on

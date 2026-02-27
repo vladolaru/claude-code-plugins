@@ -97,6 +97,11 @@ AGENT_CONFIG: Dict[str, dict] = {
         "protocols": ["reviewer"],
         "scope_flags": [],
     },
+    "a11y-reviewer": {
+        "domain": "a11y",
+        "protocols": ["reviewer"],
+        "scope_flags": [],
+    },
 }
 
 # Sections to SKIP from reviewer-protocol.md.

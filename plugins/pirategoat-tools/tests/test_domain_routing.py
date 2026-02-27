@@ -30,6 +30,7 @@ REVIEW_SCOPE_SCRIPT = SCRIPTS_DIR / "review-scope.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
 ALL_DOMAINS = [
+    "a11y",
     "architecture",
     "code",
     "dead-code",
@@ -51,6 +52,7 @@ ALL_DOMAINS = [
 # ---------------------------------------------------------------------------
 ROUTING_MATRIX = {
     "php-source.diff": {
+        "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
         "dead-code": "OK",
         "security": "OK",
@@ -64,6 +66,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "js-ts-source.diff": {
+        "a11y": "OK",
         "code": "OK",
         "dead-code": "OK",
         "security": "OK",
@@ -77,6 +80,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "php-test-only.diff": {
+        "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
         "dead-code": "NO_DOMAIN_FILES",
         "security": "OK",
@@ -90,6 +94,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "js-test-only.diff": {
+        "a11y": "OK",
         "code": "OK",
         "dead-code": "NO_DOMAIN_FILES",
         "security": "OK",
@@ -103,6 +108,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "e2e-test-only.diff": {
+        "a11y": "OK",
         "code": "OK",
         "dead-code": "OK",  # CheckoutPage.ts survives (no test/spec in filename)
         "security": "OK",
@@ -116,6 +122,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "go-test-only.diff": {
+        "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
         "dead-code": "NO_DOMAIN_FILES",  # _test.go excluded
         "security": "OK",
@@ -129,6 +136,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "go-source.diff": {
+        "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
         "dead-code": "OK",
         "security": "OK",
@@ -142,6 +150,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "mixed-code-and-tests.diff": {
+        "a11y": "OK",  # src/cart.test.ts matches .ts extension
         "code": "OK",
         "dead-code": "OK",  # src/Cart.php survives; tests/CartTest.php and src/cart.test.ts excluded
         "security": "OK",
@@ -155,6 +164,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "wp-hooks-and-i18n.diff": {
+        "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
         "dead-code": "OK",
         "security": "OK",
@@ -168,6 +178,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "multi-file-realistic.diff": {
+        "a11y": "OK",  # .css, .tsx, .spec.ts, .test.tsx all match
         "code": "OK",
         "dead-code": "OK",  # production files survive; test files excluded
         "security": "OK",
@@ -181,6 +192,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "no-code-changes.diff": {
+        "a11y": "NO_DOMAIN_FILES",
         "code": "NO_DOMAIN_FILES",
         "dead-code": "NO_DOMAIN_FILES",
         "security": "NO_DOMAIN_FILES",

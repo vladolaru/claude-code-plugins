@@ -11,6 +11,23 @@ new file mode 100644
 +.product-list li {
 +    padding: 8px 0;
 +}
+diff --git a/assets/scss/product-detail.scss b/assets/scss/product-detail.scss
+new file mode 100644
+--- /dev/null
++++ b/assets/scss/product-detail.scss
+@@ -0,0 +1,12 @@
++.product-detail {
++    padding: 16px;
++
++    &__title {
++        font-size: 1.5rem;
++        font-weight: 600;
++    }
++
++    &__price {
++        color: #333;
++    }
++}
 diff --git a/e2e/products.spec.ts b/e2e/products.spec.ts
 new file mode 100644
 --- /dev/null
