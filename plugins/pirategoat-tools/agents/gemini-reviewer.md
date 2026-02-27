@@ -49,8 +49,8 @@ Create a focused prompt that includes:
 ### 3. Invoke Gemini CLI
 
 ```bash
-# Non-interactive review with JSON output
-gemini -o json "Review this code change for bugs, security issues, and code quality problems.
+# Non-interactive review with JSON output, forcing Gemini 2.5 Pro
+gemini -m gemini-2.5-pro -o json "Review this code change for bugs, security issues, and code quality problems.
 
 ## Context
 <PR goal and focus areas>
@@ -67,6 +67,7 @@ Be specific with file paths and line references."
 ```
 
 **Important flags:**
+- `-m gemini-2.5-pro` - Force Gemini 2.5 Pro model (best reasoning for code review)
 - `-o json` - Structured output for parsing
 - No `-y/--yolo` - We don't need tool execution, just analysis
 
@@ -99,7 +100,7 @@ Extract findings from Gemini's response and format consistently:
 
 ```bash
 # Timeout wrapper
-timeout 120 gemini -o json "..." || echo "Gemini review timed out"
+timeout 120 gemini -m gemini-2.5-pro -o json "..." || echo "Gemini review timed out"
 ```
 
 ## Output Format
@@ -107,7 +108,7 @@ timeout 120 gemini -o json "..." || echo "Gemini review timed out"
 ```markdown
 ## Gemini Cross-Validation: [PR Title/Number]
 
-**Model:** Gemini (via CLI)
+**Model:** Gemini 2.5 Pro (via CLI)
 **Focus:** [General / Security / Performance / as requested]
 
 ### Findings
@@ -136,6 +137,7 @@ timeout 120 gemini -o json "..." || echo "Gemini review timed out"
 
 **Safe invocation:**
 - Use timeout wrapper (120s max) to prevent hanging
+- Always pass `-m gemini-2.5-pro` to force the Gemini 2.5 family (do not rely on auto-routing)
 - Use `-o json` for parseable, consistent output
 - Include PR context in the prompt for relevant findings
 
