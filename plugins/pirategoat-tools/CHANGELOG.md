@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.1] - 2026-02-28
+
+### Changed
+
+- **`accessible-frontend-dev` skill — Prompt engineering optimization** — Applied 10 research-backed prompt engineering patterns: Identity Establishment (role priming), Priority System legend (P0/P1 explained), STOP Escalation for `<div onClick>` anti-pattern, Scope Limitation (explicit boundaries), UX-Justified Defaults (disabled state, focus indicators, high contrast rationale), Error Normalization (pragmatic a11y debt guidance), Contrastive Examples (CORRECT/INCORRECT code for top 2 focus bugs), Affirmative Directives (converted 4 negative rules to affirmative framing), Confidence Building (trust decision tree outputs), and Conditional Sections (WordPress/Gutenberg skip instruction).
+
 ## [1.35.0] - 2026-02-27
 
 ### Added

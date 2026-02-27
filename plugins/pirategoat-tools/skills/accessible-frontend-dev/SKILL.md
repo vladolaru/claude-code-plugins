@@ -5,7 +5,11 @@ description: Use when writing or modifying frontend React/HTML components, creat
 
 # Accessible Frontend Development
 
+You are an accessibility-expert frontend developer. Your code ensures that every user — including those relying on screen readers, keyboard navigation, or assistive technology — can use the interface.
+
 Write accessible frontend code by default. Every interactive component must be keyboard-operable, screen-reader-announced, and focus-managed.
+
+**Scope:** Apply these rules when writing or modifying interactive frontend components (React, HTML, CSS). The Gutenberg Infrastructure section applies only in WordPress/Gutenberg contexts — skip it otherwise. This skill does not cover: backend accessibility (API responses), automated testing tooling, or WCAG audit documentation.
 
 ## Decision Trees (Use BEFORE Writing Code)
 
@@ -46,13 +50,35 @@ Critical/urgent (error, destructive action)?
 User should discover this control exists?
 ├── YES → aria-disabled="true" (NOT HTML disabled)
 │   └── Prevent activation in event handlers
+│   Why: HTML disabled removes the element from tab order, making it
+│   invisible to keyboard/screen reader users. aria-disabled keeps it
+│   discoverable while communicating that it can't be activated yet.
 └── NO → HTML disabled or display:none
 ```
 
+When the decision tree gives you a clear answer, apply it directly. These trees encode patterns validated across 450+ real accessibility bugs — trust the path they indicate.
+
+### When Perfect Accessibility Isn't Possible
+
+Legacy code, third-party components, or tight constraints may prevent ideal a11y in a single change. This is expected — make the highest-impact improvement possible:
+
+1. Fix P0 violations first, even if P1 issues remain
+2. Add `aria-label` or `aria-labelledby` as a bridge when semantic HTML can't be used yet
+3. Note remaining a11y debt in code comments with a brief description of what's needed
+
+Partial improvement is better than no improvement. Proceed with what's achievable.
+
 ## Universal Rules (Apply to ALL Components)
 
+| Level | Meaning | When to compromise |
+|-------|---------|-------------------|
+| **P0** | Must implement. Violations create inaccessible experiences. | Never — find another approach |
+| **P1** | Should implement. Violations degrade the experience but don't block access. | Only when P0 compliance forces a tradeoff |
+
 ### Semantic HTML First (P0)
-Use `<button>` for actions, `<a href>` for navigation. **Never** `<div role="button" tabIndex={0} onClick={...}>`. Native elements provide keyboard behavior and AT semantics for free.
+Use `<button>` for actions, `<a href>` for navigation. Native elements provide keyboard behavior and AT semantics for free.
+
+If you're about to write `<div` with `onClick` for an interactive element, **STOP**. Use the native HTML element (`<button>`, `<a>`, `<input>`, `<select>`) instead — it provides keyboard, focus, and screen reader support automatically.
 
 ### Every Interactive Element Needs an Accessible Name (P0)
 - Icon-only buttons: `aria-label="Close"` or visually hidden text
@@ -71,7 +97,42 @@ Use `<button>` for actions, `<a href>` for navigation. **Never** `<div role="but
 
 4. **Trap focus in modals:** Tab/Shift+Tab must cycle within the dialog. Use `useConstrainedTabbing()` in Gutenberg or manual trap implementation.
 
-5. **Never suppress focus indicators:** No `outline: none` without a visible replacement (`outline`, `box-shadow`, or `border`).
+5. **Always provide visible focus indicators.** When customizing, replace the default `outline` with a visible alternative (`outline`, `box-shadow`, or `border`). Removing focus indicators without a replacement makes keyboard navigation impossible — the user has no idea where they are on the page.
+
+**Focus on re-render — INCORRECT (focus lost silently):**
+```tsx
+// When showPanel becomes false, the focused element unmounts and focus disappears
+{showPanel && <PanelContent ref={panelRef} />}
+```
+
+**Focus on re-render — CORRECT (element stays in DOM):**
+```tsx
+// Element remains in DOM. Focus is preserved. Screen reader can still reach it if needed.
+<PanelContent ref={panelRef} style={{ display: showPanel ? 'block' : 'none' }} />
+```
+
+**Focus return — INCORRECT (focus goes nowhere on close):**
+```tsx
+const Modal = ({ onClose }) => {
+  return <dialog><button onClick={onClose}>Close</button></dialog>;
+};
+```
+
+**Focus return — CORRECT (focus restored to trigger on all close paths):**
+```tsx
+const Modal = ({ onClose, triggerRef }) => {
+  const handleClose = () => {
+    onClose();
+    triggerRef.current?.focus();
+  };
+  useEffect(() => {
+    const onEscape = (e) => { if (e.key === 'Escape') handleClose(); };
+    document.addEventListener('keydown', onEscape);
+    return () => document.removeEventListener('keydown', onEscape);
+  }, []);
+  return <dialog><button onClick={handleClose}>Close</button></dialog>;
+};
+```
 
 ### Keyboard Requirements (P0)
 - Every clickable element must respond to Enter (buttons) or Enter+Space (toggle/checkbox)
@@ -121,8 +182,8 @@ if (event.nativeEvent.isComposing) return;
 ### High Contrast & Forced Colors (P1)
 - Test with Windows High Contrast Mode (`forced-colors: active` media query)
 - Use `currentColor` for icon SVG fills so they adapt to forced-colors
-- Don't rely solely on `background-color` for state — borders and outlines survive forced-colors
-- Custom focus indicators: use `outline` (visible in forced-colors), not `box-shadow` (removed by forced-colors)
+- Communicate state with borders and outlines in addition to `background-color` — only borders and outlines survive forced-colors mode
+- Custom focus indicators: use `outline` (visible in forced-colors) rather than `box-shadow` (removed by forced-colors)
 
 ```css
 @media (forced-colors: active) {
@@ -134,7 +195,7 @@ if (event.nativeEvent.isComposing) return;
 
 ### Decorative Content Rendering (P1)
 
-**Screen readers announce `::before`/`::after` text content.** The W3C AccName spec requires browsers to include pseudo-element textual content in the accessible name computation. Never assume pseudo-element content is invisible to assistive technology.
+**Screen readers announce `::before`/`::after` text content.** The W3C AccName spec requires browsers to include pseudo-element textual content in the accessible name computation. Assume all pseudo-element text content is visible to assistive technology.
 
 **Choose rendering technique based on the content's role:**
 
@@ -151,7 +212,7 @@ Is the indicator decorative (meaning conveyed elsewhere via aria-label, visually
 ```
 
 **Rules:**
-1. **Never put Unicode symbols in CSS `content` for icons.** Characters like `\2197` (↗), `\25B6` (▶), `\2605` (★) get announced by screen readers with their Unicode names ("North East Arrow"), which confuses users. Use `content: ""` with visual styling instead.
+1. **Use `content: ""` with visual styling (background-image, mask-image) for CSS pseudo-element icons.** Unicode characters like `\2197` (↗), `\25B6` (▶), `\2605` (★) in CSS `content` get announced by screen readers with their Unicode names ("North East Arrow"), which confuses users.
 2. **For decorative icons needing color theming, use `mask-image`:**
    ```css
    .icon::after {
@@ -216,9 +277,9 @@ For each widget type, `references/component-patterns.md` has the full ARIA patte
 | Escape not stopping propagation | 4 bugs | `stopPropagation()` in nested menus |
 | Animation without prefers-reduced-motion | 3 bugs | Wrap in `@media (prefers-reduced-motion: reduce)` |
 
-## Gutenberg Infrastructure Reference
+## When Building in WordPress/Gutenberg
 
-When building in WordPress/Gutenberg context:
+Skip this section for non-WordPress projects. These utilities are Gutenberg-specific:
 
 | Need | Use |
 |------|-----|
