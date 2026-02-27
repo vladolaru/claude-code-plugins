@@ -78,6 +78,13 @@ Check EVERY changed file for:
 - [ ] Programmatic `.focus()` calls check `contains(document.activeElement)` first.
 - [ ] Escape in nested menus uses `event.stopPropagation()`.
 - [ ] Headings follow sequential levels, exactly one `<h1>`.
+- [ ] `prefers-reduced-motion`: Animations/transitions have a reduced-motion media query fallback.
+- [ ] `forced-colors`: Custom focus indicators use `outline` (not only `box-shadow`, which is invisible in forced-colors).
+- [ ] Disabled elements use `aria-disabled="true"` (not HTML `disabled`) when they must remain focusable with visible focus ring.
+- [ ] `aria-keyshortcuts` present when component has non-standard keyboard shortcuts.
+- [ ] Unicode symbols in CSS `content` property (e.g., `\2197`, `\25B6`) have screen reader impact assessed — they get announced with Unicode names ("North East Arrow"). Use `content: ""` with `mask-image` or inline SVG instead.
+- [ ] Decorative indicators (arrows, icons) rendered as text nodes don't leak into clipboard on text selection. Prefer `::after` with visual styling or inline SVG with `aria-hidden`.
+- [ ] RTL-dependent styling uses CSS `:dir(rtl)` or logical properties, not JS `isRTL()` calls, for presentational concerns.
 
 ### P2 Sweep (Nice to Fix — Enhancements)
 
@@ -89,6 +96,10 @@ Check EVERY changed file for:
 - [ ] Preview content uses `readOnly` + `aria-disabled`, not `inert`.
 - [ ] Auto-dismissing content has configurable timeout.
 - [ ] Safari form controls have explicit `onClick` focus handler.
+- [ ] Skip navigation link for SPA views with repeated navigation blocks.
+- [ ] Drag-and-drop interactions have a keyboard alternative (move buttons or action mode).
+- [ ] Treeview components implement full arrow key navigation (Up/Down/Left/Right/Home/End).
+- [ ] Decorative symbols use `::after`/SVG, not text nodes, in WordPress context (Twemoji replaces Unicode in text nodes with `<img>` tags).
 
 ## Anti-Pattern Detection Heuristics
 
@@ -109,6 +120,12 @@ Use these to scan changed code:
 | `aria-live` on element referenced by `aria-describedby` | AP-15: Conflicting announcement | P2 |
 | Live region container inside conditional render | Container not in DOM before content | P1 |
 | `onKeyDown` without `isComposing` check | IME composition break | P1 |
+| `@keyframes` / `animation:` / `transition:` without `prefers-reduced-motion` | AP-10: Motion without reduced-motion fallback | P1 |
+| `box-shadow` for focus styling without `outline` fallback | AP-11: Focus indicator lost in high contrast | P1 |
+| `onDrag`/`onDrop` handlers without keyboard reorder alternative | AP-12: Inaccessible drag-and-drop | P1 |
+| `content: "\2197"` or other Unicode symbols in `::before`/`::after` | AP-13: Screen reader announces Unicode name (e.g., "North East Arrow") | P1 |
+| `wp-exclude-emoji` class on element with Unicode text content | AP-14: Workaround smell — decorative symbol should use `::after`/SVG, not text node + Twemoji suppression | P1 |
+| `isRTL()` / `document.documentElement.dir` used for styling logic | AP-16: JS RTL check for presentational concern — use CSS `:dir()` or logical properties | P2 |
 
 ## Your Review Process
 

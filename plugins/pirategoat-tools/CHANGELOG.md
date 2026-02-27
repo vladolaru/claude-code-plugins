@@ -5,6 +5,24 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.0] - 2026-02-27
+
+### Added
+
+- **`accessible-frontend-dev` skill — Decorative Content Rendering rules** — Decision tree for choosing between pseudo-elements, inline SVG, `mask-image`, and text nodes. Covers screen reader behavior of `::before`/`::after` (announced per W3C AccName spec), text selection/clipboard exclusion, translation tool immunity, and DOM-walker invisibility. Rule: never put Unicode symbols in CSS `content` for icons.
+- **`accessible-frontend-dev` skill — CSS-First Presentational Concerns** — Prefer CSS mechanisms over JS runtime checks: `:dir(rtl)` over `isRTL()`, logical properties for layout, media queries for motion/color-scheme/forced-colors. Includes "workaround smell" heuristic for recognizing when an approach fights the platform.
+- **`accessible-frontend-dev` skill — WordPress Twemoji platform hazard** — Documents how Twemoji's `MutationObserver`-based DOM walker replaces Unicode characters in text nodes (including arrows, symbols, not just emoji faces). Correct approach: render decorative symbols via `::after` or SVG to avoid interference entirely.
+- **`accessible-frontend-dev` skill — Motion & Animation rules** — `prefers-reduced-motion` media query requirement, reduced-motion alternatives that preserve meaning, auto-playing content pause/stop control (WCAG 2.2.2).
+- **`accessible-frontend-dev` skill — High Contrast & Forced Colors rules** — Windows High Contrast Mode testing guidance, `currentColor` for SVG fills, `outline` over `box-shadow` for focus indicators, border/outline state indicators.
+- **`accessible-frontend-dev` skill — Keyboard Shortcuts Declaration** — `aria-keyshortcuts` attribute guidance for components with non-standard keyboard shortcuts.
+- **`accessible-frontend-dev` skill — Skip Navigation** — Skip-to-content link requirement for SPA views with repeated navigation, WordPress target selectors.
+- **`component-patterns.md` — External Link / Opens in New Tab pattern** — Security (`rel="noreferrer noopener"`), accessible name patterns, icon rendering (prefer `mask-image` or SVG, avoid Unicode text nodes), RTL via `:dir(rtl)::after`, hash-link edge case.
+- **`component-patterns.md` — Treeview pattern** — Full APG Tree View pattern with `role="tree"`/`role="treeitem"`/`role="group"`, arrow key navigation, expand/collapse, and structure example.
+- **`component-patterns.md` — Drag-and-Drop pattern** — Accessible drag-and-drop with keyboard alternatives (action mode, move buttons), live announcements for grab/move/drop/cancel, and implementation skeleton.
+- **`a11y-reviewer` agent — P1 checklist items** — `prefers-reduced-motion`, forced-colors focus indicators, `aria-disabled` vs HTML `disabled`, `aria-keyshortcuts` presence, Unicode symbols in CSS `content`, decorative text node clipboard leakage, JS RTL checks for presentational concerns.
+- **`a11y-reviewer` agent — P2 checklist items** — Skip navigation, drag-and-drop keyboard alternative, treeview arrow key navigation, Twemoji-vulnerable decorative symbols in WordPress context.
+- **`a11y-reviewer` agent — Anti-pattern heuristics AP-10 through AP-16** — Motion without reduced-motion fallback, focus indicator lost in high contrast, inaccessible drag-and-drop, Unicode symbols in pseudo-element content, `wp-exclude-emoji` workaround smell, JS RTL for presentational styling.
+
 ## [1.34.0] - 2026-02-27
 
 ### Added

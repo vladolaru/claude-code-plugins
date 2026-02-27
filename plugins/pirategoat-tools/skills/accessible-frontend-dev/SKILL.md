@@ -78,6 +78,13 @@ Use `<button>` for actions, `<a href>` for navigation. **Never** `<div role="but
 - Escape closes overlays (with `stopPropagation` in nested menus)
 - Arrow keys navigate within composite widgets (tabs, menus, listboxes)
 - Tab moves between widgets, not within them
+- SPA views with repeated navigation should include a skip-to-content link — first focusable element, visually hidden until focused, targets main content area (WordPress: `#wpbody-content` or `#wpcontent`)
+
+### Keyboard Shortcuts Declaration (P1)
+When a component has keyboard shortcuts beyond standard navigation, declare them with `aria-keyshortcuts`:
+- Format: modifier keys joined with `+` (e.g., `aria-keyshortcuts="Control+Shift+P"`)
+- Only for shortcuts that are always available — not for conditional or contextual ones
+- Supplements (does not replace) visible documentation of shortcuts
 
 ### Trigger-Popup Relationships (P1)
 Every button that opens a popup needs:
@@ -96,6 +103,88 @@ Ignore keyboard events during IME composition (CJK input). Wrap handlers with `i
 ```tsx
 if (event.nativeEvent.isComposing) return;
 ```
+
+### Motion & Animation (P1)
+- Wrap motion/animation in `prefers-reduced-motion` media query
+- Provide a reduced or no-motion alternative that preserves meaning (not just `animation: none`)
+- Auto-playing content must have a pause/stop control (WCAG 2.2.2)
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  .animated-element {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+```
+
+### High Contrast & Forced Colors (P1)
+- Test with Windows High Contrast Mode (`forced-colors: active` media query)
+- Use `currentColor` for icon SVG fills so they adapt to forced-colors
+- Don't rely solely on `background-color` for state — borders and outlines survive forced-colors
+- Custom focus indicators: use `outline` (visible in forced-colors), not `box-shadow` (removed by forced-colors)
+
+```css
+@media (forced-colors: active) {
+  .custom-focus:focus-visible {
+    outline: 2px solid ButtonText;
+  }
+}
+```
+
+### Decorative Content Rendering (P1)
+
+**Screen readers announce `::before`/`::after` text content.** The W3C AccName spec requires browsers to include pseudo-element textual content in the accessible name computation. Never assume pseudo-element content is invisible to assistive technology.
+
+**Choose rendering technique based on the content's role:**
+
+```
+Is the indicator decorative (meaning conveyed elsewhere via aria-label, visually-hidden text, etc.)?
+├── YES → Does it need color theming (adapt to text color, dark mode, forced-colors)?
+│   ├── YES → Inline SVG with aria-hidden="true", using currentColor
+│   │         OR ::before/::after with content:"" + mask-image + background:currentColor
+│   └── NO → ::before/::after with content:"" + background-image
+│             OR inline SVG with aria-hidden="true"
+└── NO (indicator conveys meaning) → Must be in the DOM
+    └── Inline SVG with aria-hidden="true" + visually-hidden <span> with text equivalent
+        OR visible text content
+```
+
+**Rules:**
+1. **Never put Unicode symbols in CSS `content` for icons.** Characters like `\2197` (↗), `\25B6` (▶), `\2605` (★) get announced by screen readers with their Unicode names ("North East Arrow"), which confuses users. Use `content: ""` with visual styling instead.
+2. **For decorative icons needing color theming, use `mask-image`:**
+   ```css
+   .icon::after {
+     content: "";
+     display: inline-block;
+     width: 1em;
+     height: 1em;
+     background: currentColor;
+     mask-image: url("icon.svg");
+     mask-size: contain;
+   }
+   ```
+3. **Pseudo-element content is excluded from text selection and clipboard.** Use this property intentionally — decorative characters (arrows, bullets) in `::before`/`::after` won't pollute copied text, but meaningful content placed only in pseudo-elements can't be selected.
+4. **Pseudo-element content is never translated** by browser translation tools (Google Translate). If text must be translatable, it must be a DOM text node.
+5. **Pseudo-element content is invisible to DOM-walking scripts** (Twemoji, Grammarly, browser extensions, translation tools). This is an advantage for decorative indicators — they can't be mangled.
+6. **When in doubt, use inline SVG with `aria-hidden="true"` plus a visually-hidden text span.** It is the most predictable, testable, and accessible approach.
+
+### CSS-First for Presentational Concerns (P1)
+
+Prefer CSS mechanisms over JavaScript runtime checks for presentational adaptations. CSS is declarative (no flash of wrong state), works without JS, and responds to dynamic changes automatically.
+
+| Concern | CSS-first approach | JS only when needed for |
+|---------|-------------------|------------------------|
+| RTL/LTR layout | CSS Logical Properties (`margin-inline-start`, `inset-inline-end`) | Keyboard arrow key direction, tooltip positioning |
+| RTL/LTR content | `:dir(rtl)` pseudo-class (matches inherited direction) | Setting `dir` attribute on locale change |
+| Reduced motion | `@media (prefers-reduced-motion: reduce)` | JS-driven animations (Canvas, GSAP) |
+| Dark mode | `@media (prefers-color-scheme: dark)` + custom properties | Persisted user preference from localStorage |
+| Forced colors | `@media (forced-colors: active)` | N/A — always CSS |
+| Responsive layout | Container queries, media queries | Reading dimensions for calculations |
+
+**`:dir(rtl)` vs `[dir="rtl"]` vs `isRTL()`:** The `:dir()` pseudo-class matches elements based on *computed* directionality (inherited from ancestors, resolved from `dir="auto"`). The `[dir="rtl"]` attribute selector only matches elements with an *explicit* `dir` attribute. JS `isRTL()` is a single global check that can't handle mixed-directionality subtrees. Use `:dir()` for styling, logical properties for layout, and JS only for imperative logic (keyboard handlers, ARIA attributes, position calculations).
+
+**Workaround smell:** When an implementation needs workaround classes, wrapper elements, or JS patches to prevent a platform feature from interfering (e.g., a class to prevent Twemoji from mangling an arrow character), that's a signal the rendering approach is fighting the platform. Step back and find an approach that aligns with the platform instead of working around it.
 
 ## Component Pattern Quick Reference
 
@@ -125,6 +214,7 @@ For each widget type, `references/component-patterns.md` has the full ARIA patte
 | Focus stolen on mount | 5 bugs | Check hasFocusWithin before .focus() |
 | Non-semantic interactive element | 4 bugs | Use `<button>`, never `<div onClick>` |
 | Escape not stopping propagation | 4 bugs | `stopPropagation()` in nested menus |
+| Animation without prefers-reduced-motion | 3 bugs | Wrap in `@media (prefers-reduced-motion: reduce)` |
 
 ## Gutenberg Infrastructure Reference
 
@@ -141,6 +231,12 @@ When building in WordPress/Gutenberg context:
 | Visually hidden text | `<VisuallyHidden>` from `@wordpress/components` |
 | Unique IDs | `useInstanceId(Component, prefix)` from `@wordpress/compose` |
 | Complex widgets | Prefer Ariakit (Dialog, Combobox, Menu, Select, Tabs, Tooltip) |
+
+**Platform hazard — Twemoji DOM walker:** WordPress ships Twemoji, which walks DOM text nodes via `MutationObserver` and replaces emoji/Unicode characters (including arrows ↗↖, symbols ©®, card suits, zodiac signs) with `<img>` tags. This affects **any Unicode character in a text node** that matches Twemoji's regex — not just emoji faces. Consequences:
+- Arrow indicators (↗) in text nodes get replaced with images, breaking layout and styling
+- The `wp-exclude-emoji` class (WordPress 6.2+) prevents replacement for an element and its descendants, but needing it is a **workaround smell**
+- **Correct approach:** Render decorative symbols via CSS pseudo-elements (`::before`/`::after`) or inline SVG — Twemoji cannot see pseudo-element content or SVG elements, so no workaround is needed
+- If you must use a text node, append U+FE0E (Variation Selector-15) after the character to force text presentation, though this has inconsistent results
 
 ## Detailed Research
 

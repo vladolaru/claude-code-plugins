@@ -246,6 +246,102 @@ function Modal({ isOpen, onClose, title, children }) {
 
 ---
 
+## Treeview
+
+**ARIA pattern (APG Tree View):**
+- Container: `role="tree"` with `aria-label`
+- Nodes: `role="treeitem"` on each item
+- Children wrapper: `role="group"` wrapping child nodes of an expanded parent
+- Parent nodes: `aria-expanded="true"` (open) or `aria-expanded="false"` (closed)
+- Selection: `aria-selected` if tree supports selection
+
+**Keyboard:**
+- ArrowDown/Up: move focus to next/previous visible treeitem
+- ArrowRight: expand closed parent → or move to first child if already expanded
+- ArrowLeft: collapse expanded parent → or move to parent if on a child
+- Home/End: first/last visible treeitem
+- Enter: activate the focused treeitem
+- `*` (asterisk): expand all siblings at the current level
+
+**Focus:** Roving tabindex — one treeitem has `tabIndex={0}`, rest have `tabIndex={-1}`.
+
+**Structure example:**
+```tsx
+<ul role="tree" aria-label="File browser">
+  <li role="treeitem" aria-expanded="true" tabIndex={0}>
+    src
+    <ul role="group">
+      <li role="treeitem" tabIndex={-1}>index.js</li>
+      <li role="treeitem" tabIndex={-1}>App.js</li>
+    </ul>
+  </li>
+  <li role="treeitem" tabIndex={-1}>README.md</li>
+</ul>
+```
+
+---
+
+## Drag and Drop
+
+**Accessibility principle:** Always provide a keyboard alternative. Drag-and-drop is a pointer-only interaction by default — keyboard and screen reader users are completely blocked without an alternative.
+
+**Keyboard alternative patterns:**
+- Action mode toggle: Enter/Space activates "grab" → arrow keys reorder → Enter/Space "drops"
+- Move buttons: explicit "Move up"/"Move down" buttons alongside each item
+- Context menu: right-click or Shift+F10 opens menu with move options
+
+**Announcements:**
+- On grab: `speak("Item grabbed, position 2 of 5", 'assertive')`
+- On move: `speak("Item moved, now position 3 of 5", 'assertive')`
+- On drop: `speak("Item dropped, final position 3 of 5", 'assertive')`
+- On cancel: `speak("Reorder cancelled", 'polite')`
+
+**ARIA guidance:**
+- Use `aria-describedby` linking to instructions: "Press Space to grab, arrow keys to move, Space to drop"
+- Use `aria-roledescription="sortable"` sparingly and only when standard ARIA roles are insufficient
+- Set `aria-grabbed` is deprecated — use the action mode pattern instead
+
+**Implementation skeleton:**
+```tsx
+function SortableItem({ label, position, total, onMove }) {
+  const [grabbed, setGrabbed] = useState(false);
+  const instructionsId = useId();
+
+  return (
+    <>
+      <span id={instructionsId} hidden>
+        Press Space to grab, arrow keys to reorder, Space to drop
+      </span>
+      <div
+        role="option"
+        aria-describedby={instructionsId}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === ' ') {
+            e.preventDefault();
+            setGrabbed(!grabbed);
+            speak(grabbed
+              ? `${label} dropped, final position ${position} of ${total}`
+              : `${label} grabbed, position ${position} of ${total}`,
+              'assertive');
+          }
+          if (grabbed && e.key === 'ArrowDown') onMove(1);
+          if (grabbed && e.key === 'ArrowUp') onMove(-1);
+          if (grabbed && e.key === 'Escape') {
+            setGrabbed(false);
+            speak('Reorder cancelled', 'polite');
+          }
+        }}
+      >
+        {label}
+      </div>
+    </>
+  );
+}
+```
+
+---
+
 ## Data Grid / Calendar Grid
 
 **ARIA pattern (APG Grid):**
@@ -261,3 +357,46 @@ function Modal({ isOpen, onClose, title, children }) {
 
 **Focus:** Roving tabindex — one cell has `tabIndex={0}`, rest have `tabIndex={-1}`.
 Use `role="application"` sparingly (only when widget handles its own keyboard model).
+
+---
+
+## External Link / Opens in New Tab
+
+**Security:** Always pair `target="_blank"` with `rel="noreferrer noopener"`. Merge with any caller-provided `rel` values — don't overwrite.
+
+**Accessible name:** Screen readers must announce that the link opens in a new tab. Two patterns:
+- Visually-hidden `<span>`: `<span className="sr-only">(opens in a new tab)</span>` inside the `<a>`
+- `aria-label` on an icon span: `<span aria-label="(opens in a new tab)" />` — contributes to the link's computed accessible name
+
+**Visual indicator (arrow icon):**
+- **Best:** `::after` pseudo-element with `mask-image` SVG and `background: currentColor` — invisible to Twemoji, excluded from text selection, inherits text color, silent to screen readers (empty `content`)
+- **Acceptable:** Inline SVG with `aria-hidden="true"` — explicit, testable, full color control
+- **Avoid:** Unicode arrow (`↗`) as text node — Twemoji replaces it with `<img>`, it leaks into clipboard on text selection, and screen readers announce "North East Arrow"
+- **Avoid:** Unicode in CSS `content: "\2197"` — screen readers announce the Unicode character name
+
+**RTL:** Use CSS `:dir(rtl)::after` to flip the arrow direction (e.g., `↗` → `↖`), not JS `isRTL()`. The `:dir()` pseudo-class responds to inherited document directionality automatically.
+
+```css
+.external-link {
+  text-decoration: none;
+}
+.external-link .link-text {
+  text-decoration: underline;
+}
+.external-link::after {
+  content: "";
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-inline-start: 0.15em;
+  background: currentColor;
+  mask-image: url("data:image/svg+xml,..."); /* arrow SVG */
+  mask-size: contain;
+  mask-repeat: no-repeat;
+}
+.external-link:dir(rtl)::after {
+  mask-image: url("data:image/svg+xml,..."); /* mirrored arrow SVG */
+}
+```
+
+**Edge case:** `href="#..."` + `target="_blank"` opens a blank tab (hash fragment has no meaning in a new context). Prevent default navigation and warn or handle gracefully.
