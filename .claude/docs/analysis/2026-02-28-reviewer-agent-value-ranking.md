@@ -61,6 +61,91 @@ Total cache read tokens across 47 sessions: **728.4M** (93% cache hit rate, 305 
 
 ---
 
+## Cost-Normalized Token Budget (Haiku-Equivalent)
+
+Raw token counts are misleading — a token on Opus costs 5x a token on Haiku. The pricing ratio is uniform across all token types (input, output, cache read, cache write):
+
+| Model | Factor | Price Rationale |
+|---|---|---|
+| Opus | ×5 | $0.50/MTok cache read vs Haiku $0.10/MTok |
+| Sonnet | ×3 | $0.30/MTok cache read vs Haiku $0.10/MTok |
+| Haiku | ×1 | Baseline |
+
+Source: [Claude API Pricing](https://platform.claude.com/docs/en/about-claude/pricing) (February 2026)
+
+### Cost-normalized budget (47 sessions, cache reads)
+
+| Agent | Model | Raw Cache MTok | Factor | Haiku-eq MTok | % Budget |
+|---|---|---|---|---|---|
+| patterns-reviewer | Opus | 196.8 | ×5 | **984.0** | 30.7% |
+| history-insights-reviewer | Opus | 121.9 | ×5 | **609.5** | 19.0% |
+| pr-reviewer | Opus | 78.3 | ×5 | **391.5** | 12.2% |
+| wp-architecture-reviewer | Opus | 77.0 | ×5 | **385.0** | 12.0% |
+| architecture-reviewer | Opus | 43.2 | ×5 | **216.0** | 6.7% |
+| security-reviewer | Sonnet | 60.8 | ×3 | **182.4** | 5.7% |
+| dead-code-reviewer | Sonnet | 38.0 | ×3 | **114.0** | 3.6% |
+| performance-reviewer | Sonnet | 37.5 | ×3 | **112.5** | 3.5% |
+| php-tests-reviewer | Sonnet | 24.7 | ×3 | **74.1** | 2.3% |
+| js-tests-reviewer | Sonnet | 15.4 | ×3 | **46.2** | 1.4% |
+| e2e-tests-reviewer | Sonnet | 14.3 | ×3 | **42.9** | 1.3% |
+| a11y-reviewer | Opus | 8.0 | ×5 | **40.0** | 1.2% |
+| gemini-reviewer | Haiku | 4.1 | ×1 | **4.1** | 0.1% |
+| codex-reviewer | Haiku | 2.0 | ×1 | **2.0** | 0.1% |
+| **Total** | | **722.0** | | **3,204.2** | |
+
+**Key insight:** Opus agents consume **82% of the cost-normalized budget** despite only 72% of raw tokens. The 5x cost multiplier makes them disproportionately expensive. Patterns-reviewer alone (984 Haiku-eq MTok) costs more than all 8 Sonnet+Haiku agents combined (576 Haiku-eq MTok).
+
+### Cost-per-finding (Haiku-normalized, sorted by efficiency)
+
+| Agent | Haiku-eq MTok | Findings | Haiku-eq MTok/Finding | Precision |
+|---|---|---|---|---|
+| js-tests-reviewer | 46.2 | 27 | **1.7** | 83.3% |
+| e2e-tests-reviewer | 42.9 | 16 | **2.7** | 80.0% |
+| php-tests-reviewer | 74.1 | 17 | **4.4** | 100% |
+| performance-reviewer | 112.5 | 24 | **4.7** | 66.7% |
+| architecture-reviewer | 216.0 | 33 | **6.5** | 62.8% |
+| wp-architecture-reviewer | 385.0 | 44 | **8.8** | 60.9% |
+| pr-reviewer | 391.5 | 29 | **13.5** | 78.9% |
+| history-insights-reviewer | 609.5 | 44 | **13.9** | 67.3% |
+| dead-code-reviewer | 114.0 | 7 | **16.3** | 92.9% |
+| a11y-reviewer | 40.0 | 2 | **20.0** | 0%² |
+| patterns-reviewer | 984.0 | 42 | **23.4** | 66.2% |
+| security-reviewer | 182.4 | 5 | **36.5** | 66.7% |
+| gemini-reviewer | 4.1 | 0 | ∞ | — |
+| codex-reviewer | 2.0 | 0 | ∞ | — |
+
+**Security-reviewer costs 36.5 Haiku-eq MTok per finding** — 21x more than js-tests-reviewer (1.7). Patterns-reviewer at 23.4 and a11y at 20.0 are the next worst. The most efficient agents (js-tests, e2e-tests, php-tests, performance) are all on Sonnet — the Opus agents occupy the bottom half of the efficiency ranking.
+
+### Model demotion savings scenarios
+
+**Scenario A — Inherit → Sonnet (conservative, keep pr-reviewer on Opus):**
+
+| Agent | Before (Haiku-eq) | After (Haiku-eq) | Saved |
+|---|---|---|---|
+| patterns | 984.0 | 590.4 | 393.6 |
+| history-insights | 609.5 | 365.7 | 243.8 |
+| wp-architecture | 385.0 | 231.0 | 154.0 |
+| architecture | 216.0 | 129.6 | 86.4 |
+| a11y | 40.0 | 24.0 | 16.0 |
+| **Total** | **2,234.5** | **1,340.7** | **893.8 (28% overall)** |
+
+**Scenario B — Aggressive: mechanical agents → Haiku, reasoning agents → Sonnet:**
+
+| Agent | Current | Proposed | Saved (Haiku-eq) |
+|---|---|---|---|
+| patterns | Opus | Haiku | 787.2 |
+| history-insights | Opus | Haiku | 487.6 |
+| wp-architecture | Opus | Sonnet | 154.0 |
+| architecture | Opus | Sonnet | 86.4 |
+| a11y | Opus | Sonnet | 16.0 |
+| dead-code | Sonnet | Haiku | 76.0 |
+| reconciliator | Sonnet | Haiku | ~84* |
+| **Total saved** | | | **~1,691 (53% overall)** |
+
+*Reconciliator cost estimated (not in per-agent data)
+
+---
+
 ## Agent Overlap Analysis
 
 38 of 204 ciab-admin findings (18.6%) were reported by 2+ agents. Key overlap pairs:
@@ -213,15 +298,27 @@ The architecture-reviewer and patterns-reviewer share 8 findings — the most of
 - **Option B**: Narrow architecture-reviewer scope to SOLID/coupling/cohesion only, explicitly excluding "pattern consistency" from its mandate (which patterns-reviewer already covers)
 - **Option C**: Keep both but add dedup in reconciliation step
 
-### 4. Consider model downgrades (save ~30-40% token cost)
-Four agents run on Opus but may not need it:
-- **architecture-reviewer**: 62.8% precision doesn't justify Opus. Try Sonnet.
-- **wp-architecture-reviewer**: 60.9% precision with 13% FP. Opus isn't preventing FPs. Try Sonnet.
-- **a11y-reviewer**: Already low precision. Sonnet would reduce cost with likely similar results.
-- **history-insights-reviewer**: Needs git history understanding. Opus may be justified here, but test Sonnet.
+### 4. Model demotions (save 28-53% of cost-normalized budget)
+
+The Opus→Haiku cost ratio is 5:1 (not close to 1:1). Six agents run on Opus and consume 82% of the cost-normalized budget. See the "Model demotion savings scenarios" section above for detailed numbers.
+
+**Phase 1 — Pin inherit agents to Sonnet (save 28%):**
+- **architecture-reviewer**: 62.8% precision, 50% unique — doesn't justify Opus.
+- **wp-architecture-reviewer**: 60.9% precision, 13% FP — Opus isn't preventing FPs.
+- **patterns-reviewer**: Largest single cost (984 Haiku-eq MTok). Pattern matching is structured work.
+- **history-insights-reviewer**: Second largest cost (609.5 Haiku-eq MTok). Git log mining is structured.
+- **a11y-reviewer**: WCAG checklist evaluation. Sonnet is sufficient.
+- Keep **pr-reviewer** on Opus — anchor role, 78.9% precision, worth the premium.
+
+**Phase 2 — Experiment with Haiku for mechanical agents:**
+- **patterns-reviewer** → Haiku: Search + compare is the most mechanical work. Saves 787 Haiku-eq MTok.
+- **history-insights** → Haiku: Git log correlation. Saves 488 Haiku-eq MTok.
+- **dead-code-reviewer** → Haiku: Reference checking. Saves 76 Haiku-eq MTok.
+- **reconciliator** → Haiku: JSON aggregation, not analysis. Saves ~84 Haiku-eq MTok.
+- Validate quality over 10 sessions before committing.
 
 ### 5. Pipeline bottleneck
-**history-insights-reviewer** (5.6m) and **patterns-reviewer** (5.4m) set the wall-clock time for the entire parallel dispatch. All other agents finish in 2-3m. Speeding up these two (or running them on Sonnet) would cut total review time by ~40%.
+**history-insights-reviewer** (5.6m) and **patterns-reviewer** (5.4m) set the wall-clock time for the entire parallel dispatch. All other agents finish in 2-3m. Demoting these two to Sonnet or Haiku would likely also reduce wall-clock time (faster models, less exploration), cutting total review time by ~40%.
 
 ---
 
