@@ -73,50 +73,78 @@ From the PR changes, identify **scenarios** (not just patterns):
 
 ### Phase 2: Git History Mining
 
+**Use these flags on ALL git log commands:**
+- `--since="12 months ago"` — enforces the time-box (older history is rarely relevant)
+- `--first-parent` — follows only merge commits on the default branch (10-100x faster than `--all` on repos with many branches)
+
+**Exception:** Parallel branch detection (Phase 1.5) uses `--all` because it must see all branches. Do NOT use `--all` on keyword or pickaxe searches.
+
 **Search commit messages for similar scenarios:**
 ```bash
 # Search for fixes in similar problem domains
-git log --oneline --all --grep="fix" --grep="<scenario_keyword>" --all-match | head -30
+git log --oneline --first-parent --since="12 months ago" --grep="fix" --grep="<scenario_keyword>" --all-match | head -30
 
 # Search for enhancements to similar operations
-git log --oneline --all --grep="improve\|enhance\|handle\|edge case" --grep="<domain_keyword>" --all-match | head -30
+git log --oneline --first-parent --since="12 months ago" --grep="improve\|enhance\|handle\|edge case" --grep="<domain_keyword>" --all-match | head -30
 
 # Search for bug fixes related to similar patterns
-git log --oneline --all --grep="bug\|issue\|crash\|error\|undefined\|null" --grep="<operation_keyword>" --all-match | head -30
+git log --oneline --first-parent --since="12 months ago" --grep="bug\|issue\|crash\|error\|undefined\|null" --grep="<operation_keyword>" --all-match | head -30
 ```
 
-**Search code changes for similar scenarios (pickaxe search):**
+**Search code changes (two-phase pickaxe — never use -p with -S):**
+
+Pickaxe note: `-S` is **literal string matching**. For regex patterns (e.g., `pattern_a\|pattern_b`), use `-G` instead.
+
 ```bash
-# Find when similar error handling was added
-git log -p --all -S "<error_pattern>" -- "*.php" | head -200
+# Phase 1: Find commit SHAs only (fast — no diff computation)
+git log --oneline --first-parent --since="12 months ago" -S "<literal_pattern>" -- "*.php" | head -15
 
-# Find when similar validation was introduced
-git log -p --all -S "<validation_pattern>" -- "*.php" | head -200
+# For regex patterns, use -G instead of -S:
+git log --oneline --first-parent --since="12 months ago" -G "<regex_pattern>" -- "*.php" | head -15
 
-# Find changes to similar operations
-git log --oneline --all -S "<operation_code>" -- "*.php" | head -30
+# Phase 2: Investigate ONLY the 2-3 most relevant commits from Phase 1
+git show <commit_hash> --stat                       # quick overview first
+git show <commit_hash> -p -- "specific_file.php"    # targeted diff for relevant file only
+```
+
+**NEVER do this** (generates full diffs for all matching commits, then discards most):
+```bash
+# WRONG — -p with -S scans all history and generates all diffs before head truncates
+git log -p --all -S "<pattern>" -- "*.php" | head -200
+```
+
+**Supplementary: git blame on changed hunks**
+```bash
+# Pinpoint who last changed the lines being modified (finds recent fix commits)
+git blame -L <start>,<end> -- <changed-file>
+
+# Follow file history including renames
+git log --oneline --follow --since="12 months ago" -- <changed-file> | head -20
 ```
 
 **For each potentially relevant commit, investigate:**
 ```bash
-git show <commit_hash> --stat
-git show <commit_hash> -p
+git show <commit_hash> --stat                       # overview first (cheap)
+git show <commit_hash> -p -- "relevant_file.php"    # targeted diff (only if needed)
 ```
 
-**Search for related PRs on GitHub (when repo is on github.com):**
-```bash
-# Search merged PRs for similar fixes
-gh pr list --repo <owner>/<repo> --state merged --search "fix <scenario_keyword>" --limit 10
-gh pr list --repo <owner>/<repo> --state merged --search "<domain_keyword> edge case" --limit 10
+**Search for related PRs on GitHub (only for high-confidence findings):**
 
-# Get PR details for relevant matches
-gh pr view <pr_number> --repo <owner>/<repo> --json title,body,mergedAt
+Link specific commits to PRs rather than running keyword searches:
+```bash
+# Link a commit to its merge PR (local, no API call)
+git log --oneline --merges --ancestry-path <commit>..origin/trunk | tail -1
+
+# Or via GitHub API (single call per commit, not per keyword)
+gh pr list --search "<commit_sha>" --state merged --json number,title --limit 1
+
+# Only fall back to keyword PR search when commit linking doesn't suffice:
+gh pr list --repo <owner>/<repo> --state merged --search "fix <scenario_keyword>" --limit 5
 ```
 
 **For Automattic GitHub Enterprise repos (github.a8c.com):**
 ```bash
-# Use ghe instead of gh
-ghe pr list --repo Automattic/<repo> --state merged --search "fix <scenario_keyword>" --limit 10
+ghe pr list --repo Automattic/<repo> --state merged --search "fix <scenario_keyword>" --limit 5
 ghe pr view <pr_url> --json title,body,mergedAt
 ```
 
