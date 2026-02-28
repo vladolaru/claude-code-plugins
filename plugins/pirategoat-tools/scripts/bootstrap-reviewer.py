@@ -289,16 +289,24 @@ def get_file_history(files: List[str], max_commits: int = 15) -> str:
 
     Returns structured text with last N commits per file.
     Fast: one git log per file, limited output.
+    File paths from scope output are git-root-relative, so we use
+    git -C <root> to ensure correct path resolution.
     """
     if not files:
         return ""
 
-    lines = [f"=== FILE HISTORY (last {max_commits} commits per changed file) ==="]
+    # Detect git root so paths resolve correctly regardless of cwd
+    rc, git_root, _ = run_cmd(["git", "rev-parse", "--show-toplevel"])
+    if rc != 0 or not git_root:
+        return ""
+
+    lines = [f"=== FILE HISTORY ==="]
+    lines.append(f"Last {max_commits} commits per changed file:")
     lines.append("")
 
     for filepath in files[:20]:  # Cap at 20 files to avoid runaway
         rc, stdout, _ = run_cmd(
-            ["git", "log", "--oneline", "--follow",
+            ["git", "-C", git_root, "log", "--oneline", "--follow",
              "--since=12 months ago", "--", filepath],
             timeout=10,
         )
@@ -310,7 +318,7 @@ def get_file_history(files: List[str], max_commits: int = 15) -> str:
                 lines.append(cl)
             lines.append("")
 
-    if len(lines) <= 2:
+    if len(lines) <= 3:
         # No history found for any file
         return ""
 
