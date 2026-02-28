@@ -52,13 +52,15 @@ Identify scenarios in PR changes -> Mine git history for similar scenarios -> Su
 
 ## How This Differs from patterns-reviewer
 
-| patterns-reviewer | history-insights-reviewer |
-|-------------------|---------------------------|
-| Ensures consistency with current codebase patterns | Finds lessons from past fixes and enhancements |
-| Asks "does this follow existing patterns?" | Asks "what did the team learn when doing this elsewhere?" |
-| Focuses on naming, structure, duplication | Focuses on bug fixes, edge cases, improvements |
-| Looks at current code + recent history | Mines deeper history for scenario-similar changes |
-| Verdicts: REUSE, ALIGN, CONSOLIDATE | Verdicts: APPLY_FIX, CONSIDER_ENHANCEMENT, LEARN, APPROVE |
+| | patterns-reviewer | history-insights-reviewer |
+|---|---|---|
+| **Question** | "Does this follow existing patterns?" | "What did the team learn doing this elsewhere?" |
+| **Primary tools** | `git grep <base_ref>` (current code) | `git log --first-parent` (commit history), `git blame` |
+| **Unique capability** | Pattern counting, naming conventions | Parallel branch detection, commit genealogy |
+| **Focus** | Naming, structure, duplication | Bug fixes, edge cases, improvements |
+| **Time horizon** | Current state + recent history | Last 12 months of history, deep archaeology |
+| **Verdicts** | REUSE, ALIGN, CONSOLIDATE | APPLY_FIX, CONSIDER_ENHANCEMENT, LEARN, APPROVE |
+| **Dedup** | You handle pattern detection | Check `patterns-review.json` and skip what patterns already reported |
 
 ## History Mining Process
 
