@@ -78,11 +78,97 @@ If agents are skipped, note it briefly: "Skipping N agents with no files in scop
   - **Offer to freshen the base branch before suggesting rebase:** The local base ref may itself be out of date. Run `git fetch origin <base_branch>` and check if new commits arrived. If so, tell the user: "Local base branch was also outdated — fetched M new commits from origin. Consider rebasing: `git rebase origin/<base_branch>`". If already up to date, just suggest: "Consider rebasing before opening a PR: `git rebase origin/<base_branch>`"
 - If `IS_STALE: false`: proceed normally, no message needed.
 
+## Step 3.6: Adaptive Agent Triage
+
+Not all agents that pass the file-type preflight need to run. Evaluate the **6 conditional agents** below against the diffstat and commit messages you already have from Steps 1-3.
+
+For each conditional agent that passed the preflight check in Step 3.5:
+
+1. Check its **DISPATCH WHEN** criteria against the diffstat and commit messages
+2. Decide: **DISPATCH** or **SKIP**
+3. Log your reasoning (required for every decision)
+
+**DEFAULT: When in doubt, DISPATCH.** Only skip when you are confident none of the criteria apply.
+
+### Conditional Agents
+
+**security-reviewer**
+DISPATCH WHEN the PR expands or modifies attack surface:
+- New or modified endpoints accepting external input
+- Code processing user-supplied data (form fields, query params, request bodies, file uploads)
+- Database operations (reads, writes, raw queries)
+- Dynamic content rendered to output
+- Auth, authorization, or session management changes
+- File system operations with user-influenced paths
+- Third-party API or webhook integrations
+- Cryptographic or secret/token handling
+- Commits introducing new entry points or data processing
+
+**dead-code-reviewer**
+DISPATCH WHEN the PR changes the dependency graph:
+- Files deleted or renamed
+- Significant code removal (removed > added)
+- Refactoring commits (extract, move, rename, consolidate, remove, delete)
+- Import/require statements added or removed
+- New files replacing or superseding existing ones
+
+**architecture-reviewer**
+DISPATCH WHEN the PR introduces structural changes:
+- New classes, interfaces, or abstract types added
+- Files spanning 3+ architectural layers
+- Commits mentioning architecture, refactor, restructure, decouple, extract
+- Large PRs (20+ files or 500+ lines)
+- New modules or packages introduced
+
+**wp-architecture-reviewer**
+DISPATCH WHEN the PR touches WordPress integration points:
+- PHP files using WordPress APIs (hooks, filters, options, transients, REST)
+- WooCommerce-specific files
+- Admin menus, settings pages, or custom post types
+- Commits mentioning hooks, filters, backwards compatibility, deprecation, i18n
+- Plugin bootstrap or activation/deactivation files
+
+**performance-reviewer**
+DISPATCH WHEN the PR touches data flow or rendering:
+- Database queries, API calls, data fetching hooks
+- Lists, tables, pagination, bulk operations
+- Asset loading, lazy loading, code splitting
+- Caching logic (transients, object cache, memoization)
+- Commits mentioning performance, optimize, cache, query, load time
+
+**a11y-reviewer**
+DISPATCH WHEN the PR modifies user-facing UI:
+- JSX/TSX with interactive elements (buttons, forms, modals, dropdowns)
+- ARIA attributes or focus management code
+- New UI components or significant visual changes
+- CSS/SCSS affecting visibility, focus indicators, or contrast
+- Commits mentioning accessibility, a11y, keyboard, screen reader, ARIA
+
+### Triage Output
+
+For each conditional agent, log:
+
+```
+TRIAGE: <agent-name>: <DISPATCH|SKIP> — <one-line reasoning>
+```
+
+Example:
+```
+TRIAGE: security-reviewer: DISPATCH — PR adds new REST endpoint in src/api/users.ts
+TRIAGE: dead-code-reviewer: SKIP — no files deleted, no refactoring commits, net +120 lines
+TRIAGE: architecture-reviewer: SKIP — single component file changed, no structural reorganization
+TRIAGE: wp-architecture-reviewer: DISPATCH — PHP files modify WooCommerce payment gateway hooks
+TRIAGE: performance-reviewer: DISPATCH — new useQuery hook in data-fetching layer
+TRIAGE: a11y-reviewer: DISPATCH — new modal component with form inputs
+```
+
+Agents that passed preflight but are skipped by triage are **not dispatched** in Step 4. They are recorded as `STATUS=SKIPPED_TRIAGE` in the agent signals for the reconciliator.
+
 ## Step 4: Dispatch Reviewer Agents in Parallel
 
 **CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**
 
-Based on the pre-flight check in Step 3.5, dispatch only agents whose domain has matching files. Always include agents with domain `(none)`.
+Based on the pre-flight check in Step 3.5 and triage in Step 3.6, dispatch only agents that passed both gates. Always include agents with domain `(none)`.
 
 Each agent receives this context in its prompt:
 ```
@@ -110,7 +196,9 @@ python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range 
 | 12 | `pirategoat-tools:dead-code-reviewer` | dead-code | Unused functions, orphaned imports, unreachable code |
 | 13 | `pirategoat-tools:a11y-reviewer` | a11y | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA |
 
-Agents not dispatched (domain had no files) are recorded as `STATUS=SKIPPED` in the agent signals for the reconciliator.
+Agents not dispatched due to scope are recorded in agent signals for the reconciliator:
+- Preflight skip: `<agent>: STATUS=SKIPPED (no files in <domain> domain)`
+- Triage skip: `<agent>: STATUS=SKIPPED_TRIAGE (<one-line reason from Step 3.6>)`
 
 ## Step 5: Reconcile Findings
 
@@ -125,7 +213,8 @@ Task tool:
 
     Agent Signals:
     <list all agent signals from Step 4>
-    <for each skipped agent: "<agent>: STATUS=SKIPPED (no files in <domain> domain)">
+    <for each preflight-skipped agent: "<agent>: STATUS=SKIPPED (no files in <domain> domain)">
+    <for each triage-skipped agent: "<agent>: STATUS=SKIPPED_TRIAGE (<reason from Step 3.6>)">
 ```
 
 The reconciliator reads all review files from the output directory, reconciles findings (multi-source = high confidence), and returns a condensed summary.
