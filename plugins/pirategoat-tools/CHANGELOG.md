@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.36.0] - 2026-02-28
+
+### Added
+
+- **patterns-reviewer agent — Pattern relevance improvements** — Four changes to reduce false positives and improve finding quality: (1) RULE 1: 3+ independent usage gate — patterns need 3+ instances to be reported as "established," with exceptions for authoritative locations and small codebase adjustment; (2) Proximity confidence modifiers — same-module patterns get +15 confidence, distant patterns get -15, using the existing confidence system instead of a separate score; (3) Staleness check step — new Step 5 in the discovery process uses `git log -S` to detect actively-adopted vs declining patterns, with confidence reduction for dying patterns; (4) Contextual verdict qualifiers — verdicts now require usage counts, area context, and freshness indicators in descriptions.
+
 ## [1.35.3] - 2026-02-28
 
 ### Fixed

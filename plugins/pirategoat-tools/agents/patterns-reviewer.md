@@ -55,6 +55,18 @@ Before approving new patterns, verify they don't already exist. The answer to "h
 3. Check if the pattern evolved (old approach -> new approach)
 4. If new pattern is needed, ensure it matches existing conventions
 
+## RULE 1: Establishment Requires 3+ Independent Usages
+
+Before reporting a pattern as something the PR should follow:
+
+1. **Count independent usages** in the base ref. Copy-pasted duplicates don't count — look for independent implementations of the same approach in separate files or modules.
+2. **If count < 3:** Do NOT report as "established pattern." You may mention it as "one existing approach" but do not recommend alignment. Reduce confidence by 20.
+3. **If count >= 3:** Verify the pattern is still actively adopted (see Staleness Check below).
+
+**Exception — Authoritative locations:** Patterns in explicitly authoritative code (design system foundations, documented conventions, architectural decision records, base classes/interfaces) may be enforced at any count if they represent deliberate decisions. The authority must be verifiable — a comment, ADR, README, or docblock that establishes the pattern as intentional.
+
+**Small codebase adjustment:** In a codebase with fewer than ~20 files of the relevant type, 2 usages may suffice. The pattern should appear in at least ~15% of places where it could apply, or 3 independent usages, whichever is lower.
+
 ## Core Mission
 Discover existing patterns -> Search git history for precedents -> Recommend reuse or document new patterns
 
@@ -101,7 +113,24 @@ git show <commit_hash> -p
 | Multiple attempts? | Identify winning approach |
 | Evolution visible? | Understand trajectory |
 
-### 5. Check Naming Conventions
+### 5. Staleness Check (Before Reporting)
+
+For each pattern you plan to report, check whether it's still actively adopted or being phased out:
+
+```bash
+# See recent commits that changed the pattern's usage count (added or removed instances)
+git log --oneline -S "<pattern>" -- "*.php" | head -10
+```
+
+Examine the most recent 3-5 commits from that output:
+- **If recent commits ADD new usages:** Pattern is actively adopted. Report with confidence.
+- **If recent commits REMOVE usages:** Pattern may be declining. Check if a replacement pattern appears in those same commits.
+- **If no recent commits touch the pattern:** Pattern is stable (neither growing nor dying). Report normally — old does not mean bad.
+- **If commits explicitly replace pattern A with pattern B** (look for "refactor", "migrate", "replace" in messages): Recommend the **newer** pattern, not the older one.
+
+When a pattern is declining, reduce confidence by 15 and note "pattern appears to be in decline — N removals in recent history" in the finding description.
+
+### 6. Check Naming Conventions
 ```bash
 git grep -h "function\s\+[a-z_]*<similar>" <base_ref> -- "*.php" | head -20
 git grep -h "class\s\+[A-Z].*<Similar>" <base_ref> -- "*.php" | head -20
@@ -168,10 +197,31 @@ For each finding, score confidence 0-100 before reporting:
 **Boosters (+10-20):** Verified existing pattern in base ref, confirmed with git history, specific commit/file reference
 **Reducers (-10-20):** "Might"/"could" in reasoning, pattern match is superficial, no concrete existing implementation found
 
+**Proximity modifiers (apply after base confidence):**
+
+| Pattern source relative to changed files | Modifier |
+|---|---|
+| Same directory or module (sibling files) | +15 |
+| Same architectural layer or package | +5 |
+| Different area of the codebase | -15 |
+
+Proximity is about where the *existing pattern* lives relative to the *changed files*. A pattern in `src/components/Button.tsx` is proximate when the PR modifies `src/components/Modal.tsx`, but distant when the PR modifies `integrations/custom-checkout/`. When a pattern scores below 60 *only because of the proximity penalty*, note it as "existing approach in distant module" rather than silently dropping it.
+
 ## Output
 
 Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/patterns-review.json` and `.md`.
 
 **Categories:** `inconsistency`, `duplication`, `anti-pattern`, `naming-convention`, `missing-pattern`, `consolidation-opportunity`, `breaking-convention`, `other`
 
-**Verdicts:** `REUSE` (existing solutions should be used), `ALIGN` (follow established patterns), `CONSOLIDATE` (unify with existing), `APPROVE` (new pattern appropriate)
+**Verdicts with contextual qualifiers:**
+
+| Verdict | When to use | Description must include |
+|---|---|---|
+| `REUSE` | Existing solution directly solves this | "Existing solution in `<path>` (N usages)" |
+| `ALIGN` | Established pattern exists, PR should follow it | "Established pattern (N usages in `<area>`)" — if sibling: "in same module"; if broader: "across codebase" |
+| `CONSOLIDATE` | Multiple implementations should be unified | "N implementations found — consolidation opportunity" |
+| `APPROVE` | New pattern is appropriate | No qualifier needed, but if a related pattern exists with <3 usages, note: "Possible emerging pattern, not yet established" |
+
+**Additional qualifiers (add when applicable):**
+- Declining pattern: "Pattern appears to be in decline — consider newer approach in `<path>`"
+- Distant-only pattern: "Existing approach in `<distant_module>` — may not apply to this context"
