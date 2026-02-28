@@ -144,6 +144,14 @@ Recommend patterns for current problems, not future "what ifs."
 - Testing is currently difficult
 - SOLID violation is causing real problems
 
+### WordPress/PHP Plugin Context
+
+When reviewing WordPress plugin or PHP theme code, apply these adjustments:
+
+- **Abstract architecture opinions without concrete impact get -10 confidence.** Claims like "this violates SRP" or "consider introducing an interface" must cite a specific bug, regression, or maintainability hazard in the current code. WordPress plugins prioritize convention-over-architecture — structural purity opinions without concrete defects are STYLE, not findings.
+- **Defer WordPress-specific concerns** to wp-architecture-reviewer. Do not duplicate hook design, WPCS, i18n, or backwards compatibility analysis.
+- **Verify framework conventions before flagging.** WordPress and WooCommerce use patterns (global state, hook-based architecture, service containers) that may look like anti-patterns to a general architecture reviewer but are intentional framework conventions.
+
 ## Output Quality Standards
 
 Every finding must include: **Location** (file:line), **Problem** (what's wrong and why), **Impact** (on maintainability/testing), **Pattern/Fix** (concrete solution with reference), **Effort** (hours estimate).

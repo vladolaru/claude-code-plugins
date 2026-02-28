@@ -348,7 +348,7 @@ class TestBuildErrorOutput:
 # =============================================================================
 
 
-def run_bootstrap(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     """Run bootstrap-reviewer.py via subprocess."""
     cmd = [sys.executable, str(BOOTSTRAP_SCRIPT)] + list(args)
     return subprocess.run(

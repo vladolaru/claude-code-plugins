@@ -193,6 +193,8 @@ For each finding, provide:
 
 **Stay scenario-focused:** Don't search for every keyword in the diff. Focus on the 3-5 most important scenarios the PR introduces or modifies.
 
+**Tie insights to changed code:** Every insight must connect to code being CHANGED in this PR. An insight about how the team handled caching in module X is not relevant to a PR changing authentication in module Y, even if both are interesting. Before reporting, ask: "Would the PR author need this specific precedent to avoid a concrete mistake in THIS code?" If the answer is "it's just good to know" — classify as LEARN (INFO severity) or drop it entirely.
+
 **Depth over breadth:** A single well-researched historical insight with full context is worth more than ten shallow "this commit mentions a similar word" matches.
 
 **Be specific:** "Commit abc123 added null checking to the payment amount in `process_payment()` after issue #456 — the same pattern applies to `calculate_total()` in this PR" is useful. "Consider adding null checks" is not.

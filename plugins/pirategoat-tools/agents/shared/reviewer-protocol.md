@@ -100,13 +100,21 @@ Two distinct activities with different rules:
 
 Exploration is expected and encouraged: reading project conventions, understanding call sites, checking how similar code works elsewhere.
 
-If you are about to report a finding, STOP. Verify it is in changed code (the diff), not explored code. Findings on unchanged code are false positives — drop them.
+**STOP CHECK — before every `add_issue()` call:**
 
-For every finding, verify:
+State the file path and line number for this finding. Then answer two questions:
+1. Is this file in `CHANGED_FILES`? (If NO → drop: not in diff)
+2. Is this line in a diff hunk? (If NO → drop: pre-existing code)
+
+If either answer is NO, this is exploration context, not a finding. Do NOT call `add_issue()`. This check is mandatory — findings on unchanged code are false positives.
+
+For every finding that passes the STOP CHECK, also verify:
 1. **Is this in the changed code?** Issues in unchanged code are NOT findings.
 2. **Is this new or pre-existing?** Only report issues INTRODUCED by this change.
 3. **Would I bet my reputation on this?** If uncertain, verify deeper or drop it.
 4. **Am I reviewing the change, or the codebase?** Evaluate THIS CHANGE, not the entire codebase.
+5. **Is this a bug or a preference?** For LOW and MEDIUM findings: if this is a formatting choice, naming opinion, code organization style, or "I would have done it differently" without a concrete defect, regression, or security concern — it's a preference. Drop it.
+6. **Did I verify my factual claim?** If your finding says code does or doesn't do something specific (missing close, missing attribute, missing null check, O(N^2) complexity), you MUST read the actual implementation lines with the Read tool to confirm. Do not infer behavior from context or variable names. 47% of false positives come from factual claims that don't match the actual code.
 
 <example type="CORRECT">
 Finding: "process_payment() at line 42 concatenates user input into SQL query — this line was ADDED in this PR."

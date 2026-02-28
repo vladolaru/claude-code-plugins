@@ -70,6 +70,16 @@ Hooks are integration points, not a requirement for every function. Add hooks wh
 
 Do NOT add hooks just because "WordPress does it this way." Over-hooking creates maintenance burden, performance overhead, and API surface bloat.
 
+**Anti-False-Positive Checks:**
+
+Before reporting a finding, verify it doesn't fall into these known FP patterns:
+
+1. **Framework API misidentification:** Before flagging a pattern as an API bypass, tight coupling, or architectural violation, check if it's a documented framework API by reading the relevant type definitions or interface files. If a type/interface explicitly declares the pattern (e.g., `CompletionState = boolean | undefined`), it's intentional — drop the finding.
+
+2. **Developer-only strings don't need i18n:** Error messages from SDK integrations (Stripe, payment gateways), debug assertions, and errors that never surface in the user-facing UI do NOT need internationalization. Only flag i18n for strings rendered to end users.
+
+3. **Clean removals are not dead code:** Code that was intentionally removed in the PR is the PR doing its job, not a "dead code" finding. Only flag dead code that the PR *introduces* or *leaves behind*.
+
 ## WordPress Architecture Categories
 
 ### CRITICAL (Breaking/blocking)
