@@ -5,6 +5,21 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.39.0] - 2026-02-28
+
+### Changed
+
+- **history-insights-reviewer efficiency overhaul** — Based on deep analysis of 3 session transcripts showing 60-70 git commands per run. Key changes:
+  - Bootstrap now provides merge-base-correct diffs (eliminates 8-11 redundant `git diff` commands per session)
+  - All keyword/pickaxe searches use `--first-parent --since="12 months ago"` (10-100x faster on repos with many branches)
+  - Pickaxe split into two phases: find SHAs first (no `-p`), then selective `git show` (major token reduction)
+  - Fixed `-S`/`-G` confusion: `-S` for literal strings, `-G` for regex (eliminates ~half of 19% pickaxe failure rate)
+  - Added `git blame` as supplementary discovery tool
+  - Added explicit parallel branch detection as Phase 1.5 (elevates agent's most unique capability)
+  - Added soft ~35 command budget and patterns-reviewer dedup
+  - Pre-computed file history in bootstrap (last 15 commits per changed file)
+  - Expected savings: ~35% token reduction (5.3M → ~3.5M avg), ~35% runtime reduction (5m35s → ~3m30s)
+
 ## [1.38.1] - 2026-02-28
 
 ### Changed
