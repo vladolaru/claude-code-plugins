@@ -71,6 +71,28 @@ From the PR changes, identify **scenarios** (not just patterns):
 - What **operations** are performed? (CRUD, API calls, state transitions, calculations)
 - What **edge cases** might exist? (empty states, concurrent access, large datasets, null values)
 
+### Phase 1.5: Parallel Branch Detection (YOUR UNIQUE VALUE)
+
+Before mining commit history, check if other branches are working on the same files. This is something no other reviewer can surface.
+
+```bash
+# Find commits on ANY branch that touch the same files as this PR (last 3 months)
+# This is the ONE place where --all is correct — you need to see all branches
+git log --oneline --all --since="3 months ago" -- <changed-file-1> <changed-file-2> | head -30
+
+# Filter out commits already on the default branch to find branch-only work
+# (commits on feature branches not yet merged)
+git log --oneline --all --since="3 months ago" -- <changed-file> \
+  | grep -v "$(git log --oneline --first-parent --since="3 months ago" | cut -d' ' -f1 | paste -sd'|')"
+```
+
+If you find commits on other branches touching the same files:
+1. Identify the branch: `git branch -r --contains <commit_hash>`
+2. Compare: `git diff <other-branch> -- <file>`
+3. Check for fixes/enhancements the PR might be missing
+
+Report parallel branch findings as HIGH confidence CONSIDER_ENHANCEMENT — they represent active concurrent work the PR author likely doesn't know about.
+
 ### Phase 2: Git History Mining
 
 **Use these flags on ALL git log commands:**
