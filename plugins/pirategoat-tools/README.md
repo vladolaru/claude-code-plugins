@@ -85,6 +85,23 @@ Agents don't guess — they use actual tool outputs when available. Scripts for 
 
 All tools are optional — agents fall back to manual analysis when tools aren't available.
 
+### Pipeline Analytics
+
+`scripts/extract-session-metrics.py` — extracts operational metrics from Claude Code session transcripts to measure agent performance and triage effectiveness.
+
+```bash
+# Agent metrics: runtime, tokens, findings, hit rates
+python3 scripts/extract-session-metrics.py --limit 50
+
+# Filter to specific agents
+python3 scripts/extract-session-metrics.py --agents security-reviewer,pr-reviewer
+
+# Triage effectiveness: dispatch/skip accuracy for adaptive dispatch (Step 3.6)
+python3 scripts/extract-session-metrics.py --triage --limit 30
+```
+
+Outputs markdown and JSON reports. Auto-detects the Claude Code sessions directory from the current git repo. See `--help` for all options.
+
 ## Installation
 
 ```bash
