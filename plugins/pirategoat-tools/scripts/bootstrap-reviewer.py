@@ -86,6 +86,7 @@ AGENT_CONFIG: Dict[str, dict] = {
         "domain": "code",
         "protocols": ["reviewer"],
         "scope_flags": [],
+        "file_history": True,
     },
     "tests-mutation-reviewer": {
         "domain": None,
@@ -283,6 +284,39 @@ def extract_status(scope_output: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def get_file_history(files: List[str], max_commits: int = 15) -> str:
+    """Get recent commit history for each changed file.
+
+    Returns structured text with last N commits per file.
+    Fast: one git log per file, limited output.
+    """
+    if not files:
+        return ""
+
+    lines = [f"=== FILE HISTORY (last {max_commits} commits per changed file) ==="]
+    lines.append("")
+
+    for filepath in files[:20]:  # Cap at 20 files to avoid runaway
+        rc, stdout, _ = run_cmd(
+            ["git", "log", "--oneline", "--follow",
+             "--since=12 months ago", "--", filepath],
+            timeout=10,
+        )
+        if rc == 0 and stdout:
+            # Limit to max_commits lines
+            commit_lines = stdout.strip().splitlines()[:max_commits]
+            lines.append(f"--- {filepath} ---")
+            for cl in commit_lines:
+                lines.append(cl)
+            lines.append("")
+
+    if len(lines) <= 2:
+        # No history found for any file
+        return ""
+
+    return "\n".join(lines)
+
+
 def build_output(
     agent_name: str,
     plugin_root: str,
@@ -294,6 +328,7 @@ def build_output(
     output_dir: str,
     pr_number: Optional[str],
     reviewer_name: str,
+    file_history: Optional[str] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
     lines = []
@@ -326,6 +361,10 @@ def build_output(
     if exploration_scope:
         lines.append("=== EXPLORATION SCOPE ===")
         lines.append(exploration_scope)
+        lines.append("")
+
+    if file_history:
+        lines.append(file_history)
         lines.append("")
 
     # Section 3: Output Instructions (bottom position — recency effect)
@@ -516,6 +555,26 @@ def main():
         output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    # Compute file history for agents that request it
+    file_history_output = None
+    if config.get("file_history") and scope_output:
+        # Extract file list from scope output
+        file_lines = []
+        in_files = False
+        for line in scope_output.splitlines():
+            if line.startswith("=== FILES ==="):
+                in_files = True
+                continue
+            if in_files and line.startswith("==="):
+                break
+            if in_files and line.strip():
+                # File line format: "path/to/file  (+N -M)"
+                file_path = line.split("  ")[0].strip()
+                if file_path:
+                    file_lines.append(file_path)
+        if file_lines:
+            file_history_output = get_file_history(file_lines)
+
     # Step 5: Build and output the structured block
     reviewer_name = derive_reviewer_name(args.agent)
 
@@ -535,6 +594,7 @@ def main():
         output_dir=output_dir,
         pr_number=pr_number,
         reviewer_name=reviewer_name,
+        file_history=file_history_output,
     )
 
     print(output)

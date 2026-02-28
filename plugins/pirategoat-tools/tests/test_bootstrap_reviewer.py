@@ -515,3 +515,19 @@ class TestErrorHandling:
     def test_valid_agents_exit_0(self, agent_name):
         result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
         assert result.returncode == 0, f"{agent_name} exited with {result.returncode}: {result.stderr}"
+
+
+class TestFileHistory:
+    """File history section for history-insights-reviewer."""
+
+    def test_file_history_present_for_history_insights(self):
+        result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-bootstrap")
+        assert "=== FILE HISTORY ===" in result.stdout
+
+    @pytest.mark.parametrize(
+        "agent_name",
+        [a for a in ALL_AGENTS if a != "history-insights-reviewer"],
+    )
+    def test_file_history_absent_for_other_agents(self, agent_name):
+        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
+        assert "=== FILE HISTORY ===" not in result.stdout
