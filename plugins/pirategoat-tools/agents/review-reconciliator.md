@@ -39,10 +39,12 @@ If you are about to add a finding, STOP. Every finding in your output must trace
 ├── php-tests-review.json/.md
 ├── js-tests-review.json/.md
 ├── e2e-tests-review.json/.md
+├── go-tests-review.json/.md
 ├── patterns-review.json/.md
 ├── history-insights-review.json/.md
 ├── pr-review.json/.md            # ANCHOR
 ├── tests-mutation-review.json/.md
+├── dead-code-review.json/.md
 ├── a11y-review.json/.md
 ├── gemini.md                     # External AI (if exists)
 ├── codex.md                      # External AI (if exists)
@@ -68,7 +70,7 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
 ### Reading Agent JSON Outputs
 
 ```python
-agent_names = ['security', 'architecture', 'wp-architecture', 'performance', 'php-tests', 'js-tests', 'e2e-tests', 'patterns', 'history-insights', 'pr', 'tests-mutation', 'a11y']
+agent_names = ['security', 'architecture', 'wp-architecture', 'performance', 'php-tests', 'js-tests', 'e2e-tests', 'go-tests', 'patterns', 'history-insights', 'pr', 'tests-mutation', 'dead-code', 'a11y']
 agent_outputs = {}
 for name in agent_names:
     path = f"{output_dir}/{name}-review.json"
