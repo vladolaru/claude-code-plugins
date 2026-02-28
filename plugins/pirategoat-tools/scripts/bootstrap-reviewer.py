@@ -85,7 +85,7 @@ AGENT_CONFIG: Dict[str, dict] = {
     "history-insights-reviewer": {
         "domain": "code",
         "protocols": ["reviewer"],
-        "scope_flags": ["--base-ref-only"],
+        "scope_flags": [],
     },
     "tests-mutation-reviewer": {
         "domain": None,
