@@ -31,7 +31,7 @@ Phase 3  →  Generate review-report.md + ask about branch restore
 | Step 0 (Ask for PR URL) | **Skip** — URL provided in step 1 above |
 | Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking |
 | Step 3 (Ask how to proceed) | **Always "Full review"** — skip the question |
-| Step 8 (Agent dispatch) | **Use `/full-code-review` dispatch** (steps 3.5–5) instead of the skill's selective dispatch — ensures all 12 agents run regardless of PR size |
+| Step 8 (Agent dispatch) | **Use `/full-code-review` dispatch** (steps 3.5–5) instead of the skill's selective dispatch — ensures all eligible agents run with triage regardless of PR size |
 
 All other skill steps execute as documented.
 
