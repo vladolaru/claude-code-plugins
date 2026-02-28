@@ -255,6 +255,10 @@ For each finding, provide:
 
 **Time-box your search:** Spend most effort on the last 12 months of history. Older history is less likely to be relevant due to codebase evolution.
 
+**Command budget:** Aim for ~35 git commands total. After finding 5 high-quality insights, stop searching and write your report. More commands rarely produce proportionally more value — depth on fewer findings beats breadth across many.
+
+**Dedup with patterns-reviewer:** Before starting keyword searches, check if `patterns-review.json` exists in OUTPUT_DIR. If it does, read its findings and avoid reporting the same pattern-level observations. Your value is in temporal insights (what the team learned over time), not in pattern detection (what exists now). Let patterns-reviewer handle "this pattern exists N times" — you handle "the team fixed this bug 6 months ago."
+
 ## Finding Confidence
 
 For each finding, score confidence 0-100 before reporting:
