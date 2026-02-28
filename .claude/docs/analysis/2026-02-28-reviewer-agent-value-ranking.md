@@ -18,10 +18,10 @@ Combining precision (from ingest validation), operational metrics (47 sessions),
 | 2 | **performance-reviewer** | **Top tier** | 66.7% | 0% | 56% | 25/47 (53%) | 76.9% | 2m 45s | 1.5M | Sonnet |
 | 3 | **pr-reviewer** | **High** | 78.9% | 2.6% | 59% | 27/47 (57%) | ~45% | 3m 16s | 2.9M | Opus |
 | 4 | **dead-code-reviewer** | **High** (when hits) | 92.9% | 0% | 32% | 19/47 (40%) | 100% | 2m 48s | 2.0M | Sonnet |
-| 5 | **history-insights-reviewer** | **Moderate** | 67.3% | 2.0% | 87% | 23/47 (49%) | ~55% | 5m 35s | 5.3M | Opus |
-| 6 | **patterns-reviewer** | **Moderate** | 66.2% | 0% | 41% | 41/47 (87%) | 61.9% | 4m 38s | 4.8M | Opus |
-| 7 | **wp-architecture-reviewer** | **Moderate** | 60.9% | **13.0%** | 33% | 55/47¹ (117%) | 80% | 2m 54s | 1.4M | Opus |
-| 8 | **architecture-reviewer** | **Questionable** | 62.8% | 7.0% | 67% | 24/47 (51%) | **50%** | 2m 59s | 1.8M | Opus |
+| 5 | **history-insights-reviewer** | **Moderate** | 67.3% | 2.0% | 87% | 23/47 (49%) | ~55% | 5m 35s | 5.3M | Sonnet³ |
+| 6 | **patterns-reviewer** | **Moderate** | 66.2% | 0% | 41% | 41/47 (87%) | 61.9% | 4m 38s | 4.8M | Sonnet³ |
+| 7 | **wp-architecture-reviewer** | **Moderate** | 60.9% | **13.0%** | 33% | 55/47¹ (117%) | 80% | 2m 54s | 1.4M | Sonnet³ |
+| 8 | **architecture-reviewer** | **Questionable** | 62.8% | 7.0% | 67% | 24/47 (51%) | **50%** | 2m 59s | 1.8M | Sonnet³ |
 | 9 | **php-tests-reviewer** | **Promising** | 100% | 0% | 31% | 13/47 (28%) | 66.7% | 2m 30s | 1.9M | Sonnet |
 | 10 | **e2e-tests-reviewer** | **Promising** | 80% | 0% | 46% | 13/47 (28%) | 100% | 1m 54s | 1.1M | Sonnet |
 | 11 | **security-reviewer** | **Low** | 66.7% | 11.1% | **11%** | 38/47 (81%) | 60% | 3m 14s | 1.6M | Sonnet |
@@ -31,6 +31,7 @@ Combining precision (from ingest validation), operational metrics (47 sessions),
 
 ¹ wp-architecture-reviewer is dispatched multiple times in some sessions (55 dispatches across 47 sessions)
 ² Both validated a11y findings were STYLE/PREFERENCE — precision sample is only 2
+³ Demoted from Opus (inherit) to Sonnet in v1.38.1 — metrics above reflect pre-demotion Opus runs
 
 ---
 
@@ -331,7 +332,7 @@ The Opus→Haiku cost ratio is 5:1 (not close to 1:1). Six agents run on Opus an
 - **Min:** 10s, Max: 26m 14s
 - 83% of agents complete within 5 minutes
 
-### Model distribution
+### Model distribution (pre-v1.38.1 demotion)
 
 | Model | Executions | % |
 |---|---|---|
@@ -340,6 +341,8 @@ The Opus→Haiku cost ratio is 5:1 (not close to 1:1). Six agents run on Opus an
 | claude-sonnet-4-5 | 34 | 11% |
 | claude-haiku-4-5 | 23 | 8% |
 | claude-opus-4-5 | 9 | 3% |
+
+Post-v1.38.1: 4 agents moved from Opus (inherit) to Sonnet (architecture, wp-architecture, patterns, history-insights). pr-reviewer and a11y-reviewer remain on Opus (inherit). Expected new distribution: ~25% Opus, ~60% Sonnet, ~15% Haiku.
 
 ### Verdict distribution
 

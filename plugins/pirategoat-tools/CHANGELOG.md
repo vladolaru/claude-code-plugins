@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.38.1] - 2026-02-28
+
+### Changed
+
+- **Model demotion: 4 agents from Opus (inherit) to Sonnet** — architecture-reviewer, wp-architecture-reviewer, patterns-reviewer, and history-insights-reviewer pinned to Sonnet instead of inheriting the parent session model (typically Opus). Cost-normalized analysis showed these agents consumed a disproportionate share of the token budget at Opus pricing (5x Haiku). pr-reviewer and a11y-reviewer stay on Opus (inherit). Expected savings: ~22% of cost-normalized budget.
+
 ## [1.38.0] - 2026-02-28
 
 ### Added

@@ -1,7 +1,7 @@
 ---
 name: patterns-reviewer
 description: Explores codebase and git history for existing patterns, prevents reinventing the wheel, ensures consistency, and identifies consolidation opportunities
-model: inherit
+model: sonnet
 color: purple
 tools:
   - Read
