@@ -6,7 +6,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ## What's Inside
 
-### 17 Review Agents
+### 18 Review Agents
 
 These run in parallel by default — total review time equals the slowest agent, not the sum of all agents.
 
@@ -28,13 +28,14 @@ These run in parallel by default — total review time equals the slowest agent,
 | **gemini-reviewer** | Cross-validates via Google Gemini CLI for independent perspective | haiku |
 | **codex-reviewer** | Cross-validates via OpenAI Codex CLI for independent perspective | haiku |
 | **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | sonnet |
+| **a11y-reviewer** | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA | inherit |
 | **technical-writer** | Creates documentation after feature completion | haiku |
 
 #### Model Tiers
 
 Not all review work requires the same level of reasoning. Agents are assigned to model tiers based on what their task actually demands:
 
-- **inherit** (5 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. Architecture reviewers need structural reasoning about SOLID violations and ecosystem impact. The patterns and history-insights reviewers do genuine codebase archaeology — recognizing analogues across git history, not just keyword matching.
+- **inherit** (6 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. Architecture reviewers need structural reasoning about SOLID violations and ecosystem impact. The patterns and history-insights reviewers do genuine codebase archaeology — recognizing analogues across git history, not just keyword matching.
 - **sonnet** (8 agents) — Structured analysis against well-defined checklists. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). Test reviewers check against catalogued smells. The mutation reviewer follows a rigid 5-phase protocol. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
 - **haiku** (4 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
 
@@ -116,7 +117,7 @@ Agents use ground truth results at confidence 1.0 and fall back to manual analys
 
 ```
 pirategoat-tools/
-├── agents/           # 17 review agent definitions
+├── agents/           # 18 review agent definitions
 ├── commands/         # 8 slash commands
 ├── skills/           # 15 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library

@@ -34,13 +34,13 @@ Deterministic pytest suite. Tests `bootstrap-reviewer.py` by importing its funct
 
 | Class | Functions under test | What it verifies |
 |---|---|---|
-| `TestDeriveReviewerName` | `derive_reviewer_name()` | All 11 agents produce correct output names, edge cases (no suffix, empty string) |
+| `TestDeriveReviewerName` | `derive_reviewer_name()` | All agents produce correct output names, edge cases (no suffix, empty string) |
 | `TestExtractProtocolSections` | `extract_protocol_sections()` | Skip-list works, new sections auto-included, code fences not misread, L1 title stripped |
 | `TestExtractFields` | `extract_pr_number()`, `extract_output_dir()`, `extract_status()` | Parses structured scope output, handles missing fields |
 | `TestBuildOutput` | `build_output()` | Section markers, conditional sections (domain rules, exploration scope), output paths, builder snippet |
 | `TestBuildErrorOutput` | `build_error_output()` | Error structure, plugin root, action directive |
 
-**Integration test classes** run the full script via subprocess for all 11 agents:
+**Integration test classes** run the full script via subprocess for all agents:
 
 | Class | What it verifies |
 |---|---|
@@ -79,7 +79,7 @@ Deterministic pytest suite that validates structural properties of review comman
 | Class | What it verifies |
 |---|---|
 | `TestFrontmatter` | All commands exist, have valid YAML frontmatter with `description` field |
-| `TestAgentReferences` | Agent names in dispatch tables exist in `marketplace.json`; both dispatch commands reference the same 10 agents |
+| `TestAgentReferences` | Agent names in dispatch tables exist in `marketplace.json`; both dispatch commands reference the same agents |
 | `TestScriptReferences` | Scripts referenced in commands (`bootstrap-reviewer.py`, `review-scope.py`) exist on disk |
 | `TestMarketplaceRegistration` | All review commands are registered in `marketplace.json` |
 | `TestCodeReviewIterative` | `code-review.md` has state file reference, incremental mode, full/reset option, rebase detection, no-new-commits guard |
@@ -150,9 +150,9 @@ Every grader has tests for both:
 
 Protocol extraction uses a skip-list (sections to exclude) rather than an include-list. New sections added to `reviewer-protocol.md` are automatically included in bootstrap output — and the test `test_new_section_auto_included` verifies this. If someone adds a section to the protocol, they don't need to update the bootstrap script or tests.
 
-### 6. All 11 agents, always
+### 6. All agents, always
 
-Integration tests are parameterized across all 11 reviewer agents. Adding a new agent to `AGENT_CONFIG` in `bootstrap-reviewer.py` automatically includes it in all parameterized tests. No test file changes needed.
+Integration tests are parameterized across all reviewer agents. Adding a new agent to `AGENT_CONFIG` in `bootstrap-reviewer.py` automatically includes it in all parameterized tests. No test file changes needed.
 
 ### 7. Tests read real protocol files
 

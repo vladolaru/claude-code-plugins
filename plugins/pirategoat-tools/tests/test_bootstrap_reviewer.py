@@ -69,6 +69,7 @@ class TestDeriveReviewerName:
             ("history-insights-reviewer", "history-insights"),
             ("tests-mutation-reviewer", "tests-mutation"),
             ("dead-code-reviewer", "dead-code"),
+            ("a11y-reviewer", "a11y"),
         ],
     )
     def test_all_agents(self, agent_name, expected):

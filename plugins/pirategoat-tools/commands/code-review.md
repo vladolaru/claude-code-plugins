@@ -136,6 +136,7 @@ python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range 
 | 10 | `pirategoat-tools:e2e-tests-reviewer` | e2e-tests | Playwright E2E test quality |
 | 11 | `pirategoat-tools:go-tests-reviewer` | go-tests | Go test quality |
 | 12 | `pirategoat-tools:dead-code-reviewer` | dead-code | Unused functions, orphaned imports, unreachable code |
+| 13 | `pirategoat-tools:a11y-reviewer` | a11y | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA |
 
 Agents not dispatched (domain had no files) are recorded as `STATUS=SKIPPED` in the agent signals for the reconciliator.
 

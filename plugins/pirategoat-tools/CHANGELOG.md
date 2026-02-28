@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.35.3] - 2026-02-28
+
+### Fixed
+
+- **a11y-reviewer agent — Wired into all dispatch and documentation locations** — Added a11y-reviewer as agent #13 in both `/full-code-review` and `/code-review` dispatch tables, added `a11y` to review-reconciliator's agent_names list and file tree, added to pirategoat-tools and root README agent tables (17→18 agents), added to TestDeriveReviewerName parametrize list, updated test_commands dispatch count (12→13), and removed stale hardcoded agent counts from TESTING.md.
+
 ## [1.35.2] - 2026-02-28
 
 ### Changed
