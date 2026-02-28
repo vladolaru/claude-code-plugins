@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.37.1] - 2026-02-28
+
+### Changed
+
+- **architecture-reviewer — Narrow scope to eliminate patterns-reviewer overlap** — Added explicit exclusions for code duplication, structural inconsistency, and consolidation opportunities (all handled by patterns-reviewer). Added -20 confidence reducer for findings that primarily recommend "extract shared code" or "align with existing implementation." Updated collaboration section to clarify the boundary. Based on overlap analysis showing 8 co-reported findings (all duplication/consistency) and architecture-reviewer's 50% unique contribution rate — the worst in the pipeline.
+
 ## [1.37.0] - 2026-02-28
 
 ### Added
