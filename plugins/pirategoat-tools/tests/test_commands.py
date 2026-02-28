@@ -377,6 +377,85 @@ class TestFullCodeReview:
 
 
 # =============================================================================
+# Triage Block Tests (Step 3.6: Adaptive Agent Triage)
+# =============================================================================
+
+
+# The 6 agents subject to LLM triage (must match design doc)
+TRIAGED_AGENTS = [
+    "security-reviewer",
+    "dead-code-reviewer",
+    "architecture-reviewer",
+    "wp-architecture-reviewer",
+    "performance-reviewer",
+    "a11y-reviewer",
+]
+
+
+class TestTriageBlock:
+    """Step 3.6 adaptive agent triage is present and well-formed in dispatch commands."""
+
+    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
+    def test_has_triage_step(self, command):
+        """Dispatch commands must contain Step 3.6 triage block."""
+        content = _read_command(command)
+        assert "Step 3.6" in content or "Adaptive Agent Triage" in content, (
+            f"{command}: missing Step 3.6 (Adaptive Agent Triage)"
+        )
+
+    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
+    def test_triage_lists_all_conditional_agents(self, command):
+        """Triage block must reference all 6 conditional agents."""
+        content = _read_command(command)
+        for agent in TRIAGED_AGENTS:
+            # Agent name without -reviewer suffix is acceptable in criteria headings
+            agent_base = agent.replace("-reviewer", "")
+            assert agent in content or agent_base in content, (
+                f"{command}: triage block missing conditional agent '{agent}'"
+            )
+
+    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
+    def test_triage_output_format(self, command):
+        """Triage block must document the TRIAGE: output format."""
+        content = _read_command(command)
+        assert "TRIAGE:" in content, (
+            f"{command}: missing TRIAGE: output format"
+        )
+        # Must show both DISPATCH and SKIP as possible decisions
+        assert "DISPATCH" in content and "SKIP" in content, (
+            f"{command}: triage format must show both DISPATCH and SKIP decisions"
+        )
+
+    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
+    def test_triage_skipped_signal(self, command):
+        """Dispatch commands must include STATUS=SKIPPED_TRIAGE signal for reconciliator."""
+        content = _read_command(command)
+        assert "SKIPPED_TRIAGE" in content, (
+            f"{command}: missing STATUS=SKIPPED_TRIAGE signal for reconciliator"
+        )
+
+    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
+    def test_triage_between_preflight_and_dispatch(self, command):
+        """Step 3.6 must appear between Step 3.5 (preflight) and Step 4 (dispatch)."""
+        content = _read_command(command)
+        pos_35 = content.find("Step 3.5")
+        pos_36 = content.find("Step 3.6")
+        pos_4 = content.find("Step 4")
+        assert pos_35 < pos_36 < pos_4, (
+            f"{command}: Step 3.6 must be between Step 3.5 and Step 4 "
+            f"(positions: 3.5={pos_35}, 3.6={pos_36}, 4={pos_4})"
+        )
+
+    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
+    def test_triage_default_is_dispatch(self, command):
+        """Triage must default to DISPATCH when in doubt (safety mechanism)."""
+        content = _read_command(command).lower()
+        assert "when in doubt" in content and "dispatch" in content, (
+            f"{command}: triage must specify 'when in doubt, DISPATCH' default"
+        )
+
+
+# =============================================================================
 # State File Grader Tests
 # =============================================================================
 
