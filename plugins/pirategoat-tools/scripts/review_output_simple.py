@@ -199,8 +199,8 @@ class ReviewOutputBuilder:
         import os
         os.makedirs(output_dir, exist_ok=True)
 
-        json_path = os.path.join(output_dir, f"{self.reviewer}.json")
-        md_path = os.path.join(output_dir, f"{self.reviewer}.md")
+        json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
+        md_path = os.path.join(output_dir, f"{self.reviewer}-review.md")
 
         with open(json_path, 'w') as f:
             f.write(self.to_json())

@@ -88,7 +88,10 @@ The function is registered via `add_action('widgets_init', ...)` two files away.
 
 ### Step 0: Assess Dynamic Dispatch Risk
 
-Before cataloging symbols, determine the codebase's dynamic dispatch profile:
+Check the `DYNAMIC_DISPATCH_RISK` value from bootstrap output.
+
+- **`DYNAMIC_DISPATCH_RISK: low`** — No PHP files in scope. Skip the grep below and start confidence at 75. Standard verification sufficient.
+- **`DYNAMIC_DISPATCH_RISK: high`** — PHP files are in scope. Run the command below to gauge false positive risk:
 
 ```bash
 # Count framework hook registrations to gauge false positive risk

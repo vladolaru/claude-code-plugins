@@ -105,6 +105,11 @@ AGENT_CONFIG: Dict[str, dict] = {
     },
 }
 
+# Maximum inline scope size before capping (in characters).
+# Beyond this, the full scope is written to a file and only a summary is inlined.
+# Prevents Claude Code's output persistence cascade for large PRs.
+SCOPE_INLINE_CAP = 15 * 1024  # 15KB
+
 # Sections to SKIP from reviewer-protocol.md.
 # Everything else is included automatically (safe default for new sections).
 # - Setup sections: bootstrap already performed these steps
@@ -363,7 +368,30 @@ def build_output(
     lines.append("--- Section 2: REVIEW CONTENT (what to review) ---")
     lines.append("")
     lines.append("=== REVIEW SCOPE ===")
-    lines.append(scope_output)
+
+    if len(scope_output) > SCOPE_INLINE_CAP:
+        # Write full scope to file to avoid output persistence cascade
+        os.makedirs(output_dir, exist_ok=True)
+        scope_file = os.path.join(output_dir, "scoped-diff.patch")
+        with open(scope_file, 'w') as f:
+            f.write(scope_output)
+        # Show first ~200 lines inline, capped at SCOPE_INLINE_CAP characters
+        scope_lines = scope_output.splitlines()
+        truncated_lines = []
+        char_count = 0
+        for sl in scope_lines[:200]:
+            if char_count + len(sl) > SCOPE_INLINE_CAP:
+                break
+            truncated_lines.append(sl)
+            char_count += len(sl) + 1  # +1 for newline
+        lines.append("\n".join(truncated_lines))
+        lines.append("")
+        lines.append(f"... SCOPE TRUNCATED ({len(scope_lines)} total lines) ...")
+        lines.append(f"Full scope written to: {scope_file}")
+        lines.append("Read it with offset/limit parameters (e.g., offset=200, limit=200) to avoid re-truncation.")
+    else:
+        lines.append(scope_output)
+
     lines.append("")
 
     if exploration_scope:
@@ -373,6 +401,18 @@ def build_output(
 
     if file_history:
         lines.append(file_history)
+        lines.append("")
+
+    # Inject DYNAMIC_DISPATCH_RISK for dead-code-reviewer
+    if agent_name == "dead-code-reviewer":
+        # Check if any PHP files are in the scope
+        has_php = any(
+            line.strip().split("  ")[0].strip().endswith(".php")
+            for line in scope_output.splitlines()
+            if line.strip() and not line.startswith("===")
+        )
+        risk = "high (PHP files in scope — check for hooks, filters, callbacks)" if has_php else "low (0 PHP files in scope — skip Step 0)"
+        lines.append(f"DYNAMIC_DISPATCH_RISK: {risk}")
         lines.append("")
 
     # Section 3: Output Instructions (bottom position — recency effect)
@@ -393,6 +433,16 @@ def build_output(
     lines.append(
         f'  builder = ReviewOutputBuilder(pr_id={pr_id_str}, reviewer="{reviewer_name}")'
     )
+    lines.append(f'  builder.add_issue(severity="high", title="Issue title", file="path/to/file.py",')
+    lines.append(f'      description="What is wrong", recommendation="How to fix",')
+    lines.append(f'      category="category-name", line=42, confidence=0.9)')
+    lines.append(f'  builder.add_positive("Positive observation text")')
+    lines.append(f'  builder.set_files_reviewed(N)')
+    lines.append(f'  builder.set_confidence(0.85)')
+    lines.append(f'  result = builder.save("{output_dir}")  # returns {{"json": path, "markdown": path}}')
+    lines.append(f"")
+    lines.append(f"  IMPORTANT: save() confirms success via its return value.")
+    lines.append(f"  Do NOT read the output files back to verify — proceed directly to the STATUS signal.")
     lines.append("")
     lines.append("Return signal format:")
     lines.append("  STATUS: FINISHED")

@@ -531,3 +531,223 @@ class TestFileHistory:
     def test_file_history_absent_for_other_agents(self, agent_name):
         result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
         assert "=== FILE HISTORY ===" not in result.stdout
+
+
+class TestReviewOutputBuilderAPIExample:
+    """Bootstrap Section 3 must include a complete ReviewOutputBuilder usage example."""
+
+    def _build(self):
+        return build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/pr-review-42",
+            pr_number="42",
+            reviewer_name="security",
+        )
+
+    def test_output_contains_add_issue_example(self):
+        """The usage example must show add_issue() with named parameters."""
+        output = self._build()
+        assert "add_issue(" in output
+        assert "severity=" in output
+        assert "title=" in output
+        assert "file=" in output
+        assert "description=" in output
+        assert "recommendation=" in output
+
+    def test_output_contains_add_positive_example(self):
+        """The usage example must show add_positive()."""
+        output = self._build()
+        assert "add_positive(" in output
+
+    def test_output_contains_save_example(self):
+        """The usage example must show save() with output_dir."""
+        output = self._build()
+        assert "save(" in output
+        assert "output_dir" in output.lower() or "/tmp/pr-review-42" in output
+
+    def test_output_contains_set_files_reviewed(self):
+        """The usage example must show set_files_reviewed()."""
+        output = self._build()
+        assert "set_files_reviewed(" in output
+
+    def test_output_contains_set_confidence(self):
+        """The usage example must show set_confidence()."""
+        output = self._build()
+        assert "set_confidence(" in output
+
+    def test_output_contains_no_verify_instruction(self):
+        """The usage example must tell agents not to verify save() output."""
+        output = self._build()
+        lower = output.lower()
+        assert "do not" in lower and ("read" in lower or "verify" in lower) and ("output file" in lower or "save()" in lower)
+
+
+class TestBootstrapOutputSizeCap:
+    """Bootstrap caps inline scope when output would exceed size threshold."""
+
+    def _build_large_output(self, scope_size_kb=50, output_dir=None):
+        """Helper: build output with a scope of the given KB size."""
+        if output_dir is None:
+            import tempfile
+            output_dir = tempfile.mkdtemp()
+        large_scope = "x" * (scope_size_kb * 1024)
+        return build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules here",
+            domain_rules=None,
+            scope_output=large_scope,
+            exploration_scope=None,
+            output_dir=output_dir,
+            pr_number="42",
+            reviewer_name="security",
+        )
+
+    def test_small_scope_included_inline(self):
+        """Scope under threshold is included inline (no change from current behavior)."""
+        small_scope = "diff content here\n" * 100  # ~2KB
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules here",
+            domain_rules=None,
+            scope_output=small_scope,
+            exploration_scope=None,
+            output_dir="/tmp/pr-review-42",
+            pr_number="42",
+            reviewer_name="security",
+        )
+        assert small_scope in output
+
+    def test_large_scope_truncated(self):
+        """Scope over threshold is truncated with a file reference."""
+        output = self._build_large_output(scope_size_kb=50)
+        # The full 50KB scope should NOT be in the output
+        assert len(output) < 40 * 1024  # output should be well under 40KB total
+
+    def test_large_scope_has_file_reference(self):
+        """When scope is truncated, output tells agent where to read the full scope."""
+        output = self._build_large_output(scope_size_kb=50)
+        assert "scoped-diff.patch" in output or "full scope" in output.lower() or "Read" in output
+
+    def test_large_scope_has_read_instructions(self):
+        """When scope is truncated, output tells agent to use offset/limit."""
+        output = self._build_large_output(scope_size_kb=50)
+        lower = output.lower()
+        assert "offset" in lower or "limit" in lower or "head" in lower
+
+
+class TestDynamicDispatchRisk:
+    """Bootstrap injects DYNAMIC_DISPATCH_RISK for dead-code-reviewer."""
+
+    def test_dead_code_reviewer_gets_dispatch_risk(self):
+        """dead-code-reviewer output includes DYNAMIC_DISPATCH_RISK."""
+        scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
+        output = build_output(
+            agent_name="dead-code-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output=scope_with_php,
+            exploration_scope=None,
+            output_dir="/tmp/pr-review-42",
+            pr_number="42",
+            reviewer_name="dead-code",
+        )
+        assert "DYNAMIC_DISPATCH_RISK:" in output
+
+    def test_dispatch_risk_high_with_php_files(self):
+        """DYNAMIC_DISPATCH_RISK is 'high' when PHP files are in scope."""
+        scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
+        output = build_output(
+            agent_name="dead-code-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output=scope_with_php,
+            exploration_scope=None,
+            output_dir="/tmp/pr-review-42",
+            pr_number="42",
+            reviewer_name="dead-code",
+        )
+        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
+        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert "high" in risk_line[0].lower()
+
+    def test_dispatch_risk_low_without_php_files(self):
+        """DYNAMIC_DISPATCH_RISK is 'low' when no PHP files are in scope."""
+        scope_no_php = "=== FILES ===\nsrc/utils.ts  (+3 -1)\nsrc/component.tsx  (+20 -5)\n=== DIFFS ==="
+        output = build_output(
+            agent_name="dead-code-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output=scope_no_php,
+            exploration_scope=None,
+            output_dir="/tmp/pr-review-42",
+            pr_number="42",
+            reviewer_name="dead-code",
+        )
+        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
+        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert "low" in risk_line[0].lower()
+
+    def test_other_agents_no_dispatch_risk(self):
+        """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK."""
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/pr-review-42",
+            pr_number="42",
+            reviewer_name="security",
+        )
+        assert "DYNAMIC_DISPATCH_RISK:" not in output
+
+
+class TestOutputFilenameConsistency:
+    """Output filenames from ReviewOutputBuilder.save() match bootstrap expectations."""
+
+    def test_save_uses_review_suffix(self, tmp_path):
+        """save() should write {reviewer}-review.json and {reviewer}-review.md."""
+        from review_output_simple import ReviewOutputBuilder
+
+        builder = ReviewOutputBuilder(pr_id="42", reviewer="dead-code")
+        result = builder.save(str(tmp_path))
+
+        assert result["json"].endswith("dead-code-review.json"), f"Got: {result['json']}"
+        assert result["markdown"].endswith("dead-code-review.md"), f"Got: {result['markdown']}"
+        assert os.path.isfile(result["json"])
+        assert os.path.isfile(result["markdown"])
+
+    def test_bootstrap_output_matches_save_filenames(self):
+        """Bootstrap OUTPUT_FILES paths match what save() actually creates."""
+        output = build_output(
+            agent_name="dead-code-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/pr-review-42",
+            pr_number="42",
+            reviewer_name="dead-code",
+        )
+        assert "/tmp/pr-review-42/dead-code-review.json" in output
+        assert "/tmp/pr-review-42/dead-code-review.md" in output
