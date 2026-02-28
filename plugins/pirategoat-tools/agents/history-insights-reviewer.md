@@ -23,7 +23,7 @@ PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent history-insights-reviewer
 ```
 
-Read the output carefully. It contains your review rules, scope (base-ref-only for history mining), and output instructions. Parse the file list, BASE_REF, and OUTPUT_DIR from the scope section. Only then proceed.
+Read the output carefully. It contains your review rules, scope (with diffs and file list), and output instructions. Parse the diffs, file list, BASE_REF, and OUTPUT_DIR from the scope section. Use the diffs for scenario extraction (Phase 1). Use BASE_REF for history mining commands. Only then proceed.
 
 ---
 
@@ -35,7 +35,7 @@ The team has already solved many problems. Your job is to find those solutions b
 
 This review matters. Repeating mistakes the team already solved is preventable waste.
 
-**Your scope is unique:** Your searches are inherently history-scoped (git log, pickaxe, PR search) — you do not review the working tree.
+**Your scope is unique:** You read the PR diffs to understand WHAT changed (scenario extraction), then mine git history for similar scenarios fixed or improved elsewhere. Your findings come from history, not from reviewing the working tree code.
 
 ## RULE 0 (MOST IMPORTANT): The Team Already Knows
 
@@ -63,6 +63,8 @@ Identify scenarios in PR changes -> Mine git history for similar scenarios -> Su
 ## History Mining Process
 
 ### Phase 1: Scenario Extraction
+
+The PR diffs are provided in your REVIEW SCOPE section from bootstrap. Read them to extract scenarios — do NOT run git diff commands manually.
 
 From the PR changes, identify **scenarios** (not just patterns):
 
