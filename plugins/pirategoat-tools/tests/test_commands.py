@@ -206,14 +206,14 @@ class TestAgentReferences:
             )
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_dispatches_13_agents(self, command):
-        """Each dispatch command references exactly 13 agents."""
+    def test_dispatches_14_agents(self, command):
+        """Each dispatch command references exactly 14 agents."""
         content = _read_command(command)
         refs = _extract_agent_refs(content)
         # Exclude reconciliator from the count (dispatched in a separate step)
         dispatch_refs = [r for r in refs if r != "review-reconciliator"]
-        assert len(dispatch_refs) == 13, (
-            f"{command}: expected 13 dispatch agents, found {len(dispatch_refs)}: {dispatch_refs}"
+        assert len(dispatch_refs) == 14, (
+            f"{command}: expected 14 dispatch agents, found {len(dispatch_refs)}: {dispatch_refs}"
         )
 
 

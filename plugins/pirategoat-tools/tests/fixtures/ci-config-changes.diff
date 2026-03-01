@@ -1,0 +1,89 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,32 @@
++name: CI
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++    branches: [main]
++
++permissions:
++  contents: read
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 20
++      - run: npm ci
++      - run: npm test
++
++  lint:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 20
++      - run: npm ci
++      - run: npm run lint
++
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,18 @@
++FROM node:20-alpine AS builder
++
++WORKDIR /app
++COPY package*.json ./
++RUN npm ci --only=production
++
++COPY . .
++RUN npm run build
++
++FROM node:20-alpine
++
++WORKDIR /app
++COPY --from=builder /app/dist ./dist
++COPY --from=builder /app/node_modules ./node_modules
++
++EXPOSE 3000
++USER node
++CMD ["node", "dist/index.js"]
+diff --git a/terraform/main.tf b/terraform/main.tf
+new file mode 100644
+--- /dev/null
++++ b/terraform/main.tf
+@@ -0,0 +1,22 @@
++terraform {
++  required_providers {
++    aws = {
++      source  = "hashicorp/aws"
++      version = "~> 5.0"
++    }
++  }
++}
++
++provider "aws" {
++  region = var.aws_region
++}
++
++resource "aws_security_group" "app" {
++  name        = "app-sg"
++  description = "Security group for the application"
++
++  ingress {
++    from_port   = 443
++    to_port     = 443
++    protocol    = "tcp"
++    cidr_blocks = ["0.0.0.0/0"]
++  }
++}

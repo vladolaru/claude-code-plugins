@@ -5,6 +5,35 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.42.0] - 2026-03-01
+
+### Added
+
+- **agent-registry.json:** Canonical JSON registry for all 15 review agents — single source of truth replacing hardcoded AGENT_CONFIG in bootstrap-reviewer.py. Fields: domain, secondary_domains, protocols, scope_flags, dispatch_class, triage_criteria, focus, model_tier
+- **plan-review-dispatch.py:** Deterministic dispatch planner that reads agent registry and changed files to decide which agents to dispatch. Replaces duplicated triage/dispatch logic in command files with `--mode full|incremental|pr`
+- **reconcile-reviews.py:** Deterministic reconciliation engine with Jaccard-based dedup clustering, severity resolution, and structured output. Pre-processes findings before the LLM reconciliator agent
+- **ingest-preprocess.py:** Deterministic scope checker and pre-classifier for ingest pipeline. Reduces LLM ingest steps from 6 to 3 by handling file/hunk scope checks and stable ID assignment mechanically
+- **reliability-reviewer agent:** New conditional agent for operational resilience review — logging, error handling, rollback safety, feature flags, circuit breakers, and failure-mode handling (sonnet tier)
+- **config-ops domain:** New scope domain covering CI/CD configs, Docker, Terraform, Helm, Makefiles, and infrastructure files. Security-reviewer and architecture-reviewer gain secondary domain coverage with dedicated checklists
+- **reliability domain:** New scope domain for production code operational resilience review
+- **Quality metrics extraction:** `--quality-metrics` mode in analyze-reviewer-sessions.py for finding counts, survival rates, and cross-agent overlap detection
+- **Test adequacy advisory:** Informational test-gap detection in reconcile-reviews.py — warns when production code changes without corresponding test modifications
+- **180+ new tests:** test_agent_registry (27), test_dispatch_planner (41), test_reconcile_reviews (55), test_ingest_preprocess (30), test_quality_metrics (27), domain routing extensions
+
+### Changed
+
+- **bootstrap-reviewer.py:** Loads agent config from agent-registry.json instead of hardcoded dict; secondary_domains support for multi-domain scope discovery
+- **review-reconciliator.md:** Simplified from mechanical dedup+narrative to narrative-only — reads pre-processed reconciled-structured.json, focuses on synthesis and executive summary
+- **ingest-code-review.py:** Supports 3-step preprocessed mode (--total-steps 3) alongside legacy 6-step mode for backwards compatibility
+- **full-code-review.md:** Dispatch via plan-review-dispatch.py; reconciliation split into deterministic preprocessing + LLM narrative
+- **code-review.md:** Same dispatch and reconciliation refactoring as full-code-review.md
+- **pr-review.md:** Updated agent count to /14; references dispatch planner directly
+
+### Fixed
+
+- **pr-review.md:** Corrected hardcoded agent count from /12 to /14
+- **README.md:** Fixed 5 stale model tier entries; corrected tier counts (inherit 3, sonnet 12, haiku 4)
+
 ## [1.41.3] - 2026-03-01
 
 ### Changed

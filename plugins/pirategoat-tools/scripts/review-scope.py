@@ -95,6 +95,16 @@ DOMAIN_CATALOG = {
         "include": r"\.(js|ts|jsx|tsx|css|scss)$",
         "exclude": None,
     },
+    "reliability": {
+        "description": "Production code for operational resilience review",
+        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
+        "exclude": r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$)",
+    },
+    "config-ops": {
+        "description": "CI/CD configs, Docker, Terraform, and infrastructure files",
+        "include": r"(\.github/workflows/|\.gitlab-ci|Dockerfile|docker-compose|\.tf$|\.tfvars$|\.toml$|Jenkinsfile|\.circleci/|Makefile$|\.helmfile|chart\.yaml$|values\.yaml$)",
+        "exclude": None,
+    },
 }
 
 # Noise patterns — files no reviewer should waste context on

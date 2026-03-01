@@ -33,6 +33,7 @@ ALL_DOMAINS = [
     "a11y",
     "architecture",
     "code",
+    "config-ops",
     "dead-code",
     "e2e-tests",
     "go-tests",
@@ -40,6 +41,7 @@ ALL_DOMAINS = [
     "patterns",
     "performance",
     "php-tests",
+    "reliability",
     "security",
     "wp-architecture",
 ]
@@ -54,7 +56,9 @@ ROUTING_MATRIX = {
     "php-source.diff": {
         "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",
+        "reliability": "OK",
         "security": "OK",
         "performance": "OK",
         "architecture": "OK",
@@ -68,7 +72,9 @@ ROUTING_MATRIX = {
     "js-ts-source.diff": {
         "a11y": "OK",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",
+        "reliability": "OK",
         "security": "OK",
         "performance": "OK",
         "architecture": "OK",
@@ -82,7 +88,9 @@ ROUTING_MATRIX = {
     "php-test-only.diff": {
         "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "NO_DOMAIN_FILES",
+        "reliability": "NO_DOMAIN_FILES",
         "security": "OK",
         "performance": "OK",
         "architecture": "NO_DOMAIN_FILES",
@@ -96,7 +104,9 @@ ROUTING_MATRIX = {
     "js-test-only.diff": {
         "a11y": "OK",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "NO_DOMAIN_FILES",
+        "reliability": "NO_DOMAIN_FILES",
         "security": "OK",
         "performance": "OK",
         "architecture": "NO_DOMAIN_FILES",
@@ -110,7 +120,9 @@ ROUTING_MATRIX = {
     "e2e-test-only.diff": {
         "a11y": "OK",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",  # CheckoutPage.ts survives (no test/spec in filename)
+        "reliability": "OK",  # CheckoutPage.ts survives (no test/spec in path or filename)
         "security": "OK",
         "performance": "OK",
         "architecture": "OK",  # CheckoutPage.ts survives (no test/spec in filename)
@@ -124,7 +136,9 @@ ROUTING_MATRIX = {
     "go-test-only.diff": {
         "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "NO_DOMAIN_FILES",  # _test.go excluded
+        "reliability": "OK",  # _test.go not excluded (reliability exclude lacks _test.go pattern)
         "security": "OK",
         "performance": "OK",
         "architecture": "NO_DOMAIN_FILES",  # _test.go contains "test" → excluded
@@ -138,7 +152,9 @@ ROUTING_MATRIX = {
     "go-source.diff": {
         "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",
+        "reliability": "OK",
         "security": "OK",
         "performance": "OK",
         "architecture": "OK",
@@ -152,7 +168,9 @@ ROUTING_MATRIX = {
     "mixed-code-and-tests.diff": {
         "a11y": "OK",  # src/cart.test.ts matches .ts extension
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",  # src/Cart.php survives; tests/CartTest.php and src/cart.test.ts excluded
+        "reliability": "OK",  # src/Cart.php survives; tests/ and .test. excluded
         "security": "OK",
         "performance": "OK",
         "architecture": "OK",  # src/Cart.php survives
@@ -166,7 +184,9 @@ ROUTING_MATRIX = {
     "wp-hooks-and-i18n.diff": {
         "a11y": "NO_DOMAIN_FILES",
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",
+        "reliability": "OK",
         "security": "OK",
         "performance": "OK",
         "architecture": "OK",
@@ -180,7 +200,9 @@ ROUTING_MATRIX = {
     "multi-file-realistic.diff": {
         "a11y": "OK",  # .css, .tsx, .spec.ts, .test.tsx all match
         "code": "OK",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",  # production files survive; test files excluded
+        "reliability": "OK",  # production files survive; __tests__/, .spec., tests/, Test.php excluded
         "security": "OK",
         "performance": "OK",
         "architecture": "OK",
@@ -191,10 +213,28 @@ ROUTING_MATRIX = {
         "go-tests": "NO_DOMAIN_FILES",
         "patterns": "OK",
     },
+    "ci-config-changes.diff": {
+        "a11y": "NO_DOMAIN_FILES",
+        "code": "NO_DOMAIN_FILES",
+        "config-ops": "OK",
+        "dead-code": "NO_DOMAIN_FILES",
+        "reliability": "NO_DOMAIN_FILES",
+        "security": "NO_DOMAIN_FILES",
+        "performance": "NO_DOMAIN_FILES",
+        "architecture": "NO_DOMAIN_FILES",
+        "wp-architecture": "NO_DOMAIN_FILES",
+        "php-tests": "NO_DOMAIN_FILES",
+        "js-tests": "NO_DOMAIN_FILES",
+        "e2e-tests": "NO_DOMAIN_FILES",
+        "go-tests": "NO_DOMAIN_FILES",
+        "patterns": "NO_DOMAIN_FILES",
+    },
     "no-code-changes.diff": {
         "a11y": "NO_DOMAIN_FILES",
         "code": "NO_DOMAIN_FILES",
+        "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "NO_DOMAIN_FILES",
+        "reliability": "NO_DOMAIN_FILES",
         "security": "NO_DOMAIN_FILES",
         "performance": "NO_DOMAIN_FILES",
         "architecture": "NO_DOMAIN_FILES",

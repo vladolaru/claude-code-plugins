@@ -6,7 +6,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ## What's Inside
 
-### 18 Review Agents
+### 19 Review Agents
 
 These run in parallel by default — total review time equals the slowest agent, not the sum of all agents.
 
@@ -14,29 +14,30 @@ These run in parallel by default — total review time equals the slowest agent,
 |-------|-------|-------|
 | **pr-reviewer** | Generalist — validates changes against stated goals, catches cross-cutting issues | inherit |
 | **security-reviewer** | WordPress security — SQL injection, XSS, CSRF, capabilities, sanitization | sonnet |
-| **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | inherit |
-| **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | inherit |
+| **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | sonnet |
+| **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | sonnet |
 | **performance-reviewer** | N+1 queries, caching, autoloaded options, WP_Query optimization | sonnet |
 | **php-tests-reviewer** | PHPUnit test quality, WordPress factories, WooCommerce patterns | sonnet |
 | **js-tests-reviewer** | Jest/Vitest quality, React Testing Library queries, async patterns | sonnet |
 | **e2e-tests-reviewer** | Playwright quality — locators, Page Object Model, auto-waiting | sonnet |
 | **go-tests-reviewer** | Go testing idioms, table-driven tests, httptest, benchmarks | haiku |
-| **patterns-reviewer** | Codebase archaeology — finds existing patterns, prevents reinventing the wheel | inherit |
+| **patterns-reviewer** | Codebase archaeology — finds existing patterns, prevents reinventing the wheel | sonnet |
 | **dead-code-reviewer** | Unused functions, unreachable paths, orphaned imports | sonnet |
-| **history-insights-reviewer** | Mines git history for relevant prior fixes and lessons learned | inherit |
+| **history-insights-reviewer** | Mines git history for relevant prior fixes and lessons learned | sonnet |
 | **tests-mutation-reviewer** | Fault injection to verify tests catch real bugs (runs solo) | sonnet |
 | **gemini-reviewer** | Cross-validates via Google Gemini CLI for independent perspective | haiku |
 | **codex-reviewer** | Cross-validates via OpenAI Codex CLI for independent perspective | haiku |
-| **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | sonnet |
+| **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | inherit |
 | **a11y-reviewer** | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA | inherit |
+| **reliability-reviewer** | Logging, error handling, rollback safety, feature flags, failure-mode resilience | sonnet |
 | **technical-writer** | Creates documentation after feature completion | haiku |
 
 #### Model Tiers
 
 Not all review work requires the same level of reasoning. Agents are assigned to model tiers based on what their task actually demands:
 
-- **inherit** (6 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. Architecture reviewers need structural reasoning about SOLID violations and ecosystem impact. The patterns and history-insights reviewers do genuine codebase archaeology — recognizing analogues across git history, not just keyword matching.
-- **sonnet** (8 agents) — Structured analysis against well-defined checklists. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). Test reviewers check against catalogued smells. The mutation reviewer follows a rigid 5-phase protocol. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
+- **inherit** (3 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. The a11y-reviewer needs contextual reasoning about accessibility impact. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs.
+- **sonnet** (12 agents) — Structured analysis against well-defined checklists. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
 - **haiku** (4 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
 
 ### 15 Skills
@@ -134,7 +135,7 @@ Agents use ground truth results at confidence 1.0 and fall back to manual analys
 
 ```
 pirategoat-tools/
-├── agents/           # 18 review agent definitions
+├── agents/           # 19 review agent definitions
 ├── commands/         # 8 slash commands
 ├── skills/           # 15 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library

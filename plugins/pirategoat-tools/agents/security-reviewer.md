@@ -121,6 +121,37 @@ Ask these for every input path:
 
 If any answer is "bad things happen," it's a vulnerability.
 
+## CI/CD and Infrastructure Security Checklist
+
+When config-ops files appear in scope (CI workflows, Dockerfiles, Terraform, etc.), apply these checks:
+
+### CI/CD Pipelines
+```
+[] No hardcoded secrets or credentials in workflow files?
+[] Workflow permissions follow least-privilege (no `permissions: write-all`)?
+[] Secrets not exposed via environment variables in public logs?
+[] Third-party actions pinned to SHA (not mutable tags like @latest)?
+[] No self-hosted runner abuse vectors (pull_request_target with checkout)?
+```
+
+### Docker
+```
+[] Base image uses specific tag (not :latest) and is from trusted registry?
+[] No secrets baked into image layers (use multi-stage builds or runtime secrets)?
+[] Container runs as non-root user?
+[] No unnecessary packages or tools in production image?
+```
+
+### Infrastructure-as-Code (Terraform, Helm)
+```
+[] Security groups not overly permissive (no 0.0.0.0/0 on sensitive ports)?
+[] Sensitive variables marked as sensitive in Terraform?
+[] No hardcoded credentials in .tf or .tfvars files?
+[] IAM policies follow least-privilege principle?
+```
+
+**Security categories for config-ops findings:** `ci-secret-exposure`, `ci-permissions`, `insecure-docker`, `infra-misconfiguration`, `other`
+
 ## Security Scanner Results
 
 When available, load `security-results-unified.json` per shared protocol. High-severity scanner findings = critical. Map CWE codes: CWE-89 -> sql-injection, CWE-79 -> xss, CWE-352 -> csrf, CWE-22 -> path-traversal, CWE-434 -> file-upload, CWE-862 -> capabilities, CWE-200 -> data-exposure. Scanner findings must be addressed before approval.

@@ -19,6 +19,7 @@ Zero external dependencies (stdlib only).
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -27,83 +28,23 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # =============================================================================
-# Agent Configuration
+# Agent Configuration — loaded from agent-registry.json
 # =============================================================================
 
-AGENT_CONFIG: Dict[str, dict] = {
-    "pr-reviewer": {
-        "domain": "code",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-    "security-reviewer": {
-        "domain": "security",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-    "performance-reviewer": {
-        "domain": "performance",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-    "architecture-reviewer": {
-        "domain": "architecture",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-    "wp-architecture-reviewer": {
-        "domain": "wp-architecture",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-    "php-tests-reviewer": {
-        "domain": "php-tests",
-        "protocols": ["reviewer", "tests-reviewer"],
-        "scope_flags": [],
-    },
-    "js-tests-reviewer": {
-        "domain": "js-tests",
-        "protocols": ["reviewer", "tests-reviewer"],
-        "scope_flags": [],
-    },
-    "e2e-tests-reviewer": {
-        "domain": "e2e-tests",
-        "protocols": ["reviewer", "tests-reviewer"],
-        "scope_flags": [],
-    },
-    "go-tests-reviewer": {
-        "domain": "go-tests",
-        "protocols": ["reviewer", "tests-reviewer"],
-        "scope_flags": [],
-    },
-    "patterns-reviewer": {
-        "domain": "patterns",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-        "extra_scope": ["--base-ref-only"],
-    },
-    "history-insights-reviewer": {
-        "domain": "code",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-        "file_history": True,
-    },
-    "tests-mutation-reviewer": {
-        "domain": None,
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-    "dead-code-reviewer": {
-        "domain": "dead-code",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-    "a11y-reviewer": {
-        "domain": "a11y",
-        "protocols": ["reviewer"],
-        "scope_flags": [],
-    },
-}
+
+def load_agent_config() -> Dict[str, dict]:
+    """Load agent configuration from agent-registry.json.
+
+    The registry is the single source of truth for agent configuration.
+    Returns a dict keyed by agent name, compatible with the rest of this module.
+    """
+    registry_path = Path(__file__).parent / "agent-registry.json"
+    with open(registry_path) as f:
+        registry = json.load(f)
+    return registry["agents"]
+
+
+AGENT_CONFIG = load_agent_config()
 
 # Maximum inline scope size before capping (in characters).
 # Beyond this, the full scope is written to a file and only a summary is inlined.
@@ -586,6 +527,18 @@ def main():
                 plugin_root, config["domain"], extra_flags, args.range,
                 output_dir=args.output_dir,
             )
+
+        # Run secondary domain scope discovery (e.g., config-ops for security/architecture)
+        for sec_domain in config.get("secondary_domains", []):
+            sec_flags = list(config.get("scope_flags", []))
+            sec_rc, sec_output = run_scope_discovery(
+                plugin_root, sec_domain, sec_flags, args.range,
+                output_dir=args.output_dir,
+            )
+            sec_status = extract_status(sec_output)
+            if sec_status and sec_status == "OK":
+                scope_output += f"\n\n=== SECONDARY SCOPE: {sec_domain} ===\n"
+                scope_output += sec_output
     else:
         # No domain (tests-mutation-reviewer) — detect output dir manually
         scope_output = "(No scope discovery — this agent does not use domain-based scope)"

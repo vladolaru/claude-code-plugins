@@ -88,89 +88,42 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --domain code --summary --
 
 Present a brief summary: number of files changed, lines added/removed in the incremental range.
 
-## Step 3.5: Pre-flight Scope Check
+## Step 3.5: Generate Dispatch Plan
 
-Determine which agents have files to review before dispatching:
+Run the dispatch planner to determine which agents to dispatch:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --preflight --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan-review-dispatch.py \
+  --mode incremental \
+  --git-range "<GIT_RANGE>" \
+  --output-dir "<OUTPUT_DIR>"
 ```
 
-Parse the `DISPATCH_DOMAINS` and `SKIP_DOMAINS` lines from the output. Only dispatch agents whose domain appears in `DISPATCH_DOMAINS`. Always dispatch agents with domain `(none)` — they are not subject to pre-flight filtering.
+Parse the JSON output. Display the dispatch summary to the user showing which agents will be dispatched and which are skipped (with reasons).
 
 If agents are skipped, note it briefly: "Skipping N agents with no files in scope: [list]"
 
-**Stale branch check (conditional):** Parse the `BRANCH_FRESHNESS:` section from the preflight output. Only act on staleness if the `history-insights-reviewer` is in the `DISPATCH_DOMAINS` list (domain: `code`). If the history-insights-reviewer is being skipped, the stale branch warning adds no value — skip this check.
+**Stale branch check (conditional):** Only act on staleness if the `history-insights-reviewer` has status "DISPATCH" in the plan (domain: `code`). If the history-insights-reviewer is being skipped, the stale branch warning adds no value — skip this check.
 
-If acting on staleness:
+If acting on staleness, check branch freshness:
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --preflight --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
+```
+Parse the `BRANCH_FRESHNESS:` section from the preflight output.
 - If `IS_STALE: true` and `RANGE_REBASED: true`: Tell the user: "Branch is N commits behind base. Review scope adjusted to merge-base to exclude unrelated trunk files. Consider rebasing before your next review iteration."
 - If `IS_STALE: false`: proceed normally, no message needed.
 
 ## Step 3.6: Adaptive Agent Triage
 
-Not all agents that pass the file-type preflight need to run. Evaluate the **6 conditional agents** below against the diffstat and commit messages you already have from Steps 1-3.
+The dispatch planner handles domain-level filtering (agents whose domain has zero files are SKIPPED). For **conditional agents** that the planner marked as DISPATCH, apply a second triage pass using the diffstat and commit messages you already have from Steps 1-3.
 
-For each conditional agent that passed the preflight check in Step 3.5:
+For each conditional agent with status "DISPATCH" in the plan:
 
-1. Check its **DISPATCH WHEN** criteria against the diffstat and commit messages
-2. Decide: **DISPATCH** or **SKIP**
+1. Check its **triage_criteria** (from the agent registry) against the diffstat and commit messages
+2. Decide: keep **DISPATCH** or downgrade to **SKIP**
 3. Log your reasoning (required for every decision)
 
 **DEFAULT: When in doubt, DISPATCH.** Only skip when you are confident none of the criteria apply.
-
-### Conditional Agents
-
-**security-reviewer**
-DISPATCH WHEN the PR expands or modifies attack surface:
-- New or modified endpoints accepting external input
-- Code processing user-supplied data (form fields, query params, request bodies, file uploads)
-- Database operations (reads, writes, raw queries)
-- Dynamic content rendered to output
-- Auth, authorization, or session management changes
-- File system operations with user-influenced paths
-- Third-party API or webhook integrations
-- Cryptographic or secret/token handling
-- Commits introducing new entry points or data processing
-
-**dead-code-reviewer**
-DISPATCH WHEN the PR changes the dependency graph:
-- Files deleted or renamed
-- Significant code removal (removed > added)
-- Refactoring commits (extract, move, rename, consolidate, remove, delete)
-- Import/require statements added or removed
-- New files replacing or superseding existing ones
-
-**architecture-reviewer**
-DISPATCH WHEN the PR introduces structural changes:
-- New classes, interfaces, or abstract types added
-- Files spanning 3+ architectural layers
-- Commits mentioning architecture, refactor, restructure, decouple, extract
-- Large PRs (20+ files or 500+ lines)
-- New modules or packages introduced
-
-**wp-architecture-reviewer**
-DISPATCH WHEN the PR touches WordPress integration points:
-- PHP files using WordPress APIs (hooks, filters, options, transients, REST)
-- WooCommerce-specific files
-- Admin menus, settings pages, or custom post types
-- Commits mentioning hooks, filters, backwards compatibility, deprecation, i18n
-- Plugin bootstrap or activation/deactivation files
-
-**performance-reviewer**
-DISPATCH WHEN the PR touches data flow or rendering:
-- Database queries, API calls, data fetching hooks
-- Lists, tables, pagination, bulk operations
-- Asset loading, lazy loading, code splitting
-- Caching logic (transients, object cache, memoization)
-- Commits mentioning performance, optimize, cache, query, load time
-
-**a11y-reviewer**
-DISPATCH WHEN the PR modifies user-facing UI:
-- JSX/TSX with interactive elements (buttons, forms, modals, dropdowns)
-- ARIA attributes or focus management code
-- New UI components or significant visual changes
-- CSS/SCSS affecting visibility, focus indicators, or contrast
-- Commits mentioning accessibility, a11y, keyboard, screen reader, ARIA
 
 ### Triage Output
 
@@ -188,15 +141,16 @@ TRIAGE: architecture-reviewer: SKIP — single component file changed, no struct
 TRIAGE: wp-architecture-reviewer: DISPATCH — PHP files modify WooCommerce payment gateway hooks
 TRIAGE: performance-reviewer: DISPATCH — new useQuery hook in data-fetching layer
 TRIAGE: a11y-reviewer: DISPATCH — new modal component with form inputs
+TRIAGE: reliability-reviewer: DISPATCH — new external API client without timeout/retry
 ```
 
-Agents that passed preflight but are skipped by triage are **not dispatched** in Step 4. They are recorded as `STATUS=SKIPPED_TRIAGE` in the agent signals for the reconciliator.
+Agents skipped by triage are recorded as `STATUS=SKIPPED_TRIAGE` in the agent signals for the reconciliator.
 
-## Step 4: Dispatch Reviewer Agents in Parallel
+## Step 4: Execute Dispatch Plan
 
 **CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**
 
-Based on the pre-flight check in Step 3.5 and triage in Step 3.6, dispatch only agents that passed both gates. Always include agents with domain `(none)`.
+For each agent with status "DISPATCH" in the plan (after triage adjustments in Step 3.6), dispatch using the Agent tool.
 
 Each agent receives this context in its prompt:
 ```
@@ -207,6 +161,8 @@ Review Type: Branch review (incremental, reviewing only new commits since last r
 When running bootstrap, include these flags:
 python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
 ```
+
+<!-- Agent dispatch reference table (sourced from agent-registry.json) -->
 
 | # | Agent | Domain | Focus |
 |---|-------|--------|-------|
@@ -223,9 +179,10 @@ python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range 
 | 11 | `pirategoat-tools:go-tests-reviewer` | go-tests | Go test quality |
 | 12 | `pirategoat-tools:dead-code-reviewer` | dead-code | Unused functions, orphaned imports, unreachable code |
 | 13 | `pirategoat-tools:a11y-reviewer` | a11y | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA |
+| 14 | `pirategoat-tools:reliability-reviewer` | reliability | Logging, error handling, rollback safety, feature flags, failure-mode resilience |
 
-Agents not dispatched due to scope are recorded in agent signals for the reconciliator:
-- Preflight skip: `<agent>: STATUS=SKIPPED (no files in <domain> domain)`
+Agents not dispatched are recorded in agent signals for the reconciliator:
+- Domain skip: `<agent>: STATUS=SKIPPED (no files in <domain> domain)`
 - Triage skip: `<agent>: STATUS=SKIPPED_TRIAGE (<one-line reason from Step 3.6>)`
 
 ## Step 5: Save Review State
@@ -248,7 +205,21 @@ This ensures state is persisted even if reconciliation encounters an issue.
 
 ## Step 6: Reconcile and Present Results
 
-Dispatch the reconciliator:
+### Step 6a: Run Deterministic Reconciliation
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/reconcile-reviews.py \
+  --output-dir <OUTPUT_DIR> \
+  --agent-signals "<all agent signals from Step 4, including SKIPPED and SKIPPED_TRIAGE>"
+```
+
+This script reads all `*-review.json` files, deduplicates findings across agents, and writes `reconciled-structured.json` to the output directory. It handles:
+- Exact and near deduplication (same file + overlapping lines + similar title)
+- Severity conflict resolution (highest wins)
+- Source agent aggregation per cluster
+- Schema validation (gracefully skips invalid outputs)
+
+### Step 6b: Dispatch Reconciliator for Narrative Summary
 
 ```
 Task tool:
@@ -262,6 +233,8 @@ Task tool:
     <for each preflight-skipped agent: "<agent>: STATUS=SKIPPED (no files in <domain> domain)">
     <for each triage-skipped agent: "<agent>: STATUS=SKIPPED_TRIAGE (<reason from Step 3.6>)">
 ```
+
+The reconciliator reads the pre-processed `reconciled-structured.json` and agent review files, then produces a narrative executive summary (`reconciled.md` and `reconciled.json`).
 
 Present the reconciliator's summary to the user:
 - Overall verdict and confidence

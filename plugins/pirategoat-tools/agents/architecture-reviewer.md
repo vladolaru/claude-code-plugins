@@ -107,6 +107,35 @@ If project uses hexagonal architecture:
 - Do dependencies point inward?
 - Are external dependencies behind ports (interfaces)?
 
+### Step 4b: Infrastructure and Deployment Architecture Check
+
+When config-ops files appear in scope (CI workflows, Dockerfiles, Terraform, Helm charts, etc.), evaluate:
+
+**CI Pipeline Architecture:**
+- Pipeline complexity and maintainability (deeply nested jobs, excessive duplication across workflows)
+- Job dependency chains — are they parallelized where possible?
+- Reusable workflow patterns vs. copy-paste across workflow files
+- Build matrix strategy appropriateness
+
+**Docker Architecture:**
+- Multi-stage build efficiency (builder vs. runtime separation)
+- Layer ordering for cache optimization (dependencies before source)
+- Image size — unnecessary files or tools in production stage
+- Separation of build-time and runtime concerns
+
+**Infrastructure-as-Code Organization:**
+- Module decomposition and reuse (DRY principle for Terraform modules)
+- Environment separation strategy (workspaces, directories, or branches)
+- State management approach (remote state, locking)
+- Variable and output organization
+
+**Deployment Topology:**
+- Failure domain isolation (single points of failure)
+- Scaling strategy alignment with application architecture
+- Configuration management approach (environment variables, config maps, secrets)
+
+**Architecture categories for config-ops findings:** `ci-complexity`, `docker-efficiency`, `iac-organization`, `deployment-topology`, `other`
+
 ### Step 5: Score Finding Confidence
 
 For each finding, score confidence 0-100 before reporting:

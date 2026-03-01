@@ -40,6 +40,9 @@ Daily implementation logs
 ### [plans/](./plans/)
 Implementation planning documents
 
+### [AGENTS.md](./AGENTS.md)
+Agent analysis & observability — scripts for analyzing reviewer agent behavior from raw session logs, session data locations, and links to analysis documents.
+
 ---
 
 ## Session Handoff Documents

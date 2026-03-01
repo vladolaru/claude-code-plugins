@@ -1,0 +1,188 @@
+{
+  "$schema": "Agent registry — single source of truth for all reviewer agent configuration.",
+  "agents": {
+    "pr-reviewer": {
+      "domain": "code",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "Goal alignment, bugs, code quality",
+      "model_tier": "inherit"
+    },
+    "security-reviewer": {
+      "domain": "security",
+      "secondary_domains": ["config-ops"],
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "New or modified endpoints accepting external input",
+        "Code processing user-supplied data (form fields, query params, request bodies, file uploads)",
+        "Database operations (reads, writes, raw queries)",
+        "Dynamic content rendered to output",
+        "Auth, authorization, or session management changes",
+        "File system operations with user-influenced paths",
+        "Third-party API or webhook integrations",
+        "Cryptographic or secret/token handling",
+        "Commits introducing new entry points or data processing",
+        "CI/CD configuration changes (workflow files, pipeline configs)",
+        "Infrastructure-as-code changes (Terraform, Helm, Docker)"
+      ],
+      "focus": "XSS, SQL injection, CSRF, sanitization",
+      "model_tier": "sonnet"
+    },
+    "performance-reviewer": {
+      "domain": "performance",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "Database queries, API calls, data fetching hooks",
+        "Lists, tables, pagination, bulk operations",
+        "Asset loading, lazy loading, code splitting",
+        "Caching logic (transients, object cache, memoization)",
+        "Commits mentioning performance, optimize, cache, query, load time"
+      ],
+      "focus": "N+1 queries, caching, optimization",
+      "model_tier": "sonnet"
+    },
+    "architecture-reviewer": {
+      "domain": "architecture",
+      "secondary_domains": ["config-ops"],
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "New classes, interfaces, or abstract types added",
+        "Files spanning 3+ architectural layers",
+        "Commits mentioning architecture, refactor, restructure, decouple, extract",
+        "Large PRs (20+ files or 500+ lines)",
+        "New modules or packages introduced",
+        "Deployment or infrastructure architecture changes (Dockerfiles, Terraform, CI pipelines, Helm charts)"
+      ],
+      "focus": "SOLID, design patterns, coupling",
+      "model_tier": "sonnet"
+    },
+    "wp-architecture-reviewer": {
+      "domain": "wp-architecture",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "PHP files using WordPress APIs (hooks, filters, options, transients, REST)",
+        "WooCommerce-specific files",
+        "Admin menus, settings pages, or custom post types",
+        "Commits mentioning hooks, filters, backwards compatibility, deprecation, i18n",
+        "Plugin bootstrap or activation/deactivation files"
+      ],
+      "focus": "Hooks, WPCS, backwards compatibility",
+      "model_tier": "sonnet"
+    },
+    "php-tests-reviewer": {
+      "domain": "php-tests",
+      "protocols": ["reviewer", "tests-reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "PHPUnit test quality",
+      "model_tier": "sonnet"
+    },
+    "js-tests-reviewer": {
+      "domain": "js-tests",
+      "protocols": ["reviewer", "tests-reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "Jest/Vitest test quality",
+      "model_tier": "sonnet"
+    },
+    "e2e-tests-reviewer": {
+      "domain": "e2e-tests",
+      "protocols": ["reviewer", "tests-reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "Playwright E2E test quality",
+      "model_tier": "sonnet"
+    },
+    "go-tests-reviewer": {
+      "domain": "go-tests",
+      "protocols": ["reviewer", "tests-reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "Go test quality",
+      "model_tier": "haiku"
+    },
+    "patterns-reviewer": {
+      "domain": "patterns",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "extra_scope": ["--base-ref-only"],
+      "dispatch_class": "always",
+      "focus": "Existing patterns, consolidation",
+      "model_tier": "sonnet"
+    },
+    "history-insights-reviewer": {
+      "domain": "code",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "file_history": true,
+      "dispatch_class": "always",
+      "focus": "Git history precedents, lessons learned",
+      "model_tier": "sonnet"
+    },
+    "tests-mutation-reviewer": {
+      "domain": null,
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "manual",
+      "focus": "Adversarial mutation testing to verify test coverage",
+      "model_tier": "sonnet"
+    },
+    "dead-code-reviewer": {
+      "domain": "dead-code",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "Files deleted or renamed",
+        "Significant code removal (removed > added)",
+        "Refactoring commits (extract, move, rename, consolidate, remove, delete)",
+        "Import/require statements added or removed",
+        "New files replacing or superseding existing ones"
+      ],
+      "focus": "Unused functions, orphaned imports, unreachable code",
+      "model_tier": "sonnet"
+    },
+    "a11y-reviewer": {
+      "domain": "a11y",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "JSX/TSX with interactive elements (buttons, forms, modals, dropdowns)",
+        "ARIA attributes or focus management code",
+        "New UI components or significant visual changes",
+        "CSS/SCSS affecting visibility, focus indicators, or contrast",
+        "Commits mentioning accessibility, a11y, keyboard, screen reader, ARIA"
+      ],
+      "focus": "ARIA correctness, keyboard access, focus management, WCAG 2.2 AA",
+      "model_tier": "inherit"
+    },
+    "reliability-reviewer": {
+      "domain": "reliability",
+      "secondary_domains": ["config-ops"],
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "Database migrations or schema changes",
+        "External service integrations or API client changes",
+        "Error handling or retry logic modifications",
+        "Feature flag or kill-switch changes",
+        "Deployment configuration or infrastructure changes",
+        "Background job or queue processing changes",
+        "Caching layer modifications"
+      ],
+      "focus": "Logging, error handling, rollback safety, feature flags, failure-mode resilience",
+      "model_tier": "sonnet"
+    }
+  }
+}
