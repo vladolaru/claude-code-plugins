@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.0] - 2026-03-01
+
+### Added
+
+- **figma-copy-sync skill:** Self-contained skill for synchronizing text copy between Figma designs and implemented code. 4-phase workflow: Figma text extraction → surface matching (browser snapshots via browser-interaction skill) → copy comparison with i18n detection → approval-gated application. Handles multiple component states, auto-detects translation patterns (WordPress i18n, react-intl, i18next), and produces structured sync reports.
+
 ## [1.42.2] - 2026-03-01
 
 ### Added

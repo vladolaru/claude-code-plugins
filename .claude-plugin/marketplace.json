@@ -13,7 +13,7 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Code review orchestration (15 specialized agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
-      "version": "1.42.2",
+      "version": "1.43.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -32,7 +32,8 @@
         "wcag",
         "figma",
         "design-system",
-        "design-to-code"
+        "design-to-code",
+        "copy-sync"
       ],
       "category": "development-tools",
       "strict": true,
@@ -50,6 +51,7 @@
         "./skills/software-architecture",
         "./skills/accessible-frontend-dev",
         "./skills/using-figma",
+        "./skills/figma-copy-sync",
         "./skills/analyzing-cc-sessions"
       ],
       "commands": [
