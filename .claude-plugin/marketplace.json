@@ -12,8 +12,8 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Code review orchestration (14 specialized agents), WordPress/WooCommerce development patterns, accessibility guidance, testing patterns, and browser automation.",
-      "version": "1.39.1",
+      "description": "Code review orchestration (14 specialized agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
+      "version": "1.41.1",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -29,7 +29,10 @@
         "design-patterns",
         "accessibility",
         "a11y",
-        "wcag"
+        "wcag",
+        "figma",
+        "design-system",
+        "design-to-code"
       ],
       "category": "development-tools",
       "strict": true,
@@ -45,7 +48,9 @@
         "./skills/e2e-testing-patterns",
         "./skills/go-testing-patterns",
         "./skills/software-architecture",
-        "./skills/accessible-frontend-dev"
+        "./skills/accessible-frontend-dev",
+        "./skills/using-figma",
+        "./skills/analyzing-cc-sessions"
       ],
       "commands": [
         "./commands/execute-plan.md",

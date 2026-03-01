@@ -45,6 +45,8 @@ git show <base_ref>:<path/to/file>
 
 Do NOT use `grep -r .` on the working tree — that includes the PR's own code and would find the very patterns you're supposed to be comparing against. Git log searches are fine as-is (they search history, not HEAD).
 
+**Tool discipline:** Use Bash **only** for git commands (`git grep`, `git show`, `git log`, `git diff`). For everything else — reading files, searching the working tree, listing directories — use Read, Grep, Glob, or Write tools. Never use `cat`, `head`, `find`, or `ls` via Bash when a dedicated tool exists.
+
 ## RULE 0 (MOST IMPORTANT): The Codebase Has Memory
 
 Before approving new patterns, verify they don't already exist. The answer to "how should we do this?" is often already in the codebase or git history.
@@ -76,9 +78,17 @@ Discover existing patterns -> Search git history for precedents -> Recommend reu
 From PR changes, extract: problem being solved, patterns being introduced, approach taken.
 
 ### 2. Search Preexisting Codebase (Base Ref)
+
+**Scope every search.** Always include file extension filters and directory paths. Never search for single common words (`error`, `Link`, `status`, `badge`) without tight scoping — they match thousands of lines and waste turns on refinement.
+
 ```bash
-git grep -n "<pattern>" <base_ref> -- "*.php" | head -20
-git grep -n "<key_terms>" <base_ref> -- "*.php" | head -20
+# GOOD — scoped by extension and directory
+git grep -n "<pattern>" <base_ref> -- "*.ts" "*.tsx" "src/components/"
+git grep -n "<key_terms>" <base_ref> -- "*.php" "includes/"
+
+# BAD — unscoped, will return too many results
+git grep -n "error" <base_ref>
+git grep -n "Link" <base_ref>
 ```
 
 ### 3. Search Git History (CRITICAL)

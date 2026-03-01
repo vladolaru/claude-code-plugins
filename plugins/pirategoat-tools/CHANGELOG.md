@@ -5,6 +5,41 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.41.1] - 2026-03-01
+
+### Changed
+
+- **patterns-reviewer:** Add tool discipline instruction — Bash only for git commands, use Read/Grep/Glob for everything else (addresses inefficiency #5 from deep analysis: 23 `cat`/`head`/`find` calls via Bash in worst dispatch)
+- **patterns-reviewer:** Add search scoping guidance — always include extension filters and directory paths in `git grep`, never search unscoped common words (addresses inefficiency #6 remainder: broad searches like `git grep "error"` wasting 3-4 refinement calls)
+
+## [1.41.0] - 2026-03-01
+
+### Added
+
+- **New `analyzing-cc-sessions` skill** — Reference guide for navigating and analyzing Claude Code raw session logs (JSONL transcripts). Codifies structural knowledge from 3 deep analysis sessions (figma-workflow, dead-code-reviewer efficiency, patterns-reviewer deep analysis). Covers:
+  - Session data locations and project directory resolution
+  - Main session JSONL structure (5 entry types, content block formats, tool_use/tool_result pairing)
+  - Subagent JSONL structure (simpler format, dispatch prompt identification, agent type inference)
+  - Tool results persistence (>30KB threshold, separate files)
+  - Correlating main session dispatches with subagent execution via agentId
+  - Parsing recipes (extract tool calls, categorize bash commands, sum token usage)
+  - Links to existing analysis scripts (analyze-reviewer-sessions.py, extract-session-metrics.py, analyze-subagents.py)
+  - Common waste patterns ranked by impact with detection guidance
+  - Gotchas table for structural traps (content type variance, compaction agents, model field location)
+
+## [1.40.0] - 2026-03-01
+
+### Added
+
+- **New `using-figma` skill** — Structured workflow for translating Figma designs into production code with high fidelity. Based on deep analysis of 4 real CIAB-admin sessions that identified 8 systematic anti-patterns causing design mismatches. Key features:
+  - **5-phase workflow** (Survey → Specification → Component Tree → Implementation → Validation) that mandates building a structured mental model before coding
+  - **Design Specification Documents** — Intermediary data state between raw Figma responses and code, persisting across context compressions
+  - **9 iron rules** derived from observed failures: always call `get_variable_defs`, never use screenshots as sole implementation source, always use project tokens, never batch Figma with other tool providers, etc.
+  - **Project-agnostic core** with `.claude/figma-config.json` configuration for project-specific token mappings (Figma → project design system)
+  - **Cross-session caching** for token definitions, token mappings, and node hierarchies
+  - **Bundled Python scripts** for parsing large Figma responses: `figma-parse-nodes.py` (metadata hierarchy) and `figma-extract-specs.py` (design context specifications)
+  - **Design spec template** for consistent specification documents
+
 ## [1.39.1] - 2026-02-28
 
 ### Fixed
