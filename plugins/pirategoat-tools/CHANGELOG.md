@@ -5,6 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.42.2] - 2026-03-01
+
+### Added
+
+- **test_review_output.py:** 40 unit tests for ReviewOutputBuilder — initialization, issue validation, verdict calculation, serialization (dict, JSON, markdown), and file output
+- **test_review_api_contract.py:** 12 cross-component contract tests verifying producer→reconcile→ingest pipeline — catches interface mismatches between layers
+
+### Fixed
+
+- **reconcile-reviews.py:** Add `issues` key to reconcile output that flattens `clusters[].canonical` into a flat list. Previously `ingest-preprocess.py` read `reconciled.get("issues", [])` but reconcile only wrote `clusters`, silently dropping all findings. The `clusters` key is preserved for backward compatibility.
+
 ## [1.42.1] - 2026-03-01
 
 ### Changed

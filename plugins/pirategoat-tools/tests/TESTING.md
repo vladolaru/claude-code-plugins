@@ -12,6 +12,8 @@ tests/
 ├── test_bootstrap_reviewer.py      # Level 1: Script evals (pytest)
 ├── test_domain_routing.py          # Level 1: Domain routing evals (pytest)
 ├── test_commands.py                # Level 1: Command structure evals (pytest)
+├── test_review_output.py           # Level 1: ReviewOutputBuilder unit tests (pytest)
+├── test_review_api_contract.py     # Level 1: Cross-component contract tests (pytest)
 ├── graders.py                      # Shared grading functions
 ├── test_graders.py                 # Tests for the graders themselves
 ├── eval_agent_compliance.py        # Level 2: Agent compliance evals
@@ -87,6 +89,35 @@ Deterministic pytest suite that validates structural properties of review comman
 | `TestIngestCodeReview` | `ingest-code-review.md` has scope validation, false positive handling, CHANGED_FILES reference, action plan, finding categories |
 | `TestFullCodeReview` | `full-code-review.md` has default branch guard, reconciliator dispatch, no state file reference |
 | `TestStateFileGrading` | `.review-state.json` round-trip: valid state files pass, incremented counts pass, explicit ranges pass |
+
+### Level 1: ReviewOutputBuilder Unit Tests (`test_review_output.py`)
+
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review_output_simple.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, JSON, markdown), and file output.
+
+| Class | What it verifies |
+|---|---|
+| `TestBuilderInit` | pr_id/reviewer stored, defaults (empty lists, confidence 0.95), timestamp is ISO |
+| `TestAddIssue` | Returns 8-char ID, stores all fields, severity case-insensitive, invalid severity raises, confidence boundaries, extra kwargs, defaults |
+| `TestAddRecommendation` | Valid priorities store, invalid silently ignored, multiple per bucket |
+| `TestAddPositive` | Stores observations in insertion order |
+| `TestSetFilesReviewed` | Stores count |
+| `TestSetConfidence` | Valid range works, invalid raises ValueError |
+| `TestAddToolResult` | Stores tool names, deduplicates |
+| `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
+| `TestToDict` | All top-level keys, severity counts, meta structure, None for empty fields |
+| `TestToJson` | json.loads(to_json()) roundtrips to match to_dict() |
+| `TestToMarkdown` | Header format, issues grouped by severity, positive observations |
+| `TestSave` | Creates both files, JSON matches to_dict(), return paths correct |
+
+### Level 1: Cross-Component Contract Tests (`test_review_api_contract.py`)
+
+Tests the contracts between the three review pipeline layers: ReviewOutputBuilder (producer), reconcile() (consumer 1), and preprocess_findings() (consumer 2). Uses real output from one layer as input to the next.
+
+| Class | What it verifies |
+|---|---|
+| `TestProducerToReconcileContract` | Builder output consumed by reconcile; multi-agent dedup; all fields survive; non-builder JSON skipped; extra fields don't break reconcile |
+| `TestReconcileToIngestContract` | Reconcile output consumed by ingest (catches clusters/issues mismatch); issues key present; correct count; empty→empty |
+| `TestFullRoundTrip` | 3-agent pipeline end-to-end (no findings dropped); severity preserved; all fields present in ingest output |
 
 ### Shared Graders (`graders.py`)
 

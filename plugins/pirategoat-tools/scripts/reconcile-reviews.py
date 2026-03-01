@@ -486,7 +486,10 @@ def reconcile(
         "agent_stats": agent_stats,
     }
 
-    # 8.5. Test gap detection (only when changed_files is provided)
+    # 8.5. Flat issues list (for downstream consumers like ingest-preprocess.py)
+    result["issues"] = [c["canonical"] for c in clusters_output]
+
+    # 8.6. Test gap detection (only when changed_files is provided)
     if changed_files is not None:
         advisories = []
         test_gap = detect_test_gap(changed_files, DOMAIN_CATALOG)
