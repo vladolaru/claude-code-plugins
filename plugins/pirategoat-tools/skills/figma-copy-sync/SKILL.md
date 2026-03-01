@@ -9,11 +9,11 @@ description: >
 
 # Figma Copy Sync
 
-Synchronize text copy between Figma designs and implemented code. Extracts all text content from a Figma design, matches it to live UI surfaces in a local environment, compares copy differences, and applies approved changes — respecting i18n patterns.
+You are a copy synchronization specialist. Your job: extract every text element from a Figma design, match each to its implementation in the codebase, compare differences, and apply approved changes — preserving i18n wrappers and respecting all component states.
 
-**Scope:** Visible text (headings, body, buttons, labels, links) plus contextual text (placeholders, tooltips, error messages). Does NOT include programmatic ARIA labels not present in the Figma design.
+**Scope:** Visible text (headings, body, buttons, labels, links) plus contextual text (placeholders, tooltips, error messages). Exclude programmatic ARIA labels not present in the Figma design.
 
-**Constraint:** Only for already-implemented designs. This skill updates existing copy, it does not implement new UI.
+**Constraint:** Only for already-implemented designs. Update existing copy; do not implement new UI.
 
 ## When to Use
 
@@ -32,14 +32,29 @@ Synchronize text copy between Figma designs and implemented code. Extracts all t
 
 ## Iron Rules
 
-| # | Rule | Violation consequence |
-|---|------|----------------------|
-| R1 | **NEVER modify code without user approval** | Copy changes can have legal, marketing, or UX implications. Always present the full diff table and get explicit approval first. |
-| R2 | **NEVER guess at surface matches** | When a Figma surface can't be confidently matched to a code location, STOP and ask the user. Wrong matches → wrong files edited. |
-| R3 | **ALWAYS extract text from `get_design_context`, not screenshots** | Screenshots don't give you exact text strings. Structured data does. Use screenshots only for visual matching. |
-| R4 | **ALWAYS include ALL states from Figma** | If Figma shows 5 states (default, hover, error, empty, loading), extract copy from all 5 — even if you can't navigate to them in the browser. |
-| R5 | **NEVER break i18n wrappers** | If copy is inside `__('text')`, update the string inside the wrapper. Don't remove the wrapper function. Don't change the text domain. |
-| R6 | **ALWAYS use the `browser-interaction` skill for browser work** | It handles tool selection, snapshot lifecycle, and error recovery. Never load browser MCP tools directly. Never batch Figma MCP calls with browser MCP calls — different providers cascade-fail together. |
+### Safety-Critical (violations cause data loss or legal risk)
+
+**RULE 0:** Present the full diff table and get explicit user approval before modifying any code. Copy changes can have legal, marketing, or UX implications.
+
+**RULE 1:** Preserve i18n wrappers. Update only the text string inside translation functions (`__()`, `_e()`, `esc_html__()`, etc.). Keep the wrapper function and text domain intact.
+
+**RULE 2:** When a Figma surface can't be confidently matched to a code location, STOP and ask the user. Wrong matches → wrong files edited.
+
+### Operational (violations cause incorrect or incomplete results)
+
+**RULE 3:** Extract text from `get_design_context` structured data, not screenshots. Use screenshots only for visual matching.
+
+**RULE 4:** Include ALL states from Figma. If Figma shows 5 states (default, hover, error, empty, loading), extract copy from all 5 — even if you can't navigate to them in the browser.
+
+**RULE 5:** Use the `browser-interaction` skill for all browser work. It handles tool selection, snapshot lifecycle, and error recovery. Batch Figma MCP calls separately from browser MCP calls.
+
+## Expected Uncertainty
+
+Uncertainty is normal in copy sync — not every text element will classify cleanly, and not every Figma surface will match a browser page on the first attempt. When you encounter ambiguity:
+
+- **Classify as Uncertain** and move on. The Phase 0 checkpoint exists precisely for the user to resolve these.
+- **Report UNMATCHED surfaces** directly. The user knows their codebase better than you do — they'll point you to the right page.
+- **Flag NOT-FOUND text** without apology. New copy that hasn't been implemented yet is a normal outcome, not a failure.
 
 ## Figma URL Parsing
 
@@ -68,21 +83,14 @@ Skill: browser-interaction
 
 ## Workflow
 
-```dot
-digraph copy_sync {
-  rankdir=TB;
-  node [shape=box];
+| Phase | Goal | Gate |
+|-------|------|------|
+| 0. Figma Text Extraction | Build copy inventory from design | User approves inventory |
+| 1. Surface Matching | Map Figma surfaces → browser pages | User confirms matches |
+| 2. Copy Comparison | Grep code, build diff table | — |
+| 3. Review & Apply | Present diffs, apply approved changes | User approves changes |
 
-  extract [label="Phase 0: Figma Text Extraction\n(fetch design context → copy inventory)"];
-  match [label="Phase 1: Surface Matching\n(browser snapshots ↔ Figma surfaces)"];
-  compare [label="Phase 2: Copy Comparison\n(grep code → build diff table)"];
-  apply [label="Phase 3: Review & Apply\n(approval gate → apply changes)"];
-
-  extract -> match -> compare -> apply;
-  match -> extract [label="missing surfaces\nre-fetch" style=dashed];
-  apply -> compare [label="user requests\nre-check" style=dashed];
-}
-```
+Backtrack: Phase 1 → Phase 0 (missing surfaces); Phase 3 → Phase 2 (user requests re-check).
 
 ### Phase 0: Figma Text Extraction
 
@@ -169,7 +177,12 @@ digraph copy_sync {
 
 **Output:** Figma Copy Inventory document + screenshots saved as visual reference.
 
-**Checkpoint:** Present the inventory to the user, including the classification of each text element. Ask: "Does this capture all the surfaces and states you want to sync? Are the classifications correct (especially any marked Uncertain)? Any surfaces to add or skip?"
+**Checkpoint:** Present the inventory to the user. Highlight any items marked Uncertain — these need user classification before proceeding.
+
+Ask the user to review and choose:
+- **Approve** — inventory is complete, classifications are correct
+- **Edit** — specify corrections (reclassify items, add/remove surfaces)
+- **Re-extract** — "I see missing surfaces, re-fetch with these node IDs: ___"
 
 ### Phase 1: Surface Matching
 
@@ -241,11 +254,7 @@ digraph copy_sync {
 
       **For Static copy:** Grep for the exact string. Record: file path, line number, surrounding context.
 
-      **For Mixed copy (static + dynamic):** The browser shows rendered text (e.g., "Showing 1-20 of 147 results") but code has format specifiers (e.g., `sprintf('Showing %1$d-%2$d of %3$d results')`). To find these:
-      - Strip the dynamic segments (numbers, prices, names, dates) from the Figma/browser text
-      - Grep for the remaining static fragments (e.g., "Showing" + "of" + "results")
-      - Search for `sprintf`, `_n`, `%d`, `%s`, `%f` patterns near the component's files
-      - Once found, record the full format string including placeholders
+      **For Mixed copy:** Strip dynamic segments (numbers, prices, names, dates) and grep for remaining static fragments. Also search for `sprintf`, `_n`, `%d`, `%s`, `%f` patterns near the component's files. Record the full format string including placeholders.
 
       **For text not found by exact grep:** Before flagging as NOT-FOUND, try the mixed-copy strategy above — the string may contain dynamic segments you didn't initially classify.
 
@@ -313,13 +322,19 @@ Not found in code: 1
 
 **Goal:** Present all copy differences for user approval, apply approved changes, and produce a sync report.
 
-1. **Present the diff table** — Show the complete diff from Phase 2, organized by surface and state. Only show elements with status DIFFERENT, MIXED-CHANGED, MIXED-NEW-PLACEHOLDER, STATE-ONLY, or NOT-FOUND (skip IDENTICAL). Highlight MIXED-NEW-PLACEHOLDER items — these require user attention because they imply code changes beyond copy updates.
+1. **Present the diff table** — Show the complete diff from Phase 2, organized by surface and state. Only show elements with status DIFFERENT, MIXED-CHANGED, MIXED-NEW-PLACEHOLDER, STATE-ONLY, or NOT-FOUND (skip IDENTICAL). Highlight MIXED-NEW-PLACEHOLDER items separately — these require code changes beyond copy sync.
 
 2. **Ask for approval:**
-   - "Here are all the copy differences between Figma and code. Review each change and tell me:
-     - **Approve all** — apply every change
-     - **Approve with exceptions** — list the items to skip (by number)
-     - **Review individually** — I'll present each change one at a time"
+
+   **Impact summary:**
+   - Files to modify: [list files and change count per file]
+   - i18n strings affected: [count]
+   - Items needing attention: [MIXED-NEW-PLACEHOLDER and NOT-FOUND]
+
+   Ask the user to choose:
+   - **Approve all** — apply every change listed above
+   - **Approve with exceptions** — "skip items: #3, #7"
+   - **Review individually** — present each change one at a time
 
 3. **Apply approved changes:**
 
