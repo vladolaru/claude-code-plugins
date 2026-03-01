@@ -348,11 +348,30 @@ class TestBuildErrorOutput:
 # =============================================================================
 
 
-def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
-    """Run bootstrap-reviewer.py via subprocess.
+# ---------------------------------------------------------------------------
+# Temp repo for integration tests (created once, reused across all tests)
+# ---------------------------------------------------------------------------
+sys.path.insert(0, str(TESTS_DIR))
+from conftest import setup_temp_git_repo
 
-    Always passes --range HEAD~1..HEAD so tests are deterministic
-    regardless of working tree state.
+_BOOTSTRAP_REPO = None
+
+
+def _get_bootstrap_repo() -> str:
+    """Lazily create a temp git repo from multi-file-realistic.diff."""
+    global _BOOTSTRAP_REPO
+    if _BOOTSTRAP_REPO is None:
+        diff = str(TESTS_DIR / "fixtures" / "multi-file-realistic.diff")
+        _BOOTSTRAP_REPO = setup_temp_git_repo(diff)
+    return _BOOTSTRAP_REPO
+
+
+def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run bootstrap-reviewer.py via subprocess against a temp git repo.
+
+    Uses a temp repo from multi-file-realistic.diff so tests are fully
+    isolated from the real repository state. Always passes
+    --range HEAD~1..HEAD for deterministic behavior.
     """
     full_args = list(args)
     if "--range" not in full_args:
@@ -360,7 +379,7 @@ def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     cmd = [sys.executable, str(BOOTSTRAP_SCRIPT)] + full_args
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout,
-        cwd=str(PLUGIN_ROOT),
+        cwd=_get_bootstrap_repo(),
     )
 
 

@@ -1,0 +1,70 @@
+"""Shared test fixtures and helpers for pirategoat-tools tests."""
+
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+import pytest
+
+TESTS_DIR = Path(__file__).resolve().parent
+FIXTURES_DIR = TESTS_DIR / "fixtures"
+
+
+def setup_temp_git_repo(diff_file: str) -> str:
+    """Create a temp git repo and apply a diff. Returns repo path."""
+    tmp = tempfile.mkdtemp(prefix="test-routing-")
+    subprocess.run(["git", "init"], cwd=tmp, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=tmp, capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=tmp, capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"],
+        cwd=tmp, capture_output=True, check=True,
+    )
+
+    # Initial commit
+    readme = os.path.join(tmp, "README.md")
+    with open(readme, "w") as f:
+        f.write("# Test Project\n")
+    subprocess.run(["git", "add", "."], cwd=tmp, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=tmp, capture_output=True, check=True,
+    )
+
+    # Apply diff
+    result = subprocess.run(
+        ["git", "apply", str(diff_file)],
+        cwd=tmp, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, (
+        f"git apply failed for {Path(diff_file).name}: {result.stderr}"
+    )
+
+    subprocess.run(["git", "add", "."], cwd=tmp, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "changes"],
+        cwd=tmp, capture_output=True, check=True,
+    )
+
+    return tmp
+
+
+@pytest.fixture(scope="module")
+def bootstrap_repo():
+    """Module-scoped temp git repo from multi-file-realistic.diff.
+
+    Shared across all bootstrap integration tests in a module.
+    Created once, cleaned up after all tests in the module complete.
+    """
+    diff = str(FIXTURES_DIR / "multi-file-realistic.diff")
+    repo_path = setup_temp_git_repo(diff)
+    yield repo_path
+    shutil.rmtree(repo_path, ignore_errors=True)

@@ -8,6 +8,7 @@ Testing for pirategoat-tools follows a two-level eval architecture: fast determi
 tests/
 ├── TESTING.md                      # This file
 ├── __init__.py                     # Package marker
+├── conftest.py                     # Shared fixtures (setup_temp_git_repo, bootstrap_repo)
 ├── test_bootstrap_reviewer.py      # Level 1: Script evals (pytest)
 ├── test_domain_routing.py          # Level 1: Domain routing evals (pytest)
 ├── test_commands.py                # Level 1: Command structure evals (pytest)
@@ -40,7 +41,7 @@ Deterministic pytest suite. Tests `bootstrap-reviewer.py` by importing its funct
 | `TestBuildOutput` | `build_output()` | Section markers, conditional sections (domain rules, exploration scope), output paths, builder snippet |
 | `TestBuildErrorOutput` | `build_error_output()` | Error structure, plugin root, action directive |
 
-**Integration test classes** run the full script via subprocess for all agents:
+**Integration test classes** run the full script via subprocess for all agents against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state):
 
 | Class | What it verifies |
 |---|---|
@@ -157,6 +158,10 @@ Integration tests are parameterized across all reviewer agents. Adding a new age
 ### 7. Tests read real protocol files
 
 Integration tests run the actual bootstrap script against real `reviewer-protocol.md` and `tests-reviewer-protocol.md` files. This means tests catch heading drift (e.g., someone renames a section that the skip-list references).
+
+### 8. Mock git repos, not the real repo
+
+Integration tests that shell out to scripts (which run git commands) use temporary git repos created from `.diff` fixtures via `setup_temp_git_repo()` in `conftest.py`. This isolates tests from the real repository state — dirty working trees, recent commits, and branch structure don't affect results. The scripts resolve their plugin files via their own script path (`os.path.abspath(__file__)`), so changing `cwd` to a temp repo only affects git operations.
 
 ## How To
 
