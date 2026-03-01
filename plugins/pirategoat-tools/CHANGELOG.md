@@ -5,6 +5,18 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.41.3] - 2026-03-01
+
+### Changed
+
+- **analyzing-cc-sessions:** Apply prompt engineering optimizations for behavioral clarity:
+  - **"Before You Start" goal table** (Pre-Work Context Analysis) — maps analysis goals to concrete starting points, eliminating aimless exploration
+  - **"Selecting Task-Relevant Agents"** (Affirmative Directives) — reframes "skip compaction agents" into "process only task agents" with reusable `is_task_agent()` helper
+  - **Scripts table by use case** (Category-Based Generalization) — reorganizes from flat "Script | Purpose" to "When you need to... | Use" with fallback row for custom analysis
+  - **Parsing error preamble** (Error Normalization) — sets defensive expectations for malformed data upfront, preventing parser crashes
+  - **Efficiency analysis guidance** (Hint-Based Guidance) — directs focus to phase transition boundaries where waste clusters
+- **review-reconciliator:** Change model from `sonnet` to `inherit` — the reconciliator performs judgment-heavy synthesis (conflict resolution, deduplication, 10:1 compression) so it should use the parent session's model rather than being pinned to Sonnet
+
 ## [1.41.2] - 2026-03-01
 
 ### Changed
