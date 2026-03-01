@@ -5,6 +5,16 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.41.2] - 2026-03-01
+
+### Changed
+
+- **using-figma:** Apply prompt engineering optimizations for high-impact behavioral improvements:
+  - **Red Flags → Pre-Action Checkpoints** (STOP Escalation + Affirmative Directives) — converts passive "if you catch yourself" observation into active pre-action verification table with trigger/test/alternative columns
+  - **Iron Rules → Category-Based Generalization** — groups 9 rules into 3 principle categories (data acquisition first, structural understanding first, tool usage discipline) enabling analogical reasoning for unlisted scenarios
+  - **Asset Handling → Affirmative Directives** — reframes 3 prohibitions ("Do NOT") into 3 affirmative directives specifying correct behavior directly
+  - **New "Handling Figma MCP Failures" section** (Error Normalization) — adds recovery table for truncated responses, empty results, connection errors, and unexpected formats to prevent apology spirals
+
 ## [1.41.1] - 2026-03-01
 
 ### Changed
