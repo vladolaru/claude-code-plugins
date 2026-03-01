@@ -111,9 +111,23 @@ digraph copy_sync {
    - **Parent surface** (which UI surface this text belongs to)
    - **State** (which component state this text appears in)
 
-6. **Take visual references** — Call `get_screenshot` for each UI surface (default state at minimum).
+6. **Classify each text element** — Not all text in Figma is syncable copy. Classify each extracted text node:
 
-7. **Write Figma Copy Inventory** — Save to `.claude/tmp/figma-copy-sync/<feature>-inventory.md`:
+   | Classification | Description | Examples | Action |
+   |---------------|-------------|----------|--------|
+   | **Static copy** | Labels, headings, descriptions, button text, error messages — fixed strings in code | "Payment Settings", "Save changes", "No results found" | Sync normally |
+   | **Mixed (static + dynamic)** | Static copy containing dynamic placeholders shown as example data in Figma | "Showing 1-20 of 147 results" → code has `sprintf('Showing %1$d-%2$d of %3$d results')` | Sync the static parts, preserve placeholders |
+   | **Dynamic data** | Values rendered entirely from variables — prices, dates, user names, counts with no surrounding static text | "$49.99", "John Doe", "March 1, 2026" | Exclude from sync |
+   | **Design placeholder** | Lorem ipsum, sample data used for layout purposes only | "Lorem ipsum dolor sit amet" | Exclude from sync |
+   | **Uncertain** | Cannot confidently classify | — | Flag for user at checkpoint |
+
+   **How to identify mixed strings:** Look for text that contains numbers, currency, dates, or proper nouns embedded within a natural-language sentence. The sentence structure is static copy; the specific values are dynamic placeholders.
+
+   **How to identify dynamic data:** Text that is purely a value with no surrounding label — standalone numbers, prices, names, dates, or IDs. These appear in table cells, badges, or data fields rather than in headings, descriptions, or buttons.
+
+7. **Take visual references** — Call `get_screenshot` for each UI surface (default state at minimum).
+
+8. **Write Figma Copy Inventory** — Save to `.claude/tmp/figma-copy-sync/<feature>-inventory.md`. Only include Static, Mixed, and Uncertain items. Exclude Dynamic data and Design placeholders.
 
 ```markdown
 # Figma Copy Inventory: [Feature Name]
@@ -129,31 +143,33 @@ digraph copy_sync {
 
 ### State: Default
 
-| # | Element Role | Text Content |
-|---|-------------|-------------|
-| 1 | Heading | "Payment Settings" |
-| 2 | Description | "Configure your payment methods and preferences." |
-| 3 | Button | "Save changes" |
-| 4 | Placeholder | "Search payment methods..." |
+| # | Element Role | Text Content | Classification |
+|---|-------------|-------------|----------------|
+| 1 | Heading | "Payment Settings" | Static |
+| 2 | Description | "Configure your payment methods and preferences." | Static |
+| 3 | Button | "Save changes" | Static |
+| 4 | Placeholder | "Search payment methods..." | Static |
+| 5 | Table header | "Showing 1-20 of 147 results" | Mixed |
+| 6 | Price cell | "$49.99" | Dynamic data |
 
 ### State: Error
 
-| # | Element Role | Text Content |
-|---|-------------|-------------|
-| 1 | Error message | "Unable to save payment settings. Please try again." |
+| # | Element Role | Text Content | Classification |
+|---|-------------|-------------|----------------|
+| 1 | Error message | "Unable to save payment settings. Please try again." | Static |
 
 ### State: Empty
 
-| # | Element Role | Text Content |
-|---|-------------|-------------|
-| 1 | Empty heading | "No payment methods" |
-| 2 | Empty description | "Add a payment method to start accepting payments." |
-| 3 | Button | "Add payment method" |
+| # | Element Role | Text Content | Classification |
+|---|-------------|-------------|----------------|
+| 1 | Empty heading | "No payment methods" | Static |
+| 2 | Empty description | "Add a payment method to start accepting payments." | Static |
+| 3 | Button | "Add payment method" | Static |
 ```
 
 **Output:** Figma Copy Inventory document + screenshots saved as visual reference.
 
-**Checkpoint:** Present the inventory to the user. Ask: "Does this capture all the surfaces and states you want to sync? Any surfaces to add or skip?"
+**Checkpoint:** Present the inventory to the user, including the classification of each text element. Ask: "Does this capture all the surfaces and states you want to sync? Are the classifications correct (especially any marked Uncertain)? Any surfaces to add or skip?"
 
 ### Phase 1: Surface Matching
 
@@ -221,9 +237,19 @@ digraph copy_sync {
 
    a. **Get current copy from browser** — Using the browser-interaction skill, take a snapshot (accessibility tree) to read the current text content from the live UI (for navigable states).
 
-   b. **Find copy in codebase** — For each text string from the browser:
-      - Use Grep to search the codebase for the exact string
-      - Record: file path, line number, surrounding context (to identify i18n wrappers)
+   b. **Find copy in codebase** — Strategy depends on classification from Phase 0:
+
+      **For Static copy:** Grep for the exact string. Record: file path, line number, surrounding context.
+
+      **For Mixed copy (static + dynamic):** The browser shows rendered text (e.g., "Showing 1-20 of 147 results") but code has format specifiers (e.g., `sprintf('Showing %1$d-%2$d of %3$d results')`). To find these:
+      - Strip the dynamic segments (numbers, prices, names, dates) from the Figma/browser text
+      - Grep for the remaining static fragments (e.g., "Showing" + "of" + "results")
+      - Search for `sprintf`, `_n`, `%d`, `%s`, `%f` patterns near the component's files
+      - Once found, record the full format string including placeholders
+
+      **For text not found by exact grep:** Before flagging as NOT-FOUND, try the mixed-copy strategy above — the string may contain dynamic segments you didn't initially classify.
+
+      **If text appears in multiple files:** This is common (PHP + JS dual rendering, shared components). Record ALL locations and present them to the user in the diff table — don't silently pick one.
 
    c. **Detect i18n pattern** — Check if the text is wrapped in a translation function:
 
@@ -243,6 +269,8 @@ digraph copy_sync {
    d. **Compare Figma vs. code** — For each text element:
       - **IDENTICAL** — Figma and code match exactly
       - **DIFFERENT** — Figma and code differ (the change to apply)
+      - **MIXED-CHANGED** — Mixed string where the static parts differ but placeholders are preserved (e.g., code has `'Showing %1$d-%2$d of %3$d results'`, Figma implies `'Displaying %1$d-%2$d of %3$d results'`)
+      - **MIXED-NEW-PLACEHOLDER** — Mixed string where Figma implies a new placeholder not in code (e.g., code has `'%d items'`, Figma shows "3 items ($49.99)" suggesting a price placeholder). **Flag for user attention.**
       - **STATE-ONLY** — Text exists only in a non-default Figma state; find it by grepping for current code copy (it may exist in the code but not be visible in the current browser state)
 
    e. **For states not navigable in the browser** — Use the Figma copy inventory from Phase 0. Search the codebase for likely text patterns (error messages near the component, empty state text, loading text). If found, compare. If not found, flag as "new copy — not found in code" for user attention.
@@ -261,6 +289,7 @@ digraph copy_sync {
 | 3 | Button | Save | Save changes | settings.tsx | 87 | `__()` | DIFFERENT |
 | 4 | Placeholder | Search... | Search payment methods... | settings.tsx | 55 | `__()` | DIFFERENT |
 | 5 | Link | Learn more | Learn more | settings.tsx | 48 | `__()` | IDENTICAL |
+| 6 | Results count | Showing %1$d-%2$d of %3$d results | Displaying %1$d-%2$d of %3$d results | list.tsx | 31 | `sprintf(__())` | MIXED-CHANGED |
 
 ### Surface: Payment Settings — Error State
 
@@ -284,7 +313,7 @@ Not found in code: 1
 
 **Goal:** Present all copy differences for user approval, apply approved changes, and produce a sync report.
 
-1. **Present the diff table** — Show the complete diff from Phase 2, organized by surface and state. Only show elements with status DIFFERENT, STATE-ONLY, or NOT-FOUND (skip IDENTICAL).
+1. **Present the diff table** — Show the complete diff from Phase 2, organized by surface and state. Only show elements with status DIFFERENT, MIXED-CHANGED, MIXED-NEW-PLACEHOLDER, STATE-ONLY, or NOT-FOUND (skip IDENTICAL). Highlight MIXED-NEW-PLACEHOLDER items — these require user attention because they imply code changes beyond copy updates.
 
 2. **Ask for approval:**
    - "Here are all the copy differences between Figma and code. Review each change and tell me:
@@ -314,9 +343,19 @@ Not found in code: 1
 
    c. **If plural form** (`_n`) — Update both singular and plural strings if Figma provides both.
 
-   d. **If translation JSON** — Update the value for the corresponding key in the JSON file.
+   d. **If MIXED-CHANGED** — Update only the static text parts of the format string. Preserve all existing placeholders (`%d`, `%s`, `%1$d`, etc.) in their original positions:
+      ```
+      // Before
+      sprintf( __( 'Showing %1$d-%2$d of %3$d results', 'woocommerce' ), $start, $end, $total )
+      // After — only static text changed, placeholders preserved
+      sprintf( __( 'Displaying %1$d-%2$d of %3$d results', 'woocommerce' ), $start, $end, $total )
+      ```
 
-   e. **If NOT-FOUND** — Report to user: "This text from Figma was not found in the codebase. It may need to be added as part of a feature implementation." Do not create new code.
+   e. **If MIXED-NEW-PLACEHOLDER** — Do NOT auto-apply. Report to user: "Figma implies a new dynamic value (e.g., a price, count, or name) that doesn't exist as a placeholder in the current code. This requires a code change beyond copy sync — a new variable or data source may need to be added." Present the current format string and what the Figma text implies, so the user can decide how to handle it.
+
+   f. **If translation JSON** — Update the value for the corresponding key in the JSON file.
+
+   g. **If NOT-FOUND** — Report to user: "This text from Figma was not found in the codebase. It may need to be added as part of a feature implementation." Do not create new code.
 
 4. **Write sync report** — Save to `.claude/tmp/figma-copy-sync/<feature>-sync-report.md`:
 
