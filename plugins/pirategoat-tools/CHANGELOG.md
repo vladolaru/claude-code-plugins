@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **figma-copy-sync skill:** Self-contained skill for synchronizing text copy between Figma designs and implemented code. 4-phase workflow: Figma text extraction → surface matching (browser snapshots via browser-interaction skill) → copy comparison with i18n detection → approval-gated application. Handles multiple component states, auto-detects translation patterns (WordPress i18n, react-intl, i18next), and produces structured sync reports.
 
+### Changed
+
+- **figma-copy-sync skill:** Optimize with prompt engineering patterns — identity establishment, tiered Iron Rules (Safety-Critical RULE 0-2 vs Operational RULE 3-5), structured HITL approval gates with impact summaries, error normalization for expected uncertainty, compact workflow table replacing unrenderable dot graph, and affirmative directive framing
+
 ## [1.42.2] - 2026-03-01
 
 ### Added
