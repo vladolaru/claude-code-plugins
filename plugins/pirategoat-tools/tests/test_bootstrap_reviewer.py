@@ -349,8 +349,15 @@ class TestBuildErrorOutput:
 
 
 def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
-    """Run bootstrap-reviewer.py via subprocess."""
-    cmd = [sys.executable, str(BOOTSTRAP_SCRIPT)] + list(args)
+    """Run bootstrap-reviewer.py via subprocess.
+
+    Always passes --range HEAD~1..HEAD so tests are deterministic
+    regardless of working tree state.
+    """
+    full_args = list(args)
+    if "--range" not in full_args:
+        full_args.extend(["--range", "HEAD~1..HEAD"])
+    cmd = [sys.executable, str(BOOTSTRAP_SCRIPT)] + full_args
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout,
         cwd=str(PLUGIN_ROOT),
