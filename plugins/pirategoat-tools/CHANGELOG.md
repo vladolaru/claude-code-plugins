@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.2] - 2026-03-02
+
+### Changed
+
+- **patterns-reviewer agent:** Add parallel tool call guidance — instructs the agent to issue independent `git grep` and `git show` calls simultaneously instead of sequentially. Addresses the #1 inefficiency (43.7% of all tool calls are sequential git grep, with zero parallelism across 302 observed turns). Expected ~40% wall-clock reduction on the search phase.
+
 ## [1.43.1] - 2026-03-02
 
 ### Added

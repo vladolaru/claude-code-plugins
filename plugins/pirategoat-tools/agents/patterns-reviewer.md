@@ -81,7 +81,17 @@ From PR changes, extract: problem being solved, patterns being introduced, appro
 
 **Scope every search.** Always include file extension filters and directory paths. Never search for single common words (`error`, `Link`, `status`, `badge`) without tight scoping — they match thousands of lines and waste turns on refinement.
 
+**Parallelize independent searches.** After reading the diffs, you typically know several concepts to investigate. Issue independent `git grep` calls as parallel tool calls in a single turn — don't wait for one result before starting the next. Reserve sequential calls for when result A determines what to search for next.
+
 ```bash
+# GOOD — 3 independent concept searches in ONE turn (parallel tool calls)
+git grep -n "wp_cache_set\|wp_cache_get" <base_ref> -- "*.php" | head -20
+git grep -n "useAutoRefresh\|usePolling" <base_ref> -- "*.ts" "*.tsx" | head -20
+git grep -n "window\.__next\|__nextAdmin" <base_ref> -- "*.ts" "*.tsx" "*.php" | head -20
+
+# BAD — same 3 searches issued one per turn, waiting for each result
+# (wastes wall-clock time when the searches don't depend on each other)
+
 # GOOD — scoped by extension and directory
 git grep -n "<pattern>" <base_ref> -- "*.ts" "*.tsx" "src/components/"
 git grep -n "<key_terms>" <base_ref> -- "*.php" "includes/"
@@ -90,6 +100,8 @@ git grep -n "<key_terms>" <base_ref> -- "*.php" "includes/"
 git grep -n "error" <base_ref>
 git grep -n "Link" <base_ref>
 ```
+
+The same applies to `git show` calls — if you need to read 3 files from the base ref, issue all 3 in one turn.
 
 ### 3. Search Git History (CRITICAL)
 
