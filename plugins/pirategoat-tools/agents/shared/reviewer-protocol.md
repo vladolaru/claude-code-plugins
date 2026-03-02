@@ -8,7 +8,7 @@ Standard protocol for all review agents. Read this FIRST before starting your re
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | head -1 | xargs dirname | xargs dirname)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
 python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name>
 ```
 
@@ -17,7 +17,7 @@ If the bootstrap script is not available, locate the plugin root manually:
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 # Fallback if hook hasn't run yet
-[ -z "$PLUGIN_ROOT" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py" -type f 2>/dev/null | sort -V | tail -1 | xargs dirname | xargs dirname)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
 echo "PLUGIN_ROOT=$PLUGIN_ROOT"
 ```
 

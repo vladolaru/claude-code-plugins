@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.3] - 2026-03-02
+
+### Fixed
+
+- All reviewer agents + shared protocol: validate plugin root cache path exists before use, and pick latest (not oldest) cached version in find fallback — prevents agents from running scripts from old cached plugin versions after upgrades
+
 ## [1.43.2] - 2026-03-02
 
 ### Changed
