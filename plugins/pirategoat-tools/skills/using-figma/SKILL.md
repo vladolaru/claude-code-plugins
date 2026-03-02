@@ -91,6 +91,14 @@ Before each action, verify the prerequisite. If the check fails, STOP and comple
 
 Backtrack: Phase 4 → Phase 3 (fidelity gap found). Planning sessions: Phase 3 = "write the plan" (see below).
 
+### Plugin Scripts
+
+Some phases use helper scripts bundled with this plugin. Derive the plugin root from the skill base directory (provided by Claude Code on skill load — go two levels up):
+
+```bash
+PLUGIN_ROOT="<skill base directory>/../.."
+```
+
 ### Phase 0: Survey
 
 **Goal:** Build a complete inventory of the design before touching any code.
@@ -99,7 +107,7 @@ Backtrack: Phase 4 → Phase 3 (fidelity gap found). Planning sessions: Phase 3 
 
 2. **Fetch metadata** — Call `get_metadata` on the root node. If the response is >50K chars, save to file and parse with:
    ```bash
-   python3 <plugin-scripts>/figma-parse-nodes.py <saved-file> [--format tree|flat|json]
+   python3 $PLUGIN_ROOT/scripts/figma-parse-nodes.py <saved-file> [--format tree|flat|json]
    ```
 
 3. **Classify nodes** — From the parsed hierarchy, identify:
@@ -121,7 +129,7 @@ Backtrack: Phase 4 → Phase 3 (fidelity gap found). Planning sessions: Phase 3 
 
 2. **Parse each response** — If a response is >20K chars, save to file and parse with:
    ```bash
-   python3 <plugin-scripts>/figma-extract-specs.py <saved-file> [--tokens-file <tokens-cache>]
+   python3 $PLUGIN_ROOT/scripts/figma-extract-specs.py <saved-file> [--tokens-file <tokens-cache>]
    ```
 
 3. **Build token mapping** — If no `.claude/figma-config.json` exists, cross-reference Figma token names with the project's CSS variables/design tokens. Write the mapping to `.claude/tmp/figma-cache/token-mapping-<fileKey>.json`.

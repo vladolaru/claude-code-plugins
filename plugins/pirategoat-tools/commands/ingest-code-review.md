@@ -50,7 +50,7 @@ fi
 
 Run the preprocessor:
 ```bash
-python3 scripts/ingest-preprocess.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ingest-preprocess.py \
   --output-dir "${OUTPUT_DIR}" \
   --git-range "${GIT_RANGE}"
 ```
@@ -62,7 +62,7 @@ python3 scripts/ingest-preprocess.py \
 ### Step 1: Generate Verification Questions
 
 ```bash
-python3 scripts/ingest-code-review.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ingest-code-review.py \
   --step-number 1 \
   --total-steps 3 \
   --output-dir "${OUTPUT_DIR}" \
@@ -79,7 +79,7 @@ After each step:
 3. Call the script again with `--step-number N+1` and ALL accumulated state in `--thoughts`
 
 ```bash
-python3 scripts/ingest-code-review.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ingest-code-review.py \
   --step-number <2-3> \
   --total-steps 3 \
   --output-dir "${OUTPUT_DIR}" \
@@ -102,7 +102,7 @@ Three calls total (steps 1–3). The workflow completes when step 3 produces the
 If `ingest-preprocessed.json` does not exist in the output directory (e.g., preprocessing was skipped), fall back to the original 6-step workflow:
 
 ```bash
-python3 scripts/ingest-code-review.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ingest-code-review.py \
   --step-number 1 \
   --total-steps 6 \
   --output-dir "<path or 'auto'>" \

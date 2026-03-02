@@ -66,10 +66,10 @@ If "Not now", stop here. If "Yes", create directories with `mkdir -p` and contin
 If sub-agents were dispatched in this session (via Task tool), run the analyzer:
 
 ```bash
-python3 ${PLUGIN_ROOT}/scripts/analyze-subagents.py --project-dir $(git rev-parse --show-toplevel)
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/analyze-subagents.py --project-dir $(git rev-parse --show-toplevel)
 ```
 
-Resolve `${PLUGIN_ROOT}`: navigate up from this command file to the directory containing `scripts/`. Verify that `${PLUGIN_ROOT}/scripts/analyze-subagents.py` exists before running. If the script is missing, skip this step and continue with Step 3.
+Verify that `${CLAUDE_PLUGIN_ROOT}/scripts/analyze-subagents.py` exists before running. If the script is missing, skip this step and continue with Step 3.
 
 If the script exits with code 2 (no data), skip this step. If exit code 0, incorporate
 flagged patterns into Step 3's analysis — they map to Inefficiency Categories:
