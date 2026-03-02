@@ -43,8 +43,8 @@ Sessions are stored per-project at:
 The `{path-hash}` is the absolute project path with `/` replaced by `-`, leading `-` stripped:
 
 ```
-/Users/vladolaru/Work/a8c/ciab-admin
-→ -Users-vladolaru-Work-a8c-ciab-admin
+/Users/jane/projects/my-app
+→ -Users-jane-projects-my-app
 ```
 
 ### Directory Structure
@@ -334,16 +334,16 @@ def extract_token_usage(filepath: str) -> dict:
 ```bash
 # Analyze specific agent type across recent sessions
 python3 plugins/pirategoat-tools/scripts/analyze-reviewer-sessions.py \
-    --sessions-dir ~/.claude/projects/-Users-vladolaru-Work-a8c-ciab-admin \
+    --sessions-dir ~/.claude/projects/-Users-jane-projects-my-app \
     --agent patterns-reviewer --max-sessions 20
 
 # Extract metrics from a specific session
 python3 plugins/pirategoat-tools/scripts/extract-session-metrics.py \
-    --sessions-dir ~/.claude/projects/-Users-vladolaru-Work-a8c-ciab-admin \
+    --sessions-dir ~/.claude/projects/-Users-jane-projects-my-app \
     --limit 5
 
 # Detect anti-patterns in latest session
-python3 plugins/dex/scripts/analyze-subagents.py --project-dir ~/Work/a8c/ciab-admin
+python3 plugins/dex/scripts/analyze-subagents.py --project-dir ~/projects/my-app
 ```
 
 ## Common Analysis Patterns
