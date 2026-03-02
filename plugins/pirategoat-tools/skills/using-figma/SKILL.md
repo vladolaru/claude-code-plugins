@@ -5,7 +5,13 @@ description: Use when implementing UI from Figma designs, comparing implementati
 
 # Using Figma for Implementation
 
-Structured workflow for translating Figma designs into production code with high fidelity. Addresses the root cause of design mismatches: **CC doesn't build a structured mental model before coding.**
+You are a design-to-code specialist. Your job: translate Figma designs into production code with high fidelity by building a structured specification before writing any code.
+
+**Why this workflow matters** — measured across 4 real sessions:
+- Survey-first: 0 factual corrections, 6% call waste
+- No survey (reactive): 17 user corrections, 18% call waste
+- Screenshot-only implementation: 100% of guessed values were wrong
+- Sessions without `get_variable_defs`: 4/4 had repeated token mismatches
 
 ## When to Use
 
@@ -39,31 +45,27 @@ All assets come from Figma MCP's built-in endpoint:
 
 ## Iron Rules
 
-These are non-negotiable. Violating any rule produces the exact errors observed in real sessions.
+### Foundation (violations derail the entire session)
 
-### Data acquisition first — gather complete data before coding
+**RULE 0:** Call `get_variable_defs` at session start and cache the result. Without it, tokens are discovered ad-hoc → hardcoded values → 2+ user corrections.
 
-| # | Rule | Violation consequence |
-|---|------|----------------------|
-| R1 | **ALWAYS call `get_variable_defs` at session start** | Tokens discovered ad-hoc, hardcoded values, 2+ user corrections |
-| R2 | **NEVER use `get_screenshot` as sole source for implementation** | Values guessed wrong — toggle side, icon size, spacing. Always pair with `get_design_context` |
-| R3 | **ALWAYS use project tokens, never hardcoded values** | User has to remind you mid-session. Check project's design token system first |
+**RULE 1:** Build the Design Specification Document (Phase 1) before writing any code. Code from the spec, not from raw Figma responses.
 
-### Structural understanding first — map hierarchy and states before coding
+**RULE 2:** Build the component hierarchy and enumerate ALL states (default, hover, disabled, error, empty, loading) before implementation. Missing states are discovered only when the user reports mismatches.
 
-| # | Rule | Violation consequence |
-|---|------|----------------------|
-| R6 | **ALWAYS build component hierarchy before implementation** | Spacing applied to wrong element (header vs body vs card) — 5 corrections in one session |
-| R7 | **ALWAYS enumerate component states before implementation** | Hover, disabled, loading, error states discovered only when user reports mismatch |
+**RULE 3:** Use project design tokens for every spacing, color, and typography value. Check the project's token system first; if no token exists, document it and use the closest match.
 
-### Tool usage discipline — separate providers, parse don't skim, target precisely
+### Discipline (violations cause waste or incorrect results)
 
-| # | Rule | Violation consequence |
-|---|------|----------------------|
-| R4 | **NEVER batch Figma MCP calls with other tool providers** | Cascade failure: one Chrome DevTools error killed 10 Figma calls (50% waste) |
-| R5 | **ALWAYS parse large responses with scripts** | 88KB-1.5MB blobs consume context; values are missed when read as text |
-| R8 | **When response is truncated, re-fetch sublayer nodes** | Structural data lost, workarounds produce incomplete results |
-| R9 | **Target content frames, not wrapper/title frames** | 3 of 5 `get_design_context` calls returned trivial ~700 char labels |
+**RULE 4:** Pair `get_screenshot` with `get_design_context`. Use screenshots for visual reference only — never as sole source for implementation values.
+
+**RULE 5:** Batch Figma MCP calls separately from other tool providers. One Chrome DevTools error in a mixed batch kills all Figma calls (observed: 50% waste from cascade failure).
+
+**RULE 6:** Parse large responses (>20K chars) with scripts instead of reading as text. 88KB-1.5MB blobs consume context; values are missed.
+
+**RULE 7:** When a response is truncated, re-fetch sublayer nodes individually. Workarounds on incomplete data produce incomplete results.
+
+**RULE 8:** Target content frames, not wrapper/title frames. Wrapper frames return trivial content (~700 chars of labels).
 
 ## Pre-Action Checkpoints — STOP
 
@@ -79,24 +81,15 @@ Before each action, verify the prerequisite. If the check fails, STOP and comple
 
 ## Workflow
 
-```dot
-digraph figma_workflow {
-  rankdir=TB;
-  node [shape=box];
+| Phase | Goal | Output |
+|-------|------|--------|
+| 0. Survey | Inventory design: tokens, nodes, visual | Node inventory + token cache |
+| 1. Specification | Parse design context → spec doc | Design Specification Document |
+| 2. Component Tree | Map hierarchy + enumerate states | Component tree + state inventory |
+| 3. Implementation | Code from spec, not raw Figma | Working components |
+| 4. Validation | Screenshot comparison + checklist | Verified spec |
 
-  survey [label="Phase 0: Survey\n(metadata + tokens + visual)"];
-  spec [label="Phase 1: Specification\n(parse design context → spec doc)"];
-  tree [label="Phase 2: Component Tree\n(map hierarchy + states)"];
-  implement [label="Phase 3: Implementation\n(code from spec, not raw Figma)"];
-  validate [label="Phase 4: Validation\n(screenshot comparison + checklist)"];
-
-  survey -> spec -> tree -> implement -> validate;
-  validate -> implement [label="fidelity gap" style=dashed];
-
-  planning [label="Planning session?\nSkip to Phase 3\n(plan, not code)" shape=diamond];
-  survey -> planning [style=invis];
-}
-```
+Backtrack: Phase 4 → Phase 3 (fidelity gap found). Planning sessions: Phase 3 = "write the plan" (see below).
 
 ### Phase 0: Survey
 
@@ -154,6 +147,13 @@ digraph figma_workflow {
 4. **Add to specification** — Update the Design Specification Document with the component tree and state inventory.
 
 **Output:** Component tree with parent-child spacing annotations and complete state inventory.
+
+### Figma Output ≠ Final Code
+
+Figma MCP output (React + Tailwind) is a **representation of the design**, not production code. When translating to implementation:
+- Replace Tailwind utility classes with the project's design tokens
+- Reuse existing project components instead of duplicating
+- Respect existing routing, state management, and data-fetch patterns
 
 ### Phase 3: Implementation
 
@@ -273,15 +273,9 @@ Scripts are in the plugin's `scripts/` directory:
 | `create_design_system_rules` | Generate design-to-code guidance for your stack | One-time setup — save output for reuse |
 | `get_figjam` | FigJam board content (diagrams, flows) | When referencing FigJam boards, not designs |
 
-**Implementation rules:**
-- Treat Figma MCP output (React + Tailwind) as a **representation of design**, not final code
-- Replace Tailwind utility classes with the project's design-system tokens
-- Reuse existing project components instead of duplicating functionality
-- Respect existing routing, state management, and data-fetch patterns
-
 ## Handling Figma MCP Failures
 
-Figma MCP calls may fail or return incomplete data. This is normal — adapt and continue.
+Truncated responses, empty results, and connection errors are expected — Figma MCP operates over a network with large payloads. Apply the recovery action immediately; do not apologize or explain the failure to the user.
 
 | Failure | Recovery |
 |---------|----------|
@@ -301,10 +295,3 @@ Figma MCP calls may fail or return incomplete data. This is normal — adapt and
 | **Cascade Batching** | Figma + Chrome calls batched, cascade failure | Separate tool providers into own batches |
 | **Reactive Figma** | No survey, issues discovered one-by-one by user | Survey phase mandatory (Phase 0) |
 
-## Measured Impact
-
-From analysis of 4 CIAB-admin sessions:
-- **Session with no survey (reactive):** 17 user corrections, 18% call waste
-- **Session with survey-first:** 0 factual corrections, 6% call waste
-- **Sessions with no `get_variable_defs`:** 4/4 sessions, causing repeated token mismatches
-- **Sessions with screenshot-only implementation:** 100% of guessed values were wrong
