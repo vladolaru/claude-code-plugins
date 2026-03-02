@@ -101,6 +101,16 @@ AGENT_INFERENCE_PATTERNS = {
     "go-tests": [r"Go test", r"golang test"],
 }
 
+# Fingerprints for non-reviewer agents that might be misidentified by keyword
+# inference.  Each key maps to a list of regexes tested against first_user_content
+# with re.MULTILINE.  If ANY regex matches, the agent type is returned immediately
+# (before keyword inference runs).
+NON_REVIEWER_AGENT_FINGERPRINTS = {
+    "reconciliator": [
+        r"^Output Directory:.*\nMode:\s*(summary|focused)",
+    ],
+}
+
 # Agents subject to LLM triage (Step 3.6 adaptive dispatch)
 TRIAGED_AGENTS = [
     "security-reviewer",
@@ -389,11 +399,26 @@ def identify_agent_type(filepath: str) -> Optional[str]:
     except (IOError, OSError):
         return None
 
+    # Strategy 1.5: detect non-reviewer agents by fingerprint
+    if first_user_content:
+        for agent_type, fingerprints in NON_REVIEWER_AGENT_FINGERPRINTS.items():
+            for fp in fingerprints:
+                if re.search(fp, first_user_content, re.MULTILINE):
+                    return agent_type
+
     # Strategy 2: infer from prompt keywords
     if first_user_content:
+        # Strip agent signal lines (e.g. "wp-architecture-reviewer: STATUS=COMPLETED")
+        # to prevent false matches from reconciliator/orchestrator context
+        cleaned_content = re.sub(
+            r"^[a-z0-9-]+-reviewer:\s*STATUS=\S+.*$",
+            "",
+            first_user_content,
+            flags=re.MULTILINE,
+        )
         for agent_short, patterns in AGENT_INFERENCE_PATTERNS.items():
             for pattern in patterns:
-                if re.search(pattern, first_user_content, re.IGNORECASE):
+                if re.search(pattern, cleaned_content, re.IGNORECASE):
                     return agent_short + "-reviewer"
 
     return None
