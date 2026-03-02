@@ -262,11 +262,11 @@ All AI-generated artifacts (plans, analysis, research, decisions, learnings) go 
 
 ## Design Patterns
 
-Established patterns for building skills and commands live in `.claude/docs/patterns/`. Consult them before implementing similar functionality.
+Established patterns live in `.claude/docs/patterns/` (local, not tracked in git). Consult them before implementing similar functionality.
 
 | Pattern | When to use |
 |---|---|
-| [step-by-step-prompt-injection](.claude/docs/patterns/step-by-step-prompt-injection.md) | Multi-phase analytical workflows where later steps must be independent of earlier conclusions — e.g., verify before judge, gather before synthesize. Includes script template, skill file structure, testing checklist, and two reference implementations. |
+| `step-by-step-prompt-injection` | Multi-phase analytical workflows where later steps must be independent of earlier conclusions — e.g., verify before judge, gather before synthesize. Includes script template, skill file structure, testing checklist, and two reference implementations. |
 
 ## Knowledge Capture
 
