@@ -55,8 +55,6 @@
         "./skills/analyzing-cc-sessions"
       ],
       "commands": [
-        "./commands/execute-plan.md",
-        "./commands/fix-github-issue.md",
         "./commands/full-code-review.md",
         "./commands/code-review.md",
         "./commands/ingest-code-review.md",

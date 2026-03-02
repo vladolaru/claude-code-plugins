@@ -4,15 +4,6 @@ Complete documentation for the pirategoat-tools plugin.
 
 ---
 
-## Current Status
-
-**Version:** 1.10.0
-**Status:** Rich Feedback Loops (Phases 2-4) Complete
-
-**See:** [CURRENT-STATUS.md](./CURRENT-STATUS.md) for complete current state
-
----
-
 ## Documentation Structure
 
 ### [guides/](./guides/)
@@ -45,29 +36,10 @@ Agent analysis & observability — scripts for analyzing reviewer agent behavior
 
 ---
 
-## Session Handoff Documents
-
-- **SESSION-HANDOFF.md** - Previous session details
-- **session-2026-01-15-skills-and-agents.md** - Skills creation session
-- **tier-1-foundations-complete.md** - Tier 1 completion summary
-
----
-
 ## Quick Links
 
-### For Users
-- [Current Status](./CURRENT-STATUS.md) - What's working now
 - [Guides](./guides/) - How to use features
-- [Scripts](../scripts/) - Available scripts
-
-### For Developers
 - [Research](./research/) - Pattern analysis and proposals
-- [Progress](./progress/) - Implementation logs
-- [Plans](./plans/) - Implementation planning
-
-### For Agents
-- [Agent Specs](../agents/) - Agent definitions
-- [Skills](../skills/) - Skill definitions
 - [False Positive Guide](./guides/FALSE-POSITIVE-HANDLING-GUIDE.md)
 
 ---
