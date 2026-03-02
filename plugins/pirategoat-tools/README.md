@@ -40,7 +40,7 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 - **sonnet** (12 agents) — Structured analysis against well-defined checklists. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
 - **haiku** (4 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
 
-### 15 Skills
+### 19 Skills
 
 | Skill | What it brings |
 |-------|---------------|
@@ -59,8 +59,12 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | **decision-critic** | Structured decision analysis for technical trade-offs |
 | **creating-md-slides** | Markdown presentations via Marp (PDF, PPTX, HTML) |
 | **marp-slide-quality** | SlideGauge integration for presentation analysis |
+| **accessible-frontend-dev** | ARIA correctness, keyboard operability, focus management, WCAG 2.2 AA |
+| **using-figma** | Figma-to-code workflow — survey, specification, component tree, implementation, validation |
+| **figma-copy-sync** | Synchronize text copy between Figma designs and implemented code |
+| **analyzing-cc-sessions** | Parse CC session JSONL transcripts, analyze subagent behavior, extract metrics |
 
-### 8 Commands
+### 6 Commands
 
 | Command | Purpose |
 |---------|---------|
@@ -132,8 +136,8 @@ Agents use ground truth results at confidence 1.0 and fall back to manual analys
 ```
 pirategoat-tools/
 ├── agents/           # 19 review agent definitions
-├── commands/         # 8 slash commands
-├── skills/           # 15 skills with SKILL.md files
+├── commands/         # 6 slash commands
+├── skills/           # 19 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library
 ├── scripts/          # Helper scripts (review, parsing, linting)

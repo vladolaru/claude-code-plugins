@@ -52,7 +52,11 @@
         "./skills/accessible-frontend-dev",
         "./skills/using-figma",
         "./skills/figma-copy-sync",
-        "./skills/analyzing-cc-sessions"
+        "./skills/analyzing-cc-sessions",
+        "./skills/creating-md-slides",
+        "./skills/date-time-wrangling",
+        "./skills/decision-critic",
+        "./skills/marp-slide-quality"
       ],
       "commands": [
         "./commands/full-code-review.md",

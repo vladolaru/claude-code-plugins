@@ -23,14 +23,14 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 | Plugin | What it does |
 |--------|-------------|
-| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 18 review agents, 15 skills (testing-patterns, software-architecture, WordPress), rich feedback loops |
+| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 19 review agents, 19 skills (testing-patterns, software-architecture, WordPress, Figma), rich feedback loops |
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
 
 ### pirategoat-tools
 
-The main plugin. 18 specialized review agents that run in parallel, 15 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, and browser automation. Agents integrate with linters, coverage tools, and security scanners for ground-truth validation.
+The main plugin. 19 specialized review agents that run in parallel, 19 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, Figma-to-code workflows, and browser automation. Agents integrate with linters, coverage tools, and security scanners for ground-truth validation.
 
 **[Full documentation →](plugins/pirategoat-tools/README.md)** | [Changelog](plugins/pirategoat-tools/CHANGELOG.md)
 
@@ -59,7 +59,7 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 18 agents, 15 skills, 6 commands
+│   ├── pirategoat-tools/         # 19 agents, 19 skills, 6 commands
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   └── image-optimizer/          # 1 command, optimization scripts
@@ -70,9 +70,9 @@ vladolaru-claude-code-plugins/
 
 ## Design Patterns
 
-Reusable patterns for building new skills and commands are documented in [`.claude/docs/patterns/`](.claude/docs/patterns/).
+Reusable patterns for building new skills and commands are documented in `.claude/docs/patterns/` (local, not tracked in git).
 
-- **[Step-by-step prompt injection](.claude/docs/patterns/step-by-step-prompt-injection.md)** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic` and `ingest-code-review`.
+- **Step-by-step prompt injection** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic` and `ingest-code-review`.
 
 ## Development
 
