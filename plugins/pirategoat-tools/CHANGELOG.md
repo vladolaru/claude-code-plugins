@@ -5,6 +5,20 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.1] - 2026-03-02
+
+### Added
+
+- **test_extract_session_metrics.py:** 16 unit tests for `identify_agent_type()` — covers bootstrap detection (Strategy 1), reconciliator fingerprinting (Strategy 1.5), hardened keyword inference (Strategy 2), and edge cases (empty files, list content format, mixed signals)
+
+### Fixed
+
+- **extract-session-metrics.py:** Reconciliator agent sessions no longer misidentified as wp-architecture-reviewer. Added fingerprint detection (Strategy 1.5) and agent signal line stripping in keyword inference (Strategy 2) to prevent false matches from orchestrator context text like "wp-architecture-reviewer: STATUS=COMPLETED"
+
+### Changed
+
+- **history-insights-reviewer:** Cap diff output at 500 lines (`--max-lines 500`) and file history at 5 commits per file (down from 15) to reduce Sonnet context-processing time after the Opus→Sonnet demotion caused a 20% speed regression
+
 ## [1.43.0] - 2026-03-01
 
 ### Added
