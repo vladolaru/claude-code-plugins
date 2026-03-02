@@ -70,9 +70,9 @@ vladolaru-claude-code-plugins/
 
 ## Design Patterns
 
-Reusable patterns for building new skills and commands are documented in `.claude/docs/patterns/` (local, not tracked in git).
+Reusable patterns for building new skills and commands are documented in [`docs/patterns/`](docs/patterns/).
 
-- **Step-by-step prompt injection** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic` and `ingest-code-review`.
+- **[Step-by-step prompt injection](docs/patterns/step-by-step-prompt-injection.md)** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic` and `ingest-code-review`.
 
 ## Development
 
