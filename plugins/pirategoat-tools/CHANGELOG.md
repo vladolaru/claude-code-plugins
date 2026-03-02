@@ -5,6 +5,19 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.5] - 2026-03-02
+
+### Added
+
+- **Figma helper scripts:** `figma-parse-nodes.py` (Phase 0 metadata parsing) and `figma-extract-specs.py` (Phase 1 design context extraction) referenced by the using-figma skill
+- **Design spec template:** `references/design-spec-template.md` for the using-figma skill
+
+### Removed
+
+- **execute-plan command:** Unused, removed along with stale `quality-reviewer` reference
+- **fix-github-issue command:** Unused
+- **CURRENT-STATUS.md:** Stale since v1.10.0, actively misleading at v1.43.4
+
 ## [1.43.4] - 2026-03-02
 
 ### Added
