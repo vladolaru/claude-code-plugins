@@ -584,7 +584,8 @@ def main():
                 if file_path:
                     file_lines.append(file_path)
         if file_lines:
-            file_history_output = get_file_history(file_lines)
+            max_commits = config.get("max_history_commits", 15)
+            file_history_output = get_file_history(file_lines, max_commits=max_commits)
 
     # Step 5: Build and output the structured block
     reviewer_name = derive_reviewer_name(args.agent)
