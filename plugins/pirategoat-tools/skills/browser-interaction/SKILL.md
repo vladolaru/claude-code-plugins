@@ -47,7 +47,7 @@ Element refs (`uid="1_5"`) regenerate per snapshot. Old refs match DIFFERENT ele
 
 **Navigate:**
 ```
-mcp__chrome-devtools__navigate_page(type: "url", url: "http://localhost:9001/wp-admin/", timeout: 30000)
+mcp__chrome-devtools__navigate_page(type: "url", url: "http://localhost:8080/wp-admin/", timeout: 30000)
 ```
 
 **Snapshot → Interact:**
