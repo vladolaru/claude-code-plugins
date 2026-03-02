@@ -244,6 +244,22 @@ Copy the relevant sections from CHANGELOG.md for the release notes.
 3. **Scalability** - Add more plugins without version conflicts
 4. **Standard Practice** - Common pattern for monorepos
 
+## AI Artifacts
+
+All AI-generated artifacts (plans, analysis, research, decisions, learnings) go under `.claude/docs/`:
+
+```text
+.claude/docs/
+├── analysis/     # Research findings, investigations, session analysis
+├── decisions/    # Architecture Decision Records
+├── learnings/    # Debugging insights, gotchas, fixes
+├── patterns/     # Reusable workflows, conventions, anti-patterns
+├── plans/        # Implementation plans
+└── research/     # Deep-dive research (e.g., a11y/, figma/)
+```
+
+**RULE:** Never create AI artifacts under `docs/` at the repo root or under `plugins/*/docs/`. Those locations are for committed documentation that ships with the plugin (guides, READMEs). Working artifacts from agent sessions go in `.claude/docs/`.
+
 ## Design Patterns
 
 Established patterns for building skills and commands live in `.claude/docs/patterns/`. Consult them before implementing similar functionality.
