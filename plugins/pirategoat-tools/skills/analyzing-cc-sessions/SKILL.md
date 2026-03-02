@@ -322,28 +322,36 @@ def extract_token_usage(filepath: str) -> dict:
 
 ## Existing Analysis Scripts
 
-| When you need to... | Use | Location |
-|---------------------|-----|----------|
-| Trace tool call sequences for a specific agent type | `analyze-reviewer-sessions.py` | `plugins/pirategoat-tools/scripts/` |
-| Compare metrics (tokens, duration, findings) across sessions | `extract-session-metrics.py` | `plugins/pirategoat-tools/scripts/` |
-| Detect behavioral anti-patterns (high tool count, repeated reads) | `analyze-subagents.py` | `plugins/dex/scripts/` |
-| Do something not covered above | Write a targeted script using the parsing recipes in this skill | — |
+When this skill loads, Claude Code provides a "Base directory for this skill" path. The **plugin root** is two levels up from that path. Derive it once and use it for all script references:
+
+```bash
+# PLUGIN_ROOT = base directory minus "skills/analyzing-cc-sessions"
+# Example: if base dir is ~/.claude/plugins/cache/.../pirategoat-tools/1.43.3/skills/analyzing-cc-sessions
+# then PLUGIN_ROOT is ~/.claude/plugins/cache/.../pirategoat-tools/1.43.3
+PLUGIN_ROOT="<skill base directory>/../.."
+```
+
+| When you need to... | Use |
+|---------------------|-----|
+| Trace tool call sequences for a specific agent type | `$PLUGIN_ROOT/scripts/analyze-reviewer-sessions.py` |
+| Compare metrics (tokens, duration, findings) across sessions | `$PLUGIN_ROOT/scripts/extract-session-metrics.py` |
+| Do something not covered above | Write a targeted script using the parsing recipes in this skill |
 
 ### Quick Start
 
 ```bash
+# Derive plugin root from skill base directory (provided by Claude Code on skill load)
+PLUGIN_ROOT="<skill base directory>/../.."
+
 # Analyze specific agent type across recent sessions
-python3 plugins/pirategoat-tools/scripts/analyze-reviewer-sessions.py \
-    --sessions-dir ~/.claude/projects/-Users-jane-projects-my-app \
+python3 "$PLUGIN_ROOT/scripts/analyze-reviewer-sessions.py" \
+    --sessions-dir ~/.claude/projects/<project-path-hash> \
     --agent patterns-reviewer --max-sessions 20
 
 # Extract metrics from a specific session
-python3 plugins/pirategoat-tools/scripts/extract-session-metrics.py \
-    --sessions-dir ~/.claude/projects/-Users-jane-projects-my-app \
+python3 "$PLUGIN_ROOT/scripts/extract-session-metrics.py" \
+    --sessions-dir ~/.claude/projects/<project-path-hash> \
     --limit 5
-
-# Detect anti-patterns in latest session
-python3 plugins/dex/scripts/analyze-subagents.py --project-dir ~/projects/my-app
 ```
 
 ## Common Analysis Patterns
