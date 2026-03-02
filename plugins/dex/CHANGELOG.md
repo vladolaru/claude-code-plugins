@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.3] - 2026-03-02
+
+### Fixed
+
+- **sharpen command:** Use `${CLAUDE_PLUGIN_ROOT}` (expanded by CC for commands) instead of `${PLUGIN_ROOT}` (not available) for script path resolution
+
 ## [1.5.2] - 2026-02-24
 
 ### Changed

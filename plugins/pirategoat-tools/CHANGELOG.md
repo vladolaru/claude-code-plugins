@@ -5,6 +5,21 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.4] - 2026-03-02
+
+### Added
+
+- **analyzing-cc-sessions skill:** Ship skill for parsing CC session JSONL transcripts, analyzing subagent behavior, and extracting metrics — was registered in marketplace.json but never committed
+
+### Fixed
+
+- **Skills (analyzing-cc-sessions, decision-critic, using-figma):** Use skill base directory derivation for script path resolution instead of bare relative paths — scripts now resolve correctly when installed from marketplace cache
+- **ingest-code-review command:** Use `${CLAUDE_PLUGIN_ROOT}` for all script paths instead of bare `scripts/` references
+
+### Changed
+
+- **Skills (analyzing-cc-sessions, woocommerce-browser-interaction, browser-interaction):** Remove local setup references and project-specific paths — keep examples generic for any user
+
 ## [1.43.3] - 2026-03-02
 
 ### Fixed

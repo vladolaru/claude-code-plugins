@@ -13,7 +13,7 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Code review orchestration (15 specialized agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
-      "version": "1.43.3",
+      "version": "1.43.4",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -141,7 +141,7 @@
       "name": "dex",
       "source": "./plugins/dex",
       "description": "Frictionless knowledge capture that compounds engineering work. Captures learnings, patterns, decisions, and research from conversations into agent-first documents, with optional promotion to CLAUDE.md or AGENTS.md.",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "author": {
         "name": "Vlad Olaru"
       },
