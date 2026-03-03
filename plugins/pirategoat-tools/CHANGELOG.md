@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.7] - 2026-03-03
+
+### Fixed
+
+- **review-reconciliator agent:** Replace broken `repo_root/lib/` path resolution for `review_output_simple.py` with semver-aware glob over the plugin cache. The previous code used the reviewed project's git root, which only has a `lib/` in the plugin dev repo — in all other projects it failed silently, causing the agent to fall back to an unordered `find` that could pick any cached version (in the incident: 1.34.1 instead of 1.43.5). The new approach always selects the latest installed version regardless of which project is being reviewed.
+
 ## [1.43.6] - 2026-03-03
 
 ### Fixed

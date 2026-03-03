@@ -65,9 +65,18 @@ Read `.md` files selectively — only for clusters where you need richer narrati
 ### Setup
 
 ```python
-import sys, os, json, subprocess
-repo_root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip()
-sys.path.insert(0, os.path.join(repo_root, 'lib'))
+import sys, os, json, glob
+
+# Locate review_output_simple.py from the plugin cache using semver-aware sort.
+# Cannot rely on project git root (only exists in the plugin dev repo) or
+# CLAUDE_PLUGIN_ROOT env var (substituted at command parse time, not available
+# in Python subprocesses). find/glob without sorting picks the oldest version.
+_cache = os.path.expanduser('~/.claude/plugins/cache/vladolaru-claude-code-plugins/pirategoat-tools')
+_candidates = glob.glob(f'{_cache}/*/scripts/review_output_simple.py')
+_candidates.sort(key=lambda p: [int(x) for x in os.path.dirname(os.path.dirname(p)).split('/')[-1].split('.')])
+if not _candidates:
+    raise ImportError("review_output_simple.py not found in plugin cache — is pirategoat-tools installed?")
+sys.path.insert(0, os.path.dirname(_candidates[-1]))
 from review_output_simple import ReviewOutputBuilder
 
 builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
