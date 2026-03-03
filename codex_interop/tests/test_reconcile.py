@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import codex_interop.reconcile as reconcile_module
 from codex_interop.claude_shim import plan_claude_shim
 from codex_interop.discover import discover
 from codex_interop.model import ReconcileError
@@ -314,6 +315,115 @@ def test_format_diff_report_handles_no_changes(make_project, make_plugin_version
 
     assert format_change_report(report) == "No changes."
     assert format_diff_report(desired, report) == "No changes."
+
+
+def test_reconcile_rolls_back_project_outputs_when_skill_swap_fails(
+    make_project,
+    make_plugin_version,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Later skill swap failures restore previously generated project outputs and state."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market",
+        "prompt-engineer",
+        "1.0.0",
+        skill_names=("prompt-engineer",),
+        agent_names=("reviewer",),
+    )
+    agent_path = version_dir / "agents" / "reviewer.md"
+    skill_path = version_dir / "skills" / "prompt-engineer" / "SKILL.md"
+    agent_path.write_text("---\nname: reviewer\ndescription: Review\n---\n\nOld prompt.\n")
+    skill_path.write_text(
+        "---\nname: prompt-engineer\ndescription: Prompt help\n---\n\nOld skill.\n"
+    )
+    codex_home = tmp_path / "codex-home"
+
+    first_desired = _build_desired(project_root, cache_root, codex_home)
+    reconcile_desired_state(first_desired)
+
+    original_config = (project_root / ".codex" / "config.toml").read_text()
+    original_prompt = (
+        project_root / ".codex" / "prompts" / "agents" / "prompt-engineer-reviewer.md"
+    ).read_text()
+    original_skill = (
+        codex_home / "skills" / "prompt-engineer-prompt-engineer" / "SKILL.md"
+    ).read_text()
+    original_state = (project_root / STATE_RELATIVE_PATH).read_text()
+
+    agent_path.write_text("---\nname: reviewer\ndescription: Review\n---\n\nNew prompt.\n")
+    skill_path.write_text(
+        "---\nname: prompt-engineer\ndescription: Prompt help\n---\n\nNew skill.\n"
+    )
+    updated = _build_desired(project_root, cache_root, codex_home)
+
+    original_swap_path = reconcile_module._swap_path
+
+    def fail_on_skill_swap(destination: Path, staged_path: Path, backup_root: Path, *, is_dir: bool):
+        if is_dir and destination.name == "prompt-engineer-prompt-engineer":
+            raise RuntimeError("boom during skill swap")
+        return original_swap_path(destination, staged_path, backup_root, is_dir=is_dir)
+
+    monkeypatch.setattr(reconcile_module, "_swap_path", fail_on_skill_swap)
+
+    with pytest.raises(RuntimeError, match="boom during skill swap"):
+        reconcile_desired_state(updated)
+
+    assert (project_root / ".codex" / "config.toml").read_text() == original_config
+    assert (
+        project_root / ".codex" / "prompts" / "agents" / "prompt-engineer-reviewer.md"
+    ).read_text() == original_prompt
+    assert (
+        codex_home / "skills" / "prompt-engineer-prompt-engineer" / "SKILL.md"
+    ).read_text() == original_skill
+    assert (project_root / STATE_RELATIVE_PATH).read_text() == original_state
+
+
+def test_reconcile_rolls_back_when_stale_prompt_removal_fails(
+    make_project,
+    make_plugin_version,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Stale-output removal failures restore the prior prompt tree and state."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market",
+        "prompt-engineer",
+        "1.0.0",
+        agent_names=("reviewer",),
+    )
+    agent_path = version_dir / "agents" / "reviewer.md"
+    agent_path.write_text("---\nname: reviewer\ndescription: Review\n---\n\nPrompt body.\n")
+    codex_home = tmp_path / "codex-home"
+
+    first_desired = _build_desired(project_root, cache_root, codex_home)
+    reconcile_desired_state(first_desired)
+
+    prompt_path = project_root / ".codex" / "prompts" / "agents" / "prompt-engineer-reviewer.md"
+    original_config = (project_root / ".codex" / "config.toml").read_text()
+    original_prompt = prompt_path.read_text()
+    original_state = (project_root / STATE_RELATIVE_PATH).read_text()
+
+    agent_path.unlink()
+    updated = _build_desired(project_root, cache_root, codex_home)
+
+    original_remove_path = reconcile_module._remove_path
+
+    def fail_on_prompt_removal(destination: Path, backup_root: Path, *, is_dir: bool):
+        if destination == prompt_path:
+            raise RuntimeError("boom during stale prompt removal")
+        return original_remove_path(destination, backup_root, is_dir=is_dir)
+
+    monkeypatch.setattr(reconcile_module, "_remove_path", fail_on_prompt_removal)
+
+    with pytest.raises(RuntimeError, match="boom during stale prompt removal"):
+        reconcile_desired_state(updated)
+
+    assert (project_root / ".codex" / "config.toml").read_text() == original_config
+    assert prompt_path.read_text() == original_prompt
+    assert (project_root / STATE_RELATIVE_PATH).read_text() == original_state
 
 
 def _build_desired(project_root: Path, cache_root: Path, codex_home: Path):
