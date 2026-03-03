@@ -9,7 +9,10 @@ from codex_interop.render_codex_config import (
     render_inline_codex_config,
     render_prompt_files,
 )
-from codex_interop.translate_agents import translate_installed_agents
+from codex_interop.translate_agents import (
+    parse_markdown_with_frontmatter,
+    translate_installed_agents,
+)
 
 def test_translate_installed_agents_generates_deterministic_roles(make_plugin_version):
     """Claude agents translate to deterministic Codex role objects."""
@@ -88,3 +91,29 @@ def test_render_inline_codex_config_is_deterministic(make_plugin_version):
     assert 'prompt = ".codex/prompts/agents/beta-a-reviewer.md"' in rendered
     assert '# original_claude_model_hint = "sonnet"' in rendered
     assert 'tools = ["read", "write"]' in rendered
+
+
+def test_parse_markdown_with_frontmatter_supports_folded_scalars_and_nested_maps(tmp_path: Path):
+    """The shared frontmatter parser accepts valid YAML-like multiline fields."""
+    path = tmp_path / "skill.md"
+    path.write_text(
+        "---\n"
+        "name: knowledge-capture\n"
+        "description: >\n"
+        "  Shared dex logic for project discovery,\n"
+        "  CLAUDE.md budget management, and promotion flow.\n"
+        "metadata:\n"
+        "  short-description: Shared dex guidance\n"
+        "---\n\n"
+        "Body.\n"
+    )
+
+    frontmatter, body = parse_markdown_with_frontmatter(path)
+
+    assert frontmatter["name"] == "knowledge-capture"
+    assert frontmatter["description"] == (
+        "Shared dex logic for project discovery, "
+        "CLAUDE.md budget management, and promotion flow."
+    )
+    assert frontmatter["metadata"] == {"short-description": "Shared dex guidance"}
+    assert body == "\nBody."

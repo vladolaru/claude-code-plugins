@@ -19,6 +19,7 @@ from codex_interop.discover import discover
 from codex_interop.model import DiscoveryError, TranslationError
 from codex_interop.render_codex_config import render_inline_codex_config, render_prompt_files
 from codex_interop.translate_agents import translate_installed_agents
+from codex_interop.translate_skills import translate_installed_skills
 
 
 DISCOVERY_ONLY_COMMANDS = {"reconcile", "dry-run", "diff"}
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         result = discover(project_path=args.project, cache_dir=args.cache_dir)
         shim_decision = plan_claude_shim(result.project)
         roles = translate_installed_agents(result.plugins)
+        skills = translate_installed_skills(result.plugins)
         prompt_files = render_prompt_files(roles)
         rendered_config = render_inline_codex_config(roles)
     except (DiscoveryError, TranslationError) as exc:
@@ -66,19 +68,40 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.command == "validate":
-        _print_summary(result, shim_decision.action, len(roles), len(prompt_files), rendered_config)
+        _print_summary(
+            result,
+            shim_decision.action,
+            len(roles),
+            len(prompt_files),
+            len(skills),
+            rendered_config,
+        )
         return 0
 
-    _print_summary(result, shim_decision.action, len(roles), len(prompt_files), rendered_config)
+    _print_summary(
+        result,
+        shim_decision.action,
+        len(roles),
+        len(prompt_files),
+        len(skills),
+        rendered_config,
+    )
     print(
-        f"Phase 2 complete: translation and rendering work, but `{args.command}` writes are not "
+        f"Phase 3 complete: translation and rendering work, but `{args.command}` writes are not "
         "implemented yet.",
         file=sys.stderr,
     )
     return 2
 
 
-def _print_summary(result, shim_action: str, role_count: int, prompt_count: int, rendered_config: str) -> None:
+def _print_summary(
+    result,
+    shim_action: str,
+    role_count: int,
+    prompt_count: int,
+    skill_count: int,
+    rendered_config: str,
+) -> None:
     """Print a human-readable discovery summary."""
     print(f"PROJECT_ROOT: {result.project.root}")
     print(f"AGENTS_MD: {result.project.agents_md_path}")
@@ -86,6 +109,7 @@ def _print_summary(result, shim_action: str, role_count: int, prompt_count: int,
     print(f"PLUGINS_FOUND: {len(result.plugins)}")
     print(f"GENERATED_ROLES: {role_count}")
     print(f"GENERATED_PROMPTS: {prompt_count}")
+    print(f"GENERATED_SKILLS: {skill_count}")
     print(f"CONFIG_LINES: {len(rendered_config.splitlines())}")
     for plugin in result.plugins:
         print(

@@ -156,3 +156,25 @@ class GeneratedAgentRole:
     tools: tuple[str, ...]
     prompt_relpath: Path
     prompt_body: str
+
+
+@dataclass(frozen=True)
+class GeneratedSkillFile:
+    """One file that will be materialized inside a generated Codex skill."""
+
+    relative_path: Path
+    content: bytes
+    mode: int
+
+
+@dataclass(frozen=True)
+class GeneratedSkill:
+    """Generated Codex skill tree derived from a Claude skill."""
+
+    marketplace: str
+    plugin_name: str
+    source_path: Path
+    install_dir_name: str
+    original_skill_name: str
+    codex_skill_name: str
+    files: tuple[GeneratedSkillFile, ...]
