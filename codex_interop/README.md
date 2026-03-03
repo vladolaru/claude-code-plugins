@@ -97,7 +97,7 @@ Safety rules:
 - refuses to overwrite a hand-authored `CLAUDE.md`
 - refuses to overwrite non-generated `.codex` files
 - refuses to overwrite non-generated Codex skill directories
-- uses staged writes and atomic replacement where appropriate
+- uses staged writes with rollback-safe backup/rename replacement
 - keeps state deterministic so rerunning without input changes is a no-op
 
 In practice, existing hand-authored files are treated as authoritative unless they are explicitly generator-owned artifacts.
