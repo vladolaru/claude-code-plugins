@@ -154,7 +154,18 @@ def preprocess_findings(
         Preprocessed findings dict ready for JSON serialization.
     """
     reconciled = load_reconciled(output_dir)
+
+    # Handle two output formats:
+    # 1. reconcile-reviews.py (new): has flat "issues" list extracted from clusters
+    # 2. reconcile-reviews.py (old) or reconciled-structured.json without step 8.5:
+    #    has "clusters" with "canonical" sub-objects but no "issues" key
     raw_findings = reconciled.get("issues", [])
+    if not raw_findings and "clusters" in reconciled:
+        raw_findings = [
+            c["canonical"]
+            for c in reconciled.get("clusters", [])
+            if "canonical" in c
+        ]
 
     # Sort for stable ID assignment
     sorted_raw = sort_findings(raw_findings)

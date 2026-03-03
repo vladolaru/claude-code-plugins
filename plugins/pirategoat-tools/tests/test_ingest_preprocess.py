@@ -666,6 +666,48 @@ class TestReconciledFileLoading:
                 git_range="main..HEAD",
             )
 
+    def test_clusters_format_without_issues_key(self, tmp_output_dir):
+        """reconciled-structured.json with clusters-only format (old reconcile-reviews.py)."""
+        # Old format: produced by reconcile-reviews.py before step 8.5 was added.
+        # Has "clusters" with "canonical" sub-objects but no top-level "issues" key.
+        canonical = {
+            "title": "[security] SQL injection",
+            "file": "src/app.php",
+            "line": 10,
+            "severity": "high",
+            "confidence": 0.9,
+            "source_agents": ["security"],
+            "description": "Unescaped user input in SQL query",
+            "category": "security",
+        }
+        clusters_format = {
+            "total_findings": 1,
+            "deduplicated_findings": 1,
+            "clusters": [
+                {
+                    "cluster_id": "C1",
+                    "findings": ["security-review:issue-1"],
+                    "canonical": canonical,
+                }
+            ],
+            "severity_disagreements": [],
+            "skipped_agents": [],
+            "agent_stats": {},
+        }
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(clusters_format, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(1, 50)]},
+            git_range="main..HEAD",
+        )
+
+        assert len(result["findings"]) == 1
+        assert "[security] SQL injection" in result["findings"][0]["title"]
+        assert result["findings"][0]["scope_status"] == "IN_SCOPE"
+
 
 # =============================================================================
 # CLI integration tests
