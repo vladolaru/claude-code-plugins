@@ -22,6 +22,10 @@ class TranslationError(RuntimeError):
     """Raised when translation from Claude artifacts to Codex artifacts fails."""
 
 
+class ReconcileError(RuntimeError):
+    """Raised when reconcile planning or writes cannot proceed safely."""
+
+
 @dataclass(frozen=True)
 class SemVer:
     """Semantic version with precedence comparison."""

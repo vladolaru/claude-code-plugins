@@ -16,13 +16,17 @@ if str(PACKAGE_PARENT) not in sys.path:
 
 from codex_interop.claude_shim import plan_claude_shim
 from codex_interop.discover import discover
-from codex_interop.model import DiscoveryError, TranslationError
+from codex_interop.model import DiscoveryError, ReconcileError, TranslationError
+from codex_interop.reconcile import (
+    build_desired_state,
+    diff_desired_state,
+    format_change_report,
+    format_diff_report,
+    reconcile_desired_state,
+)
 from codex_interop.render_codex_config import render_inline_codex_config, render_prompt_files
 from codex_interop.translate_agents import translate_installed_agents
 from codex_interop.translate_skills import translate_installed_skills
-
-
-DISCOVERY_ONLY_COMMANDS = {"reconcile", "dry-run", "diff"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--cache-dir",
         type=Path,
         help="Override the Claude plugin cache path (mainly for testing).",
+    )
+    common.add_argument(
+        "--codex-home",
+        type=Path,
+        help="Override the Codex home path (mainly for testing).",
     )
 
     parser = argparse.ArgumentParser(
@@ -63,7 +72,15 @@ def main(argv: list[str] | None = None) -> int:
         skills = translate_installed_skills(result.plugins)
         prompt_files = render_prompt_files(roles)
         rendered_config = render_inline_codex_config(roles)
-    except (DiscoveryError, TranslationError) as exc:
+        desired_state = build_desired_state(
+            result,
+            shim_decision,
+            prompt_files,
+            rendered_config,
+            skills,
+            codex_home=args.codex_home,
+        )
+    except (DiscoveryError, TranslationError, ReconcileError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
@@ -78,6 +95,49 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    try:
+        if args.command == "reconcile":
+            report = reconcile_desired_state(desired_state)
+            _print_summary(
+                result,
+                shim_decision.action,
+                len(roles),
+                len(prompt_files),
+                len(skills),
+                rendered_config,
+            )
+            print(format_change_report(report))
+            return 0
+
+        if args.command == "dry-run":
+            report = diff_desired_state(desired_state)
+            _print_summary(
+                result,
+                shim_decision.action,
+                len(roles),
+                len(prompt_files),
+                len(skills),
+                rendered_config,
+            )
+            print(format_change_report(report))
+            return 0
+
+        if args.command == "diff":
+            report = diff_desired_state(desired_state)
+            _print_summary(
+                result,
+                shim_decision.action,
+                len(roles),
+                len(prompt_files),
+                len(skills),
+                rendered_config,
+            )
+            print(format_diff_report(desired_state, report))
+            return 0
+    except ReconcileError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
     _print_summary(
         result,
         shim_decision.action,
@@ -86,12 +146,8 @@ def main(argv: list[str] | None = None) -> int:
         len(skills),
         rendered_config,
     )
-    print(
-        f"Phase 3 complete: translation and rendering work, but `{args.command}` writes are not "
-        "implemented yet.",
-        file=sys.stderr,
-    )
-    return 2
+    print(f"Error: unsupported command `{args.command}`", file=sys.stderr)
+    return 1
 
 
 def _print_summary(
