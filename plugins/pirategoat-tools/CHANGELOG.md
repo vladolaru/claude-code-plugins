@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.8] - 2026-03-03
+
+### Fixed
+
+- **review-reconciliator agent:** Agent now runs `reconcile-reviews.py` itself in Step 0 rather than assuming the caller already ran it. The pr-reviewing pipeline dispatches the reconciliator directly after agents finish without running the script first, causing the agent to fall back to manual reconciliation with wrong format. Step 0 uses the same semver-aware cache glob to locate the script — `CLAUDE_PLUGIN_ROOT` is a parse-time substitution not available as a runtime env var.
+
 ## [1.43.7] - 2026-03-03
 
 ### Fixed
