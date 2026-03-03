@@ -70,3 +70,11 @@ def test_build_launchagent_plist_requires_project_agents_md(tmp_path: Path):
 
     with pytest.raises(ReconcileError, match="must contain AGENTS.md"):
         build_launchagent_plist(project_root=project_root)
+
+
+def test_build_launchagent_plist_requires_positive_interval(make_project):
+    """Intervals must be positive integers."""
+    project_root, _agents_md = make_project()
+
+    with pytest.raises(ReconcileError, match="positive integer"):
+        build_launchagent_plist(project_root=project_root, interval_seconds=0)

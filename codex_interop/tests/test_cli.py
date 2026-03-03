@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import plistlib
+
+import pytest
 
 from codex_interop import cli
 
@@ -122,3 +125,76 @@ def test_install_launchagent_cli_writes_plist(make_project, tmp_path: Path):
         str(Path("/tmp/codex_interop/cli.py").resolve()),
         "reconcile",
     ]
+
+
+def test_print_launchagent_cli_requires_valid_project(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    """LaunchAgent commands surface project validation errors."""
+    project_root = tmp_path / "missing-agents"
+    project_root.mkdir()
+
+    exit_code = cli.main(["print-launchagent", "--project", str(project_root)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "must contain AGENTS.md" in captured.err
+
+
+def test_diff_cli_reports_file_diff(make_project, make_plugin_version, tmp_path: Path, capsys):
+    """CLI diff returns a unified diff when managed text changes."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market", "prompt-engineer", "1.0.0", agent_names=("reviewer",)
+    )
+    agent_path = version_dir / "agents" / "reviewer.md"
+    agent_path.write_text("---\nname: reviewer\ndescription: Review\n---\n\nOld body.\n")
+    codex_home = tmp_path / "codex-home"
+
+    assert cli.main(
+        [
+            "reconcile",
+            "--project",
+            str(project_root),
+            "--cache-dir",
+            str(cache_root),
+            "--codex-home",
+            str(codex_home),
+        ]
+    ) == 0
+
+    agent_path.write_text("---\nname: reviewer\ndescription: Review\n---\n\nNew body.\n")
+    exit_code = cli.main(
+        [
+            "diff",
+            "--project",
+            str(project_root),
+            "--cache-dir",
+            str(cache_root),
+            "--codex-home",
+            str(codex_home),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "@@" in captured.out
+    assert "+New body." in captured.out
+
+
+def test_cli_handles_unsupported_command(monkeypatch: pytest.MonkeyPatch, capsys):
+    """The fallback unsupported-command branch returns a non-zero exit code."""
+    class FakeParser:
+        def parse_args(self, argv):
+            return argparse.Namespace(
+                command="mystery",
+                project=None,
+                cache_dir=None,
+                codex_home=None,
+            )
+
+    monkeypatch.setattr(cli, "build_parser", lambda: FakeParser())
+
+    exit_code = cli.main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "unsupported command" in captured.err

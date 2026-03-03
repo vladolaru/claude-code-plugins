@@ -62,3 +62,19 @@ def test_plan_claude_shim_fails_for_hand_authored_file(tmp_path: Path):
 
     assert decision.action == "fail"
     assert "not a generator-owned shim" in decision.reason
+
+
+def test_plan_claude_shim_fails_for_non_agents_symlink(tmp_path: Path):
+    """Symlinks to anything except AGENTS.md are rejected."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    agents_md_path = project_root / "AGENTS.md"
+    agents_md_path.write_text("# Shared\n")
+    other_file = project_root / "OTHER.md"
+    other_file.write_text("# Other\n")
+    (project_root / "CLAUDE.md").symlink_to(other_file.name)
+
+    decision = plan_claude_shim(ProjectContext(project_root, agents_md_path))
+
+    assert decision.action == "fail"
+    assert "not to AGENTS.md" in decision.reason

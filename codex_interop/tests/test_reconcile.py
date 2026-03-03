@@ -11,8 +11,11 @@ from codex_interop.discover import discover
 from codex_interop.model import ReconcileError
 from codex_interop.reconcile import (
     STATE_RELATIVE_PATH,
+    ReconcileReport,
     build_desired_state,
     diff_desired_state,
+    format_change_report,
+    format_diff_report,
     reconcile_desired_state,
 )
 from codex_interop.render_codex_config import render_inline_codex_config, render_prompt_files
@@ -168,6 +171,149 @@ def test_reconcile_removes_stale_managed_skill(make_project, make_plugin_version
     reconcile_desired_state(second_desired)
 
     assert not installed_skill.exists()
+
+
+def test_diff_report_includes_unified_diff_for_updated_text_files(
+    make_project,
+    make_plugin_version,
+    tmp_path: Path,
+):
+    """Diff output includes a unified diff when a managed text file changes."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market",
+        "prompt-engineer",
+        "1.0.0",
+        agent_names=("reviewer",),
+    )
+    agent_path = version_dir / "agents" / "reviewer.md"
+    agent_path.write_text("---\nname: reviewer\ndescription: Review\n---\n\nOld body.\n")
+    desired = _build_desired(project_root, cache_root, tmp_path / "codex-home")
+    reconcile_desired_state(desired)
+
+    agent_path.write_text("---\nname: reviewer\ndescription: Review\n---\n\nNew body.\n")
+    updated = _build_desired(project_root, cache_root, tmp_path / "codex-home")
+    report = diff_desired_state(updated)
+    rendered = format_diff_report(updated, report)
+
+    assert "UPDATE:" in rendered
+    assert "@@" in rendered
+    assert "-Old body." in rendered
+    assert "+New body." in rendered
+
+
+def test_reconcile_removes_stale_managed_prompt_file(
+    make_project,
+    make_plugin_version,
+    tmp_path: Path,
+):
+    """Previously managed prompt files are removed when no longer desired."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market",
+        "prompt-engineer",
+        "1.0.0",
+        agent_names=("reviewer",),
+    )
+    (version_dir / "agents" / "reviewer.md").write_text(
+        "---\nname: reviewer\ndescription: Review\n---\n\nPrompt body.\n"
+    )
+    codex_home = tmp_path / "codex-home"
+
+    first = _build_desired(project_root, cache_root, codex_home)
+    reconcile_desired_state(first)
+    prompt_path = project_root / ".codex" / "prompts" / "agents" / "prompt-engineer-reviewer.md"
+    assert prompt_path.exists()
+
+    updated_agent = version_dir / "agents" / "reviewer.md"
+    updated_agent.unlink()
+    second = _build_desired(project_root, cache_root, codex_home)
+    reconcile_desired_state(second)
+
+    assert not prompt_path.exists()
+
+
+def test_reconcile_rejects_symlinked_project_file(make_project, make_plugin_version, tmp_path: Path):
+    """Managed project targets may not be symlinks."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market", "prompt-engineer", "1.0.0", agent_names=("reviewer",)
+    )
+    (version_dir / "agents" / "reviewer.md").write_text(
+        "---\nname: reviewer\ndescription: Review\n---\n\nPrompt body.\n"
+    )
+    config_dir = project_root / ".codex"
+    config_dir.mkdir()
+    real_config = project_root / "real-config.toml"
+    real_config.write_text("real\n")
+    (config_dir / "config.toml").symlink_to(real_config)
+
+    desired = _build_desired(project_root, cache_root, tmp_path / "codex-home")
+
+    with pytest.raises(ReconcileError, match="symlinked project file"):
+        diff_desired_state(desired)
+
+
+def test_reconcile_rejects_non_directory_skill_target(make_project, make_plugin_version, tmp_path: Path):
+    """A file where a skill directory should be is a hard error."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market", "prompt-engineer", "1.0.0", skill_names=("prompt-engineer",)
+    )
+    (version_dir / "skills" / "prompt-engineer" / "SKILL.md").write_text(
+        "---\nname: prompt-engineer\ndescription: Prompt help\n---\n\nUse this skill.\n"
+    )
+    codex_home = tmp_path / "codex-home"
+    skills_root = codex_home / "skills"
+    skills_root.mkdir(parents=True)
+    (skills_root / "prompt-engineer-prompt-engineer").write_text("not a directory\n")
+
+    desired = _build_desired(project_root, cache_root, codex_home)
+
+    with pytest.raises(ReconcileError, match="Expected a skill directory but found a file"):
+        diff_desired_state(desired)
+
+
+def test_reconcile_rejects_non_owned_skill_directory(make_project, make_plugin_version, tmp_path: Path):
+    """Existing hand-authored skill directories are not overwritten."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market", "prompt-engineer", "1.0.0", skill_names=("prompt-engineer",)
+    )
+    (version_dir / "skills" / "prompt-engineer" / "SKILL.md").write_text(
+        "---\nname: prompt-engineer\ndescription: Prompt help\n---\n\nUse this skill.\n"
+    )
+    codex_home = tmp_path / "codex-home"
+    skill_dir = codex_home / "skills" / "prompt-engineer-prompt-engineer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("hand-authored\n")
+
+    desired = _build_desired(project_root, cache_root, codex_home)
+
+    with pytest.raises(ReconcileError, match="non-generated skill directory"):
+        diff_desired_state(desired)
+
+
+def test_format_change_report_handles_empty_report():
+    """Empty reports render as a single no-op line."""
+    assert format_change_report(ReconcileReport(changes=(), applied=False)) == "No changes."
+
+
+def test_format_diff_report_handles_no_changes(make_project, make_plugin_version, tmp_path: Path):
+    """No-op diffs render the short form."""
+    project_root, _agents_md = make_project()
+    cache_root, version_dir = make_plugin_version(
+        "market", "prompt-engineer", "1.0.0", skill_names=("prompt-engineer",)
+    )
+    (version_dir / "skills" / "prompt-engineer" / "SKILL.md").write_text(
+        "---\nname: prompt-engineer\ndescription: Prompt help\n---\n\nUse this skill.\n"
+    )
+    desired = _build_desired(project_root, cache_root, tmp_path / "codex-home")
+    reconcile_desired_state(desired)
+    report = diff_desired_state(desired)
+
+    assert format_change_report(report) == "No changes."
+    assert format_diff_report(desired, report) == "No changes."
 
 
 def _build_desired(project_root: Path, cache_root: Path, codex_home: Path):

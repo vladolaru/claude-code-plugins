@@ -1,4 +1,4 @@
-"""Tests for Phase 1 Codex interop discovery."""
+"""Tests for Phase 1 Codex interop discovery and SemVer behavior."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from codex_interop.discover import discover, discover_latest_plugins, resolve_project_root
-from codex_interop.model import DiscoveryError
+from codex_interop.model import DiscoveryError, SemVer
 
 def test_resolve_project_root_from_cwd(make_project, monkeypatch: pytest.MonkeyPatch):
     """Project root resolves from current working directory when AGENTS.md exists above."""
@@ -29,6 +29,19 @@ def test_resolve_project_root_from_explicit_project_path(make_project):
     nested_dir.mkdir(parents=True)
 
     result = resolve_project_root(nested_dir)
+
+    assert result.root == project_root.resolve()
+    assert result.agents_md_path == agents_md.resolve()
+
+
+def test_resolve_project_root_from_file_path(make_project):
+    """Explicit file paths resolve from the parent directory."""
+    project_root, agents_md = make_project()
+    nested_file = project_root / "docs" / "guide.md"
+    nested_file.parent.mkdir(parents=True)
+    nested_file.write_text("guide\n")
+
+    result = resolve_project_root(nested_file)
 
     assert result.root == project_root.resolve()
     assert result.agents_md_path == agents_md.resolve()
@@ -84,6 +97,21 @@ def test_discover_latest_plugins_fails_if_no_valid_versions(tmp_path: Path):
         discover_latest_plugins(cache_root)
 
 
+def test_discover_latest_plugins_requires_existing_cache_dir(tmp_path: Path):
+    """A missing cache root is a hard discovery failure."""
+    with pytest.raises(DiscoveryError, match="cache not found"):
+        discover_latest_plugins(tmp_path / "missing-cache")
+
+
+def test_discover_latest_plugins_requires_at_least_one_plugin(tmp_path: Path):
+    """An empty cache root fails clearly instead of returning an empty result."""
+    cache_root = tmp_path / "claude-cache"
+    cache_root.mkdir()
+
+    with pytest.raises(DiscoveryError, match="No installed Claude plugins found"):
+        discover_latest_plugins(cache_root)
+
+
 def test_discover_latest_plugins_follows_symlinked_repo_source(tmp_path: Path):
     """Installed plugin versions that are symlinks resolve to the repo target."""
     cache_root = tmp_path / "claude-cache"
@@ -129,3 +157,14 @@ def test_discover_combines_project_and_plugins(make_project, make_plugin_version
     assert len(result.plugins) == 1
     assert result.plugins[0].plugin_name == "prompt-engineer"
     assert result.plugins[0].version_text == "2.1.0"
+
+
+def test_semver_prerelease_ordering_and_type_guards():
+    """Prerelease precedence follows semver ordering rules."""
+    alpha1 = SemVer.parse("1.2.3-alpha.1")
+    alpha2 = SemVer.parse("1.2.3-alpha.2")
+    beta = SemVer.parse("1.2.3-beta")
+    stable = SemVer.parse("1.2.3")
+
+    assert alpha1 < alpha2 < beta < stable
+    assert SemVer.__lt__(stable, "1.2.4") is NotImplemented

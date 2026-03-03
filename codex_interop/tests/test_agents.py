@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from codex_interop.discover import discover_latest_plugins
+from codex_interop.model import InstalledPlugin, SemVer, TranslationError
 from codex_interop.render_codex_config import (
     render_inline_codex_config,
     render_prompt_files,
 )
 from codex_interop.translate_agents import (
+    _parse_frontmatter_lines,
     parse_markdown_with_frontmatter,
+    translate_tools,
     translate_installed_agents,
 )
 
@@ -117,3 +122,100 @@ def test_parse_markdown_with_frontmatter_supports_folded_scalars_and_nested_maps
     )
     assert frontmatter["metadata"] == {"short-description": "Shared dex guidance"}
     assert body == "\nBody."
+
+
+def test_translate_installed_agents_requires_name_and_description(make_plugin_version):
+    """Missing required frontmatter fields fail clearly."""
+    cache_root, version_dir = make_plugin_version(
+        "market",
+        "test-plugin",
+        "1.0.0",
+        agent_names=("broken",),
+    )
+    (version_dir / "agents" / "broken.md").write_text("---\ndescription: Missing name\n---\n")
+
+    with pytest.raises(TranslationError, match="missing required name"):
+        translate_installed_agents(discover_latest_plugins(cache_root))
+
+    (version_dir / "agents" / "broken.md").write_text("---\nname: broken\n---\n")
+
+    with pytest.raises(TranslationError, match="missing required description"):
+        translate_installed_agents(discover_latest_plugins(cache_root))
+
+
+def test_translate_installed_agents_detects_duplicate_role_names(make_plugin_version):
+    """Role-name collisions across plugins are rejected."""
+    cache_root, version_dir = make_plugin_version("market", "alpha", "1.0.0", agent_names=("same",))
+    first_agent = version_dir / "agents" / "same.md"
+    first_agent.write_text("---\nname: same-role\ndescription: First\n---\n\nPrompt.\n")
+    second_agent = version_dir / "agents" / "same-again.md"
+    second_agent.write_text("---\nname: same role\ndescription: Second\n---\n\nPrompt.\n")
+
+    plugin = InstalledPlugin(
+        marketplace="market",
+        plugin_name="alpha",
+        version_text="1.0.0",
+        version=SemVer.parse("1.0.0"),
+        installed_path=version_dir,
+        source_path=version_dir,
+        skills=(),
+        agents=(first_agent, second_agent),
+    )
+
+    with pytest.raises(TranslationError, match="duplicate role name"):
+        translate_installed_agents((plugin,))
+
+
+def test_parse_markdown_with_frontmatter_handles_literal_blocks_and_errors(tmp_path: Path):
+    """Parser covers literal blocks and malformed frontmatter."""
+    literal = tmp_path / "literal.md"
+    literal.write_text(
+        "---\n"
+        "name: literal\n"
+        "description: |\n"
+        "  line one\n"
+        "  line two\n"
+        "---\n\n"
+        "Body.\n"
+    )
+    frontmatter, body = parse_markdown_with_frontmatter(literal)
+    assert frontmatter["description"] == "line one\nline two"
+    assert body == "\nBody."
+
+    no_frontmatter = tmp_path / "plain.md"
+    no_frontmatter.write_text("Plain body.\n")
+    frontmatter, body = parse_markdown_with_frontmatter(no_frontmatter)
+    assert frontmatter == {}
+    assert body == "Plain body.\n"
+
+    unclosed = tmp_path / "unclosed.md"
+    unclosed.write_text("---\nname: broken\n")
+    with pytest.raises(TranslationError, match="Unclosed frontmatter"):
+        parse_markdown_with_frontmatter(unclosed)
+
+
+def test_translate_tools_rejects_invalid_shapes():
+    """Tool translation handles invalid non-list or non-string inputs."""
+    assert translate_tools(None) == ()
+    assert translate_tools(["Read", "Read", "Unknown"]) == ("read",)
+
+    with pytest.raises(TranslationError, match="must be a list"):
+        translate_tools("Read")
+
+    with pytest.raises(TranslationError, match="must be a string"):
+        translate_tools(["Read", 1])
+
+
+def test_parse_frontmatter_lines_rejects_invalid_indentation():
+    """Low-level frontmatter parser rejects invalid list and indentation shapes."""
+    with pytest.raises(TranslationError, match="List item found before a frontmatter key"):
+        _parse_frontmatter_lines(["- Read"])
+
+    with pytest.raises(TranslationError, match="Unexpected indented frontmatter line"):
+        _parse_frontmatter_lines([" name: bad"])
+
+    with pytest.raises(TranslationError, match="Mixed scalar and list values"):
+        _parse_frontmatter_lines(["name: reviewer", "  - Read"])
+
+    with pytest.raises(TranslationError, match="Invalid frontmatter line"):
+        _parse_frontmatter_lines(["broken"])
