@@ -18,6 +18,10 @@ class DiscoveryError(RuntimeError):
     """Raised when project or installed-plugin discovery fails."""
 
 
+class TranslationError(RuntimeError):
+    """Raised when translation from Claude artifacts to Codex artifacts fails."""
+
+
 @dataclass(frozen=True)
 class SemVer:
     """Semantic version with precedence comparison."""
@@ -127,3 +131,28 @@ class DiscoveryResult:
 
     project: ProjectContext
     plugins: tuple[InstalledPlugin, ...]
+
+
+@dataclass(frozen=True)
+class ClaudeShimDecision:
+    """Decision for handling the project root CLAUDE.md shim."""
+
+    action: str
+    path: Path
+    content: str | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class GeneratedAgentRole:
+    """Generated Codex role metadata derived from a Claude agent."""
+
+    plugin_name: str
+    source_path: Path
+    role_name: str
+    description: str
+    original_model_hint: str | None
+    model: str
+    tools: tuple[str, ...]
+    prompt_relpath: Path
+    prompt_body: str

@@ -14,8 +14,11 @@ PACKAGE_PARENT = Path(__file__).resolve().parent.parent
 if str(PACKAGE_PARENT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_PARENT))
 
+from codex_interop.claude_shim import plan_claude_shim
 from codex_interop.discover import discover
-from codex_interop.model import DiscoveryError
+from codex_interop.model import DiscoveryError, TranslationError
+from codex_interop.render_codex_config import render_inline_codex_config, render_prompt_files
+from codex_interop.translate_agents import translate_installed_agents
 
 
 DISCOVERY_ONLY_COMMANDS = {"reconcile", "dry-run", "diff"}
@@ -54,28 +57,36 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = discover(project_path=args.project, cache_dir=args.cache_dir)
-    except DiscoveryError as exc:
+        shim_decision = plan_claude_shim(result.project)
+        roles = translate_installed_agents(result.plugins)
+        prompt_files = render_prompt_files(roles)
+        rendered_config = render_inline_codex_config(roles)
+    except (DiscoveryError, TranslationError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     if args.command == "validate":
-        _print_summary(result)
+        _print_summary(result, shim_decision.action, len(roles), len(prompt_files), rendered_config)
         return 0
 
-    _print_summary(result)
+    _print_summary(result, shim_decision.action, len(roles), len(prompt_files), rendered_config)
     print(
-        f"Phase 1 complete: discovery works, but `{args.command}` generation is not "
+        f"Phase 2 complete: translation and rendering work, but `{args.command}` writes are not "
         "implemented yet.",
         file=sys.stderr,
     )
     return 2
 
 
-def _print_summary(result) -> None:
+def _print_summary(result, shim_action: str, role_count: int, prompt_count: int, rendered_config: str) -> None:
     """Print a human-readable discovery summary."""
     print(f"PROJECT_ROOT: {result.project.root}")
     print(f"AGENTS_MD: {result.project.agents_md_path}")
+    print(f"CLAUDE_MD_ACTION: {shim_action}")
     print(f"PLUGINS_FOUND: {len(result.plugins)}")
+    print(f"GENERATED_ROLES: {role_count}")
+    print(f"GENERATED_PROMPTS: {prompt_count}")
+    print(f"CONFIG_LINES: {len(rendered_config.splitlines())}")
     for plugin in result.plugins:
         print(
             "PLUGIN: "

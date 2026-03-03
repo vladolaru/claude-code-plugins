@@ -9,46 +9,11 @@ import pytest
 from codex_interop.discover import discover, discover_latest_plugins, resolve_project_root
 from codex_interop.model import DiscoveryError
 
-
-def _make_plugin_version(
-    cache_root: Path,
-    marketplace: str,
-    plugin_name: str,
-    version: str,
-    *,
-    skill_names: tuple[str, ...] = (),
-    agent_names: tuple[str, ...] = (),
-) -> Path:
-    """Create a fake installed Claude plugin version directory."""
-    version_dir = cache_root / marketplace / plugin_name / version
-    version_dir.mkdir(parents=True, exist_ok=True)
-
-    skills_dir = version_dir / "skills"
-    agents_dir = version_dir / "agents"
-
-    for skill_name in skill_names:
-        skill_dir = skills_dir / skill_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {skill_name}\ndescription: test skill\n---\n"
-        )
-
-    for agent_name in agent_names:
-        agents_dir.mkdir(parents=True, exist_ok=True)
-        (agents_dir / f"{agent_name}.md").write_text(
-            f"---\nname: {agent_name}\ndescription: test agent\n---\n"
-        )
-
-    return version_dir
-
-
-def test_resolve_project_root_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_resolve_project_root_from_cwd(make_project, monkeypatch: pytest.MonkeyPatch):
     """Project root resolves from current working directory when AGENTS.md exists above."""
-    project_root = tmp_path / "project"
+    project_root, agents_md = make_project()
     nested_dir = project_root / "src" / "feature"
     nested_dir.mkdir(parents=True)
-    agents_md = project_root / "AGENTS.md"
-    agents_md.write_text("# Shared instructions\n")
 
     monkeypatch.chdir(nested_dir)
     result = resolve_project_root()
@@ -57,13 +22,11 @@ def test_resolve_project_root_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
     assert result.agents_md_path == agents_md.resolve()
 
 
-def test_resolve_project_root_from_explicit_project_path(tmp_path: Path):
+def test_resolve_project_root_from_explicit_project_path(make_project):
     """Explicit project path can point inside a repo and still resolves upward."""
-    project_root = tmp_path / "project"
+    project_root, agents_md = make_project()
     nested_dir = project_root / "docs" / "nested"
     nested_dir.mkdir(parents=True)
-    agents_md = project_root / "AGENTS.md"
-    agents_md.write_text("# Shared instructions\n")
 
     result = resolve_project_root(nested_dir)
 
@@ -80,17 +43,16 @@ def test_resolve_project_root_requires_agents_md(tmp_path: Path):
         resolve_project_root(project_root)
 
 
-def test_discover_latest_plugins_uses_semver_order(tmp_path: Path):
+def test_discover_latest_plugins_uses_semver_order(make_plugin_version):
     """Latest installed plugin version is selected by semantic version precedence."""
-    cache_root = tmp_path / "claude-cache"
-    _make_plugin_version(
-        cache_root, "market", "prompt-engineer", "2.0.0", skill_names=("prompt-engineer",)
+    cache_root, _ = make_plugin_version(
+        "market", "prompt-engineer", "2.0.0", skill_names=("prompt-engineer",)
     )
-    _make_plugin_version(
-        cache_root, "market", "prompt-engineer", "2.1.0", skill_names=("prompt-engineer",)
+    make_plugin_version(
+        "market", "prompt-engineer", "2.1.0", skill_names=("prompt-engineer",)
     )
-    _make_plugin_version(
-        cache_root, "market", "prompt-engineer", "2.0.5", skill_names=("prompt-engineer",)
+    make_plugin_version(
+        "market", "prompt-engineer", "2.0.5", skill_names=("prompt-engineer",)
     )
 
     plugins = discover_latest_plugins(cache_root)
@@ -100,10 +62,11 @@ def test_discover_latest_plugins_uses_semver_order(tmp_path: Path):
     assert plugins[0].version_text == "2.1.0"
 
 
-def test_discover_latest_plugins_ignores_invalid_version_dirs(tmp_path: Path):
+def test_discover_latest_plugins_ignores_invalid_version_dirs(make_plugin_version):
     """Malformed version directories are ignored."""
-    cache_root = tmp_path / "claude-cache"
-    _make_plugin_version(cache_root, "market", "dex", "1.5.3", skill_names=("knowledge-capture",))
+    cache_root, _ = make_plugin_version(
+        "market", "dex", "1.5.3", skill_names=("knowledge-capture",)
+    )
     (cache_root / "market" / "dex" / "latest").mkdir(parents=True)
 
     plugins = discover_latest_plugins(cache_root)
@@ -149,15 +112,10 @@ def test_discover_latest_plugins_follows_symlinked_repo_source(tmp_path: Path):
     assert plugins[0].agents == ((agents_dir / "optimizer.md").resolve(),)
 
 
-def test_discover_combines_project_and_plugins(tmp_path: Path):
+def test_discover_combines_project_and_plugins(make_project, make_plugin_version):
     """Top-level discover returns both project and installed plugin information."""
-    project_root = tmp_path / "project"
-    project_root.mkdir()
-    (project_root / "AGENTS.md").write_text("# Shared instructions\n")
-
-    cache_root = tmp_path / "claude-cache"
-    _make_plugin_version(
-        cache_root,
+    project_root, _agents_md = make_project()
+    cache_root, _ = make_plugin_version(
         "market",
         "prompt-engineer",
         "2.1.0",
