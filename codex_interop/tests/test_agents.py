@@ -50,7 +50,7 @@ def test_translate_installed_agents_generates_deterministic_roles(make_plugin_ve
     assert role.description == "Software architecture review"
     assert role.original_model_hint == "sonnet"
     assert role.model == "gpt-5.3-codex"
-    assert role.tools == ("read", "bash", "web_search")
+    assert role.tools == ("bash", "read", "web_search")
     assert role.prompt_relpath.as_posix() == "prompts/agents/pirategoat-tools-architecture-reviewer.md"
     assert role.prompt_body == "You are an architecture reviewer.\n"
 
@@ -96,6 +96,50 @@ def test_render_inline_codex_config_is_deterministic(make_plugin_version):
     assert 'prompt = ".codex/prompts/agents/beta-a-reviewer.md"' in rendered
     assert '# original_claude_model_hint = "sonnet"' in rendered
     assert 'tools = ["read", "write"]' in rendered
+
+
+def test_translate_tools_and_rendered_config_ignore_source_tool_order(make_plugin_version):
+    """Equivalent tool sets produce the same translated order and config output."""
+    cache_root, version_dir = make_plugin_version(
+        "market",
+        "test-plugin",
+        "1.0.0",
+        agent_names=("reviewer",),
+    )
+    agent_path = version_dir / "agents" / "reviewer.md"
+    agent_path.write_text(
+        "---\n"
+        "name: reviewer\n"
+        "description: Review\n"
+        "tools:\n"
+        "  - Write\n"
+        "  - Read\n"
+        "  - Bash\n"
+        "---\n\n"
+        "Prompt body.\n"
+    )
+
+    first_roles = translate_installed_agents(discover_latest_plugins(cache_root))
+    first_render = render_inline_codex_config(first_roles)
+
+    agent_path.write_text(
+        "---\n"
+        "name: reviewer\n"
+        "description: Review\n"
+        "tools:\n"
+        "  - Bash\n"
+        "  - Write\n"
+        "  - Read\n"
+        "---\n\n"
+        "Prompt body.\n"
+    )
+
+    second_roles = translate_installed_agents(discover_latest_plugins(cache_root))
+    second_render = render_inline_codex_config(second_roles)
+
+    assert first_roles[0].tools == ("bash", "read", "write")
+    assert second_roles[0].tools == ("bash", "read", "write")
+    assert first_render == second_render
 
 
 def test_parse_markdown_with_frontmatter_supports_folded_scalars_and_nested_maps(tmp_path: Path):
@@ -197,7 +241,7 @@ def test_parse_markdown_with_frontmatter_handles_literal_blocks_and_errors(tmp_p
 def test_translate_tools_rejects_invalid_shapes():
     """Tool translation handles invalid non-list or non-string inputs."""
     assert translate_tools(None) == ()
-    assert translate_tools(["Read", "Read", "Unknown"]) == ("read",)
+    assert translate_tools(["Write", "Read", "Read", "Unknown"]) == ("read", "write")
 
     with pytest.raises(TranslationError, match="must be a list"):
         translate_tools("Read")

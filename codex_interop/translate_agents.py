@@ -101,7 +101,7 @@ def translate_tools(raw_tools: object) -> tuple[str, ...]:
         if translated_tool and translated_tool not in translated:
             translated.append(translated_tool)
 
-    return tuple(translated)
+    return tuple(sorted(translated))
 
 
 def _parse_frontmatter_lines(lines: list[str]) -> dict[str, object]:
