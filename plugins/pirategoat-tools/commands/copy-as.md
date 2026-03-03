@@ -76,7 +76,17 @@ The INCORRECT example dumps everything into one undifferentiated block. The CORR
 
 #### PR review comments specifically
 
-Write as a fellow engineer talking to a peer. The PR author knows their own PR — strip anything obvious from context:
+Write as a fellow engineer talking to a peer. The PR author knows their own PR — strip anything obvious from context.
+
+**Tone and address:**
+- Use the author's name when known: "Hey Maria, ..." or "Sam — ..."
+- Assume good faith; they're trying their best — respond in kind
+- Acknowledge their intent or effort before raising a concern
+- Frame suggestions collaboratively: "What if we...?" not "You should..."
+- Say what's genuinely good, plainly — don't bury it in qualifications
+- Write in active voice; own your perspective
+
+**What to omit:**
 
 - **Omit the PR number** — you're already on the PR page.
 - **Omit the verdict** (approve / request changes) — that's a separate GitHub action, not prose.

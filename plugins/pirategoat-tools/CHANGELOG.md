@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.9] - 2026-03-03
+
+### Changed
+
+- **copy-as command:** Added compressed Human-Facing Messages guidance to the PR review comments section — use the author's name, assume good faith, acknowledge effort, frame suggestions collaboratively, and write in active voice.
+
 ## [1.43.8] - 2026-03-03
 
 ### Fixed
