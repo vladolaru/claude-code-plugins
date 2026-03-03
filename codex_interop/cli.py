@@ -16,6 +16,12 @@ if str(PACKAGE_PARENT) not in sys.path:
 
 from codex_interop.claude_shim import plan_claude_shim
 from codex_interop.discover import discover
+from codex_interop.install_launchagent import (
+    DEFAULT_START_INTERVAL,
+    build_launchagent_label,
+    build_launchagent_plist,
+    install_launchagent,
+)
 from codex_interop.model import DiscoveryError, ReconcileError, TranslationError
 from codex_interop.reconcile import (
     build_desired_state,
@@ -57,6 +63,41 @@ def build_parser() -> argparse.ArgumentParser:
     for command in ("reconcile", "validate", "dry-run", "diff"):
         subparsers.add_parser(command, parents=[common])
 
+    launchagent_common = argparse.ArgumentParser(add_help=False)
+    launchagent_common.add_argument(
+        "--interval",
+        type=int,
+        default=DEFAULT_START_INTERVAL,
+        help="LaunchAgent StartInterval in seconds.",
+    )
+    launchagent_common.add_argument(
+        "--label",
+        help="Override the generated LaunchAgent label.",
+    )
+    launchagent_common.add_argument(
+        "--python-executable",
+        type=Path,
+        help="Override the Python executable used by the LaunchAgent.",
+    )
+    launchagent_common.add_argument(
+        "--cli-path",
+        type=Path,
+        help="Override the CLI script path used by the LaunchAgent.",
+    )
+    launchagent_common.add_argument(
+        "--logs-dir",
+        type=Path,
+        help="Override the LaunchAgent log directory.",
+    )
+
+    subparsers.add_parser("print-launchagent", parents=[common, launchagent_common])
+    install_parser = subparsers.add_parser("install-launchagent", parents=[common, launchagent_common])
+    install_parser.add_argument(
+        "--launchagents-dir",
+        type=Path,
+        help="Override the LaunchAgents destination directory.",
+    )
+
     return parser
 
 
@@ -64,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command in {"print-launchagent", "install-launchagent"}:
+        return _handle_launchagent_command(args)
 
     try:
         result = discover(project_path=args.project, cache_dir=args.cache_dir)
@@ -148,6 +192,41 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"Error: unsupported command `{args.command}`", file=sys.stderr)
     return 1
+
+
+def _handle_launchagent_command(args: argparse.Namespace) -> int:
+    """Handle LaunchAgent rendering or installation commands."""
+    try:
+        project = args.project or Path.cwd()
+        resolved_project = project.expanduser().resolve()
+        label = args.label or build_launchagent_label(resolved_project)
+        plist_bytes = build_launchagent_plist(
+            project_root=resolved_project,
+            interval_seconds=args.interval,
+            cache_dir=args.cache_dir,
+            codex_home=args.codex_home,
+            python_executable=args.python_executable,
+            cli_path=args.cli_path,
+            label=label,
+            logs_dir=args.logs_dir,
+        )
+    except ReconcileError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.command == "print-launchagent":
+        sys.stdout.buffer.write(plist_bytes)
+        return 0
+
+    destination = install_launchagent(
+        plist_bytes,
+        label=label,
+        launchagents_dir=args.launchagents_dir,
+    )
+    print(f"LAUNCHAGENT_LABEL: {label}")
+    print(f"LAUNCHAGENT_PATH: {destination}")
+    print(f"NEXT_STEP: launchctl bootstrap gui/$(id -u) {destination}")
+    return 0
 
 
 def _print_summary(

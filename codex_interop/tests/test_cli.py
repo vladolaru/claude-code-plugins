@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import plistlib
 
 from codex_interop import cli
 
@@ -85,3 +86,39 @@ def test_reconcile_and_dry_run_respect_fake_codex_home(
     assert dry_run_exit == 0
     assert (project_root / ".codex" / "config.toml").exists()
     assert (codex_home / "skills" / "prompt-engineer-prompt-engineer").exists()
+
+
+def test_install_launchagent_cli_writes_plist(make_project, tmp_path: Path):
+    """CLI install-launchagent writes a plist into the requested LaunchAgents directory."""
+    project_root, _agents_md = make_project()
+    launchagents_dir = tmp_path / "LaunchAgents"
+    logs_dir = tmp_path / "logs"
+
+    exit_code = cli.main(
+        [
+            "install-launchagent",
+            "--project",
+            str(project_root),
+            "--launchagents-dir",
+            str(launchagents_dir),
+            "--logs-dir",
+            str(logs_dir),
+            "--python-executable",
+            "/usr/bin/python3",
+            "--cli-path",
+            "/tmp/codex_interop/cli.py",
+            "--interval",
+            "900",
+        ]
+    )
+
+    assert exit_code == 0
+    plist_paths = list(launchagents_dir.glob("*.plist"))
+    assert len(plist_paths) == 1
+    payload = plistlib.loads(plist_paths[0].read_bytes())
+    assert payload["StartInterval"] == 900
+    assert payload["ProgramArguments"][:3] == [
+        "/usr/bin/python3",
+        str(Path("/tmp/codex_interop/cli.py").resolve()),
+        "reconcile",
+    ]
