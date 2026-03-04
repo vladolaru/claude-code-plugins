@@ -104,30 +104,41 @@ In practice, existing hand-authored files are treated as authoritative unless th
 
 ## Commands
 
-Run from the repo root or pass `--project`.
+Package install for easier CLI use:
+
+```bash
+python3 -m pip install -e .
+```
+
+After that you can use either:
+
+- `cc-codex-bridge ...`
+- `python3 -m codex_interop ...`
+
+Examples below use the packaged CLI form. Run from the repo root or pass `--project`.
 
 Validate only:
 
 ```bash
-python3 codex_interop/cli.py validate --project .
+cc-codex-bridge validate --project .
 ```
 
 Preview changes without writing:
 
 ```bash
-python3 codex_interop/cli.py dry-run --project .
+cc-codex-bridge dry-run --project .
 ```
 
 Show file-level diffs:
 
 ```bash
-python3 codex_interop/cli.py diff --project .
+cc-codex-bridge diff --project .
 ```
 
 Apply generated outputs:
 
 ```bash
-python3 codex_interop/cli.py reconcile --project .
+cc-codex-bridge reconcile --project .
 ```
 
 Useful overrides:
@@ -148,11 +159,14 @@ The normal workflow is:
    - `plugins/*/skills/*/SKILL.md`
    - `plugins/*/agents/*.md`
    - plugin-local `scripts/`, `references/`, `assets/`, and related files
-2. Make sure the relevant Claude plugins are actually installed locally so they exist in the Claude plugin cache.
-3. Run `python3 codex_interop/cli.py validate --project .`
-4. Run `python3 codex_interop/cli.py dry-run --project .`
-5. Run `python3 codex_interop/cli.py reconcile --project .`
+2. Install the local package once with `python3 -m pip install -e .`
+3. Make sure the relevant Claude plugins are actually installed locally so they exist in the Claude plugin cache.
+4. Run `cc-codex-bridge validate --project .`
+5. Run `cc-codex-bridge dry-run --project .`
+6. Run `cc-codex-bridge reconcile --project .`
 6. Use the generated Codex artifacts from `.codex/*`, `CLAUDE.md`, and `~/.codex/skills/*`
+
+If you do not want to install the console script, `python3 -m codex_interop ...` works as the packaged fallback.
 
 Important:
 
@@ -181,13 +195,13 @@ That is also a deliberate decision:
 Print a LaunchAgent plist:
 
 ```bash
-python3 codex_interop/cli.py print-launchagent --project .
+cc-codex-bridge print-launchagent --project .
 ```
 
 Install a LaunchAgent plist into `~/Library/LaunchAgents/`:
 
 ```bash
-python3 codex_interop/cli.py install-launchagent --project .
+cc-codex-bridge install-launchagent --project .
 ```
 
 Optional scheduling overrides:

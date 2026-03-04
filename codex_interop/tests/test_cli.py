@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import runpy
 from pathlib import Path
 import plistlib
 
@@ -198,3 +199,20 @@ def test_cli_handles_unsupported_command(monkeypatch: pytest.MonkeyPatch, capsys
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "unsupported command" in captured.err
+
+
+def test_module_entrypoint_invokes_cli_main(monkeypatch: pytest.MonkeyPatch):
+    """`python -m codex_interop` delegates to the CLI main entrypoint."""
+    calls: list[list[str] | None] = []
+
+    def fake_main(argv=None):
+        calls.append(argv)
+        return 0
+
+    monkeypatch.setattr(cli, "main", fake_main)
+
+    with pytest.raises(SystemExit) as excinfo:
+        runpy.run_module("codex_interop", run_name="__main__")
+
+    assert excinfo.value.code == 0
+    assert calls == [None]

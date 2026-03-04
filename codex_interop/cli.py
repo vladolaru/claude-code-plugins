@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Codex interop generator CLI.
-
-Phase 1 implements project and installed-plugin discovery only.
-"""
+"""Codex interop generator CLI."""
 
 from __future__ import annotations
 
