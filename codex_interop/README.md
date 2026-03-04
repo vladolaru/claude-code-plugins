@@ -137,6 +137,30 @@ Useful overrides:
 
 These are mainly useful for testing or controlled local runs.
 
+## Developer Workflow
+
+Treat `codex_interop` as a local generator, not as a second authored system.
+
+The normal workflow is:
+
+1. Edit the canonical Claude-side sources:
+   - `AGENTS.md`
+   - `plugins/*/skills/*/SKILL.md`
+   - `plugins/*/agents/*.md`
+   - plugin-local `scripts/`, `references/`, `assets/`, and related files
+2. Make sure the relevant Claude plugins are actually installed locally so they exist in the Claude plugin cache.
+3. Run `python3 codex_interop/cli.py validate --project .`
+4. Run `python3 codex_interop/cli.py dry-run --project .`
+5. Run `python3 codex_interop/cli.py reconcile --project .`
+6. Use the generated Codex artifacts from `.codex/*`, `CLAUDE.md`, and `~/.codex/skills/*`
+
+Important:
+
+- do not hand-edit generated `.codex/*` files
+- do not hand-edit generated `~/.codex/skills/*`
+- if generated output is wrong, change the canonical Claude-side source and rerun `reconcile`
+- `.codex/config.toml` is local-only and should not be committed
+
 Project selection is intentionally narrow:
 
 - default target = current working directory
