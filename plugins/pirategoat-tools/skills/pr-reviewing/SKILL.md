@@ -812,6 +812,8 @@ Task: history-insights-reviewer (starts immediately)
 
 After all review agents return signals, dispatch the `review-reconciliator` agent to produce the unified review:
 
+Preserve the agent signals in a canonical text block with one signal per line. If you invoke `reconcile-reviews.py` before dispatching the reconciliator, pass that entire block as one quoted `--agent-signals` argument. Do not splat individual tokens into the shell.
+
 ```
 Task tool:
   subagent_type: pirategoat-tools:review-reconciliator

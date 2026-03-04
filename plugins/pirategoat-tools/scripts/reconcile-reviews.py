@@ -524,7 +524,10 @@ def main():
     parser.add_argument(
         "--agent-signals",
         default="",
-        help="Agent signals string (e.g., 'pr-reviewer: STATUS=DISPATCH, ...').",
+        help=(
+            "Single string or newline-joined text block of agent signals "
+            "(pass it as one quoted shell argument)."
+        ),
     )
     parser.add_argument(
         "--changed-files",

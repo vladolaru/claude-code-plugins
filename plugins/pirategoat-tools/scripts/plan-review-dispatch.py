@@ -113,6 +113,16 @@ def parse_changed_files_list(files_str: str) -> List[str]:
     return [f.strip() for f in files_str.split(",") if f.strip()]
 
 
+def render_agent_signals_text(agent_signals: List[str]) -> str:
+    """Render agent signals as the canonical text block for downstream steps.
+
+    The review commands pass this text verbatim to reconcile-reviews.py as a
+    single quoted --agent-signals argument and paste the same block into the
+    reconciliator prompt.
+    """
+    return "\n".join(agent_signals)
+
+
 # =============================================================================
 # Domain matching
 # =============================================================================
@@ -286,6 +296,7 @@ def build_dispatch_plan(
         "scope_summary": scope_summary,
         "dispatch": dispatch_list,
         "agent_signals": agent_signals,
+        "agent_signals_text": render_agent_signals_text(agent_signals),
     }
 
 

@@ -32,6 +32,7 @@ _spec.loader.exec_module(_mod)
 # Import functions under test
 load_registry = _mod.load_registry
 parse_changed_files_list = _mod.parse_changed_files_list
+render_agent_signals_text = _mod.render_agent_signals_text
 count_files_in_domain = _mod.count_files_in_domain
 build_domain_counts = _mod.build_domain_counts
 decide_agent_dispatch = _mod.decide_agent_dispatch
@@ -124,6 +125,20 @@ class TestParseChangedFilesList:
     def test_trailing_comma(self):
         result = parse_changed_files_list("a.py,b.ts,")
         assert result == ["a.py", "b.ts"]
+
+
+class TestRenderAgentSignalsText:
+    """Canonical text rendering for downstream shell/prompt usage."""
+
+    def test_joins_signals_with_newlines(self):
+        signals = [
+            "pr-reviewer: STATUS=DISPATCH",
+            "a11y-reviewer: STATUS=SKIPPED_TRIAGE (no UI changes)",
+        ]
+        assert render_agent_signals_text(signals) == (
+            "pr-reviewer: STATUS=DISPATCH\n"
+            "a11y-reviewer: STATUS=SKIPPED_TRIAGE (no UI changes)"
+        )
 
 
 # =============================================================================
@@ -305,6 +320,7 @@ class TestBuildDispatchPlan:
         assert "scope_summary" in plan
         assert "dispatch" in plan
         assert "agent_signals" in plan
+        assert "agent_signals_text" in plan
 
     def test_mode_passed_through(self, registry):
         for mode in ["full", "incremental", "pr"]:
@@ -360,6 +376,17 @@ class TestBuildDispatchPlan:
             assert "STATUS=" in signal
             # Each signal starts with an agent name followed by ": STATUS="
             assert ": STATUS=" in signal
+
+    def test_agent_signals_text_matches_signal_list(self, registry):
+        """The canonical text block is a newline-join of the signal list."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=SAMPLE_MIXED_FILES,
+            registry=registry,
+        )
+        assert plan["agent_signals_text"] == "\n".join(plan["agent_signals"])
 
     def test_scope_summary_structure(self, registry):
         plan = build_dispatch_plan(

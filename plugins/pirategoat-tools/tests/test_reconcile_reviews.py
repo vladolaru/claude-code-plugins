@@ -16,6 +16,7 @@ Validates the reconciliation engine:
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -721,6 +722,51 @@ class TestAgentSignals:
         )
         result = reconcile(tmp_dir, agent_signals=signals)
         assert "a11y-reviewer" in result["skipped_agents"]
+
+
+class TestCliAgentSignals:
+    """CLI contract: --agent-signals must be passed as one argument."""
+
+    def test_cli_accepts_multiline_agent_signals_as_single_argument(self, tmp_dir):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--output-dir",
+                tmp_dir,
+                "--agent-signals",
+                (
+                    "patterns-reviewer: STATUS=FINISHED critical=0 high=0 medium=0\n"
+                    "history-insights-reviewer: STATUS=FINISHED critical=0 high=1"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "RECONCILIATION COMPLETE" in result.stdout
+
+    def test_cli_rejects_unquoted_split_agent_signals(self, tmp_dir):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--output-dir",
+                tmp_dir,
+                "--agent-signals",
+                "patterns-reviewer:",
+                "STATUS=FINISHED",
+                "critical=0",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 2
+        assert "unrecognized arguments" in result.stderr
 
 
 # =============================================================================

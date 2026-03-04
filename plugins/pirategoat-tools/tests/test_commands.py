@@ -236,6 +236,16 @@ class TestScriptReferences:
             )
 
 
+class TestAgentSignalsContract:
+    """Review commands document the shell-safe agent-signals contract."""
+
+    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
+    def test_documents_agent_signals_text(self, command):
+        content = _read_command(command)
+        assert "agent_signals_text" in content
+        assert '--agent-signals "$AGENT_SIGNALS_TEXT"' in content
+
+
 # =============================================================================
 # Structural Tests — Marketplace Registration
 # =============================================================================

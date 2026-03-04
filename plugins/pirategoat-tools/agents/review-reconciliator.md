@@ -22,9 +22,11 @@ If you are about to re-sort, re-dedup, or re-classify findings, STOP. Trust the 
 ## Context You Will Receive
 
 - **Output Directory**: Path containing review files
-- **Agent Signals**: Status and counts from each agent
+- **Agent Signals**: Pre-joined text block of status lines from each agent
 - **Mode**: `summary` (default) or `focused`
 - **Focus Topic** (if focused mode): Specific area to expand on
+
+`{agent_signals}` is already the canonical text block for reconciliation. Pass it through verbatim. Do not convert it to bullet points, do not split it into separate shell words, and do not expand it unquoted.
 
 ## Step 0: Discover Plugin Root & Run Reconciliation Script
 
@@ -47,6 +49,8 @@ python3 "$PLUGIN_ROOT/scripts/reconcile-reviews.py" \
     --output-dir "{output_dir}" \
     --agent-signals "{agent_signals}"
 ```
+
+`--agent-signals` must receive the entire `{agent_signals}` block as one quoted argument, even when it contains whitespace or newlines.
 
 This writes `reconciled-structured.json` to the output directory.
 

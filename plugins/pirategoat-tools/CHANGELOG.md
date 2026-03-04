@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.10] - 2026-03-04
+
+### Fixed
+
+- **review pipeline agent-signals contract:** `plan-review-dispatch.py` now emits `agent_signals_text`, a canonical newline-joined text block for downstream reconciliation steps. The full/incremental review commands, the `review-reconciliator` agent, and the `pr-reviewing` skill now state explicitly that this block must be passed as one quoted `--agent-signals` argument and pasted verbatim into the reconciliator prompt.
+- **Regression coverage:** Added tests for the new `agent_signals_text` planner field, command docs that preserve the quoting contract, and `reconcile-reviews.py` CLI behavior for properly quoted vs split `--agent-signals` input.
+
 ## [1.43.9] - 2026-03-03
 
 ### Changed

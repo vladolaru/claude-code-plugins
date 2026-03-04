@@ -73,6 +73,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan-review-dispatch.py \
 
 Parse the JSON output. Display the dispatch summary to the user showing which agents will be dispatched and which are skipped (with reasons).
 
+Persist two representations from the planner output:
+- `agent_signals` — the JSON array of per-agent status lines
+- `agent_signals_text` — the planner-provided newline-joined text block
+
+Use `agent_signals` when you want to inspect or summarize individual entries. Use `agent_signals_text` whenever you invoke `reconcile-reviews.py` or paste the signals into the reconciliator prompt. Do not rebuild this text yourself and do not expand it unquoted in the shell.
+
 If agents are skipped, note it briefly: "Skipping N agents with no files in scope: [list]"
 
 **Stale branch check:** Before dispatching, check branch freshness:
@@ -166,8 +172,10 @@ After ALL dispatched agents have returned their signals, run the deterministic r
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/reconcile-reviews.py \
   --output-dir <OUTPUT_DIR> \
-  --agent-signals "<all agent signals from Step 4, including SKIPPED and SKIPPED_TRIAGE>"
+  --agent-signals "$AGENT_SIGNALS_TEXT"
 ```
+
+Where `AGENT_SIGNALS_TEXT` is the exact `agent_signals_text` value from Step 3.5. It must remain a single quoted shell argument, even if it spans multiple lines. Never splat the list directly into the command, and never use an unquoted expansion such as `--agent-signals $AGENT_SIGNALS_TEXT`.
 
 This script reads all `*-review.json` files, deduplicates findings across agents, and writes `reconciled-structured.json` to the output directory. It handles:
 - Exact and near deduplication (same file + overlapping lines + similar title)
@@ -185,9 +193,7 @@ Task tool:
     Mode: summary
 
     Agent Signals:
-    <list all agent signals from Step 4>
-    <for each preflight-skipped agent: "<agent>: STATUS=SKIPPED (no files in <domain> domain)">
-    <for each triage-skipped agent: "<agent>: STATUS=SKIPPED_TRIAGE (<reason from Step 3.6>)">
+    <paste the exact agent_signals_text block from Step 3.5/Step 4 verbatim, one signal per line>
 ```
 
 The reconciliator reads the pre-processed `reconciled-structured.json` and agent review files, then produces a narrative executive summary (`reconciled.md` and `reconciled.json`).
