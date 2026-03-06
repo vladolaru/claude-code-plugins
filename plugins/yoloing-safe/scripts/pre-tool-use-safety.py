@@ -116,7 +116,23 @@ ASK_MESSAGES = {
 # rule_id ties to the category so disabling a rule also disables its allowlist
 # ---------------------------------------------------------------------------
 
-ALLOWLIST_PATTERNS = []  # Populated in Task 3
+ALLOWLIST_PATTERNS = [
+    # Git branch creation (not file checkout)
+    ("git_discard_changes", re.compile(r"^git checkout (-b|--orphan) ")),
+    # Git unstage only (--staged/-S without --worktree/-W)
+    ("git_discard_changes", re.compile(r"^git restore\b.*(?:--staged|-S)(?!.*(?:--worktree|-W))")),
+    # Git clean dry-run (handles combined flags like -fn, -nfd, etc.)
+    ("git_other_dangerous", re.compile(r"^git clean\b.*(--dry-run|-[a-zA-Z]*n)")),
+    # Git push with safe force variants
+    ("git_force_push", re.compile(r"^git push\b.*--force-(with-lease|if-includes)")),
+    # rm in temp directories
+    ("destructive_deletion", re.compile(r"^rm\s+-[rfRF]*\s+(/tmp/|/var/tmp/|\$TMPDIR/)")),
+    # chmod +x (make executable)
+    ("permission_changes", re.compile(r"^chmod \+x\b")),
+    # Dry-run publishing
+    ("package_publishing", re.compile(r"^npm publish\b.*--dry-run")),
+    ("package_publishing", re.compile(r"^twine check\b")),
+]
 
 # ---------------------------------------------------------------------------
 # Detection Functions — placeholders, implemented in Tasks 4-7

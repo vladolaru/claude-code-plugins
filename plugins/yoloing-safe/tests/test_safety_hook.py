@@ -59,3 +59,40 @@ class TestLoadConfig:
         monkeypatch.setattr(hook, "USER_CONFIG_PATH", str(config_file))
         config = hook.load_config()
         assert "unknown_key" not in config
+
+
+class TestAllowlist:
+    @pytest.mark.parametrize("command", [
+        "git checkout -b feature-branch",
+        "git checkout --orphan gh-pages",
+        "git restore --staged file.txt",
+        "git restore -S file.txt",
+        "git clean -n",
+        "git clean --dry-run",
+        "git clean -fn",
+        "git clean -nd",
+        "git push --force-with-lease",
+        "git push --force-if-includes",
+        "git push origin main --force-with-lease",
+        "rm -rf /tmp/build",
+        "rm -rf /var/tmp/test",
+        "rm -rf $TMPDIR/cache",
+        "chmod +x script.sh",
+        "npm publish --dry-run",
+        "twine check dist/*",
+    ])
+    def test_allowlisted_commands(self, hook, command):
+        assert hook.is_allowlisted(hook.normalize_command(command)) is True
+
+    @pytest.mark.parametrize("command", [
+        "git checkout -- file.txt",
+        "git restore file.txt",
+        "git restore --staged --worktree file.txt",
+        "git clean -fd",
+        "git push --force",
+        "rm -rf /home/user",
+        "chmod 777 file.txt",
+        "npm publish",
+    ])
+    def test_not_allowlisted(self, hook, command):
+        assert hook.is_allowlisted(hook.normalize_command(command)) is False
