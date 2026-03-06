@@ -1,6 +1,8 @@
 """Tests for the yoloing-safe PreToolUse safety hook."""
 
 import json
+import os
+import subprocess
 import pytest
 from importlib.util import spec_from_file_location, module_from_spec
 from pathlib import Path
@@ -723,3 +725,66 @@ class TestGitHubCICDOps:
         cmd = hook.normalize_command(command)
         detected, _ = hook.detect_github_cicd_ops(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
+
+
+# ---------------------------------------------------------------------------
+# disable_rules Support (Task 8)
+# ---------------------------------------------------------------------------
+
+class TestDisableRules:
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input, config_path=None):
+        env = dict(os.environ)
+        if config_path:
+            env["YOLOING_SAFE_CONFIG_PATH"] = config_path
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5, env=env
+        )
+
+    def test_disabled_block_rule_allows_command(self, tmp_path):
+        """rm -rf should pass through when destructive_deletion is disabled."""
+        config = {"disable_rules": ["destructive_deletion"]}
+        config_file = tmp_path / "yoloing-safe.json"
+        config_file.write_text(json.dumps(config))
+        r = self._run_hook("Bash", {"command": "rm -rf /"}, str(config_file))
+        assert r.returncode == 0
+
+    def test_disabled_ask_rule_allows_command(self, tmp_path):
+        """git push --force should pass through when git_force_push is disabled."""
+        config = {"disable_rules": ["git_force_push"]}
+        config_file = tmp_path / "yoloing-safe.json"
+        config_file.write_text(json.dumps(config))
+        r = self._run_hook("Bash", {"command": "git push --force"}, str(config_file))
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+
+    def test_unknown_rule_id_ignored(self, tmp_path):
+        """Unknown rule IDs in disable_rules should not cause errors."""
+        config = {"disable_rules": ["nonexistent_category"]}
+        config_file = tmp_path / "yoloing-safe.json"
+        config_file.write_text(json.dumps(config))
+        # rm -rf should still be blocked
+        r = self._run_hook("Bash", {"command": "rm -rf /"}, str(config_file))
+        assert r.returncode == 2
+
+    def test_multiple_rules_disabled(self, tmp_path):
+        """Multiple categories can be disabled simultaneously."""
+        config = {"disable_rules": ["brew_commands", "docker_destructive", "permission_changes"]}
+        config_file = tmp_path / "yoloing-safe.json"
+        config_file.write_text(json.dumps(config))
+        # brew should pass
+        r = self._run_hook("Bash", {"command": "brew install node"}, str(config_file))
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+        # docker should pass
+        r = self._run_hook("Bash", {"command": "docker system prune"}, str(config_file))
+        assert r.returncode == 0
+        # chmod 777 should pass
+        r = self._run_hook("Bash", {"command": "chmod 777 file"}, str(config_file))
+        assert r.returncode == 0
+        # But rm -rf should still be blocked
+        r = self._run_hook("Bash", {"command": "rm -rf /"}, str(config_file))
+        assert r.returncode == 2

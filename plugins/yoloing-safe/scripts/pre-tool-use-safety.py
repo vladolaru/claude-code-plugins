@@ -48,8 +48,9 @@ USER_CONFIG_PATH = os.path.expanduser("~/.claude/yoloing-safe.json")
 def load_config():
     """Load config: user file overrides present keys, others keep defaults."""
     config = dict(DEFAULTS)
+    config_path = os.environ.get("YOLOING_SAFE_CONFIG_PATH", USER_CONFIG_PATH)
     try:
-        with open(USER_CONFIG_PATH) as f:
+        with open(config_path) as f:
             user = json.load(f)
         for key in DEFAULTS:
             if key in user:
