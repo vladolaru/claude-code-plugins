@@ -931,3 +931,29 @@ class TestIntegrationFailOpen:
     def test_missing_tool_input(self):
         r = self._run_hook(json.dumps({"tool_name": "Bash"}))
         assert r.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Adversarial Evasion Tests (Task 10)
+# ---------------------------------------------------------------------------
+
+class TestEvasionSuite:
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    @pytest.fixture
+    def evasion_scenarios(self):
+        path = Path(__file__).resolve().parent / "scenarios" / "evasion.json"
+        with open(path) as f:
+            return json.load(f)
+
+    def test_all_evasions_caught(self, evasion_scenarios):
+        """Every evasion scenario must be blocked."""
+        for scenario in evasion_scenarios:
+            payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": scenario["command"]}})
+            result = subprocess.run(
+                ["python3", self.SCRIPT],
+                input=payload, capture_output=True, text=True, timeout=5
+            )
+            assert result.returncode == 2, (
+                f"Evasion NOT caught ({scenario['technique']}): {scenario['command']}"
+            )
