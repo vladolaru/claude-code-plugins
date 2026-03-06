@@ -1,0 +1,17 @@
+{
+  "description": "YOLO responsibly. Catches the 'oh no' commands before they become 'oh no' moments — blocks the destructive stuff, asks about the maybe-intentional stuff, lets everything else fly.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-use-safety.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

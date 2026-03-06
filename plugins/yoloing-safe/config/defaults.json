@@ -1,0 +1,22 @@
+{
+  "credential_patterns": [
+    "\\.env(?!\\.sample|\\.example|\\.template)",
+    "client_secret\\.json",
+    "\\.credentials\\.json",
+    "token\\.pickle",
+    "\\.pem$",
+    "id_rsa",
+    "id_ed25519",
+    "\\.key$"
+  ],
+  "credential_safe_patterns": [
+    "\\.env\\.sample",
+    "\\.env\\.example",
+    "\\.env\\.template"
+  ],
+  "zero_access_paths": [
+    "~/.ssh/",
+    "~/.gnupg/"
+  ],
+  "disable_rules": []
+}
