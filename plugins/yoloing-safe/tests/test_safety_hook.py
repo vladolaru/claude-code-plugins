@@ -788,3 +788,146 @@ class TestDisableRules:
         # But rm -rf should still be blocked
         r = self._run_hook("Bash", {"command": "rm -rf /"}, str(config_file))
         assert r.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# Integration Tests (Task 9)
+# ---------------------------------------------------------------------------
+
+class TestIntegrationBlock:
+    """Run the actual script, verify exit code 2 + stderr message."""
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5
+        )
+
+    def test_rm_rf_blocks(self):
+        r = self._run_hook("Bash", {"command": "rm -rf /"})
+        assert r.returncode == 2
+        assert "targeted file removal" in r.stderr
+
+    def test_dd_blocks(self):
+        r = self._run_hook("Bash", {"command": "dd if=/dev/zero of=/dev/sda"})
+        assert r.returncode == 2
+        assert "Disk formatting" in r.stderr
+
+    def test_credential_read_blocks(self):
+        r = self._run_hook("Read", {"file_path": "/project/.env.local"})
+        assert r.returncode == 2
+        assert "secrets or credentials" in r.stderr
+
+    def test_gh_repo_delete_blocks(self):
+        r = self._run_hook("Bash", {"command": "gh repo delete owner/repo --yes"})
+        assert r.returncode == 2
+        assert "irreversible" in r.stderr
+
+    def test_npm_publish_blocks(self):
+        r = self._run_hook("Bash", {"command": "npm publish"})
+        assert r.returncode == 2
+        assert "irreversible" in r.stderr
+
+    def test_ssh_destruction_blocks(self):
+        r = self._run_hook("Bash", {"command": 'ssh host "DROP DATABASE"'})
+        assert r.returncode == 2
+        assert "remote" in r.stderr.lower()
+
+
+class TestIntegrationAsk:
+    """Run the actual script, verify exit 0 + JSON with permissionDecision: ask."""
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5
+        )
+
+    def test_force_push_asks(self):
+        r = self._run_hook("Bash", {"command": "git push --force"})
+        assert r.returncode == 0
+        output = json.loads(r.stdout)
+        assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+        assert "force-with-lease" in output["hookSpecificOutput"]["systemMessage"]
+
+    def test_brew_install_asks(self):
+        r = self._run_hook("Bash", {"command": "brew install node"})
+        assert r.returncode == 0
+        output = json.loads(r.stdout)
+        assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    def test_docker_prune_asks(self):
+        r = self._run_hook("Bash", {"command": "docker system prune"})
+        assert r.returncode == 0
+        output = json.loads(r.stdout)
+        assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    def test_terraform_destroy_asks(self):
+        r = self._run_hook("Bash", {"command": "terraform destroy"})
+        assert r.returncode == 0
+        output = json.loads(r.stdout)
+        assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+class TestIntegrationAllow:
+    """Run the actual script, verify exit 0 + no output."""
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5
+        )
+
+    def test_git_status_allowed(self):
+        r = self._run_hook("Bash", {"command": "git status"})
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+
+    def test_allowlisted_rm_tmp(self):
+        r = self._run_hook("Bash", {"command": "rm -rf /tmp/build"})
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+
+    def test_non_bash_tool_allowed(self):
+        r = self._run_hook("Grep", {"pattern": "rm -rf", "path": "."})
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+
+    def test_allowlisted_git_checkout_b(self):
+        r = self._run_hook("Bash", {"command": "git checkout -b feature"})
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+
+    def test_safe_read(self):
+        r = self._run_hook("Read", {"file_path": "/project/README.md"})
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+
+
+class TestIntegrationFailOpen:
+    """Verify the hook fails open on bad input."""
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, stdin_text):
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=stdin_text, capture_output=True, text=True, timeout=5
+        )
+
+    def test_invalid_json(self):
+        r = self._run_hook("not json at all")
+        assert r.returncode == 0
+
+    def test_empty_input(self):
+        r = self._run_hook("")
+        assert r.returncode == 0
+
+    def test_missing_tool_input(self):
+        r = self._run_hook(json.dumps({"tool_name": "Bash"}))
+        assert r.returncode == 0
