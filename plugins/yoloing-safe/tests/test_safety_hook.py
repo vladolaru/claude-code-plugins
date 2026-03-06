@@ -400,3 +400,168 @@ class TestZeroAccessPaths:
         cmd = hook.normalize_command("ls ~/.local")
         detected, _ = hook.detect_zero_access_paths(cmd, "Bash", {"command": "ls ~/.local"}, hook.DEFAULTS)
         assert detected is False
+
+
+# ---------------------------------------------------------------------------
+# Ask Tier — Git Operations (Task 6)
+# ---------------------------------------------------------------------------
+
+class TestGitForcePush:
+    @pytest.mark.parametrize("command", [
+        "git push --force",
+        "git push -f",
+        "git push origin main --force",
+        "git push -f origin main",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_force_push(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "git push --force-with-lease",
+        "git push --force-if-includes",
+        "git push origin main",
+        "git push",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_git_force_push(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestGitHardReset:
+    @pytest.mark.parametrize("command", [
+        "git reset --hard",
+        "git reset --hard HEAD~3",
+        "git reset --merge",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_hard_reset(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "git reset --soft",
+        "git reset --soft HEAD~1",
+        "git reset HEAD file.txt",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_git_hard_reset(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestGitDiscardChanges:
+    @pytest.mark.parametrize("command", [
+        "git checkout -- .",
+        "git checkout -- file.txt",
+        "git checkout HEAD~3 -- src/",
+        "git restore file.txt",
+        "git restore --worktree file.txt",
+        "git restore -W file.txt",
+        "git restore --staged --worktree file.txt",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_discard_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "git checkout -b branch",
+        "git checkout main",
+        "git restore --staged file.txt",
+        "git restore -S file.txt",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_git_discard_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestGitDestroyStash:
+    @pytest.mark.parametrize("command", [
+        "git stash drop",
+        "git stash clear",
+        "git stash drop stash@{0}",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_destroy_stash(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "git stash",
+        "git stash pop",
+        "git stash list",
+        "git stash apply",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_git_destroy_stash(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestGitHistoryRewrite:
+    @pytest.mark.parametrize("command", [
+        "git filter-branch --tree-filter 'rm -rf passwords' HEAD",
+        "git filter-repo --path secret.txt --invert-paths",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_history_rewrite(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+
+class TestGitConfigChanges:
+    @pytest.mark.parametrize("command", [
+        'git config --global user.name "x"',
+        "git config --system core.editor vim",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_config_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        'git config user.name "x"',
+        "git config --local user.email a@b.com",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_git_config_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestGitOtherDangerous:
+    @pytest.mark.parametrize("command", [
+        "git clean -fd",
+        "git clean -f",
+        "git branch -D feat",
+        "git remote remove origin",
+        "git reflog expire --expire=now --all",
+        "git gc --prune=now",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_other_dangerous(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "git branch -d feat",
+        "git remote add origin url",
+        "git gc",
+        "git status",
+        "git log",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_git_other_dangerous(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False

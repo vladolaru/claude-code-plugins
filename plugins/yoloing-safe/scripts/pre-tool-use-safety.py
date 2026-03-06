@@ -302,6 +302,92 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
     return False, None
 
 
+# --- Ask Tier: Git Operations ---
+
+def detect_git_force_push(command, tool_name, tool_input, config):
+    """Detect git push --force (but not --force-with-lease or --force-if-includes)."""
+    if not re.search(r"^git push\b", command):
+        return False, None
+    # Must have --force or -f, but not --force-with-lease or --force-if-includes
+    if re.search(r"--force-with-lease|--force-if-includes", command):
+        return False, None
+    if re.search(r"(--force\b|-f\b)", command):
+        return True, ASK_MESSAGES["git_force_push"]
+    return False, None
+
+
+def detect_git_hard_reset(command, tool_name, tool_input, config):
+    """Detect git reset --hard or --merge."""
+    if not re.search(r"^git reset\b", command):
+        return False, None
+    if re.search(r"--hard\b", command):
+        return True, ASK_MESSAGES["git_hard_reset"]
+    if re.search(r"--merge\b", command):
+        return True, ASK_MESSAGES["git_hard_reset"]
+    return False, None
+
+
+def detect_git_discard_changes(command, tool_name, tool_input, config):
+    """Detect git checkout -- and git restore that discards working tree changes."""
+    # git checkout -- <path> or git checkout <ref> -- <path>
+    if re.search(r"^git checkout\b", command) and re.search(r"\s--\s", command):
+        return True, ASK_MESSAGES["git_discard_changes"]
+    # git restore (without --staged/-S alone — that's allowlisted)
+    if re.search(r"^git restore\b", command):
+        has_staged = bool(re.search(r"(--staged|-S)\b", command))
+        has_worktree = bool(re.search(r"(--worktree|-W)\b", command))
+        # If only --staged (no --worktree), it's safe (allowlisted)
+        if has_staged and not has_worktree:
+            return False, None
+        # Otherwise it touches the worktree — dangerous
+        return True, ASK_MESSAGES["git_discard_changes"]
+    return False, None
+
+
+def detect_git_destroy_stash(command, tool_name, tool_input, config):
+    """Detect git stash drop/clear."""
+    if re.search(r"^git stash (drop|clear)\b", command):
+        return True, ASK_MESSAGES["git_destroy_stash"]
+    return False, None
+
+
+def detect_git_history_rewrite(command, tool_name, tool_input, config):
+    """Detect git filter-branch/filter-repo."""
+    if re.search(r"^git filter-(branch|repo)\b", command):
+        return True, ASK_MESSAGES["git_history_rewrite"]
+    return False, None
+
+
+def detect_git_config_changes(command, tool_name, tool_input, config):
+    """Detect git config --global or --system."""
+    if not re.search(r"^git config\b", command):
+        return False, None
+    if re.search(r"--(global|system)\b", command):
+        return True, ASK_MESSAGES["git_config_changes"]
+    return False, None
+
+
+def detect_git_other_dangerous(command, tool_name, tool_input, config):
+    """Detect other dangerous git ops: clean -f, branch -D, remote remove, reflog expire, gc --prune."""
+    # git clean with -f (force) but without -n/--dry-run (allowlisted)
+    if re.search(r"^git clean\b", command):
+        if re.search(r"-[a-zA-Z]*f", command) and not re.search(r"(-[a-zA-Z]*n|--dry-run)", command):
+            return True, ASK_MESSAGES["git_other_dangerous"]
+    # git branch -D (force delete)
+    if re.search(r"^git branch\s+-D\b", command):
+        return True, ASK_MESSAGES["git_other_dangerous"]
+    # git remote remove
+    if re.search(r"^git remote remove\b", command):
+        return True, ASK_MESSAGES["git_other_dangerous"]
+    # git reflog expire
+    if re.search(r"^git reflog expire\b", command):
+        return True, ASK_MESSAGES["git_other_dangerous"]
+    # git gc --prune=now
+    if re.search(r"^git gc\b.*--prune=", command):
+        return True, ASK_MESSAGES["git_other_dangerous"]
+    return False, None
+
+
 # Rule registry: (rule_id, tier, detect_fn)
 RULE_REGISTRY = [
     ("destructive_deletion", "block", detect_destructive_deletion),
@@ -314,6 +400,14 @@ RULE_REGISTRY = [
     ("ssh_remote_destruction", "block", detect_ssh_remote_destruction),
     ("github_repo_deletion", "block", detect_github_repo_deletion),
     ("zero_access_paths", "block", detect_zero_access_paths),
+    # Ask tier — git operations
+    ("git_force_push", "ask", detect_git_force_push),
+    ("git_hard_reset", "ask", detect_git_hard_reset),
+    ("git_discard_changes", "ask", detect_git_discard_changes),
+    ("git_destroy_stash", "ask", detect_git_destroy_stash),
+    ("git_history_rewrite", "ask", detect_git_history_rewrite),
+    ("git_config_changes", "ask", detect_git_config_changes),
+    ("git_other_dangerous", "ask", detect_git_other_dangerous),
 ]
 
 
