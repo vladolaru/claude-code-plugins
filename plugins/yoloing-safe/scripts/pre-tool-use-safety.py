@@ -13,7 +13,22 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Profiling (zero-cost when disabled)
+# Set YOLOING_SAFE_PROFILE=1 to print timing breakpoints to stderr.
+# ---------------------------------------------------------------------------
+
+_PROFILE = os.environ.get("YOLOING_SAFE_PROFILE") == "1"
+_T0 = time.monotonic() if _PROFILE else 0
+
+
+def _mark(label):
+    if _PROFILE:
+        elapsed_ms = (time.monotonic() - _T0) * 1000
+        print(f"[yoloing-safe:profile] {label} {elapsed_ms:.3f}ms", file=sys.stderr)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -50,6 +65,8 @@ DEFAULTS = {
 }
 
 USER_CONFIG_PATH = os.path.expanduser("~/.claude/yoloing-safe.json")
+
+_mark("module_loaded")
 
 # Self-protection: these paths cannot be modified by Write/Edit.
 # NOT configurable — hardcoded to prevent the agent from disabling the hook.
@@ -99,14 +116,14 @@ def normalize_command(cmd):
         return ""
     # Strip leading absolute path from the command binary only
     # e.g., /usr/bin/git → git, but rm /home/user/bin/rm stays unchanged
-    normalized = re.sub(r"^(?:/usr/local/bin/|/usr/bin/|/bin/|/sbin/|/usr/sbin/)", "", cmd)
+    normalized = _RE_PATH_PREFIX.sub("", cmd)
     # Strip command wrappers, looping for nesting (sudo env rm → rm)
     prev = None
     while prev != normalized:
         prev = normalized
         normalized = _WRAPPER_RE.sub("", normalized)
     # Collapse whitespace
-    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = _RE_WHITESPACE.sub(" ", normalized).strip()
     return normalized
 
 
@@ -171,6 +188,116 @@ ALLOWLIST_PATTERNS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Pre-compiled Regex Patterns
+# ---------------------------------------------------------------------------
+
+# Shared patterns (used by multiple detection functions)
+_RE_RM = re.compile(r"\brm\b")
+_RE_CHAIN_OPS = re.compile(r"(&&|;|\|\|)")
+_RE_CHAIN_SPLIT = re.compile(r"&&|;|\|\|")
+
+# Command normalization
+_RE_PATH_PREFIX = re.compile(r"^(?:/usr/local/bin/|/usr/bin/|/bin/|/sbin/|/usr/sbin/)")
+_RE_WHITESPACE = re.compile(r"\s+")
+
+# Filesystem destruction
+_RE_RECURSIVE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive")
+_RE_FORCE_DELETE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[fF]|--force")
+_RE_FIND_DELETE = re.compile(r"\bfind\b.*-delete\b")
+_RE_FIND_EXEC_RM = re.compile(r"\bfind\b.*-exec\s+rm\b")
+_RE_XARGS_RM = re.compile(r"\bxargs\s+rm\b")
+_RE_EVAL_RM = re.compile(r"\beval\b.*\brm\b")
+_RE_MKFS = re.compile(r"\bmkfs\b")
+_RE_DD = re.compile(r"\bdd\b")
+_RE_DD_OF_DEV = re.compile(r"of=/dev/")
+
+# Network exfiltration
+_RE_CURL_POST_DATA = re.compile(r"\bcurl\b.*(-d\s+@|--data\s+@|-X\s+POST)")
+_RE_CURL_UPLOAD = re.compile(r"\bcurl\b.*(-F\s+|--form\s+|-T\s+|--upload-file\s+)")
+_RE_WGET_POST_FILE = re.compile(r"\bwget\b.*--post-file")
+_RE_PIPE_TO_NC = re.compile(r"\|\s*nc\b")
+_RE_NC_REDIRECT = re.compile(r"\bnc\b.*<")
+_RE_CURL_WGET_PIPE_SHELL = re.compile(r"\b(curl|wget)\b.*\|\s*(bash|sh|zsh)\b")
+_RE_SCP_UPLOAD = re.compile(r"\bscp\b.*\s\S+@\S+:\S*$")
+_RE_RSYNC_UPLOAD = re.compile(r"\brsync\b.*\s\S+@\S+:\S*$")
+
+# Package publishing
+_RE_NPM_PUBLISH = re.compile(r"\bnpm publish\b")
+_RE_DRY_RUN = re.compile(r"--dry-run")
+_RE_TWINE_PIP_UPLOAD = re.compile(r"\b(twine|pip) upload\b")
+_RE_GEM_PUSH = re.compile(r"\bgem push\b")
+
+# SSH remote destruction
+_RE_SSH_CMD = re.compile(r"^ssh\b")
+_RE_SSH_QUOTED_CMD = re.compile(r"""ssh\s+\S+\s+['"](.+?)['"]""")
+
+# GitHub repo deletion
+_RE_GH_REPO_DELETE = re.compile(r"\bgh repo delete\b")
+
+# Git operations
+_RE_GIT_PUSH = re.compile(r"^git push\b")
+_RE_GIT_FORCE_SAFE = re.compile(r"--force-with-lease|--force-if-includes")
+_RE_GIT_FORCE_FLAG = re.compile(r"(--force\b|-f\b)")
+_RE_GIT_RESET = re.compile(r"^git reset\b")
+_RE_HARD_FLAG = re.compile(r"--hard\b")
+_RE_MERGE_FLAG = re.compile(r"--merge\b")
+_RE_GIT_CHECKOUT = re.compile(r"^git checkout\b")
+_RE_DOUBLE_DASH_SEP = re.compile(r"\s--\s")
+_RE_GIT_RESTORE = re.compile(r"^git restore\b")
+_RE_STAGED_FLAG = re.compile(r"(--staged|-S)\b")
+_RE_WORKTREE_FLAG = re.compile(r"(--worktree|-W)\b")
+_RE_GIT_STASH_DROP_CLEAR = re.compile(r"^git stash (drop|clear)\b")
+_RE_GIT_FILTER = re.compile(r"^git filter-(branch|repo)\b")
+_RE_GIT_CONFIG = re.compile(r"^git config\b")
+_RE_GLOBAL_SYSTEM_FLAG = re.compile(r"--(global|system)\b")
+_RE_GIT_CLEAN = re.compile(r"^git clean\b")
+_RE_CLEAN_FORCE_FLAG = re.compile(r"-[a-zA-Z]*f")
+_RE_CLEAN_DRY_RUN = re.compile(r"(-[a-zA-Z]*n|--dry-run)")
+_RE_GIT_BRANCH_DELETE = re.compile(r"^git branch\s+-D\b")
+_RE_GIT_REMOTE_REMOVE = re.compile(r"^git remote remove\b")
+_RE_GIT_REFLOG_EXPIRE = re.compile(r"^git reflog expire\b")
+_RE_GIT_GC_PRUNE = re.compile(r"^git gc\b.*--prune=")
+
+# Permission changes
+_RE_CHMOD_PLUS_X = re.compile(r"^chmod \+x\b")
+_RE_SUDO_CHMOD = re.compile(r"\bsudo\s+chmod\b")
+_RE_CHMOD = re.compile(r"\bchmod\b")
+_RE_CHMOD_777 = re.compile(r"\bchmod\s+777\b")
+_RE_CHMOD_SETUID_OCTAL = re.compile(r"\bchmod\s+[4267]\d{3}\b")
+_RE_CHMOD_SETUID_SYMBOLIC = re.compile(r"\bchmod\s+[ugo]*\+s\b")
+_RE_CHOWN_RECURSIVE = re.compile(r"\bchown\s+-[a-zA-Z]*R")
+
+# Brew commands
+_RE_BREW = re.compile(r"^brew\b")
+_RE_BREW_MODIFYING = re.compile(r"^brew\s+(install|uninstall|remove|upgrade|tap|untap|link|unlink)\b")
+
+# Docker destructive
+_RE_DOCKER_PRUNE = re.compile(r"\bdocker\s+(system|volume|image)\s+prune\b")
+_RE_DOCKER_RM_FORCE = re.compile(r"\bdocker\s+rm\s+-[a-zA-Z]*f")
+_RE_COMPOSE_DOWN_VOLUMES = re.compile(r"\bdocker-compose\s+down\b.*-v\b")
+
+# Database destructive
+_RE_DROP_OBJECT = re.compile(r"\bDROP\s+(DATABASE|TABLE|SCHEMA)\b")
+_RE_TRUNCATE = re.compile(r"\bTRUNCATE\b")
+_RE_DELETE_FROM = re.compile(r"\bDELETE\s+FROM\b")
+_RE_WHERE = re.compile(r"\bWHERE\b")
+_RE_DROPDB_DROPUSER = re.compile(r"\b(dropdb|dropuser)\b")
+_RE_REDIS_FLUSH = re.compile(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b")
+
+# Terraform/Pulumi destructive
+_RE_TERRAFORM_DESTROY = re.compile(r"\bterraform destroy\b")
+_RE_TERRAFORM_AUTO_APPROVE = re.compile(r"\bterraform apply\b.*-auto-approve\b")
+_RE_PULUMI_DESTROY = re.compile(r"\bpulumi destroy\b")
+
+# GitHub CI/CD ops
+_RE_GH_SECRET_VAR_DELETE = re.compile(r"\bgh\s+(secret|variable)\s+delete\b")
+_RE_GH_WORKFLOW_DISABLE = re.compile(r"\bgh\s+workflow\s+disable\b")
+_RE_GH_RELEASE_DELETE = re.compile(r"\bgh\s+release\s+delete\b")
+
+# Inline interpreter
+_RE_SHELL_SUBSHELL = re.compile(r"\b(bash|sh|zsh)\s+-c\b")
+
+# ---------------------------------------------------------------------------
 # Detection Functions
 # Each returns (detected: bool, message: str | None)
 # Signature: (command, tool_name, tool_input, config) -> (bool, str|None)
@@ -180,11 +307,11 @@ ALLOWLIST_PATTERNS = [
 
 def detect_destructive_deletion(command, tool_name, tool_input, config):
     """Detect rm -rf and variants."""
-    if not re.search(r"\brm\b", command):
+    if not _RE_RM.search(command):
         return False, None
     # Must have both recursive and force flags
-    has_recursive = bool(re.search(r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive", command))
-    has_force = bool(re.search(r"(?:^|\s)-[a-zA-Z]*[fF]|--force", command))
+    has_recursive = bool(_RE_RECURSIVE_FLAG.search(command))
+    has_force = bool(_RE_FORCE_DELETE_FLAG.search(command))
     if has_recursive and has_force:
         return True, BLOCK_MESSAGES["destructive_deletion"]
     return False, None
@@ -192,15 +319,15 @@ def detect_destructive_deletion(command, tool_name, tool_input, config):
 
 def detect_chained_deletion(command, tool_name, tool_input, config):
     """Detect rm hidden in command chains (&&, ;, ||)."""
-    if not re.search(r"(&&|;|\|\|)", command):
+    if not _RE_CHAIN_OPS.search(command):
         return False, None
     # Split on chain operators and check each segment
-    segments = re.split(r"&&|;|\|\|", command)
+    segments = _RE_CHAIN_SPLIT.split(command)
     for segment in segments:
         segment = segment.strip()
         # Normalize the segment too
         segment = normalize_command(segment)
-        if re.search(r"\brm\b", segment):
+        if _RE_RM.search(segment):
             return True, BLOCK_MESSAGES["chained_deletion"]
     return False, None
 
@@ -208,26 +335,26 @@ def detect_chained_deletion(command, tool_name, tool_input, config):
 def detect_alternative_deletion(command, tool_name, tool_input, config):
     """Detect find -delete, find -exec rm, xargs rm, eval rm."""
     # find -delete
-    if re.search(r"\bfind\b.*-delete\b", command):
+    if _RE_FIND_DELETE.search(command):
         return True, BLOCK_MESSAGES["alternative_deletion"]
     # find -exec rm
-    if re.search(r"\bfind\b.*-exec\s+rm\b", command):
+    if _RE_FIND_EXEC_RM.search(command):
         return True, BLOCK_MESSAGES["alternative_deletion"]
     # xargs rm
-    if re.search(r"\bxargs\s+rm\b", command):
+    if _RE_XARGS_RM.search(command):
         return True, BLOCK_MESSAGES["alternative_deletion"]
     # eval with rm
-    if re.search(r"\beval\b.*\brm\b", command):
+    if _RE_EVAL_RM.search(command):
         return True, BLOCK_MESSAGES["alternative_deletion"]
     return False, None
 
 
 def detect_disk_formatting(command, tool_name, tool_input, config):
     """Detect mkfs, dd to device."""
-    if re.search(r"\bmkfs\b", command):
+    if _RE_MKFS.search(command):
         return True, BLOCK_MESSAGES["disk_formatting"]
     # dd writing to a device
-    if re.search(r"\bdd\b", command) and re.search(r"of=/dev/", command):
+    if _RE_DD.search(command) and _RE_DD_OF_DEV.search(command):
         return True, BLOCK_MESSAGES["disk_formatting"]
     return False, None
 
@@ -237,25 +364,25 @@ def detect_disk_formatting(command, tool_name, tool_input, config):
 def detect_network_exfiltration(command, tool_name, tool_input, config):
     """Detect data exfiltration via curl, wget, nc, scp, rsync."""
     # curl posting data (file or stdin)
-    if re.search(r"\bcurl\b.*(-d\s+@|--data\s+@|-X\s+POST)", command):
+    if _RE_CURL_POST_DATA.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # curl file upload (-F form, -T upload, --upload-file)
-    if re.search(r"\bcurl\b.*(-F\s+|--form\s+|-T\s+|--upload-file\s+)", command):
+    if _RE_CURL_UPLOAD.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # wget posting a file
-    if re.search(r"\bwget\b.*--post-file", command):
+    if _RE_WGET_POST_FILE.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # Piping to nc
-    if re.search(r"\|\s*nc\b", command) or re.search(r"\bnc\b.*<", command):
+    if _RE_PIPE_TO_NC.search(command) or _RE_NC_REDIRECT.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # Piping curl/wget output to bash/sh (remote code execution)
-    if re.search(r"\b(curl|wget)\b.*\|\s*(bash|sh|zsh)\b", command):
+    if _RE_CURL_WGET_PIPE_SHELL.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # scp upload: last argument is remote destination (user@host:path)
-    if re.search(r"\bscp\b.*\s\S+@\S+:\S*$", command):
+    if _RE_SCP_UPLOAD.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # rsync upload: last argument is remote destination
-    if re.search(r"\brsync\b.*\s\S+@\S+:\S*$", command):
+    if _RE_RSYNC_UPLOAD.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     return False, None
 
@@ -295,27 +422,27 @@ def detect_package_publishing(command, tool_name, tool_input, config):
     # (prevents "npm publish --dry-run && npm publish" from being allowed
     #  because --dry-run appears in the first segment)
     segments = [command]
-    if re.search(r"(&&|;|\|\|)", command):
-        segments = [s.strip() for s in re.split(r"&&|;|\|\|", command)]
+    if _RE_CHAIN_OPS.search(command):
+        segments = [s.strip() for s in _RE_CHAIN_SPLIT.split(command)]
     for seg in segments:
         # npm publish (without --dry-run in this segment)
-        if re.search(r"\bnpm publish\b", seg) and not re.search(r"--dry-run", seg):
+        if _RE_NPM_PUBLISH.search(seg) and not _RE_DRY_RUN.search(seg):
             return True, BLOCK_MESSAGES["package_publishing"]
         # twine upload / pip upload
-        if re.search(r"\b(twine|pip) upload\b", seg):
+        if _RE_TWINE_PIP_UPLOAD.search(seg):
             return True, BLOCK_MESSAGES["package_publishing"]
         # gem push
-        if re.search(r"\bgem push\b", seg):
+        if _RE_GEM_PUSH.search(seg):
             return True, BLOCK_MESSAGES["package_publishing"]
     return False, None
 
 
 def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
     """Detect destructive commands executed remotely via SSH."""
-    if not re.search(r"^ssh\b", command):
+    if not _RE_SSH_CMD.search(command):
         return False, None
     # Try quoted remote command first
-    remote_cmd_match = re.search(r"""ssh\s+\S+\s+['"](.+?)['"]""", command)
+    remote_cmd_match = _RE_SSH_QUOTED_CMD.search(command)
     if remote_cmd_match:
         remote_cmd = remote_cmd_match.group(1).lower()
     else:
@@ -334,7 +461,7 @@ def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
 
 def detect_github_repo_deletion(command, tool_name, tool_input, config):
     """Detect gh repo delete."""
-    if re.search(r"\bgh repo delete\b", command):
+    if _RE_GH_REPO_DELETE.search(command):
         return True, BLOCK_MESSAGES["github_repo_deletion"]
     return False, None
 
@@ -364,23 +491,23 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
 
 def detect_git_force_push(command, tool_name, tool_input, config):
     """Detect git push --force (but not --force-with-lease or --force-if-includes)."""
-    if not re.search(r"^git push\b", command):
+    if not _RE_GIT_PUSH.search(command):
         return False, None
     # Must have --force or -f, but not --force-with-lease or --force-if-includes
-    if re.search(r"--force-with-lease|--force-if-includes", command):
+    if _RE_GIT_FORCE_SAFE.search(command):
         return False, None
-    if re.search(r"(--force\b|-f\b)", command):
+    if _RE_GIT_FORCE_FLAG.search(command):
         return True, ASK_MESSAGES["git_force_push"]
     return False, None
 
 
 def detect_git_hard_reset(command, tool_name, tool_input, config):
     """Detect git reset --hard or --merge."""
-    if not re.search(r"^git reset\b", command):
+    if not _RE_GIT_RESET.search(command):
         return False, None
-    if re.search(r"--hard\b", command):
+    if _RE_HARD_FLAG.search(command):
         return True, ASK_MESSAGES["git_hard_reset"]
-    if re.search(r"--merge\b", command):
+    if _RE_MERGE_FLAG.search(command):
         return True, ASK_MESSAGES["git_hard_reset"]
     return False, None
 
@@ -388,12 +515,12 @@ def detect_git_hard_reset(command, tool_name, tool_input, config):
 def detect_git_discard_changes(command, tool_name, tool_input, config):
     """Detect git checkout -- and git restore that discards working tree changes."""
     # git checkout -- <path> or git checkout <ref> -- <path>
-    if re.search(r"^git checkout\b", command) and re.search(r"\s--\s", command):
+    if _RE_GIT_CHECKOUT.search(command) and _RE_DOUBLE_DASH_SEP.search(command):
         return True, ASK_MESSAGES["git_discard_changes"]
     # git restore (without --staged/-S alone — that's allowlisted)
-    if re.search(r"^git restore\b", command):
-        has_staged = bool(re.search(r"(--staged|-S)\b", command))
-        has_worktree = bool(re.search(r"(--worktree|-W)\b", command))
+    if _RE_GIT_RESTORE.search(command):
+        has_staged = bool(_RE_STAGED_FLAG.search(command))
+        has_worktree = bool(_RE_WORKTREE_FLAG.search(command))
         # If only --staged (no --worktree), it's safe (allowlisted)
         if has_staged and not has_worktree:
             return False, None
@@ -404,23 +531,23 @@ def detect_git_discard_changes(command, tool_name, tool_input, config):
 
 def detect_git_destroy_stash(command, tool_name, tool_input, config):
     """Detect git stash drop/clear."""
-    if re.search(r"^git stash (drop|clear)\b", command):
+    if _RE_GIT_STASH_DROP_CLEAR.search(command):
         return True, ASK_MESSAGES["git_destroy_stash"]
     return False, None
 
 
 def detect_git_history_rewrite(command, tool_name, tool_input, config):
     """Detect git filter-branch/filter-repo."""
-    if re.search(r"^git filter-(branch|repo)\b", command):
+    if _RE_GIT_FILTER.search(command):
         return True, ASK_MESSAGES["git_history_rewrite"]
     return False, None
 
 
 def detect_git_config_changes(command, tool_name, tool_input, config):
     """Detect git config --global or --system."""
-    if not re.search(r"^git config\b", command):
+    if not _RE_GIT_CONFIG.search(command):
         return False, None
-    if re.search(r"--(global|system)\b", command):
+    if _RE_GLOBAL_SYSTEM_FLAG.search(command):
         return True, ASK_MESSAGES["git_config_changes"]
     return False, None
 
@@ -428,20 +555,20 @@ def detect_git_config_changes(command, tool_name, tool_input, config):
 def detect_git_other_dangerous(command, tool_name, tool_input, config):
     """Detect other dangerous git ops: clean -f, branch -D, remote remove, reflog expire, gc --prune."""
     # git clean with -f (force) but without -n/--dry-run (allowlisted)
-    if re.search(r"^git clean\b", command):
-        if re.search(r"-[a-zA-Z]*f", command) and not re.search(r"(-[a-zA-Z]*n|--dry-run)", command):
+    if _RE_GIT_CLEAN.search(command):
+        if _RE_CLEAN_FORCE_FLAG.search(command) and not _RE_CLEAN_DRY_RUN.search(command):
             return True, ASK_MESSAGES["git_other_dangerous"]
     # git branch -D (force delete)
-    if re.search(r"^git branch\s+-D\b", command):
+    if _RE_GIT_BRANCH_DELETE.search(command):
         return True, ASK_MESSAGES["git_other_dangerous"]
     # git remote remove
-    if re.search(r"^git remote remove\b", command):
+    if _RE_GIT_REMOTE_REMOVE.search(command):
         return True, ASK_MESSAGES["git_other_dangerous"]
     # git reflog expire
-    if re.search(r"^git reflog expire\b", command):
+    if _RE_GIT_REFLOG_EXPIRE.search(command):
         return True, ASK_MESSAGES["git_other_dangerous"]
     # git gc --prune=now
-    if re.search(r"^git gc\b.*--prune=", command):
+    if _RE_GIT_GC_PRUNE.search(command):
         return True, ASK_MESSAGES["git_other_dangerous"]
     return False, None
 
@@ -451,35 +578,34 @@ def detect_git_other_dangerous(command, tool_name, tool_input, config):
 def detect_permission_changes(command, tool_name, tool_input, config):
     """Detect dangerous permission changes (chmod 777, setuid, recursive chown, sudo chmod)."""
     # chmod +x is safe (allowlisted), skip it
-    if re.search(r"^chmod \+x\b", command):
+    if _RE_CHMOD_PLUS_X.search(command):
         return False, None
     # sudo chmod — always flag (note: sudo is stripped by normalize, but
     # the pattern stays for defense in depth if normalization changes)
-    if re.search(r"\bsudo\s+chmod\b", command):
+    if _RE_SUDO_CHMOD.search(command):
         return True, ASK_MESSAGES["permission_changes"]
     # chmod 777 or setuid/setgid bits (4-digit octal starting with 4/2/6)
-    if re.search(r"\bchmod\b", command):
+    if _RE_CHMOD.search(command):
         # 777 — world-writable
-        if re.search(r"\bchmod\s+777\b", command):
+        if _RE_CHMOD_777.search(command):
             return True, ASK_MESSAGES["permission_changes"]
         # 4-digit octal with setuid (4), setgid (2), or both (6) prefix
-        if re.search(r"\bchmod\s+[4267]\d{3}\b", command):
+        if _RE_CHMOD_SETUID_OCTAL.search(command):
             return True, ASK_MESSAGES["permission_changes"]
         # Symbolic setuid/setgid
-        if re.search(r"\bchmod\s+[ugo]*\+s\b", command):
+        if _RE_CHMOD_SETUID_SYMBOLIC.search(command):
             return True, ASK_MESSAGES["permission_changes"]
     # chown -R (recursive ownership change)
-    if re.search(r"\bchown\s+-[a-zA-Z]*R", command):
+    if _RE_CHOWN_RECURSIVE.search(command):
         return True, ASK_MESSAGES["permission_changes"]
     return False, None
 
 
 def detect_brew_commands(command, tool_name, tool_input, config):
     """Detect brew install/uninstall/upgrade/tap/link (not list/info/search/doctor)."""
-    if not re.search(r"^brew\b", command):
+    if not _RE_BREW.search(command):
         return False, None
-    modifying = r"^brew\s+(install|uninstall|remove|upgrade|tap|untap|link|unlink)\b"
-    if re.search(modifying, command):
+    if _RE_BREW_MODIFYING.search(command):
         return True, ASK_MESSAGES["brew_commands"]
     return False, None
 
@@ -487,13 +613,13 @@ def detect_brew_commands(command, tool_name, tool_input, config):
 def detect_docker_destructive(command, tool_name, tool_input, config):
     """Detect destructive Docker commands."""
     # docker system/volume/image prune
-    if re.search(r"\bdocker\s+(system|volume|image)\s+prune\b", command):
+    if _RE_DOCKER_PRUNE.search(command):
         return True, ASK_MESSAGES["docker_destructive"]
     # docker rm -f
-    if re.search(r"\bdocker\s+rm\s+-[a-zA-Z]*f", command):
+    if _RE_DOCKER_RM_FORCE.search(command):
         return True, ASK_MESSAGES["docker_destructive"]
     # docker-compose down -v
-    if re.search(r"\bdocker-compose\s+down\b.*-v\b", command):
+    if _RE_COMPOSE_DOWN_VOLUMES.search(command):
         return True, ASK_MESSAGES["docker_destructive"]
     return False, None
 
@@ -502,41 +628,41 @@ def detect_database_destructive(command, tool_name, tool_input, config):
     """Detect destructive database commands."""
     cmd_upper = command.upper()
     # DROP DATABASE/TABLE
-    if re.search(r"\bDROP\s+(DATABASE|TABLE|SCHEMA)\b", cmd_upper):
+    if _RE_DROP_OBJECT.search(cmd_upper):
         return True, ASK_MESSAGES["database_destructive"]
     # TRUNCATE
-    if re.search(r"\bTRUNCATE\b", cmd_upper):
+    if _RE_TRUNCATE.search(cmd_upper):
         return True, ASK_MESSAGES["database_destructive"]
     # DELETE without WHERE
-    if re.search(r"\bDELETE\s+FROM\b", cmd_upper) and not re.search(r"\bWHERE\b", cmd_upper):
+    if _RE_DELETE_FROM.search(cmd_upper) and not _RE_WHERE.search(cmd_upper):
         return True, ASK_MESSAGES["database_destructive"]
     # dropdb/dropuser CLI tools
-    if re.search(r"\b(dropdb|dropuser)\b", command):
+    if _RE_DROPDB_DROPUSER.search(command):
         return True, ASK_MESSAGES["database_destructive"]
     # redis FLUSHALL/FLUSHDB
-    if re.search(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b", command):
+    if _RE_REDIS_FLUSH.search(command):
         return True, ASK_MESSAGES["database_destructive"]
     return False, None
 
 
 def detect_terraform_destructive(command, tool_name, tool_input, config):
     """Detect destructive Terraform/Pulumi commands."""
-    if re.search(r"\bterraform destroy\b", command):
+    if _RE_TERRAFORM_DESTROY.search(command):
         return True, ASK_MESSAGES["terraform_destructive"]
-    if re.search(r"\bterraform apply\b.*-auto-approve\b", command):
+    if _RE_TERRAFORM_AUTO_APPROVE.search(command):
         return True, ASK_MESSAGES["terraform_destructive"]
-    if re.search(r"\bpulumi destroy\b", command):
+    if _RE_PULUMI_DESTROY.search(command):
         return True, ASK_MESSAGES["terraform_destructive"]
     return False, None
 
 
 def detect_github_cicd_ops(command, tool_name, tool_input, config):
     """Detect destructive GitHub CI/CD operations."""
-    if re.search(r"\bgh\s+(secret|variable)\s+delete\b", command):
+    if _RE_GH_SECRET_VAR_DELETE.search(command):
         return True, ASK_MESSAGES["github_cicd_ops"]
-    if re.search(r"\bgh\s+workflow\s+disable\b", command):
+    if _RE_GH_WORKFLOW_DISABLE.search(command):
         return True, ASK_MESSAGES["github_cicd_ops"]
-    if re.search(r"\bgh\s+release\s+delete\b", command):
+    if _RE_GH_RELEASE_DELETE.search(command):
         return True, ASK_MESSAGES["github_cicd_ops"]
     return False, None
 
@@ -584,7 +710,7 @@ def detect_inline_interpreter(command, tool_name, tool_input, config):
     if tool_name != "Bash":
         return False, None
     # bash/sh/zsh -c (subshell execution — the evasion vector)
-    if re.search(r"\b(bash|sh|zsh)\s+-c\b", command):
+    if _RE_SHELL_SUBSHELL.search(command):
         return True, ASK_MESSAGES["inline_interpreter"]
     return False, None
 
@@ -620,6 +746,8 @@ RULE_REGISTRY = [
     ("inline_interpreter", "ask", detect_inline_interpreter),
 ]
 
+_mark("registry_built")
+
 
 def is_allowlisted(command):
     """Check if command matches any allowlist pattern."""
@@ -635,12 +763,14 @@ def is_allowlisted(command):
 
 def block(message):
     """Block the tool call: exit 2 with message on stderr."""
+    _mark("exit")
     print(message, file=sys.stderr)
     sys.exit(2)
 
 
 def ask(message):
     """Ask for confirmation: exit 0 with JSON on stdout."""
+    _mark("exit")
     output = {
         "hookSpecificOutput": {
             "permissionDecision": "ask",
@@ -653,6 +783,7 @@ def ask(message):
 
 def allow():
     """Allow the tool call: exit 0 silently."""
+    _mark("exit")
     sys.exit(0)
 
 
@@ -661,11 +792,13 @@ def allow():
 # ---------------------------------------------------------------------------
 
 def main():
+    _mark("stdin_start")
     try:
         raw = sys.stdin.read()
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         allow()
+    _mark("stdin_parsed")
 
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
@@ -674,6 +807,7 @@ def main():
 
     config = load_config()
     disabled = set(config.get("disable_rules", []))
+    _mark("config_loaded")
 
     # Extract command for Bash tool
     command = ""
@@ -696,10 +830,12 @@ def main():
     # 1. Allowlist — check first, but SKIP for compound commands.
     #    Without this guard, "rm -rf /tmp/build && rm -rf /home" would
     #    match the temp-directory allowlist and bypass all block checks.
-    if command and not re.search(r"(&&|;|\|\|)", command):
+    if command and not _RE_CHAIN_OPS.search(command):
         for rule_id, pattern in ALLOWLIST_PATTERNS:
             if rule_id not in disabled and pattern.search(command):
+                _mark("allowlisted")
                 allow()
+    _mark("rules_start")
 
     # 2. Block / Ask — iterate rule registry
     for rule_id, tier, detect_fn in RULE_REGISTRY:
@@ -707,10 +843,12 @@ def main():
             continue
         detected, message = detect_fn(command, tool_name, tool_input, config)
         if detected:
+            _mark("rules_done")
             if tier == "block":
                 block(message)
             elif tier == "ask":
                 ask(message)
+    _mark("rules_done")
 
     # 3. Allow — everything else
     allow()
