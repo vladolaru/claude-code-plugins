@@ -565,3 +565,161 @@ class TestGitOtherDangerous:
         cmd = hook.normalize_command(command)
         detected, _ = hook.detect_git_other_dangerous(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
+
+
+# ---------------------------------------------------------------------------
+# Ask Tier — Non-Git Categories (Task 7)
+# ---------------------------------------------------------------------------
+
+class TestPermissionChanges:
+    @pytest.mark.parametrize("command", [
+        "chmod 777 file",
+        "chmod 4755 file",
+        "chmod u+s file",
+        "chown -R root:root /",
+        "sudo chmod 644 file",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_permission_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "chmod +x script.sh",
+        "chmod 644 file",
+        "chmod 755 script.sh",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_permission_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestBrewCommands:
+    @pytest.mark.parametrize("command", [
+        "brew install node",
+        "brew uninstall python",
+        "brew upgrade",
+        "brew tap user/repo",
+        "brew link openssl",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_brew_commands(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "brew list",
+        "brew info node",
+        "brew search pattern",
+        "brew doctor",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_brew_commands(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestDockerDestructive:
+    @pytest.mark.parametrize("command", [
+        "docker system prune",
+        "docker volume prune",
+        "docker rm -f container",
+        "docker-compose down -v",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_docker_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "docker ps",
+        "docker build .",
+        "docker run image",
+        "docker-compose up",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_docker_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestDatabaseDestructive:
+    @pytest.mark.parametrize("command", [
+        'psql -c "DROP TABLE users"',
+        'mysql -e "TRUNCATE orders"',
+        'psql -c "DELETE FROM users"',
+        "dropdb mydb",
+        "dropuser myuser",
+        "redis-cli FLUSHALL",
+        "redis-cli FLUSHDB",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_database_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        'psql -c "SELECT * FROM users"',
+        'psql -c "DELETE FROM users WHERE id = 1"',
+        'mysql -e "INSERT INTO users VALUES (1)"',
+        "createdb mydb",
+        "redis-cli GET key",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_database_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestTerraformDestructive:
+    @pytest.mark.parametrize("command", [
+        "terraform destroy",
+        "terraform apply -auto-approve",
+        "pulumi destroy",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_terraform_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "terraform plan",
+        "terraform init",
+        "terraform apply",
+        "pulumi preview",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_terraform_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+class TestGitHubCICDOps:
+    @pytest.mark.parametrize("command", [
+        "gh secret delete MY_SECRET",
+        "gh variable delete MY_VAR",
+        "gh workflow disable ci.yml",
+        "gh release delete v1.0",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_github_cicd_ops(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "gh secret list",
+        "gh secret set MY_SECRET",
+        "gh workflow view",
+        "gh release create v1.0",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_github_cicd_ops(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False

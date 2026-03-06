@@ -388,6 +388,100 @@ def detect_git_other_dangerous(command, tool_name, tool_input, config):
     return False, None
 
 
+# --- Ask Tier: Non-Git Categories ---
+
+def detect_permission_changes(command, tool_name, tool_input, config):
+    """Detect dangerous permission changes (chmod 777, setuid, recursive chown, sudo chmod)."""
+    # chmod +x is safe (allowlisted), skip it
+    if re.search(r"^chmod \+x\b", command):
+        return False, None
+    # sudo chmod — always flag
+    if re.search(r"\bsudo\s+chmod\b", command):
+        return True, ASK_MESSAGES["permission_changes"]
+    # chmod 777 or setuid/setgid bits (4-digit octal starting with 4/2/6)
+    if re.search(r"\bchmod\b", command):
+        # 777 — world-writable
+        if re.search(r"\bchmod\s+777\b", command):
+            return True, ASK_MESSAGES["permission_changes"]
+        # 4-digit octal with setuid (4), setgid (2), or both (6) prefix
+        if re.search(r"\bchmod\s+[4267]\d{3}\b", command):
+            return True, ASK_MESSAGES["permission_changes"]
+        # Symbolic setuid/setgid
+        if re.search(r"\bchmod\s+[ugo]*\+s\b", command):
+            return True, ASK_MESSAGES["permission_changes"]
+    # chown -R (recursive ownership change)
+    if re.search(r"\bchown\s+-[a-zA-Z]*R", command):
+        return True, ASK_MESSAGES["permission_changes"]
+    return False, None
+
+
+def detect_brew_commands(command, tool_name, tool_input, config):
+    """Detect brew install/uninstall/upgrade/tap/link (not list/info/search/doctor)."""
+    if not re.search(r"^brew\b", command):
+        return False, None
+    modifying = r"^brew\s+(install|uninstall|remove|upgrade|tap|untap|link|unlink)\b"
+    if re.search(modifying, command):
+        return True, ASK_MESSAGES["brew_commands"]
+    return False, None
+
+
+def detect_docker_destructive(command, tool_name, tool_input, config):
+    """Detect destructive Docker commands."""
+    # docker system/volume/image prune
+    if re.search(r"\bdocker\s+(system|volume|image)\s+prune\b", command):
+        return True, ASK_MESSAGES["docker_destructive"]
+    # docker rm -f
+    if re.search(r"\bdocker\s+rm\s+-[a-zA-Z]*f", command):
+        return True, ASK_MESSAGES["docker_destructive"]
+    # docker-compose down -v
+    if re.search(r"\bdocker-compose\s+down\b.*-v\b", command):
+        return True, ASK_MESSAGES["docker_destructive"]
+    return False, None
+
+
+def detect_database_destructive(command, tool_name, tool_input, config):
+    """Detect destructive database commands."""
+    cmd_upper = command.upper()
+    # DROP DATABASE/TABLE
+    if re.search(r"\bDROP\s+(DATABASE|TABLE|SCHEMA)\b", cmd_upper):
+        return True, ASK_MESSAGES["database_destructive"]
+    # TRUNCATE
+    if re.search(r"\bTRUNCATE\b", cmd_upper):
+        return True, ASK_MESSAGES["database_destructive"]
+    # DELETE without WHERE
+    if re.search(r"\bDELETE\s+FROM\b", cmd_upper) and not re.search(r"\bWHERE\b", cmd_upper):
+        return True, ASK_MESSAGES["database_destructive"]
+    # dropdb/dropuser CLI tools
+    if re.search(r"\b(dropdb|dropuser)\b", command):
+        return True, ASK_MESSAGES["database_destructive"]
+    # redis FLUSHALL/FLUSHDB
+    if re.search(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b", command):
+        return True, ASK_MESSAGES["database_destructive"]
+    return False, None
+
+
+def detect_terraform_destructive(command, tool_name, tool_input, config):
+    """Detect destructive Terraform/Pulumi commands."""
+    if re.search(r"\bterraform destroy\b", command):
+        return True, ASK_MESSAGES["terraform_destructive"]
+    if re.search(r"\bterraform apply\b.*-auto-approve\b", command):
+        return True, ASK_MESSAGES["terraform_destructive"]
+    if re.search(r"\bpulumi destroy\b", command):
+        return True, ASK_MESSAGES["terraform_destructive"]
+    return False, None
+
+
+def detect_github_cicd_ops(command, tool_name, tool_input, config):
+    """Detect destructive GitHub CI/CD operations."""
+    if re.search(r"\bgh\s+(secret|variable)\s+delete\b", command):
+        return True, ASK_MESSAGES["github_cicd_ops"]
+    if re.search(r"\bgh\s+workflow\s+disable\b", command):
+        return True, ASK_MESSAGES["github_cicd_ops"]
+    if re.search(r"\bgh\s+release\s+delete\b", command):
+        return True, ASK_MESSAGES["github_cicd_ops"]
+    return False, None
+
+
 # Rule registry: (rule_id, tier, detect_fn)
 RULE_REGISTRY = [
     ("destructive_deletion", "block", detect_destructive_deletion),
@@ -408,6 +502,13 @@ RULE_REGISTRY = [
     ("git_history_rewrite", "ask", detect_git_history_rewrite),
     ("git_config_changes", "ask", detect_git_config_changes),
     ("git_other_dangerous", "ask", detect_git_other_dangerous),
+    # Ask tier — non-git
+    ("permission_changes", "ask", detect_permission_changes),
+    ("brew_commands", "ask", detect_brew_commands),
+    ("docker_destructive", "ask", detect_docker_destructive),
+    ("database_destructive", "ask", detect_database_destructive),
+    ("terraform_destructive", "ask", detect_terraform_destructive),
+    ("github_cicd_ops", "ask", detect_github_cicd_ops),
 ]
 
 
