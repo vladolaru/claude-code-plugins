@@ -196,12 +196,124 @@ def detect_disk_formatting(command, tool_name, tool_input, config):
     return False, None
 
 
+# --- Block Tier: Network, Credentials, Publishing, SSH, GitHub, Paths ---
+
+def detect_network_exfiltration(command, tool_name, tool_input, config):
+    """Detect data exfiltration via curl, wget, nc."""
+    # curl posting data (file or stdin)
+    if re.search(r"\bcurl\b.*(-d\s+@|--data\s+@|-X\s+POST)", command):
+        return True, BLOCK_MESSAGES["network_exfiltration"]
+    # wget posting a file
+    if re.search(r"\bwget\b.*--post-file", command):
+        return True, BLOCK_MESSAGES["network_exfiltration"]
+    # Piping to nc
+    if re.search(r"\|\s*nc\b", command) or re.search(r"\bnc\b.*<", command):
+        return True, BLOCK_MESSAGES["network_exfiltration"]
+    # Piping curl/wget output to bash/sh (remote code execution)
+    if re.search(r"\b(curl|wget)\b.*\|\s*(bash|sh|zsh)\b", command):
+        return True, BLOCK_MESSAGES["network_exfiltration"]
+    return False, None
+
+
+def detect_credential_access(command, tool_name, tool_input, config):
+    """Detect access to credential files via Read/Edit/Write tools or Bash."""
+    cred_patterns = config.get("credential_patterns", DEFAULTS["credential_patterns"])
+    safe_patterns = config.get("credential_safe_patterns", DEFAULTS["credential_safe_patterns"])
+
+    # Get the file path to check
+    file_path = ""
+    if tool_name in ("Read", "Edit", "Write"):
+        file_path = tool_input.get("file_path", "")
+    elif tool_name == "Bash" and command:
+        # Check if bash command accesses credential files
+        file_path = command
+
+    if not file_path:
+        return False, None
+
+    # Check safe patterns first
+    for safe_pat in safe_patterns:
+        if re.search(safe_pat, file_path):
+            return False, None
+
+    # Check credential patterns
+    for cred_pat in cred_patterns:
+        if re.search(cred_pat, file_path):
+            return True, BLOCK_MESSAGES["credential_access"]
+
+    return False, None
+
+
+def detect_package_publishing(command, tool_name, tool_input, config):
+    """Detect package publishing commands."""
+    # npm publish (without --dry-run)
+    if re.search(r"\bnpm publish\b", command) and not re.search(r"--dry-run", command):
+        return True, BLOCK_MESSAGES["package_publishing"]
+    # twine upload / pip upload
+    if re.search(r"\b(twine|pip) upload\b", command):
+        return True, BLOCK_MESSAGES["package_publishing"]
+    # gem push
+    if re.search(r"\bgem push\b", command):
+        return True, BLOCK_MESSAGES["package_publishing"]
+    return False, None
+
+
+def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
+    """Detect destructive commands executed remotely via SSH."""
+    if not re.search(r"^ssh\b", command):
+        return False, None
+    # Look for quoted remote commands containing destructive operations
+    remote_cmd_match = re.search(r"""ssh\s+\S+\s+['"](.+?)['"]""", command)
+    if not remote_cmd_match:
+        return False, None
+    remote_cmd = remote_cmd_match.group(1).lower()
+    destructive = ["rm ", "rm\t", "drop ", "truncate ", "delete ", "mkfs", "dd "]
+    for pattern in destructive:
+        if pattern in remote_cmd:
+            return True, BLOCK_MESSAGES["ssh_remote_destruction"]
+    return False, None
+
+
+def detect_github_repo_deletion(command, tool_name, tool_input, config):
+    """Detect gh repo delete."""
+    if re.search(r"\bgh repo delete\b", command):
+        return True, BLOCK_MESSAGES["github_repo_deletion"]
+    return False, None
+
+
+def detect_zero_access_paths(command, tool_name, tool_input, config):
+    """Detect access to zero-access paths (e.g., ~/.ssh/, ~/.gnupg/)."""
+    zero_paths = config.get("zero_access_paths", DEFAULTS["zero_access_paths"])
+
+    # Get the path to check
+    paths_to_check = []
+    if tool_name in ("Read", "Edit", "Write"):
+        fp = tool_input.get("file_path", "")
+        if fp:
+            paths_to_check.append(fp)
+    if tool_name == "Bash" and command:
+        paths_to_check.append(command)
+
+    for check_path in paths_to_check:
+        for zero_path in zero_paths:
+            if zero_path in check_path:
+                return True, BLOCK_MESSAGES["zero_access_paths"]
+
+    return False, None
+
+
 # Rule registry: (rule_id, tier, detect_fn)
 RULE_REGISTRY = [
     ("destructive_deletion", "block", detect_destructive_deletion),
     ("chained_deletion", "block", detect_chained_deletion),
     ("alternative_deletion", "block", detect_alternative_deletion),
     ("disk_formatting", "block", detect_disk_formatting),
+    ("network_exfiltration", "block", detect_network_exfiltration),
+    ("credential_access", "block", detect_credential_access),
+    ("package_publishing", "block", detect_package_publishing),
+    ("ssh_remote_destruction", "block", detect_ssh_remote_destruction),
+    ("github_repo_deletion", "block", detect_github_repo_deletion),
+    ("zero_access_paths", "block", detect_zero_access_paths),
 ]
 
 
