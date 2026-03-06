@@ -1,0 +1,36 @@
+{
+  "_comment": "Representative tool call distribution for benchmarking. Weights approximate a typical Claude Code session: ~55% Read, ~30% Bash (mostly safe), ~10% Write/Edit, ~5% dangerous/edge cases.",
+  "scenarios": [
+    {"weight": 20, "tool_name": "Read", "tool_input": {"file_path": "/project/src/main.py"}, "label": "read_source"},
+    {"weight": 10, "tool_name": "Read", "tool_input": {"file_path": "/project/README.md"}, "label": "read_readme"},
+    {"weight": 10, "tool_name": "Read", "tool_input": {"file_path": "/project/package.json"}, "label": "read_config"},
+    {"weight": 5, "tool_name": "Read", "tool_input": {"file_path": "/project/tests/test_main.py"}, "label": "read_test"},
+    {"weight": 5, "tool_name": "Read", "tool_input": {"file_path": "/project/.env.example"}, "label": "read_env_example"},
+    {"weight": 5, "tool_name": "Read", "tool_input": {"file_path": "/project/src/utils/helpers.ts"}, "label": "read_nested"},
+
+    {"weight": 5, "tool_name": "Bash", "tool_input": {"command": "git status"}, "label": "bash_git_status"},
+    {"weight": 3, "tool_name": "Bash", "tool_input": {"command": "git diff"}, "label": "bash_git_diff"},
+    {"weight": 3, "tool_name": "Bash", "tool_input": {"command": "git log --oneline -5"}, "label": "bash_git_log"},
+    {"weight": 2, "tool_name": "Bash", "tool_input": {"command": "git add src/main.py"}, "label": "bash_git_add"},
+    {"weight": 3, "tool_name": "Bash", "tool_input": {"command": "ls -la src/"}, "label": "bash_ls"},
+    {"weight": 2, "tool_name": "Bash", "tool_input": {"command": "pwd"}, "label": "bash_pwd"},
+    {"weight": 3, "tool_name": "Bash", "tool_input": {"command": "npm test"}, "label": "bash_npm_test"},
+    {"weight": 2, "tool_name": "Bash", "tool_input": {"command": "python3 -c \"print('hello')\""}, "label": "bash_python_inline"},
+    {"weight": 2, "tool_name": "Bash", "tool_input": {"command": "node -e \"console.log(1+1)\""}, "label": "bash_node_inline"},
+    {"weight": 2, "tool_name": "Bash", "tool_input": {"command": "pnpm build"}, "label": "bash_pnpm_build"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "echo $PATH"}, "label": "bash_echo"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "wc -l src/main.py"}, "label": "bash_wc"},
+
+    {"weight": 4, "tool_name": "Write", "tool_input": {"file_path": "/project/src/main.py", "content": "..."}, "label": "write_source"},
+    {"weight": 3, "tool_name": "Edit", "tool_input": {"file_path": "/project/src/utils.py", "old_string": "a", "new_string": "b"}, "label": "edit_source"},
+    {"weight": 2, "tool_name": "Write", "tool_input": {"file_path": "/project/tests/test_new.py", "content": "..."}, "label": "write_test"},
+
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "git push origin main"}, "label": "bash_git_push"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "git checkout -b feature/new"}, "label": "bash_git_checkout_b"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/build"}, "label": "bash_rm_tmp"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "chmod +x script.sh"}, "label": "bash_chmod_x"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "npm publish --dry-run"}, "label": "bash_npm_dryrun"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "curl -s https://api.example.com/status"}, "label": "bash_curl_safe"},
+    {"weight": 1, "tool_name": "Bash", "tool_input": {"command": "docker ps"}, "label": "bash_docker_ps"}
+  ]
+}
