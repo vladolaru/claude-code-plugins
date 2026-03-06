@@ -957,3 +957,45 @@ class TestEvasionSuite:
             assert result.returncode == 2, (
                 f"Evasion NOT caught ({scenario['technique']}): {scenario['command']}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Scenario File Tests (Task 11)
+# ---------------------------------------------------------------------------
+
+class TestBlockedScenarios:
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    @pytest.fixture
+    def scenarios(self):
+        path = Path(__file__).resolve().parent / "scenarios" / "blocked.json"
+        with open(path) as f:
+            return json.load(f)
+
+    def test_all_blocked(self, scenarios):
+        for s in scenarios:
+            payload = json.dumps({"tool_name": s["tool_name"], "tool_input": s["tool_input"]})
+            result = subprocess.run(
+                ["python3", self.SCRIPT],
+                input=payload, capture_output=True, text=True, timeout=5
+            )
+            assert result.returncode == 2, f"NOT blocked ({s['category']}): {s['tool_input']}"
+
+
+class TestAllowedScenarios:
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    @pytest.fixture
+    def scenarios(self):
+        path = Path(__file__).resolve().parent / "scenarios" / "allowed.json"
+        with open(path) as f:
+            return json.load(f)
+
+    def test_all_allowed(self, scenarios):
+        for s in scenarios:
+            payload = json.dumps({"tool_name": s["tool_name"], "tool_input": s["tool_input"]})
+            result = subprocess.run(
+                ["python3", self.SCRIPT],
+                input=payload, capture_output=True, text=True, timeout=5
+            )
+            assert result.returncode == 0, f"Incorrectly blocked ({s['category']}): {s['tool_input']}"
