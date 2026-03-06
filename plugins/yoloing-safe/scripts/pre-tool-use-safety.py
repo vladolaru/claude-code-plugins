@@ -135,13 +135,74 @@ ALLOWLIST_PATTERNS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Detection Functions — placeholders, implemented in Tasks 4-7
+# Detection Functions
 # Each returns (detected: bool, message: str | None)
+# Signature: (command, tool_name, tool_input, config) -> (bool, str|None)
 # ---------------------------------------------------------------------------
 
+# --- Block Tier: Filesystem Destruction ---
+
+def detect_destructive_deletion(command, tool_name, tool_input, config):
+    """Detect rm -rf and variants."""
+    if not re.search(r"\brm\b", command):
+        return False, None
+    # Must have both recursive and force flags
+    has_recursive = bool(re.search(r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive", command))
+    has_force = bool(re.search(r"(?:^|\s)-[a-zA-Z]*[fF]|--force", command))
+    if has_recursive and has_force:
+        return True, BLOCK_MESSAGES["destructive_deletion"]
+    return False, None
+
+
+def detect_chained_deletion(command, tool_name, tool_input, config):
+    """Detect rm hidden in command chains (&&, ;, ||)."""
+    if not re.search(r"(&&|;|\|\|)", command):
+        return False, None
+    # Split on chain operators and check each segment after the first
+    segments = re.split(r"&&|;|\|\|", command)
+    for segment in segments[1:]:
+        segment = segment.strip()
+        # Normalize the segment too
+        segment = normalize_command(segment)
+        if re.search(r"\brm\b", segment):
+            return True, BLOCK_MESSAGES["chained_deletion"]
+    return False, None
+
+
+def detect_alternative_deletion(command, tool_name, tool_input, config):
+    """Detect find -delete, find -exec rm, xargs rm, eval rm."""
+    # find -delete
+    if re.search(r"\bfind\b.*-delete\b", command):
+        return True, BLOCK_MESSAGES["alternative_deletion"]
+    # find -exec rm
+    if re.search(r"\bfind\b.*-exec\s+rm\b", command):
+        return True, BLOCK_MESSAGES["alternative_deletion"]
+    # xargs rm
+    if re.search(r"\bxargs\s+rm\b", command):
+        return True, BLOCK_MESSAGES["alternative_deletion"]
+    # eval with rm
+    if re.search(r"\beval\b.*\brm\b", command):
+        return True, BLOCK_MESSAGES["alternative_deletion"]
+    return False, None
+
+
+def detect_disk_formatting(command, tool_name, tool_input, config):
+    """Detect mkfs, dd to device."""
+    if re.search(r"\bmkfs\b", command):
+        return True, BLOCK_MESSAGES["disk_formatting"]
+    # dd writing to a device
+    if re.search(r"\bdd\b", command) and re.search(r"of=/dev/", command):
+        return True, BLOCK_MESSAGES["disk_formatting"]
+    return False, None
+
+
 # Rule registry: (rule_id, tier, detect_fn)
-# detect_fn signature: (command, tool_name, tool_input, config) -> (bool, str|None)
-RULE_REGISTRY = []  # Populated in Tasks 4-7
+RULE_REGISTRY = [
+    ("destructive_deletion", "block", detect_destructive_deletion),
+    ("chained_deletion", "block", detect_chained_deletion),
+    ("alternative_deletion", "block", detect_alternative_deletion),
+    ("disk_formatting", "block", detect_disk_formatting),
+]
 
 
 def is_allowlisted(command):
