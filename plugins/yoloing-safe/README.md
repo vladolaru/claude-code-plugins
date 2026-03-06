@@ -107,6 +107,7 @@ A few deliberate choices worth calling out:
 - **Allowlist checked first** — without it, `git checkout -b feature` would false-positive against `git checkout --`, and `rm -rf /tmp/build` would match the destructive deletion pattern. Order matters.
 - **Compound command guard** — allowlist is skipped when chain operators (`&&`, `;`, `||`) are present, preventing attackers from prefixing a destructive command with an allowlisted one.
 - **Self-protection** — the hook blocks Write/Edit to its own config file and plugin directory, preventing an agent from disabling all rules then running destructive commands. This check is hardcoded and cannot be disabled via `disable_rules`.
+- **Tool-scoped rules** — each rule declares which tools it applies to. Read evaluates 2 rules (credential access, protected paths), Write/Edit evaluate 3 (adding sensitive write targets), Bash runs all 25. A new rule that omits tool tags won't run at all — a visible omission, not a silent bypass.
 - **Command normalization** — strips path prefixes (`/usr/bin/rm` → `rm`) and command wrappers (`sudo`, `env`, `nice`, `nohup`, etc.) so detection works regardless of how the command is invoked.
 - **Path expansion** — zero-access paths are checked in both `~/` form and expanded absolute form (`/Users/you/`), so protection works regardless of which form the tool provides.
 
