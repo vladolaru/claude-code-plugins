@@ -28,12 +28,13 @@ The hook auto-wires on install via `hooks.json`. Zero configuration needed — i
 | Destructive deletion | `rm -rf /`, `rm -fr /home`, chained `rm` via `&&`/`;` |
 | Alternative deletion | `find / -delete`, `xargs rm`, `eval "rm"` |
 | Disk formatting | `mkfs.ext4 /dev/sda1`, `dd of=/dev/sda` |
-| Network exfiltration | `curl -d @/etc/passwd`, piping to `nc`, `wget \| bash` |
-| Credential access | `.env`, `.pem`, `id_rsa` via any tool (configurable) |
+| Network exfiltration | `curl -d @/etc/passwd`, `curl -F`, `curl -T`, `scp` upload, `rsync` upload, piping to `nc`, `wget \| bash` |
+| Credential access | `.env`, `.pem`, `id_rsa`, `id_ecdsa`, `.p12`, `.pfx`, `.jks`, `.keystore` via any tool (configurable) |
 | Package publishing | `npm publish`, `twine upload`, `gem push` |
-| SSH remote destruction | `ssh host "rm -rf /"`, `ssh host "DROP DATABASE"` |
+| SSH remote destruction | `ssh host "rm -rf /"`, `ssh host rm -rf /` (quoted or unquoted), `ssh host "DROP DATABASE"` |
 | GitHub repo deletion | `gh repo delete` |
-| Protected paths | `~/.ssh/`, `~/.gnupg/` (configurable) |
+| Protected paths | `~/.ssh/`, `~/.gnupg/`, `~/.aws/`, `~/.config/gcloud/` (configurable) |
+| Self-protection | Write/Edit to the hook's own config or plugin files (non-configurable) |
 
 ### Asked (user confirms)
 
@@ -51,6 +52,8 @@ The hook auto-wires on install via `hooks.json`. Zero configuration needed — i
 | Database | `DROP TABLE`, `TRUNCATE`, `DELETE` without `WHERE` |
 | Infrastructure | `terraform destroy`, `terraform apply -auto-approve` |
 | GitHub CI/CD | `gh secret delete`, `gh workflow disable` |
+| Sensitive writes | Shell init files (`~/.bashrc`, `~/.zshrc`), git hooks (`.git/hooks/*`), home-directory `~/.gitconfig`, `~/.npmrc` (project-level dotfiles are allowed) |
+| Shell subshell execution | `bash -c`, `sh -c`, `zsh -c` (interpreter one-liners like `python3 -c` are allowed — see Known Limitations) |
 
 ### Allowed (safe variants pass through)
 
@@ -76,6 +79,14 @@ Works out of the box. For customization, create `~/.claude/yoloing-safe.json`:
 
 Only keys you include override defaults. Omitted keys keep their built-in values. See `config/defaults.json` for the full default configuration including credential patterns.
 
+### Disableable Rules
+
+All rules in the block and ask tiers can be disabled except **self-protection** (which prevents the agent from modifying the hook's own config or script files). Available rule IDs:
+
+**Block tier:** `destructive_deletion`, `chained_deletion`, `alternative_deletion`, `disk_formatting`, `network_exfiltration`, `credential_access`, `package_publishing`, `ssh_remote_destruction`, `github_repo_deletion`, `zero_access_paths`
+
+**Ask tier:** `git_force_push`, `git_hard_reset`, `git_discard_changes`, `git_destroy_stash`, `git_history_rewrite`, `git_config_changes`, `git_other_dangerous`, `permission_changes`, `brew_commands`, `docker_destructive`, `database_destructive`, `terraform_destructive`, `github_cicd_ops`, `sensitive_write_target`, `inline_interpreter`
+
 ## Installation
 
 ```bash
@@ -94,6 +105,46 @@ A few deliberate choices worth calling out:
 - **Exit 2 for blocks** — Claude treats this as a system error it can't negotiate with. Stronger than a policy denial for behavior shaping.
 - **5-second timeout** — if the script hangs, the tool call proceeds. No blocking the agent forever.
 - **Allowlist checked first** — without it, `git checkout -b feature` would false-positive against `git checkout --`, and `rm -rf /tmp/build` would match the destructive deletion pattern. Order matters.
+- **Compound command guard** — allowlist is skipped when chain operators (`&&`, `;`, `||`) are present, preventing attackers from prefixing a destructive command with an allowlisted one.
+- **Self-protection** — the hook blocks Write/Edit to its own config file and plugin directory, preventing an agent from disabling all rules then running destructive commands. This check is hardcoded and cannot be disabled via `disable_rules`.
+- **Command normalization** — strips path prefixes (`/usr/bin/rm` → `rm`) and command wrappers (`sudo`, `env`, `nice`, `nohup`, etc.) so detection works regardless of how the command is invoked.
+- **Path expansion** — zero-access paths are checked in both `~/` form and expanded absolute form (`/Users/you/`), so protection works regardless of which form the tool provides.
+
+## Known Limitations
+
+This hook is a safety net, not a sandbox. It catches common and accidental destructive patterns, but a sufficiently motivated adversary can find ways around it. Understanding these limits helps set the right expectations.
+
+### What it can't catch
+
+**Indirection attacks.** The hook inspects the command string, not what the command does. An agent can:
+- Write a destructive script to a file (`cleanup.sh`), then run `bash cleanup.sh` — the Bash command has no dangerous keywords
+- Use alternative language interpreters: `python3 -c "import shutil; shutil.rmtree('/')"` — interpreter one-liners are deliberately allowed because agents use them constantly for legitimate purposes (JSON formatting, calculations, version checks). Shell subshells (`bash -c`) are flagged since they're the evasion vector.
+- Write malicious content via the Write tool — only the file path is checked, not the content (mitigated for known sensitive paths by the `sensitive_write_target` rule)
+
+**Shell metacharacter evasion.** The hook sees literal strings; the shell interprets them:
+- Variable expansion: `CMD=rm; $CMD -rf /`
+- Subshell execution: `$(echo rm) -rf /`
+- Hex encoding: `$'\x72\x6d' -rf /`
+- Brace expansion: `{rm,-rf,/}`
+
+These are fundamentally hard to catch without a shell parser, which is beyond the scope of a fast, stateless hook.
+
+**Unmonitored tools.** The hook only monitors `Bash`, `Read`, `Write`, and `Edit` tools. Other tools are not checked:
+- MCP server tools (filesystem, browser automation, etc.) can read/write/delete files
+- `NotebookEdit` can write executable code cells
+
+MCP tool safety requires its own solution at the MCP permission level.
+
+**Multi-step attacks.** The hook is stateless — each tool call is evaluated independently:
+- Copy a credential file to an innocuous location, then read the copy
+- Set up a git hook that exfiltrates data on every commit
+- Push code to an attacker-controlled remote via `git remote add` + `git push`
+
+**Network exfiltration via interpreters.** While `curl`, `wget`, `nc`, `scp`, and `rsync` are monitored, data can be sent via `python3 -c "requests.post(...)"`, DNS exfiltration, `socat`, `telnet`, or any other network tool not in the detection list.
+
+### What it does catch
+
+The 95% case — the accidental `rm -rf /`, the unintended `npm publish`, the `git push --force` that should have been `--force-with-lease`, the credential file read that should use `.env.example` instead. These are the real incidents that happen in daily YOLO mode usage, and they're all caught reliably.
 
 ## License
 

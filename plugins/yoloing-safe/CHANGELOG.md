@@ -5,6 +5,25 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-06
+
+### Added
+
+- Self-protection: hook blocks Write/Edit to its own config file and plugin directory, preventing an agent from disabling safety rules (non-configurable, cannot be disabled via `disable_rules`)
+- Allowlist chain guard: allowlist is skipped when chain operators (`&&`, `;`, `||`) are present, preventing bypass via safe prefix + destructive tail (e.g., `rm -rf /tmp/build && rm -rf /home`)
+- Command wrapper normalization: strips `sudo`, `env`, `nice`, `nohup`, `time`, `exec`, `strace`, `ionice`, `taskset` prefixes with loop for nesting
+- Zero-access path expansion: `~/.ssh/` is now also checked as `/Users/you/.ssh/` so protection works regardless of path form
+- New block-tier patterns: `curl -F`/`-T`/`--upload-file` (form/file upload), `scp` upload, `rsync` upload
+- SSH unquoted command detection: `ssh host rm -rf /` now caught alongside quoted `ssh host "rm -rf /"`
+- New credential patterns: `id_ecdsa`, `.p12`, `.pfx`, `.jks`, `.keystore`
+- New default zero-access paths: `~/.aws/`, `~/.config/gcloud/`
+- New ask-tier rule `sensitive_write_target`: flags Write/Edit to shell init files (`~/.bashrc`, `~/.zshrc`, etc.), git hooks (`.git/hooks/*`), and home-directory package config (`~/.gitconfig`, `~/.npmrc`, `~/.yarnrc`). Project-level dotfiles are allowed to preserve YOLO flow.
+- New ask-tier rule `inline_interpreter`: flags shell subshell execution (`bash -c`, `sh -c`, `zsh -c`). Interpreter one-liners (`python3 -c`, `node -e`, etc.) are deliberately excluded — agents use them constantly for legitimate purposes, and the noise-to-signal ratio is too high. Interpreter-based attacks are documented as a known limitation.
+- Package publishing segment-aware detection: `npm publish --dry-run && npm publish` now correctly blocks the second segment
+- Known limitations section in README documenting what the hook fundamentally cannot catch
+- 30 evasion scenarios (was 16), 40 blocked scenarios (was 27), 29 allowed scenarios (was 27)
+- 84 new test assertions across 8 new test classes
+
 ## [1.0.0] - 2026-03-06
 
 ### Added

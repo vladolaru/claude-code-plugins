@@ -7,7 +7,12 @@
     "\\.pem$",
     "id_rsa",
     "id_ed25519",
-    "\\.key$"
+    "id_ecdsa",
+    "\\.key$",
+    "\\.p12$",
+    "\\.pfx$",
+    "\\.jks$",
+    "\\.keystore$"
   ],
   "credential_safe_patterns": [
     "\\.env\\.sample",
@@ -16,7 +21,9 @@
   ],
   "zero_access_paths": [
     "~/.ssh/",
-    "~/.gnupg/"
+    "~/.gnupg/",
+    "~/.aws/",
+    "~/.config/gcloud/"
   ],
   "disable_rules": []
 }

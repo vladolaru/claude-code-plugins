@@ -28,7 +28,12 @@ DEFAULTS = {
         r"\.pem$",
         r"id_rsa",
         r"id_ed25519",
+        r"id_ecdsa",
         r"\.key$",
+        r"\.p12$",
+        r"\.pfx$",
+        r"\.jks$",
+        r"\.keystore$",
     ],
     "credential_safe_patterns": [
         r"\.env\.sample",
@@ -38,11 +43,22 @@ DEFAULTS = {
     "zero_access_paths": [
         "~/.ssh/",
         "~/.gnupg/",
+        "~/.aws/",
+        "~/.config/gcloud/",
     ],
     "disable_rules": [],
 }
 
 USER_CONFIG_PATH = os.path.expanduser("~/.claude/yoloing-safe.json")
+
+# Self-protection: these paths cannot be modified by Write/Edit.
+# NOT configurable — hardcoded to prevent the agent from disabling the hook.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PLUGIN_ROOT = os.path.dirname(_SCRIPT_DIR)
+SELF_PROTECTED_PATHS = [
+    USER_CONFIG_PATH,
+    _PLUGIN_ROOT,
+]
 
 
 def load_config():
@@ -57,6 +73,14 @@ def load_config():
                 config[key] = user[key]
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
+    # Expand ~ in zero_access_paths so both tilde and absolute forms match
+    expanded = []
+    for p in config["zero_access_paths"]:
+        expanded.append(p)
+        ep = os.path.expanduser(p)
+        if ep != p:
+            expanded.append(ep)
+    config["zero_access_paths"] = expanded
     return config
 
 
@@ -64,15 +88,23 @@ def load_config():
 # Command Normalization
 # ---------------------------------------------------------------------------
 
+_WRAPPER_RE = re.compile(
+    r"^(command|env|sudo|nice|nohup|time|exec|strace|ionice|taskset)\s+"
+)
+
+
 def normalize_command(cmd):
-    """Strip absolute path prefix from command name and collapse whitespace."""
+    """Strip path prefixes, command wrappers, and collapse whitespace."""
     if not cmd:
         return ""
     # Strip leading absolute path from the command binary only
     # e.g., /usr/bin/git → git, but rm /home/user/bin/rm stays unchanged
     normalized = re.sub(r"^(?:/usr/local/bin/|/usr/bin/|/bin/|/sbin/|/usr/sbin/)", "", cmd)
-    # Also handle `command` builtin prefix: `command rm` → `rm`
-    normalized = re.sub(r"^command\s+", "", normalized)
+    # Strip command wrappers, looping for nesting (sudo env rm → rm)
+    prev = None
+    while prev != normalized:
+        prev = normalized
+        normalized = _WRAPPER_RE.sub("", normalized)
     # Collapse whitespace
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
@@ -93,6 +125,7 @@ BLOCK_MESSAGES = {
     "ssh_remote_destruction": "Executing destructive commands on remote hosts via SSH can cause irreversible damage to production systems. Run remote commands manually with explicit user intent.",
     "github_repo_deletion": "Deleting a GitHub repository is irreversible and destroys all issues, PRs, and history. This should only be done manually through the GitHub UI or CLI by the user.",
     "zero_access_paths": "This path contains sensitive system or security data that should not be accessed by an agent. Ask the user to provide the specific information you need.",
+    "self_protection": "This file is part of the safety hook infrastructure. Modifying it could disable safety protections. Ask the user to make changes manually.",
 }
 
 ASK_MESSAGES = {
@@ -109,6 +142,8 @@ ASK_MESSAGES = {
     "database_destructive": "This command permanently deletes database objects or data. Use a transaction with `BEGIN`/`ROLLBACK` to preview, or run against a dev database first. Confirm this is intentional.",
     "terraform_destructive": "This infrastructure command can destroy live resources. Use `--dry-run` or `plan` first to preview changes. Confirm this is intentional.",
     "github_cicd_ops": "Deleting GitHub secrets, variables, or disabling workflows affects CI/CD for all collaborators. Confirm this is intentional.",
+    "sensitive_write_target": "This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
+    "inline_interpreter": "Inline interpreter execution can bypass command-level safety checks. Review the code being executed and confirm this is intentional.",
 }
 
 # ---------------------------------------------------------------------------
@@ -159,9 +194,9 @@ def detect_chained_deletion(command, tool_name, tool_input, config):
     """Detect rm hidden in command chains (&&, ;, ||)."""
     if not re.search(r"(&&|;|\|\|)", command):
         return False, None
-    # Split on chain operators and check each segment after the first
+    # Split on chain operators and check each segment
     segments = re.split(r"&&|;|\|\|", command)
-    for segment in segments[1:]:
+    for segment in segments:
         segment = segment.strip()
         # Normalize the segment too
         segment = normalize_command(segment)
@@ -200,9 +235,12 @@ def detect_disk_formatting(command, tool_name, tool_input, config):
 # --- Block Tier: Network, Credentials, Publishing, SSH, GitHub, Paths ---
 
 def detect_network_exfiltration(command, tool_name, tool_input, config):
-    """Detect data exfiltration via curl, wget, nc."""
+    """Detect data exfiltration via curl, wget, nc, scp, rsync."""
     # curl posting data (file or stdin)
     if re.search(r"\bcurl\b.*(-d\s+@|--data\s+@|-X\s+POST)", command):
+        return True, BLOCK_MESSAGES["network_exfiltration"]
+    # curl file upload (-F form, -T upload, --upload-file)
+    if re.search(r"\bcurl\b.*(-F\s+|--form\s+|-T\s+|--upload-file\s+)", command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # wget posting a file
     if re.search(r"\bwget\b.*--post-file", command):
@@ -212,6 +250,12 @@ def detect_network_exfiltration(command, tool_name, tool_input, config):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     # Piping curl/wget output to bash/sh (remote code execution)
     if re.search(r"\b(curl|wget)\b.*\|\s*(bash|sh|zsh)\b", command):
+        return True, BLOCK_MESSAGES["network_exfiltration"]
+    # scp upload: last argument is remote destination (user@host:path)
+    if re.search(r"\bscp\b.*\s\S+@\S+:\S*$", command):
+        return True, BLOCK_MESSAGES["network_exfiltration"]
+    # rsync upload: last argument is remote destination
+    if re.search(r"\brsync\b.*\s\S+@\S+:\S*$", command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     return False, None
 
@@ -247,15 +291,22 @@ def detect_credential_access(command, tool_name, tool_input, config):
 
 def detect_package_publishing(command, tool_name, tool_input, config):
     """Detect package publishing commands."""
-    # npm publish (without --dry-run)
-    if re.search(r"\bnpm publish\b", command) and not re.search(r"--dry-run", command):
-        return True, BLOCK_MESSAGES["package_publishing"]
-    # twine upload / pip upload
-    if re.search(r"\b(twine|pip) upload\b", command):
-        return True, BLOCK_MESSAGES["package_publishing"]
-    # gem push
-    if re.search(r"\bgem push\b", command):
-        return True, BLOCK_MESSAGES["package_publishing"]
+    # For compound commands, check each segment independently
+    # (prevents "npm publish --dry-run && npm publish" from being allowed
+    #  because --dry-run appears in the first segment)
+    segments = [command]
+    if re.search(r"(&&|;|\|\|)", command):
+        segments = [s.strip() for s in re.split(r"&&|;|\|\|", command)]
+    for seg in segments:
+        # npm publish (without --dry-run in this segment)
+        if re.search(r"\bnpm publish\b", seg) and not re.search(r"--dry-run", seg):
+            return True, BLOCK_MESSAGES["package_publishing"]
+        # twine upload / pip upload
+        if re.search(r"\b(twine|pip) upload\b", seg):
+            return True, BLOCK_MESSAGES["package_publishing"]
+        # gem push
+        if re.search(r"\bgem push\b", seg):
+            return True, BLOCK_MESSAGES["package_publishing"]
     return False, None
 
 
@@ -263,11 +314,17 @@ def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
     """Detect destructive commands executed remotely via SSH."""
     if not re.search(r"^ssh\b", command):
         return False, None
-    # Look for quoted remote commands containing destructive operations
+    # Try quoted remote command first
     remote_cmd_match = re.search(r"""ssh\s+\S+\s+['"](.+?)['"]""", command)
-    if not remote_cmd_match:
+    if remote_cmd_match:
+        remote_cmd = remote_cmd_match.group(1).lower()
+    else:
+        # Unquoted: check everything after the ssh keyword
+        # Catches: ssh host rm -rf /, ssh -t host rm -rf /, etc.
+        parts = command.split(None, 1)
+        remote_cmd = parts[1].lower() if len(parts) > 1 else ""
+    if not remote_cmd:
         return False, None
-    remote_cmd = remote_cmd_match.group(1).lower()
     destructive = ["rm ", "rm\t", "drop ", "truncate ", "delete ", "mkfs", "dd "]
     for pattern in destructive:
         if pattern in remote_cmd:
@@ -396,7 +453,8 @@ def detect_permission_changes(command, tool_name, tool_input, config):
     # chmod +x is safe (allowlisted), skip it
     if re.search(r"^chmod \+x\b", command):
         return False, None
-    # sudo chmod — always flag
+    # sudo chmod — always flag (note: sudo is stripped by normalize, but
+    # the pattern stays for defense in depth if normalization changes)
     if re.search(r"\bsudo\s+chmod\b", command):
         return True, ASK_MESSAGES["permission_changes"]
     # chmod 777 or setuid/setgid bits (4-digit octal starting with 4/2/6)
@@ -483,6 +541,54 @@ def detect_github_cicd_ops(command, tool_name, tool_input, config):
     return False, None
 
 
+def detect_sensitive_write_target(command, tool_name, tool_input, config):
+    """Detect Write/Edit to shell init files, git hooks, or package config."""
+    if tool_name not in ("Write", "Edit"):
+        return False, None
+    file_path = tool_input.get("file_path", "")
+    if not file_path:
+        return False, None
+    # Normalize the path for matching
+    normalized_path = os.path.expanduser(file_path)
+    basename = os.path.basename(normalized_path)
+    # Shell init files
+    shell_init = {
+        ".bashrc", ".bash_profile", ".bash_login", ".profile",
+        ".zshrc", ".zprofile", ".zshenv", ".zlogin",
+    }
+    if basename in shell_init:
+        return True, ASK_MESSAGES["sensitive_write_target"]
+    # Git hooks directory
+    if "/.git/hooks/" in normalized_path or normalized_path.endswith("/.git/hooks"):
+        return True, ASK_MESSAGES["sensitive_write_target"]
+    # Package manager / tool config — only in home directory
+    # (project-level .npmrc/.yarnrc/.gitconfig are routine, not risky)
+    sensitive_dotfiles = {".gitconfig", ".npmrc", ".yarnrc"}
+    if basename in sensitive_dotfiles:
+        home = os.path.expanduser("~")
+        parent = os.path.dirname(normalized_path)
+        if parent == home:
+            return True, ASK_MESSAGES["sensitive_write_target"]
+    return False, None
+
+
+def detect_inline_interpreter(command, tool_name, tool_input, config):
+    """Detect shell subshell execution (bash -c, sh -c, zsh -c).
+
+    Only flags shell subshells — the actual evasion vector for bypassing
+    command-level pattern matching. python3 -c, node -e, etc. are excluded
+    because agents use them constantly for legitimate one-liners (JSON
+    formatting, calculations, version checks) and the noise-to-signal ratio
+    is too high. Interpreter-based attacks are documented as a known limitation.
+    """
+    if tool_name != "Bash":
+        return False, None
+    # bash/sh/zsh -c (subshell execution — the evasion vector)
+    if re.search(r"\b(bash|sh|zsh)\s+-c\b", command):
+        return True, ASK_MESSAGES["inline_interpreter"]
+    return False, None
+
+
 # Rule registry: (rule_id, tier, detect_fn)
 RULE_REGISTRY = [
     ("destructive_deletion", "block", detect_destructive_deletion),
@@ -510,6 +616,8 @@ RULE_REGISTRY = [
     ("database_destructive", "ask", detect_database_destructive),
     ("terraform_destructive", "ask", detect_terraform_destructive),
     ("github_cicd_ops", "ask", detect_github_cicd_ops),
+    ("sensitive_write_target", "ask", detect_sensitive_write_target),
+    ("inline_interpreter", "ask", detect_inline_interpreter),
 ]
 
 
@@ -572,8 +680,23 @@ def main():
     if tool_name == "Bash":
         command = normalize_command(tool_input.get("command", ""))
 
-    # 1. Allowlist — check first to prevent false positives
-    if command:
+    # Self-protection: prevent Write/Edit to hook config or plugin files.
+    # NOT configurable — cannot be disabled via disable_rules.
+    if tool_name in ("Write", "Edit"):
+        file_path = tool_input.get("file_path", "")
+        if file_path:
+            try:
+                abs_path = os.path.abspath(os.path.expanduser(file_path))
+                for protected in SELF_PROTECTED_PATHS:
+                    if abs_path == protected or abs_path.startswith(protected + os.sep):
+                        block(BLOCK_MESSAGES["self_protection"])
+            except (ValueError, OSError):
+                pass
+
+    # 1. Allowlist — check first, but SKIP for compound commands.
+    #    Without this guard, "rm -rf /tmp/build && rm -rf /home" would
+    #    match the temp-directory allowlist and bypass all block checks.
+    if command and not re.search(r"(&&|;|\|\|)", command):
         for rule_id, pattern in ALLOWLIST_PATTERNS:
             if rule_id not in disabled and pattern.search(command):
                 allow()
