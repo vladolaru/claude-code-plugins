@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.12] - 2026-03-06
+
+### Fixed
+
+- **decision-critic skill:** Fixed incorrect script path in SKILL.md — was resolving to plugin-level `scripts/` directory instead of the skill-local `scripts/` directory, causing `FileNotFoundError` on first invocation.
+
 ## [1.43.11] - 2026-03-06
 
 ### Fixed

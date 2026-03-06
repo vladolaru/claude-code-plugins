@@ -35,11 +35,11 @@ SYNTHESIS (7)          Verdict: STAND | REVISE | ESCALATE
 
 ## Invocation
 
-Derive the plugin root from the skill base directory (provided by Claude Code on skill load — go two levels up from the base directory):
+Use the skill base directory (provided by Claude Code on skill load) to locate the script:
 
 ```bash
-PLUGIN_ROOT="<skill base directory>/../.."
-python3 "$PLUGIN_ROOT/scripts/decision-critic.py" \
+SKILL_DIR="<skill base directory>"
+python3 "$SKILL_DIR/scripts/decision-critic.py" \
   --step-number <1-7> \
   --total-steps 7 \
   --decision "<decision text>" \
