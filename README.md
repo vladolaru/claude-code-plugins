@@ -15,6 +15,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 /plugin install dex@vladolaru-claude-code-plugins
 /plugin install prompt-engineer@vladolaru-claude-code-plugins
 /plugin install image-optimizer@vladolaru-claude-code-plugins
+/plugin install yoloing-safe@vladolaru-claude-code-plugins
 
 # Restart Claude Code to activate
 ```
@@ -27,6 +28,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
+| [**yoloing-safe**](plugins/yoloing-safe/README.md) | YOLO mode safety net — PreToolUse guardrails that block destructive commands, ask about risky ones, and nudge toward safer alternatives |
 
 ### pirategoat-tools
 
@@ -52,6 +54,12 @@ Lossless image compression using ImageOptim and svgo. Shows you the before/after
 
 **[Full documentation →](plugins/image-optimizer/README.md)** | [Changelog](plugins/image-optimizer/CHANGELOG.md)
 
+### yoloing-safe
+
+YOLO mode safety net. A `PreToolUse` hook that evaluates every tool call against safety rules — blocks the irreversible stuff (`rm -rf`, `npm publish`, credential access), asks about the risky-but-maybe-intentional stuff (force push, `brew install`, `terraform destroy`), and lets everything else fly. Configurable credential patterns and zero-access paths. Zero dependencies, zero config needed.
+
+**[Full documentation →](plugins/yoloing-safe/README.md)** | [Changelog](plugins/yoloing-safe/CHANGELOG.md)
+
 ## Repository Structure
 
 ```text
@@ -62,7 +70,8 @@ vladolaru-claude-code-plugins/
 │   ├── pirategoat-tools/         # 19 agents, 19 skills, 6 commands
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
-│   └── image-optimizer/          # 1 command, optimization scripts
+│   ├── image-optimizer/          # 1 command, optimization scripts
+│   └── yoloing-safe/            # PreToolUse safety hook, tests
 ├── CLAUDE.md
 ├── LICENSE
 └── README.md
