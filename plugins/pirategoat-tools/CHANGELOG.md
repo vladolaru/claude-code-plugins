@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.11] - 2026-03-06
+
+### Fixed
+
+- **a11y-reviewer triage criteria:** Added non-visual a11y features to triage criteria — `speak()` calls, `aria-live` regions, and focus management in hooks/utilities. Previously, the adaptive triage pass (Step 3.6) could skip the a11y reviewer on PRs that add screen reader announcements without new interactive UI components (e.g., `announceErrorMessage` wiring via `@wordpress/a11y`). Updated agent description and review process Step 1 to reinforce focus on non-visual a11y.
+
 ## [1.43.10] - 2026-03-04
 
 ### Fixed

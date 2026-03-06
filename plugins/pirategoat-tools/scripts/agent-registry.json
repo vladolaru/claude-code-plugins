@@ -162,6 +162,8 @@
         "ARIA attributes or focus management code",
         "New UI components or significant visual changes",
         "CSS/SCSS affecting visibility, focus indicators, or contrast",
+        "Screen reader announcements: speak() calls, aria-live regions, live region wiring",
+        "Focus management in hooks or utilities (programmatic .focus(), focus restoration logic)",
         "Commits mentioning accessibility, a11y, keyboard, screen reader, ARIA"
       ],
       "focus": "ARIA correctness, keyboard access, focus management, WCAG 2.2 AA",

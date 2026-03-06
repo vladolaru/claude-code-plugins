@@ -1,6 +1,6 @@
 ---
 name: a11y-reviewer
-description: Frontend accessibility code review for ARIA correctness, keyboard operability, focus management, screen reader support, and WCAG 2.2 AA compliance
+description: Frontend accessibility code review for ARIA correctness, keyboard operability, focus management, screen reader announcements (speak(), aria-live), and WCAG 2.2 AA compliance — covers both visual UI components and non-visual a11y features in hooks/utilities
 model: inherit
 color: green
 tools:
@@ -175,6 +175,7 @@ Review the diffs provided in the bootstrap output. Focus on:
 - Overlay/modal/popover implementations
 - Dynamic content updates
 - ARIA attribute changes
+- **Non-visual a11y features:** `speak()` calls, `aria-live` region wiring, live region politeness levels, announcement deduplication/debouncing — even in hooks or utilities with no visible UI
 
 ### Step 2: Run the Checklists
 
