@@ -78,6 +78,58 @@ SELF_PROTECTED_PATHS = [
 ]
 
 
+def _is_self_protected_path(file_path):
+    """Check if a file path resolves to a self-protected location.
+
+    Uses realpath to resolve symlinks, preventing symlink-based bypasses.
+    """
+    try:
+        real_path = os.path.realpath(os.path.expanduser(file_path))
+        for protected in SELF_PROTECTED_PATHS:
+            protected_real = os.path.realpath(protected)
+            if real_path == protected_real or real_path.startswith(protected_real + os.sep):
+                return True
+    except (ValueError, OSError):
+        pass
+    return False
+
+
+# Pre-compiled patterns for Bash self-protection detection
+_RE_SHELL_REDIRECT = re.compile(r"[12]?>")
+_RE_BASH_WRITE_CMDS = re.compile(
+    r"\b(cp|mv|tee|install|rsync)\b"
+)
+_RE_SED_INPLACE = re.compile(r"\bsed\b.*\s-i")
+
+
+def _bash_targets_protected_path(command):
+    """Check if a Bash command writes to a self-protected path.
+
+    Detects shell redirects (>, >>), copy/move commands, tee, and sed -i
+    that reference self-protected paths.
+    """
+    might_write = (
+        _RE_SHELL_REDIRECT.search(command)
+        or _RE_BASH_WRITE_CMDS.search(command)
+        or _RE_SED_INPLACE.search(command)
+    )
+    if not might_write:
+        return False
+    # Check if any protected path appears in the command
+    for protected in SELF_PROTECTED_PATHS:
+        protected_real = os.path.realpath(protected)
+        # Check both the raw path and expanded forms
+        if protected in command or protected_real in command:
+            return True
+        # Also check with ~ unexpanded (e.g., ~/.claude/yoloing-safe.json)
+        home = os.path.expanduser("~")
+        if protected_real.startswith(home):
+            tilde_form = "~" + protected_real[len(home):]
+            if tilde_form in command:
+                return True
+    return False
+
+
 def load_config():
     """Load config: user file overrides present keys, others keep defaults."""
     config = dict(DEFAULTS)
@@ -403,14 +455,14 @@ def detect_credential_access(command, tool_name, tool_input, config):
     if not file_path:
         return False, None
 
-    # Check safe patterns first
+    # Check safe patterns first (case-insensitive for case-insensitive filesystems)
     for safe_pat in safe_patterns:
-        if re.search(safe_pat, file_path):
+        if re.search(safe_pat, file_path, re.IGNORECASE):
             return False, None
 
-    # Check credential patterns
+    # Check credential patterns (case-insensitive for case-insensitive filesystems)
     for cred_pat in cred_patterns:
-        if re.search(cred_pat, file_path):
+        if re.search(cred_pat, file_path, re.IGNORECASE):
             return True, BLOCK_MESSAGES["credential_access"]
 
     return False, None
@@ -480,8 +532,9 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
         paths_to_check.append(command)
 
     for check_path in paths_to_check:
+        check_lower = check_path.lower()
         for zero_path in zero_paths:
-            if zero_path in check_path:
+            if zero_path.lower() in check_lower:
                 return True, BLOCK_MESSAGES["zero_access_paths"]
 
     return False, None
@@ -823,18 +876,17 @@ def main():
     if tool_name == "Bash":
         command = normalize_command(tool_input.get("command", ""))
 
-    # Self-protection: prevent Write/Edit to hook config or plugin files.
+    # Self-protection: prevent modification of hook config or plugin files.
     # NOT configurable — cannot be disabled via disable_rules.
+    # Covers Write/Edit (file_path) and Bash (redirect/copy to protected paths).
     if tool_name in ("Write", "Edit"):
         file_path = tool_input.get("file_path", "")
         if file_path:
-            try:
-                abs_path = os.path.abspath(os.path.expanduser(file_path))
-                for protected in SELF_PROTECTED_PATHS:
-                    if abs_path == protected or abs_path.startswith(protected + os.sep):
-                        block(BLOCK_MESSAGES["self_protection"])
-            except (ValueError, OSError):
-                pass
+            if _is_self_protected_path(file_path):
+                block(BLOCK_MESSAGES["self_protection"])
+    elif tool_name == "Bash" and command:
+        if _bash_targets_protected_path(command):
+            block(BLOCK_MESSAGES["self_protection"])
 
     # 1. Allowlist — check first, but SKIP for compound commands.
     #    Without this guard, "rm -rf /tmp/build && rm -rf /home" would

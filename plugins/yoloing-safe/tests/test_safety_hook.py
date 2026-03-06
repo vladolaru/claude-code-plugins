@@ -335,6 +335,27 @@ class TestCredentialAccess:
         detected, _ = hook.detect_credential_access(cmd, "Bash", {"command": "cat .env.example"}, hook.DEFAULTS)
         assert detected is False
 
+    @pytest.mark.parametrize("tool_name,tool_input", [
+        ("Read", {"file_path": "/project/.ENV"}),
+        ("Read", {"file_path": "/project/.Env"}),
+        ("Read", {"file_path": "/project/CLIENT_SECRET.JSON"}),
+        ("Read", {"file_path": "/project/ID_RSA"}),
+    ])
+    def test_case_insensitive_detected(self, hook, tool_name, tool_input):
+        """Credential patterns should match regardless of case."""
+        detected, msg = hook.detect_credential_access("", tool_name, tool_input, hook.DEFAULTS)
+        assert detected is True, f"Expected case-insensitive match for {tool_input}"
+
+    @pytest.mark.parametrize("tool_name,tool_input", [
+        ("Read", {"file_path": "/project/.ENV.SAMPLE"}),
+        ("Read", {"file_path": "/project/.ENV.EXAMPLE"}),
+        ("Read", {"file_path": "/project/.Env.Template"}),
+    ])
+    def test_case_insensitive_safe_not_detected(self, hook, tool_name, tool_input):
+        """Safe credential patterns should also match case-insensitively."""
+        detected, _ = hook.detect_credential_access("", tool_name, tool_input, hook.DEFAULTS)
+        assert detected is False, f"Expected case-insensitive safe match for {tool_input}"
+
 
 class TestPackagePublishing:
     @pytest.mark.parametrize("command", [
@@ -472,6 +493,27 @@ class TestZeroAccessPaths:
         cmd = hook.normalize_command("ls ~/.local")
         detected, _ = hook.detect_zero_access_paths(cmd, "Bash", {"command": "ls ~/.local"}, hook.DEFAULTS)
         assert detected is False
+
+    @pytest.mark.parametrize("tool_name,tool_input", [
+        ("Read", {"file_path": "~/.AWS/credentials"}),
+        ("Read", {"file_path": "~/.Aws/config"}),
+        ("Read", {"file_path": "~/.SSH/id_rsa"}),
+        ("Read", {"file_path": "~/.Ssh/config"}),
+        ("Read", {"file_path": "~/.GNUPG/secring.gpg"}),
+    ])
+    def test_case_insensitive_detected(self, hook, tool_name, tool_input):
+        """Zero-access paths should match regardless of case."""
+        config = hook.load_config()
+        detected, msg = hook.detect_zero_access_paths("", tool_name, tool_input, config)
+        assert detected is True, f"Expected case-insensitive match for {tool_input}"
+
+    def test_case_insensitive_expanded_detected(self, hook):
+        """Expanded paths with different case should also be detected."""
+        home = os.path.expanduser("~")
+        config = hook.load_config()
+        file_path = f"{home}/.AWS/credentials"
+        detected, _ = hook.detect_zero_access_paths("", "Read", {"file_path": file_path}, config)
+        assert detected is True
 
 
 # ---------------------------------------------------------------------------
@@ -1116,6 +1158,118 @@ class TestIntegrationSelfProtection:
             env_override={"YOLOING_SAFE_CONFIG_PATH": str(config_file)}
         )
         assert r.returncode == 2  # Still blocked
+
+    # --- Bash self-protection (Finding 1) ---
+
+    def test_bash_redirect_to_config_blocked(self):
+        """Bash redirect to config file should be blocked."""
+        config_path = os.path.expanduser("~/.claude/yoloing-safe.json")
+        r = self._run_hook("Bash", {"command": f"echo '{{}}' > {config_path}"})
+        assert r.returncode == 2
+
+    def test_bash_redirect_tilde_to_config_blocked(self):
+        """Bash redirect using ~ to config file should be blocked."""
+        r = self._run_hook("Bash", {"command": "echo '{}' > ~/.claude/yoloing-safe.json"})
+        assert r.returncode == 2
+
+    def test_bash_cp_to_plugin_dir_blocked(self):
+        """cp to plugin directory should be blocked."""
+        plugin_root = str(Path(self.SCRIPT).parent.parent)
+        r = self._run_hook("Bash", {"command": f"cp /tmp/evil.json {plugin_root}/hooks.json"})
+        assert r.returncode == 2
+
+    def test_bash_mv_to_config_blocked(self):
+        """mv to config file should be blocked."""
+        config_path = os.path.expanduser("~/.claude/yoloing-safe.json")
+        r = self._run_hook("Bash", {"command": f"mv /tmp/evil.json {config_path}"})
+        assert r.returncode == 2
+
+    def test_bash_tee_to_config_blocked(self):
+        """tee to config file should be blocked."""
+        config_path = os.path.expanduser("~/.claude/yoloing-safe.json")
+        r = self._run_hook("Bash", {"command": f"echo '{{}}' | tee {config_path}"})
+        assert r.returncode == 2
+
+    def test_bash_sed_inplace_plugin_blocked(self):
+        """sed -i on plugin files should be blocked."""
+        r = self._run_hook("Bash", {"command": f"sed -i 's/block/allow/' {self.SCRIPT}"})
+        assert r.returncode == 2
+
+    def test_bash_read_plugin_not_blocked(self):
+        """Reading (cat) plugin files via Bash is fine — no write intent."""
+        r = self._run_hook("Bash", {"command": f"cat {self.SCRIPT}"})
+        assert r.returncode == 0
+
+    def test_bash_echo_unrelated_not_blocked(self):
+        """Bash commands not targeting protected paths should pass."""
+        r = self._run_hook("Bash", {"command": "echo hello > /tmp/test.txt"})
+        assert r.returncode == 0
+
+    # --- Symlink bypass (Finding 2) ---
+
+    def test_write_via_symlink_blocked(self, tmp_path):
+        """Write via symlink pointing to plugin dir should be blocked."""
+        plugin_root = str(Path(self.SCRIPT).parent.parent)
+        link = tmp_path / "link"
+        link.symlink_to(plugin_root)
+        r = self._run_hook("Write", {"file_path": f"{link}/hooks.json", "content": "{}"})
+        assert r.returncode == 2
+
+    def test_edit_via_symlink_blocked(self, tmp_path):
+        """Edit via symlink pointing to plugin dir should be blocked."""
+        plugin_root = str(Path(self.SCRIPT).parent.parent)
+        link = tmp_path / "link"
+        link.symlink_to(plugin_root)
+        r = self._run_hook("Edit", {
+            "file_path": f"{link}/hooks.json",
+            "old_string": "a", "new_string": "b"
+        })
+        assert r.returncode == 2
+
+
+class TestCaseInsensitiveDetection:
+    """Credential and zero-access checks must be case-insensitive (Finding 3)."""
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5
+        )
+
+    @pytest.mark.parametrize("file_path", [
+        "/project/.ENV",
+        "/project/.Env",
+        "/project/.env",
+        "/project/CLIENT_SECRET.JSON",
+        "/project/Client_Secret.Json",
+    ])
+    def test_credential_case_insensitive_blocked(self, file_path):
+        """Credential patterns should match regardless of case."""
+        r = self._run_hook("Read", {"file_path": file_path})
+        assert r.returncode == 2, f"Expected {file_path} to be blocked"
+
+    @pytest.mark.parametrize("file_path", [
+        "/project/.ENV.SAMPLE",
+        "/project/.Env.Example",
+        "/project/.env.template",
+    ])
+    def test_credential_safe_case_insensitive_allowed(self, file_path):
+        """Safe credential patterns should also match case-insensitively."""
+        r = self._run_hook("Read", {"file_path": file_path})
+        assert r.returncode == 0, f"Expected {file_path} to be allowed"
+
+    @pytest.mark.parametrize("file_path", [
+        os.path.expanduser("~/.AWS/credentials"),
+        os.path.expanduser("~/.Aws/credentials"),
+        os.path.expanduser("~/.SSH/id_rsa"),
+        os.path.expanduser("~/.Ssh/config"),
+    ])
+    def test_zero_access_case_insensitive_blocked(self, file_path):
+        """Zero-access paths should match regardless of case."""
+        r = self._run_hook("Read", {"file_path": file_path})
+        assert r.returncode == 2, f"Expected {file_path} to be blocked"
 
 
 class TestIntegrationAllowlistChainBypass:

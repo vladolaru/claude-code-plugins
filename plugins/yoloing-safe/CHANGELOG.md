@@ -5,6 +5,21 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-06
+
+### Fixed
+
+- Self-protection now covers Bash tool writes (redirects `>`, `>>`, `cp`, `mv`, `tee`, `sed -i`) to protected paths — previously only blocked Write/Edit tools
+- Self-protection path check now resolves symlinks via `os.path.realpath`, preventing symlink-based bypasses (e.g., `ln -s plugin-root /tmp/link` then Write to `/tmp/link/hooks.json`)
+- Credential pattern matching is now case-insensitive — `.ENV`, `.Env`, `CLIENT_SECRET.JSON` are all caught on case-insensitive filesystems (macOS HFS+/APFS)
+- Zero-access path matching is now case-insensitive — `~/.AWS/`, `~/.SSH/` are caught regardless of case
+
+### Added
+
+- `_is_self_protected_path()` helper: centralizes symlink-resolving path check for Write/Edit
+- `_bash_targets_protected_path()` helper: detects Bash commands that write to self-protected paths
+- 35 new test assertions covering all three security fixes
+
 ## [1.2.0] - 2026-03-06
 
 ### Added
