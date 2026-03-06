@@ -5,6 +5,16 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-06
+
+### Added
+
+- Tool-aware rule dispatch: each rule declares which tools it applies to (`{"Bash"}`, `{"Write", "Edit"}`, etc.). Rules only run when the current tool is in their set. Read evaluates 2 rules (was 25), Write/Edit evaluate 3 (was 25), Bash still runs all 25. New rules must declare applicable tools — omission is a visible error, not a silent bypass.
+
+### Changed
+
+- All ~80 inline regex patterns pre-compiled as named module-level constants (e.g., `_RE_RM`, `_RE_GIT_PUSH`, `_RE_CURL_POST_DATA`). Shared patterns defined once and reused. Improves discoverability and prevents pattern drift between functions.
+
 ## [1.1.0] - 2026-03-06
 
 ### Added
