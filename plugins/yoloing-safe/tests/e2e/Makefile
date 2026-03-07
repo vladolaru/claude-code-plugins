@@ -4,7 +4,7 @@ DOCKER_CONTEXT := ../../../..
 DOCKERFILE := Dockerfile
 HOME_DIR := /Users/testuser
 
-.PHONY: build auth run run-save shell rebuild clean
+.PHONY: build auth run run-save shell rebuild clean clean-all
 
 ## Build the e2e test image
 build:
@@ -38,6 +38,10 @@ clean:
 	docker rmi $(IMAGE) 2>/dev/null || true
 	rm -rf results
 
+## Remove everything: image, results, and auth volume (requires re-login)
+clean-all: clean
+	docker volume rm $(AUTH_VOL) 2>/dev/null || true
+
 ## Show available targets
 help:
 	@echo "Usage: make <target>"
@@ -50,3 +54,4 @@ help:
 	@echo "  shell      Interactive shell for debugging"
 	@echo "  rebuild    Rebuild image after code changes (auth survives)"
 	@echo "  clean      Remove image and local results (auth volume kept)"
+	@echo "  clean-all  Remove everything including auth volume (requires re-login)"

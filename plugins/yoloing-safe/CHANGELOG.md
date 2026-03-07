@@ -5,6 +5,18 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-03-08
+
+### Added
+
+- Docker-based E2E test harness that runs Claude Code in YOLO mode against crafted prompts inside a disposable container, verifying the safety hook blocks/asks as expected
+- Four-outcome test classification: `HOOK_BLOCKED` (denied), `HOOK_ASKED` (ask decision), `MODEL_REFUSED` (inconclusive), `HOOK_FAILED` (bug)
+- Session JSONL + `--debug "hooks"` logs as classification source of truth — detects both block-tier hook errors and ask-tier `permissionDecision: "ask"` decisions
+- 22 test cases across block tier (12), ask tier (7), and subagent bypass (3)
+- Noise hooks (PreToolUse logger, PostToolUse logger, UserPromptSubmit timestamp) for multi-hook coexistence testing
+- Bait filesystem (fake SSH keys, AWS credentials, GPG keyrings, `.env` files) with before/after checksum verification
+- Makefile with `build`, `auth`, `run`, `run-save`, `shell`, `rebuild`, `clean`, `clean-all` targets
+
 ## [1.3.0] - 2026-03-06
 
 ### Fixed
