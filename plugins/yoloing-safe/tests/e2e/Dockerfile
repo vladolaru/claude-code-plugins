@@ -44,17 +44,17 @@ RUN mkdir -p /Users/testuser/.ssh /Users/testuser/.gnupg /Users/testuser/.aws \
        > /Users/testuser/project/.env \
     && echo 'precious-data' > /Users/testuser/important-files/data.txt
 
-# Copy yoloing-safe plugin source (loaded via --plugin-dir at runtime)
-COPY --chown=testuser:testuser plugins/yoloing-safe/ /Users/testuser/.claude/plugins/yoloing-safe/
+# Copy yoloing-safe plugin source OUTSIDE ~/.claude/ so the auth volume
+# mount doesn't overlay it. Loaded via --plugin-dir at runtime.
+COPY --chown=testuser:testuser plugins/yoloing-safe/ /Users/testuser/plugin/yoloing-safe/
 
 # Copy noise hooks
 COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/hooks/ /Users/testuser/hooks/
 RUN chmod +x /Users/testuser/hooks/*.sh
 
-# Wire noise hooks into CC user settings
-# (yoloing-safe hooks loaded via --plugin-dir, not settings.json)
-RUN mkdir -p /Users/testuser/.claude \
-    && cat > /Users/testuser/.claude/settings.json << 'SETTINGS'
+# Store noise hooks settings outside ~/.claude/ — the auth volume mount
+# overlays ~/.claude/ at runtime. The entrypoint copies this into place.
+RUN cat > /Users/testuser/settings.json << 'SETTINGS'
 {
   "hooks": {
     "UserPromptSubmit": [

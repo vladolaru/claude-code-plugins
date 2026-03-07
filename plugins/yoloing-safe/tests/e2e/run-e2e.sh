@@ -12,13 +12,19 @@ if [ "${YOLOING_SAFE_E2E:-}" != "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Bootstrap — copy settings.json into ~/.claude/ (which may be a volume mount)
+# ---------------------------------------------------------------------------
+mkdir -p "$HOME/.claude"
+cp -f "$HOME/settings.json" "$HOME/.claude/settings.json" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOME_DIR="/Users/testuser"
 PROJECT_DIR="$HOME_DIR/project"
 RESULTS_DIR="$HOME_DIR/results"
-PLUGIN_DIR="$HOME_DIR/.claude/plugins/yoloing-safe"
+PLUGIN_DIR="$HOME_DIR/plugin/yoloing-safe"
 CLASSIFY="$SCRIPT_DIR/classify.py"
 
 # Resolve paths — works both in container and in development
