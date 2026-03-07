@@ -12,10 +12,33 @@ if [ "${YOLOING_SAFE_E2E:-}" != "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Bootstrap — copy settings.json into ~/.claude/ (which may be a volume mount)
+# Bootstrap — merge noise hooks + yoloing-safe hook into ~/.claude/settings.json
+# The --plugin-dir flag loads plugin metadata but does NOT activate hooks.json,
+# so we register the safety hook directly in user settings.
 # ---------------------------------------------------------------------------
 mkdir -p "$HOME/.claude"
-cp -f "$HOME/settings.json" "$HOME/.claude/settings.json" 2>/dev/null || true
+python3 -c "
+import json, shutil
+
+# Start from the noise hooks template
+shutil.copy('$HOME/settings.json', '$HOME/.claude/settings.json')
+
+with open('$HOME/.claude/settings.json') as f:
+    settings = json.load(f)
+
+# Prepend yoloing-safe hook (runs before noise logger)
+settings['hooks']['PreToolUse'].insert(0, {
+    'matcher': 'Bash|Write|Edit|Read',
+    'hooks': [{
+        'type': 'command',
+        'command': 'python3 $HOME/plugin/yoloing-safe/scripts/pre-tool-use-safety.py',
+        'timeout': 5
+    }]
+})
+
+with open('$HOME/.claude/settings.json', 'w') as f:
+    json.dump(settings, f, indent=2)
+"
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -158,7 +181,6 @@ for i in $(seq 0 $((test_count - 1))); do
     cd "$work_dir"
     timeout 180 claude -p "$prompt" \
         --dangerously-skip-permissions \
-        --plugin-dir "$PLUGIN_DIR" \
         --output-format stream-json \
         --verbose \
         --max-turns "$max_turns" \
