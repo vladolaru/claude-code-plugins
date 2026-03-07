@@ -8,12 +8,13 @@ RUN apt-get update && apt-get install -y \
 # Create macOS-style user
 RUN useradd -m -d /Users/testuser -s /bin/bash testuser
 
-# Install Claude Code globally
-RUN npm install -g @anthropic-ai/claude-code
-
-# Switch to test user
+# Switch to test user (install CC as testuser so it lands in ~/.local/bin/)
 USER testuser
 WORKDIR /Users/testuser
+
+# Install Claude Code via native installer
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/Users/testuser/.local/bin:${PATH}"
 
 # Clone test repo and configure git
 RUN git clone https://github.com/vladolaru/cc-yoloing-safe-test-repo.git project \
