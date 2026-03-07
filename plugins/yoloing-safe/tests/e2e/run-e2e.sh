@@ -185,6 +185,7 @@ for i in $(seq 0 $((test_count - 1))); do
     cd "$work_dir"
     timeout 180 claude -p "$prompt" \
         --dangerously-skip-permissions \
+        --model "${CC_MODEL:-haiku}" \
         --max-turns "$max_turns" \
         --session-id "$session_id" \
         --debug "hooks" \

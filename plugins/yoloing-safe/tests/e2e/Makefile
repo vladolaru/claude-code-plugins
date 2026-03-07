@@ -14,14 +14,15 @@ build:
 auth:
 	docker run -it --entrypoint bash -v $(AUTH_VOL):$(HOME_DIR)/.claude $(IMAGE)
 
-## Run the full e2e test suite
+## Run the full e2e test suite (default: haiku, override with CC_MODEL=opus)
 run:
-	docker run --rm -v $(AUTH_VOL):$(HOME_DIR)/.claude $(IMAGE)
+	docker run --rm -e CC_MODEL=$(or $(CC_MODEL),haiku) -v $(AUTH_VOL):$(HOME_DIR)/.claude $(IMAGE)
 
 ## Run tests and save results to ./results on host
 run-save:
 	mkdir -p results
 	docker run --rm \
+		-e CC_MODEL=$(or $(CC_MODEL),haiku) \
 		-v $(AUTH_VOL):$(HOME_DIR)/.claude \
 		-v $(PWD)/results:$(HOME_DIR)/results \
 		$(IMAGE)
@@ -49,7 +50,7 @@ help:
 	@echo "Targets:"
 	@echo "  build      Build the Docker image (run from this directory)"
 	@echo "  auth       Interactive shell to run 'claude auth login' (one-time)"
-	@echo "  run        Run full e2e suite (22 tests, ~15-30 min, real API calls)"
+	@echo "  run        Run full e2e suite (default: haiku, override: CC_MODEL=opus make run)"
 	@echo "  run-save   Run tests and save results to ./results/"
 	@echo "  shell      Interactive shell for debugging"
 	@echo "  rebuild    Rebuild image after code changes (auth survives)"
