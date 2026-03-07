@@ -41,70 +41,70 @@ There is no override flag — this is intentional.
 - Docker Desktop (or Docker Engine on Linux)
 - A Claude Code account with an active subscription
 
+## Quick Start
+
+All commands run from this directory (`plugins/yoloing-safe/tests/e2e/`):
+
+```bash
+make build    # Build the Docker image
+make auth     # Interactive shell — run 'claude auth login' inside
+make run      # Run the full e2e suite
+```
+
+Run `make help` to see all available targets.
+
 ## First-Time Setup
 
 ### 1. Build the image
 
-Run from the **repo root** (the Dockerfile needs the full repo context):
-
 ```bash
-docker build -t yoloing-safe-e2e -f plugins/yoloing-safe/tests/e2e/Dockerfile .
+make build
 ```
 
 ### 2. Authenticate Claude Code
 
-Start an interactive shell inside the container:
-
 ```bash
-docker run -it --entrypoint bash -v claude-auth:/Users/testuser/.claude yoloing-safe-e2e
+make auth
 ```
 
-Inside the container, run:
+This drops you into an interactive shell inside the container. Run:
 
 ```bash
 claude auth login
 ```
 
-This opens an OAuth flow. Claude will print a URL — open it in your
-browser on the **host machine**, complete the login, and the container
-receives the token. Verify with:
+Claude prints a URL — open it in your browser on the **host machine**,
+complete the login, and the container receives the token. Verify with:
 
 ```bash
 claude auth status
 ```
 
-You should see your account info. Type `exit` to leave the container.
-
-The auth token is stored in the `claude-auth` Docker volume and persists
-across container rebuilds. You only need to do this once (until the token
-expires).
+Type `exit` to leave. The auth token is stored in a Docker volume and
+persists across container rebuilds. You only need to do this once (until
+the token expires).
 
 ## Running Tests
 
 ```bash
-# Run full e2e suite (22 tests, ~15-30 min, real API calls)
-docker run --rm -v claude-auth:/Users/testuser/.claude yoloing-safe-e2e
+make run          # Full suite (22 tests, ~15-30 min)
+make run-save     # Full suite, results saved to ./results/
+make shell        # Interactive shell for debugging
+```
 
-# Save results to host for inspection
-docker run --rm \
-    -v claude-auth:/Users/testuser/.claude \
-    -v $(pwd)/e2e-results:/Users/testuser/results \
-    yoloing-safe-e2e
+## After Code Changes
 
-# Interactive debugging (shell into the container)
-docker run -it --entrypoint bash \
-    -v claude-auth:/Users/testuser/.claude \
-    yoloing-safe-e2e
+```bash
+make rebuild      # Rebuild image (auth volume survives)
+make run          # Run tests with updated code
 ```
 
 ## After Agent Damage
 
-The container is expendable — if a test breaks something inside it,
-rebuild:
+The container is expendable. Rebuild it:
 
 ```bash
-docker build -t yoloing-safe-e2e -f plugins/yoloing-safe/tests/e2e/Dockerfile .
-# Auth volume survives -- no re-login needed
+make rebuild
 ```
 
 ## Test Cases
@@ -129,8 +129,8 @@ yoloing-safe to verify multi-hook coexistence:
 
 ## Output
 
-Results are saved to `/Users/testuser/results/` inside the container
-(mount a volume to access from the host):
+Results are saved to `/Users/testuser/results/` inside the container.
+Use `make run-save` to mount them to `./results/` on the host:
 
 - `<test-name>.session.jsonl` — CC session log (tool attempts, hook blocks)
 - `<test-name>.debug.txt` — CC debug log (hook decision traces including ask)
