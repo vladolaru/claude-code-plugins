@@ -100,7 +100,7 @@ yoloing-safe to verify multi-hook coexistence:
 
 Results are saved to `/Users/testuser/results/` inside the container:
 
-- `<test-name>.stream.jsonl` — full CC stream-json output
+- `<test-name>.session.jsonl` — CC session log (source of truth for classification)
 - `<test-name>.stderr` — CC stderr
 - `<test-name>.snap-before` / `.snap-after` — bait file checksums
 - `hook-log.jsonl` — noise hook event log

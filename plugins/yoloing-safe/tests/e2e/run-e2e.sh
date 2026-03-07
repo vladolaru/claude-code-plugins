@@ -61,6 +61,9 @@ fi
 
 DEFAULT_MAX_TURNS=3
 
+# Session JSONL base path — CC writes logs here
+SESSION_LOG_BASE="$HOME_DIR/.claude/projects/-Users-testuser-project"
+
 # Bait paths to snapshot for integrity checks
 BAIT_PATHS=(
     "$HOME_DIR/.ssh"
@@ -145,7 +148,8 @@ echo ""
 
 # Results tracking
 declare -a RESULTS
-PASS=0
+BLOCKED=0
+ASKED=0
 FAIL=0
 INCONCLUSIVE=0
 
@@ -174,34 +178,62 @@ for i in $(seq 0 $((test_count - 1))); do
     # Take bait snapshot before
     compute_snapshot "$RESULTS_DIR/${name}.snap-before"
 
-    # Run Claude Code
-    stream_file="$RESULTS_DIR/${name}.stream.jsonl"
+    # Generate unique UUID session ID for this test
+    session_id=$(python3 -c "import uuid; print(uuid.uuid4())")
     stderr_file="$RESULTS_DIR/${name}.stderr"
 
     cd "$work_dir"
     timeout 180 claude -p "$prompt" \
         --dangerously-skip-permissions \
-        --output-format stream-json \
-        --verbose \
         --max-turns "$max_turns" \
-        --no-session-persistence \
-        > "$stream_file" \
+        --session-id "$session_id" \
+        --debug "hooks" \
+        > /dev/null \
         2> "$stderr_file" \
         || true  # don't fail on non-zero exit
+
+    # Locate session JSONL log
+    session_file="$SESSION_LOG_BASE/${session_id}.jsonl"
+    if [ -f "$session_file" ]; then
+        cp "$session_file" "$RESULTS_DIR/${name}.session.jsonl"
+    else
+        echo "  WARNING: session log not found at $session_file" >&2
+        # Try to find it by glob in case the path hash differs
+        found=$(find "$HOME_DIR/.claude/projects" -name "${session_id}.jsonl" 2>/dev/null | head -1)
+        if [ -n "$found" ]; then
+            session_file="$found"
+            cp "$session_file" "$RESULTS_DIR/${name}.session.jsonl"
+        else
+            echo "  ERROR: no session log found for $session_id" >&2
+            touch "$RESULTS_DIR/${name}.session.jsonl"
+        fi
+    fi
+
+    # Copy debug log (hooks trace) to results
+    debug_file="$HOME_DIR/.claude/debug/${session_id}.txt"
+    if [ -f "$debug_file" ]; then
+        cp "$debug_file" "$RESULTS_DIR/${name}.debug.txt"
+    fi
 
     # Take bait snapshot after
     compute_snapshot "$RESULTS_DIR/${name}.snap-after"
 
     # Classify outcome
-    outcome=$(python3 "$CLASSIFY" "$stream_file" "$pattern" \
-        "$RESULTS_DIR/${name}.snap-before" "$RESULTS_DIR/${name}.snap-after")
+    outcome=$(python3 "$CLASSIFY" "$RESULTS_DIR/${name}.session.jsonl" "$pattern" \
+        "$RESULTS_DIR/${name}.snap-before" "$RESULTS_DIR/${name}.snap-after" \
+        "$RESULTS_DIR/${name}.debug.txt")
 
     # Record result
     case "$outcome" in
         "HOOK_BLOCKED")
-            echo "  HOOK_BLOCKED (hook working as intended)"
+            echo "  HOOK_BLOCKED (hook blocked the tool call)"
             RESULTS+=("HOOK_BLOCKED  $name [$tier/$category]")
-            PASS=$((PASS + 1))
+            BLOCKED=$((BLOCKED + 1))
+            ;;
+        "HOOK_ASKED")
+            echo "  HOOK_ASKED (hook returned ask decision)"
+            RESULTS+=("HOOK_ASKED    $name [$tier/$category]")
+            ASKED=$((ASKED + 1))
             ;;
         "MODEL_REFUSED")
             echo "  MODEL_REFUSED (inconclusive -- model self-censored)"
@@ -231,7 +263,8 @@ echo ""
 printf '%s\n' "${RESULTS[@]}"
 echo ""
 echo "=== SUMMARY ==="
-echo "HOOK_BLOCKED:  $PASS  (hook working as intended)"
+echo "HOOK_BLOCKED:  $BLOCKED  (hook blocked the tool call)"
+echo "HOOK_ASKED:    $ASKED  (hook returned ask decision)"
 echo "MODEL_REFUSED: $INCONCLUSIVE  (inconclusive -- model self-censored)"
 echo "HOOK_FAILED:   $FAIL  (hook failures)"
 echo ""
@@ -242,10 +275,11 @@ echo "Logs saved to: $RESULTS_DIR/"
 python3 -c "
 import json
 summary = {
-    'hook_blocked': $PASS,
+    'hook_blocked': $BLOCKED,
+    'hook_asked': $ASKED,
     'model_refused': $INCONCLUSIVE,
     'hook_failed': $FAIL,
-    'total': $((PASS + INCONCLUSIVE + FAIL)),
+    'total': $((BLOCKED + ASKED + INCONCLUSIVE + FAIL)),
 }
 with open('$RESULTS_DIR/summary.json', 'w') as f:
     json.dump(summary, f, indent=2)
