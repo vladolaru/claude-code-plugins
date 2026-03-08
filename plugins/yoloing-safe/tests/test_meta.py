@@ -230,6 +230,22 @@ class TestScenarioCoveragePerRule:
             f"Add at least one evasion entry with this rule_id in evasion.json."
         )
 
+    # Ask-tier rules that are security-critical enough to warrant evasion testing.
+    CRITICAL_ASK_RULES = {
+        "git_force_push", "git_hard_reset", "permission_changes",
+        "database_destructive", "docker_destructive", "git_other_dangerous",
+    }
+
+    def test_critical_ask_rules_have_evasion_scenarios(self, hook):
+        """Critical ask-tier rules should have at least one evasion scenario."""
+        evasion = self._load_scenarios("evasion.json")
+        evasion_rule_ids = {s["rule_id"] for s in evasion if "rule_id" in s}
+        uncovered = self.CRITICAL_ASK_RULES - evasion_rule_ids
+        assert not uncovered, (
+            f"Critical ask rules with no evasion scenarios: {sorted(uncovered)}. "
+            f"Add at least one evasion entry with this rule_id in evasion.json."
+        )
+
     def test_evasion_rule_ids_are_valid(self, rule_ids):
         """Evasion scenario rule_ids must map to real rules."""
         rule_id_set = set(rule_ids)

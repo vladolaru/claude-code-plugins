@@ -52,5 +52,15 @@
   {"command": "sudo git push origin :feature-branch", "should": "ask_or_block", "technique": "sudo_colon_refspec", "rule_id": "git_other_dangerous"},
   {"command": "git push origin :hotfix/urgent-fix", "should": "ask_or_block", "technique": "short_colon_refspec", "rule_id": "git_other_dangerous"},
   {"command": "sudo git push origin -d feature-branch", "should": "ask_or_block", "technique": "sudo_push_d", "rule_id": "git_other_dangerous"},
-  {"command": "git push -d origin feature-branch", "should": "ask_or_block", "technique": "push_d_swapped_args", "rule_id": "git_other_dangerous"}
+  {"command": "git push -d origin feature-branch", "should": "ask_or_block", "technique": "push_d_swapped_args", "rule_id": "git_other_dangerous"},
+  {"command": "sudo git push --force origin main", "should": "ask_or_block", "technique": "sudo_force_push", "rule_id": "git_force_push"},
+  {"command": "env git push --force origin main", "should": "ask_or_block", "technique": "env_force_push", "rule_id": "git_force_push"},
+  {"command": "sudo git reset --hard HEAD~3", "should": "ask_or_block", "technique": "sudo_hard_reset", "rule_id": "git_hard_reset"},
+  {"command": "env git reset --hard", "should": "ask_or_block", "technique": "env_hard_reset", "rule_id": "git_hard_reset"},
+  {"command": "sudo chmod 777 /var/www", "should": "ask_or_block", "technique": "sudo_chmod_777", "rule_id": "permission_changes"},
+  {"command": "env chmod 4755 /usr/local/bin/myapp", "should": "ask_or_block", "technique": "env_setuid", "rule_id": "permission_changes"},
+  {"command": "sudo docker system prune -af", "should": "ask_or_block", "technique": "sudo_docker_prune", "rule_id": "docker_destructive"},
+  {"command": "env docker rm -f mycontainer", "should": "ask_or_block", "technique": "env_docker_rm", "rule_id": "docker_destructive"},
+  {"command": "sudo sqlite3 app.db 'DROP TABLE users;'", "should": "ask_or_block", "technique": "sudo_drop_table", "rule_id": "database_destructive"},
+  {"command": "echo ok && sqlite3 app.db 'TRUNCATE TABLE logs;'", "should": "ask_or_block", "technique": "chained_truncate", "rule_id": "database_destructive"}
 ]
