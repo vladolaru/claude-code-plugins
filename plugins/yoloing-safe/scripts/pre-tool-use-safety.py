@@ -252,6 +252,35 @@ _RE_CHAIN_SPLIT = re.compile(r"&&|;|\|\|")
 _RE_PATH_PREFIX = re.compile(r"^(?:/usr/local/bin/|/usr/bin/|/bin/|/sbin/|/usr/sbin/)")
 _RE_WHITESPACE = re.compile(r"\s+")
 
+# ---------------------------------------------------------------------------
+# Heredoc Stripping
+# ---------------------------------------------------------------------------
+
+# Matches heredoc opened by a file-writing command (cat >, cat >>, tee).
+# Group 1: the writer command + heredoc opener line (including trailing \n)
+# Group 2: the delimiter word (used to find closing line)
+# Group 3: the closing delimiter line (including leading \n)
+# Does NOT match interpreter consumers (bash, python3, mysql, etc.) — those
+# are intentionally left visible for safety rule evaluation.
+_RE_WRITER_HEREDOC = re.compile(
+    r"((?:cat\s+>>?\s*\S+|tee\s+(?:-a\s+)?\S+)\s*<<\s*['\"]?(\w+)['\"]?\n)"
+    r".*?"
+    r"(\n\2\b)",
+    re.DOTALL,
+)
+
+
+def strip_writer_heredocs(command: str) -> str:
+    """Strip heredoc bodies when the consumer is cat > or tee (file writers).
+
+    Interpreter heredocs (bash <<, python3 <<, mysql <<, etc.) are NOT touched —
+    they remain visible to all safety rules and are flagged by detect_inline_heredoc.
+    """
+    if "<<" not in command:
+        return command
+    return _RE_WRITER_HEREDOC.sub(r"\1\3", command)
+
+
 # Filesystem destruction
 _RE_RECURSIVE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive")
 _RE_FORCE_DELETE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[fF]|--force")

@@ -1456,6 +1456,74 @@ class TestIntegrationFailOpen:
 
 
 # ---------------------------------------------------------------------------
+# Heredoc Stripping (Friction Reduction)
+# ---------------------------------------------------------------------------
+
+class TestStripWriterHeredocs:
+    """Test strip_writer_heredocs strips file-writer heredoc bodies only."""
+
+    def test_strips_cat_redirect_heredoc(self, hook):
+        cmd = (
+            "cat > /tmp/file.txt << 'EOF'\n"
+            "rm -rf /  \n"
+            "DELETE FROM users;\n"
+            "EOF"
+        )
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" not in result
+        assert "DELETE FROM" not in result
+        assert "cat > /tmp/file.txt << 'EOF'" in result
+
+    def test_strips_cat_append_heredoc(self, hook):
+        cmd = "cat >> /tmp/log.txt << 'LOG_EOF'\nsome content with rm\nLOG_EOF"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm" not in result
+
+    def test_strips_tee_heredoc(self, hook):
+        cmd = "tee /tmp/output.txt << 'TEE_EOF'\nrm -rf /\nTEE_EOF"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" not in result
+
+    def test_strips_tmpdir_heredoc(self, hook):
+        """Reproduces the copy-as skill pattern that caused false positives."""
+        cmd = (
+            'mkdir -p "$TMPDIR"\n'
+            'cat > "$TMPDIR/clipboard-content.txt" << \'CLIPBOARD_EOF\'\n'
+            '*Moltres WooPayments Sprint* — discussion about rm -rf and DELETE FROM\n'
+            'CLIPBOARD_EOF'
+        )
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" not in result
+        assert "DELETE FROM" not in result
+
+    def test_does_not_strip_bash_heredoc(self, hook):
+        """Interpreter heredocs are NOT stripped — they need to remain visible."""
+        cmd = "bash << 'EOF'\nrm -rf /\nEOF"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" in result
+
+    def test_does_not_strip_python_heredoc(self, hook):
+        cmd = "python3 << 'PYEOF'\nimport os; os.system('rm -rf /')\nPYEOF"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" in result
+
+    def test_does_not_strip_mysql_heredoc(self, hook):
+        cmd = "mysql db << 'SQL'\nDROP TABLE users;\nSQL"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "DROP TABLE" in result
+
+    def test_no_heredoc_passthrough(self, hook):
+        cmd = "rm -rf /some/path"
+        assert hook.strip_writer_heredocs(cmd) == cmd
+
+    def test_double_dash_heredoc_variant(self, hook):
+        """Handles << DELIM without quotes."""
+        cmd = "cat > /tmp/f.txt << EOF\nrm -rf /\nEOF"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" not in result
+
+
+# ---------------------------------------------------------------------------
 # Adversarial Evasion Tests (Task 10)
 # ---------------------------------------------------------------------------
 
