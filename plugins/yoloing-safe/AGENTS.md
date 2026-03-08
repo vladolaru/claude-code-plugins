@@ -21,7 +21,6 @@ The hook script (`scripts/pre-tool-use-safety.py`) is the single source of truth
 
 ## Critical Constraints
 
-- `scripts/pre-tool-use-safety.py` is the single source of truth for all rules, detection, and allowlists.
 - `test-cases.json` is generated — edit `test-fixtures.json` or `RULES` examples instead, then run `make generate`.
 - Block-tier rules come before ask-tier rules in the `RULES` dict.
 
@@ -33,7 +32,7 @@ Each rule in `RULES` is a dict with these keys:
 |-----|----------|------|-------------|
 | `tier` | yes | `"block"` or `"ask"` | Block exits 2; ask returns JSON for user confirmation. |
 | `tools` | yes | `set` | Tool names this rule applies to: `{"Bash"}`, `{"Read", "Write", "Edit"}`, etc. |
-| `message` | yes | `str` | Guidance message for Claude — what to do instead. |
+| `message` | yes | `str` | Guidance for Claude. Block: guide toward safer alternatives. Ask: explain the risk and request confirmation. |
 | `examples` | yes | `list[str]` | Example commands (Bash) or file paths (Read/Write/Edit) for e2e test generation. |
 | `detect` | custom rules | `callable` | `(command, tool_name, tool_input, config) -> (bool, str\|None)`. Omit for declarative rules. |
 | `patterns` | declarative | `list[str]` | Regex strings — any match triggers (OR). |
@@ -93,11 +92,7 @@ Detection function signature: `(command: str, tool_name: str, tool_input: dict, 
 Fast, deterministic, no API calls. Run after any change to the hook script or test scenarios.
 
 ```bash
-# Full suite (unit + integration + evasion + scenario regression + benchmark)
 pytest plugins/yoloing-safe/tests/ -v
-
-# Quick smoke test (unit tests only, no subprocess)
-pytest plugins/yoloing-safe/tests/test_safety_hook.py -k "not TestIntegration and not TestEvasion and not TestBlocked and not TestAllowed and not TestDisable" -v
 ```
 
 See `tests/TESTING.md` for the full breakdown of test layers, adding tests, and profiling.
@@ -134,47 +129,11 @@ See `tests/e2e/README.md` for full setup, output format, and debugging.
 
 Before starting, read `scripts/pre-tool-use-safety.py` to understand the current rule layout, naming conventions, and where new rules should be inserted. Check that no existing rule already covers the behavior you want to detect.
 
-**Step 1 — Add regex constants** (if needed, in "Pre-compiled Regex Patterns" section):
+**Step 1** — Add regex constants in the "Pre-compiled Regex Patterns" section (if needed).
 
-```python
-_RE_MY_RULE = re.compile(r"my_pattern")
-```
+**Step 2** — For custom rules: add a detection function in the "Detection Functions" section. See "Rule Types" above for the template and signature.
 
-**Step 2 — Add detection function** (custom rules only, in "Detection Functions" section):
-
-```python
-def detect_my_rule(command, tool_name, tool_input, config):
-    """One-line description of what this detects."""
-    if _RE_MY_RULE.search(command):
-        return True, RULES["my_rule"]["message"]
-    return False, None
-```
-
-**Step 3 — Add entry to `RULES` dict** (maintain block-before-ask ordering):
-
-For custom rules:
-```python
-"my_rule": {
-    "tier": "block",
-    "tools": {"Bash"},
-    "detect": detect_my_rule,
-    "message": "Guidance message telling Claude what to do instead.",
-    "examples": ["example-dangerous-command"],
-},
-```
-
-For declarative rules:
-```python
-"my_rule": {
-    "tier": "ask",
-    "tools": {"Bash"},
-    "patterns": [r"\bmy_command\b"],
-    "require": [r"--dangerous-flag"],
-    "exclude": [r"--dry-run"],
-    "message": "Explanation of the risk. Confirm this is intentional.",
-    "examples": ["my_command --dangerous-flag"],
-},
-```
+**Step 3** — Add entry to `RULES` dict. Maintain block-before-ask ordering. See "Rule Types" above for declarative and custom formats.
 
 **Step 4 — Consider allowlist safe variants** (if the rule could false-positive on safe usage):
 
@@ -230,34 +189,7 @@ Evasion entry format:
 {"command": "evasion attempt", "should": "block", "technique": "description", "rule_id": "my_rule"}
 ```
 
-**Step 7 — Run meta-tests to verify sync:**
-
-```bash
-pytest plugins/yoloing-safe/tests/test_meta.py -v
-```
-
-If meta-tests pass, all structural invariants are satisfied (rule has message, has examples, has scenario coverage, etc.).
-
-**Step 8 — Run full test suite:**
-
-```bash
-pytest plugins/yoloing-safe/tests/ -v
-```
-
-**Step 9 — Regenerate e2e test cases:**
-
-```bash
-cd plugins/yoloing-safe/tests/e2e
-make generate
-```
-
-The generator reads `examples` from `RULES` and merges with optional overrides from `test-fixtures.json`. A rule with no examples fails the generator.
-
-**Never edit `test-cases.json` directly.** It is generated and will be overwritten.
-
-**Step 10 — Update CHANGELOG.md and version** (per AGENTS.md versioning rules):
-
-Add entry under the current version. Bump version in `../../.claude-plugin/marketplace.json` if not already bumped for this release cycle.
+**Step 7** — Run the [After Any Rule Change](#after-any-rule-change) steps.
 
 ### Removing a Rule
 
@@ -268,10 +200,7 @@ Add entry under the current version. Bump version in `../../.claude-plugin/marke
 5. Remove scenarios from `blocked.json`, `asked.json`, `allowed.json`, `evasion.json`
 6. Remove the unit test class from `test_safety_hook.py`
 7. Remove any override from `tests/e2e/test-fixtures.json`
-8. Run meta-tests: `pytest plugins/yoloing-safe/tests/test_meta.py -v`
-9. Run full suite: `pytest plugins/yoloing-safe/tests/ -v`
-10. Regenerate e2e: `cd tests/e2e && make generate`
-11. Update CHANGELOG.md and version
+8. Run the [After Any Rule Change](#after-any-rule-change) steps
 
 ### Renaming a Rule
 
@@ -284,9 +213,7 @@ Rename in ALL of these locations (meta-tests catch most misses):
 5. `evasion.json` — `rule_id` field
 6. `test-fixtures.json` — override key (if applicable)
 7. Unit test class name and docstring
-8. Run meta-tests: `pytest plugins/yoloing-safe/tests/test_meta.py -v`
-9. Regenerate e2e: `cd tests/e2e && make generate`
-10. Update CHANGELOG.md
+8. Run the [After Any Rule Change](#after-any-rule-change) steps
 
 ### Changing a Rule's Tier
 
@@ -294,8 +221,14 @@ Rename in ALL of these locations (meta-tests catch most misses):
 2. Move scenario entries between `blocked.json` and `asked.json`
 3. If promoting to block: add evasion entries to `evasion.json` (required for block-tier rules)
 4. If demoting to ask: evasion entries can stay (they test `"ask_or_block"`) or be removed
-5. Update the `message` — block messages guide toward alternatives, ask messages explain risk and request confirmation
-6. Run meta-tests: `pytest plugins/yoloing-safe/tests/test_meta.py -v`
-7. Run full suite: `pytest plugins/yoloing-safe/tests/ -v`
-8. Regenerate e2e: `cd tests/e2e && make generate`
-9. Update CHANGELOG.md and version
+5. Update the `message` to match the new tier's tone (see `message` description in RULES Dict Structure)
+6. Run the [After Any Rule Change](#after-any-rule-change) steps
+
+### After Any Rule Change
+
+Run these steps after completing any rule workflow (add, remove, rename, retier):
+
+1. `pytest plugins/yoloing-safe/tests/test_meta.py -v` — verify structural invariants (rule has message, examples, scenario coverage)
+2. `pytest plugins/yoloing-safe/tests/ -v` — full test suite
+3. `cd plugins/yoloing-safe/tests/e2e && make generate` — regenerate e2e test cases from `RULES` examples + `test-fixtures.json` overrides
+4. Update `CHANGELOG.md` and bump version in `../../.claude-plugin/marketplace.json` (per root AGENTS.md versioning rules)
