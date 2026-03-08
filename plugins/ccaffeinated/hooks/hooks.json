@@ -1,0 +1,27 @@
+{
+  "description": "Keeps your Mac awake during Claude Code sessions using macOS caffeinate. Supports multiple tabs, handles crashes gracefully, and cleans up automatically when all sessions end.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/prevent-sleep.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/allow-sleep.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
