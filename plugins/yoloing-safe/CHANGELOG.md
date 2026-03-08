@@ -5,6 +5,19 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-03-08
+
+### Fixed
+- Short colon refspec deletion (`git push origin :branch`) now detected by `git_other_dangerous` — previously bypassed all rules
+- Short `-d` flag deletion (`git push origin -d branch`) now detected — previously only `--delete` was matched
+
+### Added
+- Meta-test: every rule_id has a corresponding unit test class in `test_safety_hook.py`
+- Meta-test: every rule_id has safe-variant coverage in `allowed.json`
+- Meta-test: critical ask-tier rules require evasion scenario coverage
+- 10 evasion scenarios for ask-tier rules (git_force_push, git_hard_reset, permission_changes, docker_destructive, database_destructive)
+- 4 evasion scenarios for git_other_dangerous (colon refspec and `-d` flag bypasses)
+
 ## [1.7.0] - 2026-03-08
 
 ### Added
