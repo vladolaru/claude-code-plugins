@@ -195,6 +195,7 @@ BLOCK_MESSAGES = {
     "github_repo_deletion": "Deleting a GitHub repository is irreversible and destroys all issues, PRs, and history. This should only be done manually through the GitHub UI or CLI by the user.",
     "zero_access_paths": "This path contains sensitive system or security data that should not be accessed by an agent. Ask the user to provide the specific information you need.",
     "self_protection": "This file is part of the safety hook infrastructure. Modifying it could disable safety protections. Ask the user to make changes manually.",
+    "git_bare_push": "Push with an explicit branch to avoid pushing to an unexpected target. Use `git push origin HEAD` to push the current branch, or `git push origin <branch-name>` for a specific branch.",
 }
 
 ASK_MESSAGES = {
@@ -322,6 +323,8 @@ _RE_GH_REPO_DELETE = re.compile(r"\bgh repo delete\b")
 
 # Git operations
 _RE_GIT_PUSH = re.compile(r"^git push\b")
+# git push with explicit refspec alternatives (--tags, --all, --mirror)
+_RE_GIT_PUSH_REFSPEC_ALT = re.compile(r"--(tags|all|mirror)\b")
 _RE_GIT_FORCE_SAFE = re.compile(r"--force-with-lease|--force-if-includes")
 _RE_GIT_FORCE_FLAG = re.compile(r"(--force\b|-f\b)")
 _RE_GIT_RESET = re.compile(r"^git reset\b")
@@ -592,6 +595,29 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
     return False, None
 
 
+# --- Block Tier: Git Bare Push ---
+
+def detect_git_bare_push(command, tool_name, tool_input, config):
+    """Detect git push without explicit branch specification.
+
+    Blocks bare `git push` and `git push origin` (no refspec). Requires
+    an explicit branch/ref (e.g. `git push origin HEAD`). Also allows
+    --tags, --all, --mirror as refspec alternatives.
+    """
+    if not _RE_GIT_PUSH.search(command):
+        return False, None
+    # --tags, --all, --mirror are explicit refspec alternatives
+    if _RE_GIT_PUSH_REFSPEC_ALT.search(command):
+        return False, None
+    # Count non-flag arguments after 'git push'
+    parts = command.split()
+    non_flag_parts = [p for p in parts[2:] if not p.startswith("-")]
+    # Need at least 2 non-flag args: remote + refspec
+    if len(non_flag_parts) < 2:
+        return True, BLOCK_MESSAGES["git_bare_push"]
+    return False, None
+
+
 # --- Ask Tier: Git Operations ---
 
 def detect_git_force_push(command, tool_name, tool_input, config):
@@ -855,6 +881,7 @@ RULE_REGISTRY = [
     ("ssh_remote_destruction", "block", detect_ssh_remote_destruction, {"Bash"}),
     ("github_repo_deletion", "block", detect_github_repo_deletion, {"Bash"}),
     ("zero_access_paths", "block", detect_zero_access_paths, {"Bash", "Read", "Write", "Edit"}),
+    ("git_bare_push", "block", detect_git_bare_push, {"Bash"}),
     # Ask tier — git operations
     ("git_force_push", "ask", detect_git_force_push, {"Bash"}),
     ("git_hard_reset", "ask", detect_git_hard_reset, {"Bash"}),

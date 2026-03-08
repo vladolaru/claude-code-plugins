@@ -8,7 +8,7 @@
   {"tool_name": "Bash", "tool_input": {"command": "git checkout -b feature"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "git restore --staged file.txt"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "git clean -n"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "git push --force-with-lease"}, "category": "allowlisted"},
+  {"tool_name": "Bash", "tool_input": {"command": "git push --force-with-lease origin HEAD"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/build"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "chmod +x script.sh"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "npm publish --dry-run"}, "category": "allowlisted"},

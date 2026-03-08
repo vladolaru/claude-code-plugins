@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.6.0] - 2026-03-08
 
+### Added
+
+- New `git_bare_push` block rule: blocks `git push` and `git push origin`
+  (no explicit branch). Requires an explicit refspec like `git push origin HEAD`
+  or `git push origin <branch-name>`. Also allows `--tags`, `--all`, `--mirror`
+  as refspec alternatives.
+- New `inline_heredoc` ask rule: flags heredocs fed to shell interpreters or
+  databases (`bash << 'EOF'`, `python3 << 'EOF'`, `mysql << 'EOF'`, etc.).
+  These are executed — unlike writer heredocs — and warrant confirmation.
+
 ### Fixed
 
 - `network_exfiltration` no longer blocks `curl` requests to loopback addresses
@@ -23,12 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `inline_interpreter` no longer asks for confirmation when `bash -c` is used
   via container exec tooling (`docker exec`, `pnpm wp-env run`, `wp-env run`).
   Destructive commands inside container exec are still caught by other rules.
-
-### Added
-
-- New `inline_heredoc` ask rule: flags heredocs fed to shell interpreters or
-  databases (`bash << 'EOF'`, `python3 << 'EOF'`, `mysql << 'EOF'`, etc.).
-  These are executed — unlike writer heredocs — and warrant confirmation.
 
 ## [1.5.0] - 2026-03-08
 

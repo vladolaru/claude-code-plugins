@@ -569,6 +569,37 @@ class TestZeroAccessPaths:
 # Ask Tier — Git Operations (Task 6)
 # ---------------------------------------------------------------------------
 
+class TestGitBarePush:
+    """Test detect_git_bare_push — blocks git push without explicit branch."""
+
+    @pytest.mark.parametrize("command", [
+        "git push",
+        "git push origin",
+        "git push -u origin",
+        "git push --set-upstream origin",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_git_bare_push(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "git push origin HEAD",
+        "git push origin main",
+        "git push -u origin HEAD",
+        "git push --set-upstream origin feature/branch",
+        "git push origin HEAD:refs/heads/main",
+        "git push --tags",
+        "git push origin --tags",
+        "git push --all",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_git_bare_push(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
 class TestGitForcePush:
     @pytest.mark.parametrize("command", [
         "git push --force",
@@ -1055,11 +1086,11 @@ class TestDisableRules:
         assert r.returncode == 0
 
     def test_disabled_ask_rule_allows_command(self, tmp_path):
-        """git push --force should pass through when git_force_push is disabled."""
+        """git push --force origin main should pass through when git_force_push is disabled."""
         config = {"disable_rules": ["git_force_push"]}
         config_file = tmp_path / "yoloing-safe.json"
         config_file.write_text(json.dumps(config))
-        r = self._run_hook("Bash", {"command": "git push --force"}, str(config_file))
+        r = self._run_hook("Bash", {"command": "git push --force origin main"}, str(config_file))
         assert r.returncode == 0
         assert r.stdout.strip() == ""
 
@@ -1150,7 +1181,7 @@ class TestIntegrationAsk:
         )
 
     def test_force_push_asks(self):
-        r = self._run_hook("Bash", {"command": "git push --force"})
+        r = self._run_hook("Bash", {"command": "git push --force origin main"})
         assert r.returncode == 0
         output = json.loads(r.stdout)
         assert output["hookSpecificOutput"]["permissionDecision"] == "ask"

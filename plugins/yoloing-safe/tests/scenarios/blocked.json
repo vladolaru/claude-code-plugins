@@ -38,5 +38,7 @@
   {"tool_name": "Read", "tool_input": {"file_path": "~/.config/gcloud/credentials.json"}, "category": "zero_access_paths"},
   {"tool_name": "Bash", "tool_input": {"command": "sudo rm -rf /"}, "category": "destructive_deletion"},
   {"tool_name": "Bash", "tool_input": {"command": "env rm -rf /home"}, "category": "destructive_deletion"},
-  {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/build && rm -rf /home"}, "category": "chained_deletion"}
+  {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/build && rm -rf /home"}, "category": "chained_deletion"},
+  {"tool_name": "Bash", "tool_input": {"command": "git push"}, "category": "git_bare_push"},
+  {"tool_name": "Bash", "tool_input": {"command": "git push origin"}, "category": "git_bare_push"}
 ]
