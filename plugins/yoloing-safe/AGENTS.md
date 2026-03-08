@@ -9,7 +9,7 @@ The hook script (`scripts/pre-tool-use-safety.py`) is the single source of truth
 | File | Role |
 |------|------|
 | `scripts/pre-tool-use-safety.py` | The hook script. Single source of truth — contains `RULES` dict, detection functions, allowlist, and all runtime logic. |
-| `hooks.json` | Claude Code hook registration (PreToolUse event wiring). |
+| `hooks/hooks.json` | Claude Code hook registration (PreToolUse event wiring). |
 | `tests/test_safety_hook.py` | Unit + integration tests. Uses `get_detect(hook, rule_id)` helper to call detection functions. |
 | `tests/test_meta.py` | Structural invariant checks — catches drift between RULES, allowlist, and scenario files. |
 | `tests/scenarios/blocked.json` | Block-tier regression scenarios (must exit 2). |
