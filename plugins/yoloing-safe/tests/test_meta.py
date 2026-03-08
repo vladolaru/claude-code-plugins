@@ -242,6 +242,57 @@ class TestScenarioCoveragePerRule:
             f"Evasion scenarios with invalid rule_ids: {bad}"
         )
 
+    def test_every_rule_has_safe_variant_in_allowed(self, rule_ids):
+        """Each rule_id should have a safe-variant category in allowed.json.
+
+        Safe variants use the pattern safe_{topic} (e.g., safe_git for git rules).
+        This ensures false-positive regression protection for every rule.
+        """
+        allowed = self._load_scenarios("allowed.json")
+        allowed_categories = {s["category"] for s in allowed}
+
+        RULE_SAFE_ALIAS_MAP = {
+            "destructive_deletion": {"safe_rm", "allowlisted"},
+            "chained_deletion": {"safe_rm", "safe_general"},
+            "alternative_deletion": {"scoped_find_delete"},
+            "disk_formatting": {"safe_general"},
+            "network_exfiltration": {"loopback_curl", "safe_scp_download"},
+            "credential_access": {"safe_read"},
+            "package_publishing": {"allowlisted"},
+            "ssh_remote_destruction": {"safe_general"},
+            "github_repo_deletion": {"safe_general"},
+            "zero_access_paths": {"safe_read"},
+            "git_bare_push": {"safe_git"},
+            "git_force_push": {"allowlisted", "safe_git"},
+            "git_hard_reset": {"safe_git_reset"},
+            "git_discard_changes": {"safe_git"},
+            "git_destroy_stash": {"safe_git_stash"},
+            "git_history_rewrite": {"safe_git"},
+            "git_config_changes": {"safe_git_config"},
+            "git_other_dangerous": {"safe_git", "safe_git_clean"},
+            "permission_changes": {"safe_chmod", "allowlisted"},
+            "brew_commands": {"safe_brew"},
+            "docker_destructive": {"safe_docker"},
+            "database_destructive": {"safe_database"},
+            "terraform_destructive": {"safe_terraform"},
+            "github_cicd_ops": {"safe_github_cicd"},
+            "sensitive_write_target": {"safe_write_target"},
+            "inline_interpreter": {"safe_inline_interpreter"},
+            "inline_heredoc": {"writer_heredoc"},
+        }
+
+        uncovered = []
+        for rid in rule_ids:
+            safe_aliases = RULE_SAFE_ALIAS_MAP.get(rid, set())
+            has_coverage = safe_aliases & allowed_categories
+            if not has_coverage:
+                uncovered.append(rid)
+
+        assert not uncovered, (
+            f"Rules with no safe-variant in allowed.json: {sorted(uncovered)}. "
+            f"Add a safe scenario and map it in RULE_SAFE_ALIAS_MAP."
+        )
+
 
 @pytest.fixture
 def unit_test_classes():
