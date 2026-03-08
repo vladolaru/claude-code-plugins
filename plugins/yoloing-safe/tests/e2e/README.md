@@ -119,6 +119,28 @@ The container is expendable. Rebuild it:
 make rebuild
 ```
 
+## Modifying Tests
+
+Tests are generated from two sources:
+- **`RULE_REGISTRY`** in `scripts/pre-tool-use-safety.py` — the canonical rule list
+- **`test-fixtures.json`** — the test command/pattern per rule
+
+After modifying rules or fixtures, regenerate and rebuild:
+
+```bash
+make generate     # Regenerate test-cases.json
+make build        # Rebuild Docker image with new tests
+make run          # Verify
+```
+
+Do not edit `test-cases.json` directly — it will be overwritten by `make generate`.
+
+To check if test-cases.json is stale without regenerating:
+
+```bash
+make check
+```
+
 ## Test Cases
 
 See `test-cases.json` for all 31 test cases covering all 26 rule
