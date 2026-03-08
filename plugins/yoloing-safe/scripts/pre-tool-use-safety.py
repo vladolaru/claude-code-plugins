@@ -383,6 +383,12 @@ _RE_GH_RELEASE_DELETE = re.compile(r"\bgh\s+release\s+delete\b")
 # Inline interpreter
 _RE_SHELL_SUBSHELL = re.compile(r"\b(bash|sh|zsh)\s+-c\b")
 
+# Interpreter heredocs: shell/interpreter reading from << delimiter
+# Distinct from bash -c (inline_interpreter): here the code is the heredoc body.
+_RE_INTERPRETER_HEREDOC = re.compile(
+    r"(?<!\w)(bash|sh|zsh|python3?|node|ruby|perl|mysql|psql|sqlite3)\b[^<\n]*<<"
+)
+
 # ---------------------------------------------------------------------------
 # Detection Functions
 # Each returns (detected: bool, message: str | None)
@@ -809,6 +815,19 @@ def detect_inline_interpreter(command, tool_name, tool_input, config):
     return False, None
 
 
+def detect_inline_heredoc(command, tool_name, tool_input, config):
+    """Detect heredocs fed to shell or interpreter commands (bash <<, python3 <<, etc.).
+
+    Writer heredocs (cat >, tee) are stripped before rules run and are NOT flagged here.
+    This rule catches the cases where heredoc content is EXECUTED, not just written to a file.
+    """
+    if tool_name != "Bash":
+        return False, None
+    if _RE_INTERPRETER_HEREDOC.search(command):
+        return True, ASK_MESSAGES["inline_interpreter"]
+    return False, None
+
+
 # Rule registry: (rule_id, tier, detect_fn, applicable_tools)
 # The tool set declares which tools each rule applies to. A rule only runs
 # when the current tool_name is in its set. This makes scope explicit and
@@ -841,6 +860,7 @@ RULE_REGISTRY = [
     ("github_cicd_ops", "ask", detect_github_cicd_ops, {"Bash"}),
     ("sensitive_write_target", "ask", detect_sensitive_write_target, {"Write", "Edit"}),
     ("inline_interpreter", "ask", detect_inline_interpreter, {"Bash"}),
+    ("inline_heredoc", "ask", detect_inline_heredoc, {"Bash"}),
 ]
 
 # Pre-built per-tool rule lists (indexed at module load, not per-call)

@@ -1456,6 +1456,45 @@ class TestIntegrationFailOpen:
 
 
 # ---------------------------------------------------------------------------
+# Inline Heredoc Detection (Friction Reduction)
+# ---------------------------------------------------------------------------
+
+class TestInlineHeredoc:
+    """Test detect_inline_heredoc catches interpreter heredocs."""
+
+    @pytest.mark.parametrize("command", [
+        "bash << 'EOF'\necho hello\nEOF",
+        "sh << EOF\nrm -rf /\nEOF",
+        "zsh << 'ZSH_EOF'\nsome zsh code\nZSH_EOF",
+        "python3 << 'PYEOF'\nimport os\nPYEOF",
+        "python3 - << 'PYEOF'\nimport sys\nPYEOF",
+        "mysql db << 'SQL'\nSELECT 1;\nSQL",
+        "psql -d mydb << 'SQL'\nDROP TABLE foo;\nSQL",
+        "node << 'JS'\nconsole.log('hi')\nJS",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_inline_heredoc(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        # Writer heredocs are NOT flagged by this rule (they get stripped instead)
+        "cat > /tmp/f.txt << 'EOF'\nsome content\nEOF",
+        "tee /tmp/log.txt << 'TEE_EOF'\ncontent\nTEE_EOF",
+        # Plain bash -c is handled by the existing inline_interpreter rule
+        "bash -c 'echo hello'",
+        # No heredoc at all
+        "git status",
+        "python3 script.py",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_inline_heredoc(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+
+# ---------------------------------------------------------------------------
 # Heredoc Stripping (Friction Reduction)
 # ---------------------------------------------------------------------------
 
