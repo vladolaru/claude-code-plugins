@@ -214,6 +214,7 @@ ASK_MESSAGES = {
     "github_cicd_ops": "Deleting GitHub secrets, variables, or disabling workflows affects CI/CD for all collaborators. Confirm this is intentional.",
     "sensitive_write_target": "This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
     "inline_interpreter": "Shell subshell execution (`bash -c`, `sh -c`) can bypass command-level safety checks. Write the code to a file and run it instead (e.g., `python3 script.py`), or use a non-shell interpreter directly (`python3 -c`, `node -e` are allowed). Confirm this is intentional.",
+    "inline_heredoc": "Heredocs fed to interpreters (`bash <<`, `python3 <<`) execute code that bypasses command-level safety checks. Write the code to a file and run it instead (e.g., `bash script.sh`). Writer heredocs (`cat > file << 'EOF'`) are not affected. Confirm this is intentional.",
 }
 
 # ---------------------------------------------------------------------------
@@ -862,7 +863,7 @@ def detect_inline_heredoc(command, tool_name, tool_input, config):
     if tool_name != "Bash":
         return False, None
     if _RE_INTERPRETER_HEREDOC.search(command):
-        return True, ASK_MESSAGES["inline_interpreter"]
+        return True, ASK_MESSAGES["inline_heredoc"]
     return False, None
 
 
