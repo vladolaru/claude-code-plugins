@@ -287,6 +287,10 @@ print(', '.join(names))
     session_id=$(python3 -c "import uuid; print(uuid.uuid4())")
     stderr_file="$RESULTS_DIR/${batch_key}.stderr"
 
+    # Snapshot existing session/debug files before run (to find new ones after)
+    existing_sessions=$(find "$HOME_DIR/.claude/projects" -name "*.jsonl" 2>/dev/null | sort)
+    existing_debugs=$(find "$HOME_DIR/.claude/debug" -name "*.txt" 2>/dev/null | sort)
+
     cd "$work_dir"
     timeout 300 claude -p "$prompt" \
         --dangerously-skip-permissions \
@@ -299,27 +303,35 @@ print(', '.join(names))
         2> "$stderr_file" \
         || true  # don't fail on non-zero exit
 
-    # Locate session JSONL log
-    session_file="$SESSION_LOG_BASE/${session_id}.jsonl"
-    if [ -f "$session_file" ]; then
-        cp "$session_file" "$RESULTS_DIR/${batch_key}.session.jsonl"
-    else
-        echo "  WARNING: session log not found at $session_file" >&2
-        found=$(find "$HOME_DIR/.claude/projects" -name "${session_id}.jsonl" 2>/dev/null | head -1)
-        if [ -n "$found" ]; then
-            session_file="$found"
-            cp "$session_file" "$RESULTS_DIR/${batch_key}.session.jsonl"
-        else
-            echo "  ERROR: no session log found for $session_id" >&2
-            touch "$RESULTS_DIR/${batch_key}.session.jsonl"
-        fi
+    # Collect ALL new session files (parent + subagent sessions)
+    # Subagents get their own session IDs and write separate JSONL logs.
+    new_sessions=$(comm -13 \
+        <(echo "$existing_sessions") \
+        <(find "$HOME_DIR/.claude/projects" -name "*.jsonl" 2>/dev/null | sort) \
+    )
+    > "$RESULTS_DIR/${batch_key}.session.jsonl"
+    session_count=0
+    while IFS= read -r sf; do
+        [ -z "$sf" ] && continue
+        cat "$sf" >> "$RESULTS_DIR/${batch_key}.session.jsonl"
+        session_count=$((session_count + 1))
+    done <<< "$new_sessions"
+    if [ "$session_count" -eq 0 ]; then
+        echo "  WARNING: no session logs found" >&2
+    elif [ "$session_count" -gt 1 ]; then
+        echo "  (collected $session_count session logs: parent + subagents)"
     fi
 
-    # Copy debug log (hooks trace) to results
-    debug_file="$HOME_DIR/.claude/debug/${session_id}.txt"
-    if [ -f "$debug_file" ]; then
-        cp "$debug_file" "$RESULTS_DIR/${batch_key}.debug.txt"
-    fi
+    # Collect ALL new debug logs (parent + subagent hook traces)
+    new_debugs=$(comm -13 \
+        <(echo "$existing_debugs") \
+        <(find "$HOME_DIR/.claude/debug" -name "*.txt" 2>/dev/null | sort) \
+    )
+    > "$RESULTS_DIR/${batch_key}.debug.txt"
+    while IFS= read -r df; do
+        [ -z "$df" ] && continue
+        cat "$df" >> "$RESULTS_DIR/${batch_key}.debug.txt"
+    done <<< "$new_debugs"
 
     # Take bait snapshot after session
     compute_snapshot "$RESULTS_DIR/${batch_key}.snap-after"
