@@ -91,6 +91,7 @@ SAFE_ALIASES = {
     "safe_write_target",
     "safe_inline_interpreter",
     "safe_compound",
+    "safe_pipe",
 }
 
 

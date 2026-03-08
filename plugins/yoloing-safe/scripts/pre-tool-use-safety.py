@@ -466,8 +466,8 @@ ALLOWLIST_PATTERNS = [
 
 # Shared patterns (used by multiple detection functions)
 _RE_RM = re.compile(r"\brm\b")
-_RE_CHAIN_OPS = re.compile(r"(&&|;|\|\|)")
-_RE_CHAIN_SPLIT = re.compile(r"&&|;|\|\|")
+_RE_CHAIN_OPS = re.compile(r"(&&|\|\||[|;&])")
+_RE_CHAIN_SPLIT = re.compile(r"&&|\|\||[|;&]")
 
 # Command normalization
 _RE_WHITESPACE = re.compile(r"\s+")
@@ -520,8 +520,11 @@ _RE_CURL_POST_DATA = re.compile(r"\bcurl\b.*(-d\s+@|--data\s+@|-X\s+POST)")
 _RE_CURL_UPLOAD = re.compile(r"\bcurl\b.*(-F\s+|--form\s+|-T\s+|--upload-file\s+)")
 _RE_WGET_POST_FILE = re.compile(r"\bwget\b.*--post-file")
 _RE_PIPE_TO_NC = re.compile(r"\|\s*nc\b")
+_RE_NC_BARE = re.compile(r"^nc\b")
 _RE_NC_REDIRECT = re.compile(r"\bnc\b.*<")
 _RE_CURL_WGET_PIPE_SHELL = re.compile(r"\b(curl|wget)\b.*\|\s*(bash|sh|zsh)\b")
+_RE_WGET_TO_STDOUT = re.compile(r"\bwget\b.*-[a-zA-Z]*O\s*-")
+_RE_CURL_TO_STDOUT = re.compile(r"\bcurl\b.*(-o\s*-|--output\s*-)")
 _RE_SCP_UPLOAD = re.compile(r"\bscp\b.*\s\S+@\S+:\S*$")
 _RE_RSYNC_UPLOAD = re.compile(r"\brsync\b.*\s\S+@\S+:\S*$")
 _RE_URL = re.compile(r"https?://[^\s'\"<>]+")
@@ -642,12 +645,16 @@ def detect_network_exfiltration(command, tool_name, tool_input, config):
     if _RE_WGET_POST_FILE.search(command):
         if not is_loopback_target:
             return True, RULES["network_exfiltration"]["message"]
-    # Piping to nc — loopback not a meaningful exception (nc is raw TCP)
-    if _RE_PIPE_TO_NC.search(command) or _RE_NC_REDIRECT.search(command):
+    # nc (netcat) — loopback not a meaningful exception (nc is raw TCP)
+    if _RE_PIPE_TO_NC.search(command) or _RE_NC_BARE.search(command) or _RE_NC_REDIRECT.search(command):
         return True, RULES["network_exfiltration"]["message"]
     # Piping curl/wget output to bash/sh (remote code execution) — always block
     if _RE_CURL_WGET_PIPE_SHELL.search(command):
         return True, RULES["network_exfiltration"]["message"]
+    # wget/curl writing to stdout from remote URL (segment of a pipe-to-shell)
+    if _RE_WGET_TO_STDOUT.search(command) or _RE_CURL_TO_STDOUT.search(command):
+        if not is_loopback_target:
+            return True, RULES["network_exfiltration"]["message"]
     # scp upload — loopback not applicable (scp always remote)
     if _RE_SCP_UPLOAD.search(command):
         return True, RULES["network_exfiltration"]["message"]

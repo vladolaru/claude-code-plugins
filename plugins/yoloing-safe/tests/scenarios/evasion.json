@@ -73,5 +73,8 @@
   {"command": "git -C /tmp push", "should": "block", "technique": "git_global_opt_C", "rule_id": "git_bare_push"},
   {"command": "git -c core.pager=cat push --force origin main", "should": "ask_or_block", "technique": "git_global_opt_c", "rule_id": "git_force_push"},
   {"command": "git --no-pager reset --hard", "should": "ask_or_block", "technique": "git_global_opt_no_pager", "rule_id": "git_hard_reset"},
-  {"command": "npm --registry https://registry.npmjs.org publish", "should": "block", "technique": "npm_option_reorder", "rule_id": "package_publishing"}
+  {"command": "npm --registry https://registry.npmjs.org publish", "should": "block", "technique": "npm_option_reorder", "rule_id": "package_publishing"},
+  {"command": "echo ok | git push", "should": "block", "technique": "pipe_bare_push", "rule_id": "git_bare_push"},
+  {"command": "echo ok | rm -rf /", "should": "block", "technique": "pipe_rm", "rule_id": "destructive_deletion"},
+  {"command": "rm -rf / & echo done", "should": "block", "technique": "background_rm", "rule_id": "destructive_deletion"}
 ]

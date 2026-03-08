@@ -2063,6 +2063,37 @@ class TestSelfProtectionInterpreterWrite:
         assert r.returncode == 0
 
 
+class TestPipeAndBackgroundSplitting:
+    """Verify pipe and background operators are treated as compound separators."""
+
+    @pytest.mark.parametrize("command,rule_id", [
+        ("echo ok | git push", "git_bare_push"),
+        ("echo ok | rm -rf /", "destructive_deletion"),
+        ("rm -rf / & echo done", "destructive_deletion"),
+    ])
+    def test_pipe_background_detected(self, hook, command, rule_id):
+        """Commands after | and & should be evaluated."""
+        result = subprocess.run(
+            ["python3", str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")],
+            input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True, text=True,
+        )
+        assert result.returncode != 0, f"Expected block/ask but got RC=0 for: {command}"
+
+    @pytest.mark.parametrize("command", [
+        "git log --oneline | head -20",
+        "cat README.md | wc -l",
+    ])
+    def test_benign_pipe_allowed(self, hook, command):
+        """Safe pipe commands should still be allowed."""
+        result = subprocess.run(
+            ["python3", str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")],
+            input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"Expected allow but got RC={result.returncode} for: {command}"
+
+
 class TestIsAllowlistedDisabledRules:
     """Regression: is_allowlisted must respect disabled rules."""
 

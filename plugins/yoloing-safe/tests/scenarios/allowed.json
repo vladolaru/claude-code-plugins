@@ -56,5 +56,6 @@
   {"tool_name": "Bash", "tool_input": {"command": "node -e 'console.log(42)'"}, "category": "safe_inline_interpreter"},
   {"tool_name": "Bash", "tool_input": {"command": "mkdir -p /tmp/test && rm -rf /tmp/test"}, "category": "safe_compound"},
   {"tool_name": "Bash", "tool_input": {"command": "git checkout -b feature && git push origin HEAD"}, "category": "safe_compound"},
-  {"tool_name": "Bash", "tool_input": {"command": "npm install && npm test"}, "category": "safe_compound"}
+  {"tool_name": "Bash", "tool_input": {"command": "npm install && npm test"}, "category": "safe_compound"},
+  {"tool_name": "Bash", "tool_input": {"command": "git log --oneline | head -20"}, "category": "safe_pipe"}
 ]
