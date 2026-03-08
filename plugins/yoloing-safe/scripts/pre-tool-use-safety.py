@@ -465,7 +465,6 @@ ALLOWLIST_PATTERNS = [
 # ---------------------------------------------------------------------------
 
 # Shared patterns (used by multiple detection functions)
-_RE_RM = re.compile(r"\brm\b")
 _RE_CHAIN_OPS = re.compile(r"(&&|\|\||[|;&])")
 _RE_CHAIN_SPLIT = re.compile(r"&&|\|\||[|;&]")
 
@@ -502,8 +501,6 @@ def strip_writer_heredocs(command: str) -> str:
 
 
 # Filesystem destruction
-_RE_RECURSIVE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive")
-_RE_FORCE_DELETE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[fF]|--force")
 _RE_FIND_DELETE = re.compile(r"\bfind\b.*-delete\b")
 # Scoped find roots: relative dot-paths, $TMPDIR, /tmp, /var/tmp
 _RE_FIND_SCOPED_ROOT = re.compile(
