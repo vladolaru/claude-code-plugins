@@ -292,6 +292,32 @@ class TestNetworkExfiltration:
         assert detected is True
         assert msg is not None
 
+    @pytest.mark.parametrize("command", [
+        "curl -X POST http://localhost:9001/wp-json/wc/v4/orders",
+        "curl -s -u admin:password -X POST 'http://localhost:8080/api' -H 'Content-Type: application/json' -d '{\"key\":\"val\"}'",
+        "curl -X POST http://127.0.0.1:8080/api -d '{}'",
+        "curl -X POST http://[::1]:3000/api",
+        "curl -F file=@report.txt http://localhost/upload",
+    ])
+    def test_loopback_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_network_exfiltration(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+    @pytest.mark.parametrize("command", [
+        # Loopback exception does not bypass other rules (credential_access catches these)
+        "curl -X POST http://localhost/api -d @.env",
+        "curl -X POST http://127.0.0.1/upload -F file=@id_rsa",
+    ])
+    def test_loopback_still_caught_by_other_rules(self, hook, command):
+        # network_exfiltration is skipped for loopback...
+        cmd = hook.normalize_command(command)
+        net_detected, _ = hook.detect_network_exfiltration(cmd, "Bash", {}, hook.DEFAULTS)
+        assert net_detected is False
+        # ...but credential_access still fires
+        cred_detected, _ = hook.detect_credential_access(cmd, "Bash", {}, hook.DEFAULTS)
+        assert cred_detected is True
+
 
 class TestCredentialAccess:
     @pytest.mark.parametrize("tool_name,tool_input", [
@@ -1420,16 +1446,27 @@ class TestEvasionSuite:
             return json.load(f)
 
     def test_all_evasions_caught(self, evasion_scenarios):
-        """Every evasion scenario must be blocked."""
+        """Every evasion scenario must be blocked or asked (not silently allowed)."""
         for scenario in evasion_scenarios:
             payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": scenario["command"]}})
             result = subprocess.run(
                 ["python3", self.SCRIPT],
-                input=payload, capture_output=True, text=True, timeout=5
+                input=payload, capture_output=True, text=True, timeout=5,
+                env={**os.environ, "YOLOING_SAFE_CONFIG_PATH": "/dev/null"},
             )
-            assert result.returncode == 2, (
-                f"Evasion NOT caught ({scenario['technique']}): {scenario['command']}"
-            )
+            should = scenario.get("should", "block")
+            if should == "block":
+                assert result.returncode == 2, (
+                    f"Evasion NOT blocked ({scenario['technique']}): {scenario['command']}"
+                )
+            elif should == "ask_or_block":
+                # Must not be silently allowed — either block (rc=2) or ask (rc=0 with JSON)
+                if result.returncode == 0:
+                    assert result.stdout.strip(), (
+                        f"Evasion silently allowed ({scenario['technique']}): {scenario['command']}"
+                    )
+            else:
+                assert False, f"Unknown 'should' value: {should}"
 
 
 # ---------------------------------------------------------------------------

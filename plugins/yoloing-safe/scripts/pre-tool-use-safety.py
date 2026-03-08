@@ -272,6 +272,7 @@ _RE_NC_REDIRECT = re.compile(r"\bnc\b.*<")
 _RE_CURL_WGET_PIPE_SHELL = re.compile(r"\b(curl|wget)\b.*\|\s*(bash|sh|zsh)\b")
 _RE_SCP_UPLOAD = re.compile(r"\bscp\b.*\s\S+@\S+:\S*$")
 _RE_RSYNC_UPLOAD = re.compile(r"\brsync\b.*\s\S+@\S+:\S*$")
+_RE_LOOPBACK = re.compile(r"\b(localhost|127\.0\.0\.1)(:\d+)?|\[?::1\]?(:\d+)?")
 
 # Package publishing
 _RE_NPM_PUBLISH = re.compile(r"\bnpm publish\b")
@@ -415,25 +416,30 @@ def detect_disk_formatting(command, tool_name, tool_input, config):
 
 def detect_network_exfiltration(command, tool_name, tool_input, config):
     """Detect data exfiltration via curl, wget, nc, scp, rsync."""
+    _is_loopback = bool(_RE_LOOPBACK.search(command))
+
     # curl posting data (file or stdin)
     if _RE_CURL_POST_DATA.search(command):
-        return True, BLOCK_MESSAGES["network_exfiltration"]
+        if not _is_loopback:
+            return True, BLOCK_MESSAGES["network_exfiltration"]
     # curl file upload (-F form, -T upload, --upload-file)
     if _RE_CURL_UPLOAD.search(command):
-        return True, BLOCK_MESSAGES["network_exfiltration"]
-    # wget posting a file
+        if not _is_loopback:
+            return True, BLOCK_MESSAGES["network_exfiltration"]
+    # wget posting a file — loopback bypass applies here too
     if _RE_WGET_POST_FILE.search(command):
-        return True, BLOCK_MESSAGES["network_exfiltration"]
-    # Piping to nc
+        if not _is_loopback:
+            return True, BLOCK_MESSAGES["network_exfiltration"]
+    # Piping to nc — loopback not a meaningful exception (nc is raw TCP)
     if _RE_PIPE_TO_NC.search(command) or _RE_NC_REDIRECT.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
-    # Piping curl/wget output to bash/sh (remote code execution)
+    # Piping curl/wget output to bash/sh (remote code execution) — always block
     if _RE_CURL_WGET_PIPE_SHELL.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
-    # scp upload: last argument is remote destination (user@host:path)
+    # scp upload — loopback not applicable (scp always remote)
     if _RE_SCP_UPLOAD.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
-    # rsync upload: last argument is remote destination
+    # rsync upload — loopback not applicable
     if _RE_RSYNC_UPLOAD.search(command):
         return True, BLOCK_MESSAGES["network_exfiltration"]
     return False, None

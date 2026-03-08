@@ -27,5 +27,7 @@
   {"tool_name": "Write", "tool_input": {"file_path": "/project/output.txt", "content": "hello"}, "category": "safe_write"},
   {"tool_name": "Bash", "tool_input": {"command": "scp user@host:remote.txt ./local.txt"}, "category": "safe_scp_download"},
   {"tool_name": "Bash", "tool_input": {"command": "python3 script.py"}, "category": "safe_interpreter"},
-  {"tool_name": "Bash", "tool_input": {"command": "node app.js"}, "category": "safe_interpreter"}
+  {"tool_name": "Bash", "tool_input": {"command": "node app.js"}, "category": "safe_interpreter"},
+  {"tool_name": "Bash", "tool_input": {"command": "curl -X POST http://localhost:9001/wp-json/wc/v4/orders -d '{\"status\":\"pending\"}'"},  "category": "loopback_curl"},
+  {"tool_name": "Bash", "tool_input": {"command": "curl -X POST http://127.0.0.1:8080/api -d '{}'"},  "category": "loopback_curl"}
 ]
