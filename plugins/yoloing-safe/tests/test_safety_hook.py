@@ -45,9 +45,32 @@ class TestNormalizeCommand:
         # Nested wrappers
         ("sudo env rm -rf /", "rm -rf /"),
         ("env sudo nice git push --force", "git push --force"),
+        # Git global option stripping
+        ("git -C /tmp push", "git push"),
+        ("git -c core.pager=cat push --force origin main", "git push --force origin main"),
+        ("git --no-pager push origin HEAD", "git push origin HEAD"),
+        ("git -C /tmp -c user.name=test commit -m 'msg'", "git commit -m 'msg'"),
+        ("git --git-dir=/tmp/.git push", "git push"),
+        ("git --work-tree=/tmp push", "git push"),
     ])
     def test_normalize(self, hook, input_cmd, expected):
         assert hook.normalize_command(input_cmd) == expected
+
+
+class TestGitGlobalOptionBypass:
+    """Verify git rules catch commands with global options before subcommand."""
+
+    @pytest.mark.parametrize("command,rule_id", [
+        ("git -C /tmp push", "git_bare_push"),
+        ("git -c core.pager=cat push --force origin main", "git_force_push"),
+        ("git --no-pager reset --hard", "git_hard_reset"),
+        ("git -C /repo checkout -- .", "git_discard_changes"),
+    ])
+    def test_git_global_opts_detected(self, hook, command, rule_id):
+        cmd = hook.normalize_command(command)
+        detected, msg = get_detect(hook, rule_id)(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
 
 
 class TestLoadConfig:

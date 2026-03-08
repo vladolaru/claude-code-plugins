@@ -303,6 +303,64 @@ _WRAPPER_RE = re.compile(
     r"^(command|env|sudo|nice|nohup|time|exec|strace|ionice|taskset)\s+"
 )
 
+# ---------------------------------------------------------------------------
+# Git/npm Subcommand Normalization
+# ---------------------------------------------------------------------------
+
+# Git global options that consume the next token as a value
+_GIT_GLOBAL_OPTS_WITH_ARG = frozenset({
+    '-C', '-c', '--git-dir', '--work-tree', '--namespace',
+    '--exec-path', '--super-prefix',
+})
+# Git global boolean flags (no value)
+_GIT_GLOBAL_OPTS_BOOL = frozenset({
+    '--bare', '--no-pager', '--paginate', '-p',
+    '--no-replace-objects', '-P', '--no-optional-locks',
+    '--literal-pathspecs', '--glob-pathspecs',
+    '--noglob-pathspecs', '--icase-pathspecs',
+})
+
+
+def _strip_git_global_opts(command):
+    """Strip git global options to expose the subcommand.
+
+    Git accepts options like -C <path>, -c <key=val>, --no-pager between
+    'git' and the subcommand. These are stripped so anchored patterns like
+    ^git push still match.
+
+    Only known global options are stripped — unknown flags stop the scan
+    so subcommand-level flags (e.g. --force) are preserved.
+    """
+    if not command.startswith("git "):
+        return command
+    parts = command.split()
+    result = ["git"]
+    i = 1
+    while i < len(parts):
+        token = parts[i]
+        if not token.startswith("-"):
+            # Found subcommand — keep everything from here
+            result.extend(parts[i:])
+            break
+        # --option=value form
+        if "=" in token:
+            key = token.split("=", 1)[0]
+            if key in _GIT_GLOBAL_OPTS_WITH_ARG:
+                i += 1
+                continue
+        # -C <path>, -c <key=val> etc. (next token is the value)
+        if token in _GIT_GLOBAL_OPTS_WITH_ARG:
+            i += 2
+            continue
+        # Boolean global flag
+        if token in _GIT_GLOBAL_OPTS_BOOL:
+            i += 1
+            continue
+        # Unknown flag — not a global option, keep everything from here
+        result.extend(parts[i:])
+        break
+    return " ".join(result)
+
 
 def normalize_command(cmd):
     """Strip path prefixes, command wrappers, and collapse whitespace."""
@@ -325,6 +383,8 @@ def normalize_command(cmd):
         normalized = _WRAPPER_RE.sub("", normalized)
     # Collapse whitespace
     normalized = _RE_WHITESPACE.sub(" ", normalized).strip()
+    # Strip git global options to expose subcommands for anchored rules
+    normalized = _strip_git_global_opts(normalized)
     return normalized
 
 
