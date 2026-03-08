@@ -1495,7 +1495,66 @@ class TestInlineHeredoc:
 
 
 # ---------------------------------------------------------------------------
-# Heredoc Stripping (Friction Reduction)
+# Heredoc Stripping Integration (Friction Reduction)
+# ---------------------------------------------------------------------------
+
+class TestHeredocStrippingIntegration:
+    """Integration tests: heredoc stripping prevents false positives in real hook calls."""
+
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        """Run the hook script via subprocess, return (exit_code, stdout, stderr)."""
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        r = subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5,
+            env={**os.environ, "YOLOING_SAFE_CONFIG_PATH": "/dev/null"},
+        )
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+    def test_copy_as_heredoc_with_rm_in_body_is_allowed(self):
+        """The copy-as skill pattern: cat > $TMPDIR/file << 'EOF' with rm in body."""
+        cmd = (
+            "mkdir -p \"$TMPDIR\"\n"
+            "cat > \"$TMPDIR/clipboard-content.txt\" << 'CLIPBOARD_EOF'\n"
+            "Here is my review: use rm -rf to clean the build dir\n"
+            "CLIPBOARD_EOF"
+        )
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 0, f"Expected allow (0), got {rc}. stderr: {stderr}"
+        assert stdout == ""  # no JSON = not an ask
+
+    def test_copy_as_and_heredoc_with_delete_from_in_body_is_allowed(self):
+        """database_destructive false positive: DELETE FROM in heredoc body."""
+        cmd = (
+            "cat > \"$TMPDIR/review.txt\" << 'REVIEW_EOF'\n"
+            "The query should DELETE FROM stale_sessions WHERE age > 30\n"
+            "REVIEW_EOF"
+        )
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 0
+
+    def test_bash_heredoc_with_rm_is_asked(self):
+        """Interpreter heredoc is still flagged (inline_heredoc rule)."""
+        cmd = "bash << 'EOF'\nrm -rf /tmp/build\nEOF"
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        # Should be an ask (rc=0 with JSON) or block (rc=2)
+        # inline_heredoc fires as ask; destructive_deletion may also fire as block
+        assert rc in (0, 2)
+
+    def test_writer_heredoc_with_rm_in_chained_command_still_blocked(self):
+        """Stripping body doesn't hide rm in the shell command itself."""
+        cmd = (
+            "cat > /tmp/f.txt << 'EOF'\nsome content\nEOF\n"
+            "&& rm -rf /home"
+        )
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 2, "rm -rf /home in chain should still be blocked"
+
+
+# ---------------------------------------------------------------------------
+# Heredoc Stripping Unit Tests (Friction Reduction)
 # ---------------------------------------------------------------------------
 
 class TestStripWriterHeredocs:

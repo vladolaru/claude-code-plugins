@@ -935,7 +935,12 @@ def main():
     # Extract command for Bash tool
     command = ""
     if tool_name == "Bash":
-        command = normalize_command(tool_input.get("command", ""))
+        raw_command = tool_input.get("command", "")
+        # Strip writer heredoc bodies (cat >, tee) BEFORE normalization so
+        # the regex can match on line structure (\n delimiters). Interpreter
+        # heredocs (bash <<, python3 <<) are NOT stripped.
+        raw_command = strip_writer_heredocs(raw_command)
+        command = normalize_command(raw_command)
 
     # Self-protection: prevent modification of hook config or plugin files.
     # NOT configurable — cannot be disabled via disable_rules.
