@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate test-cases.json from RULE_REGISTRY + test-fixtures.json.
+"""Generate test-cases.json from RULES + test-fixtures.json.
 
-The safety hook's RULE_REGISTRY is the canonical list of rules. Each rule
-includes example commands (5th tuple element) that drive e2e test generation.
+The safety hook's RULES dict is the canonical list of rules. Each rule
+includes example commands that drive e2e test generation.
 test-fixtures.json provides optional overrides (tool, branch, subagent,
 pattern, prompt) and extra_rules not in the registry.
 
@@ -20,14 +20,14 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
-# Import RULE_REGISTRY from the hook script (hyphenated filename requires importlib)
+# Import RULES from the hook script (hyphenated filename requires importlib)
 spec = importlib.util.spec_from_file_location(
     "pre_tool_use_safety",
     os.path.join(PLUGIN_DIR, "scripts", "pre-tool-use-safety.py"),
 )
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-RULE_REGISTRY = mod.RULE_REGISTRY
+RULES = mod.RULES
 
 FIXTURES_PATH = os.path.join(SCRIPT_DIR, "test-fixtures.json")
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "test-cases.json")
@@ -132,18 +132,17 @@ def auto_suffix(example):
 def generate():
     overrides, extra_rules = load_overrides()
 
-    # Validate: every rule in RULE_REGISTRY has non-empty examples
+    # Validate: every rule in RULES has non-empty examples
     errors = []
-    registry_ids = set()
-    for rule_id, _tier, _fn, _tools, examples in RULE_REGISTRY:
-        registry_ids.add(rule_id)
+    for rule_id, rule in RULES.items():
+        examples = rule.get("examples", [])
         if not examples:
-            errors.append(f"Rule '{rule_id}' in RULE_REGISTRY has empty examples list")
+            errors.append(f"Rule '{rule_id}' in RULES has empty examples list")
 
     # Validate: no orphan overrides
     for rule_id in overrides:
-        if rule_id not in registry_ids:
-            errors.append(f"Override '{rule_id}' has no matching RULE_REGISTRY entry")
+        if rule_id not in RULES:
+            errors.append(f"Override '{rule_id}' has no matching RULES entry")
 
     if errors:
         for err in errors:
@@ -152,8 +151,11 @@ def generate():
 
     tests = []
 
-    # Generate tests from RULE_REGISTRY + overrides
-    for rule_id, tier, _fn, tools, examples in RULE_REGISTRY:
+    # Generate tests from RULES + overrides
+    for rule_id, rule in RULES.items():
+        tier = rule["tier"]
+        tools = rule["tools"]
+        examples = rule.get("examples", [])
         override = overrides.get(rule_id, {})
         branch = override.get("branch", "main")
         tool = determine_tool(override, tools)
@@ -254,10 +256,13 @@ def generate():
             tests.append(test)
 
     # Generate subagent variants
-    for rule_id, tier, _fn, tools, examples in RULE_REGISTRY:
+    for rule_id, rule in RULES.items():
         override = overrides.get(rule_id, {})
         if not override.get("subagent"):
             continue
+        tier = rule["tier"]
+        tools = rule["tools"]
+        examples = rule.get("examples", [])
         tool = determine_tool(override, tools)
 
         # Use first example for subagent test

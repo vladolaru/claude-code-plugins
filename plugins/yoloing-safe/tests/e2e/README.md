@@ -123,7 +123,7 @@ make rebuild
 ## Modifying Tests
 
 Tests are generated from two sources:
-- **`RULE_REGISTRY`** in `scripts/pre-tool-use-safety.py` — the canonical rule list, including example commands (5th tuple element)
+- **`RULES`** in `scripts/pre-tool-use-safety.py` — the canonical rule dict, including example commands per rule
 - **`test-fixtures.json`** — optional overrides (tool, branch, subagent, pattern, prompt) for rules that need non-default test config
 
 After modifying rules or overrides, regenerate and rebuild:

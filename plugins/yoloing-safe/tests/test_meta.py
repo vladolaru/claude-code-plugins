@@ -111,7 +111,7 @@ class TestRuleMessageSync:
 
 
 class TestAllowlistIntegrity:
-    """Every allowlist rule_id maps to a real RULE_REGISTRY entry."""
+    """Every allowlist rule_id maps to a real RULES entry."""
 
     def test_allowlist_rule_ids_exist(self, hook, rule_ids):
         rule_id_set = set(rule_ids)
@@ -150,7 +150,7 @@ class TestScenarioCategoryValidity:
             if s["category"] not in rule_id_set
         ]
         assert bad == [], (
-            f"blocked.json categories not in RULE_REGISTRY: {sorted(set(bad))}"
+            f"blocked.json categories not in RULES: {sorted(set(bad))}"
         )
 
     def test_allowed_categories_are_valid(self, rule_ids, allowed_scenarios):
@@ -161,7 +161,7 @@ class TestScenarioCategoryValidity:
             if s["category"] not in valid
         ]
         assert bad == [], (
-            f"allowed.json categories not in RULE_REGISTRY or SAFE_ALIASES: "
+            f"allowed.json categories not in RULES or SAFE_ALIASES: "
             f"{sorted(set(bad))}"
         )
 
@@ -172,7 +172,7 @@ class TestScenarioCategoryValidity:
             if s["category"] not in rule_id_set
         ]
         assert bad == [], (
-            f"asked.json categories not in RULE_REGISTRY: {sorted(set(bad))}"
+            f"asked.json categories not in RULES: {sorted(set(bad))}"
         )
 
 

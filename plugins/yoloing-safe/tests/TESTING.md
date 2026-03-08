@@ -12,7 +12,7 @@ The test suite has six layers:
 
 4. **Scenario regression suite** — `scenarios/blocked.json` (block tier), `scenarios/asked.json` (ask tier), and `scenarios/allowed.json` (safe commands) loaded and run via subprocess. Comprehensive regression coverage across all categories.
 
-5. **Meta-tests** — Structural invariant checks (`test_meta.py`) that prevent drift between `RULE_REGISTRY`, message catalogs, allowlist patterns, and scenario files. Fast unit tests — no subprocess, no I/O beyond reading JSON scenario files. These are the primary defense against rule-test desync.
+5. **Meta-tests** — Structural invariant checks (`test_meta.py`) that prevent drift between `RULES`, message catalogs, allowlist patterns, and scenario files. Fast unit tests — no subprocess, no I/O beyond reading JSON scenario files. These are the primary defense against rule-test desync.
 
 6. **Performance benchmark** — Runs the hook via subprocess across a weighted mix of tool calls (from `scenarios/benchmark.json`) that approximates a real session (~55% Read, ~30% Bash, ~10% Write/Edit). Measures wall-clock time, in-process time, and rule evaluation time. Includes a pytest regression test with thresholds.
 
@@ -70,7 +70,7 @@ Add an entry to `scenarios/allowed.json` with `tool_name`, `tool_input`, and `ca
 Edit `scenarios/benchmark.json`. Each scenario has a `weight` (relative frequency), `tool_name`, `tool_input`, and `label`. Weights approximate a real session distribution — adjust if usage patterns shift significantly.
 
 ### Validating structural sync
-Run `pytest plugins/yoloing-safe/tests/test_meta.py -v` after any change to `RULE_REGISTRY`, message catalogs, allowlist patterns, or scenario files. Meta-tests verify:
+Run `pytest plugins/yoloing-safe/tests/test_meta.py -v` after any change to `RULES`, message catalogs, allowlist patterns, or scenario files. Meta-tests verify:
 - Every rule_id has a corresponding message
 - Every allowlist rule_id maps to a real rule
 - Every scenario category is a valid rule_id (or safe alias)
@@ -119,7 +119,7 @@ These are deliberately generous — the goal is catching regressions, not micro-
 | Changed file | Run |
 |---|---|
 | `scripts/pre-tool-use-safety.py` | `pytest plugins/yoloing-safe/tests/ -v` (full suite including benchmark) |
-| `RULE_REGISTRY` (add/remove/rename) | `pytest plugins/yoloing-safe/tests/test_meta.py -v` (catches desync immediately) |
+| `RULES` (add/remove/rename) | `pytest plugins/yoloing-safe/tests/test_meta.py -v` (catches desync immediately) |
 | `BLOCK_MESSAGES` / `ASK_MESSAGES` | `pytest plugins/yoloing-safe/tests/test_meta.py -v` |
 | `ALLOWLIST_PATTERNS` | `pytest plugins/yoloing-safe/tests/test_meta.py -v` |
 | `tests/scenarios/*.json` | `pytest plugins/yoloing-safe/tests/ -k "TestBlockedScenarios or TestAllowedScenarios or TestAskedScenarios or TestEvasionSuite" -v` |

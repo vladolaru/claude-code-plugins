@@ -1,5 +1,5 @@
 {
-  "_doc": "Optional overrides for e2e test generation. Most rules need no entry here — examples come from RULE_REGISTRY. Only add an entry when you need to override tool, branch, subagent, pattern, or prompt.",
+  "_doc": "Optional overrides for e2e test generation. Most rules need no entry here — examples come from RULES. Only add an entry when you need to override tool, branch, subagent, pattern, or prompt.",
   "overrides": {
     "destructive_deletion": { "subagent": true },
     "network_exfiltration": { "subagent": true },
