@@ -4,7 +4,7 @@ DOCKER_CONTEXT := ../../../..
 DOCKERFILE := Dockerfile
 HOME_DIR := /Users/testuser
 
-.PHONY: build auth run run-save shell rebuild clean clean-all
+.PHONY: build auth run run-save shell rebuild clean clean-all generate check
 
 ## Build the e2e test image
 build:
@@ -43,6 +43,14 @@ clean:
 clean-all: clean
 	docker volume rm $(AUTH_VOL) 2>/dev/null || true
 
+## Regenerate test-cases.json from RULE_REGISTRY + test-fixtures.json
+generate:
+	python3 generate-test-cases.py
+
+## Validate test-cases.json is up to date with RULE_REGISTRY
+check:
+	python3 generate-test-cases.py --check
+
 ## Show available targets
 help:
 	@echo "Usage: make <target>"
@@ -54,5 +62,7 @@ help:
 	@echo "  run-save   Run tests and save results to ./results/"
 	@echo "  shell      Interactive shell for debugging"
 	@echo "  rebuild    Rebuild image after code changes (auth survives)"
+	@echo "  generate   Regenerate test-cases.json from rule registry + fixtures"
+	@echo "  check      Validate test-cases.json is up to date"
 	@echo "  clean      Remove image and local results (auth volume kept)"
 	@echo "  clean-all  Remove everything including auth volume (requires re-login)"
