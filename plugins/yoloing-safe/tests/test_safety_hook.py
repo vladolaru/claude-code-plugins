@@ -983,6 +983,28 @@ class TestInlineInterpreter:
         detected, _ = hook.detect_inline_interpreter(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
+    @pytest.mark.parametrize("command", [
+        "docker exec -i mycontainer bash -c 'ls -la'",
+        "docker exec -i $(docker ps -qf 'name=wordpress') bash -c 'grep -r pattern /var/www/'",
+        "pnpm wp-env run wordpress -- bash -c 'ls /var/www/html'",
+        "pnpm wp-env run cli -- bash -c 'wp option get siteurl'",
+        "wp-env run wordpress -- bash -c 'echo hello'",
+    ])
+    def test_container_exec_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_inline_interpreter(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+    def test_container_exec_rm_rf_still_blocked_by_destructive_deletion(self, hook):
+        """Container exec exception for inline_interpreter does not suppress destructive_deletion."""
+        cmd = hook.normalize_command("docker exec mycontainer bash -c 'rm -rf /'")
+        # inline_interpreter is not detected (container exec)
+        inl_detected, _ = hook.detect_inline_interpreter(cmd, "Bash", {}, hook.DEFAULTS)
+        assert inl_detected is False
+        # but destructive_deletion IS detected (rm -rf in command string)
+        dest_detected, _ = hook.detect_destructive_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        assert dest_detected is True
+
     def test_non_bash_tool_not_affected(self, hook):
         """Non-Bash tools should never trigger inline_interpreter."""
         detected, _ = hook.detect_inline_interpreter(

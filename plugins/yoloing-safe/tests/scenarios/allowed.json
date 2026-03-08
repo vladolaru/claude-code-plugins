@@ -32,5 +32,7 @@
   {"tool_name": "Bash", "tool_input": {"command": "curl -X POST http://127.0.0.1:8080/api -d '{}'"},  "category": "loopback_curl"},
   {"tool_name": "Bash", "tool_input": {"command": "find .claude/tmp/screenshots -name '*.png' -mtime +7 -delete"}, "category": "scoped_find_delete"},
   {"tool_name": "Bash", "tool_input": {"command": "find $TMPDIR/cache -name '*.log' -delete"}, "category": "scoped_find_delete"},
-  {"tool_name": "Bash", "tool_input": {"command": "cat > \"$TMPDIR/clipboard-content.txt\" << 'CLIPBOARD_EOF'\nsome content with rm in it\nCLIPBOARD_EOF"}, "category": "writer_heredoc"}
+  {"tool_name": "Bash", "tool_input": {"command": "cat > \"$TMPDIR/clipboard-content.txt\" << 'CLIPBOARD_EOF'\nsome content with rm in it\nCLIPBOARD_EOF"}, "category": "writer_heredoc"},
+  {"tool_name": "Bash", "tool_input": {"command": "docker exec -i mycontainer bash -c 'ls -la /var/www'"}, "category": "container_exec"},
+  {"tool_name": "Bash", "tool_input": {"command": "pnpm wp-env run wordpress -- bash -c 'wp option get siteurl'"}, "category": "container_exec"}
 ]

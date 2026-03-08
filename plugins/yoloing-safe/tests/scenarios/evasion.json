@@ -33,5 +33,7 @@
   {"command": "find / -name '*.log' -delete", "should": "block", "technique": "absolute_find_delete"},
   {"command": "find /home -name '*.bak' -delete", "should": "block", "technique": "home_find_delete"},
   {"command": "bash << 'EOF'\nrm -rf /\nEOF", "should": "ask_or_block", "technique": "interpreter_heredoc_rm"},
-  {"command": "cat > /tmp/f.txt << 'EOF'\ncontent\nEOF\n&& rm -rf /home", "should": "block", "technique": "writer_heredoc_chained_rm"}
+  {"command": "cat > /tmp/f.txt << 'EOF'\ncontent\nEOF\n&& rm -rf /home", "should": "block", "technique": "writer_heredoc_chained_rm"},
+  {"command": "docker exec mycontainer bash -c 'rm -rf /'", "should": "block", "technique": "container_exec_rm_rf"},
+  {"command": "bash -c 'rm -rf /'", "should": "ask_or_block", "technique": "bare_bash_c_rm"}
 ]

@@ -383,6 +383,11 @@ _RE_GH_RELEASE_DELETE = re.compile(r"\bgh\s+release\s+delete\b")
 # Inline interpreter
 _RE_SHELL_SUBSHELL = re.compile(r"\b(bash|sh|zsh)\s+-c\b")
 
+# Container exec tooling: bash -c is the only way to run commands in containers
+_RE_CONTAINER_EXEC = re.compile(
+    r"\b(docker\s+exec\b|(?:pnpm\s+(?:exec\s+)?)?wp-env\s+run\b)"
+)
+
 # Interpreter heredocs: shell/interpreter reading from << delimiter
 # Distinct from bash -c (inline_interpreter): here the code is the heredoc body.
 _RE_INTERPRETER_HEREDOC = re.compile(
@@ -806,11 +811,18 @@ def detect_inline_interpreter(command, tool_name, tool_input, config):
     because agents use them constantly for legitimate one-liners (JSON
     formatting, calculations, version checks) and the noise-to-signal ratio
     is too high. Interpreter-based attacks are documented as a known limitation.
+
+    Exception: container exec tooling (docker exec, wp-env run) uses bash -c
+    as the only mechanism to run commands inside containers. Other rules
+    (destructive_deletion, etc.) still evaluate the full command string.
     """
     if tool_name != "Bash":
         return False, None
     # bash/sh/zsh -c (subshell execution — the evasion vector)
     if _RE_SHELL_SUBSHELL.search(command):
+        # Don't flag when bash -c is used for container exec
+        if _RE_CONTAINER_EXEC.search(command):
+            return False, None
         return True, ASK_MESSAGES["inline_interpreter"]
     return False, None
 
