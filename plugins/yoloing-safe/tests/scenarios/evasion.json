@@ -64,5 +64,10 @@
   {"command": "sudo docker system prune -af", "should": "ask_or_block", "technique": "sudo_docker_prune", "rule_id": "docker_destructive"},
   {"command": "env docker rm -f mycontainer", "should": "ask_or_block", "technique": "env_docker_rm", "rule_id": "docker_destructive"},
   {"command": "sudo sqlite3 app.db 'DROP TABLE users;'", "should": "ask_or_block", "technique": "sudo_drop_table", "rule_id": "database_destructive"},
-  {"command": "echo ok && sqlite3 app.db 'TRUNCATE TABLE logs;'", "should": "ask_or_block", "technique": "chained_truncate", "rule_id": "database_destructive"}
+  {"command": "echo ok && sqlite3 app.db 'TRUNCATE TABLE logs;'", "should": "ask_or_block", "technique": "chained_truncate", "rule_id": "database_destructive"},
+  {"command": "find ./../../etc -name '*.conf' -delete", "should": "block", "technique": "dot_traversal_find_delete", "rule_id": "alternative_deletion"},
+  {"command": "find ./../sensitive -name '*.key' -delete", "should": "block", "technique": "parent_traversal_find_delete", "rule_id": "alternative_deletion"},
+  {"command": "su -c 'echo hello'", "should": "ask_or_block", "technique": "su_dash_c_shell", "rule_id": "inline_interpreter"},
+  {"command": "cat $HOME/.ssh/id_rsa", "should": "block", "technique": "home_var_zero_access", "rule_id": "zero_access_paths"},
+  {"command": "cat ${HOME}/.ssh/id_rsa", "should": "block", "technique": "home_var_braced_zero_access", "rule_id": "zero_access_paths"}
 ]
