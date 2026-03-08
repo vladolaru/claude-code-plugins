@@ -5,6 +5,20 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-03-08
+
+### Added
+
+- Single source of truth for e2e test cases: `generate-test-cases.py` imports `RULE_REGISTRY` from the safety hook and merges with `test-fixtures.json` to produce `test-cases.json`
+- `make generate` and `make check` targets for regeneration and staleness detection
+- Bidirectional validation: generator fails if any registry rule lacks a fixture or vice versa
+- Full rule coverage: 31 tests across all 26 rule categories (13 block, 15 ask, 3 subagent)
+- Batched session execution reduces 22 individual sessions to 8, achieving 100% hook coverage
+
+### Changed
+
+- `test-cases.json` is now generated — do not edit directly
+
 ## [1.4.0] - 2026-03-08
 
 ### Added
