@@ -5,6 +5,31 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-03-08
+
+### Fixed
+
+- `network_exfiltration` no longer blocks `curl` requests to loopback addresses
+  (`localhost`, `127.0.0.1`, `::1`). Other rules (`credential_access`,
+  `zero_access_paths`) still apply. Eliminates false positives from local dev
+  server API calls.
+- `alternative_deletion` no longer blocks `find -delete` when the search root
+  is a relative dot-path (e.g. `.claude/tmp/`) or an explicit temp directory
+  (`$TMPDIR`, `/tmp/`, `/var/tmp/`). Absolute and home-relative roots are
+  still blocked.
+- Writer heredoc bodies (`cat >`, `tee`) are now stripped before rule evaluation,
+  eliminating false positives when heredoc content contains words like `rm` or
+  `DELETE FROM` (e.g. PR review text written to `$TMPDIR`).
+- `inline_interpreter` no longer asks for confirmation when `bash -c` is used
+  via container exec tooling (`docker exec`, `pnpm wp-env run`, `wp-env run`).
+  Destructive commands inside container exec are still caught by other rules.
+
+### Added
+
+- New `inline_heredoc` ask rule: flags heredocs fed to shell interpreters or
+  databases (`bash << 'EOF'`, `python3 << 'EOF'`, `mysql << 'EOF'`, etc.).
+  These are executed — unlike writer heredocs — and warrant confirmation.
+
 ## [1.5.0] - 2026-03-08
 
 ### Added
