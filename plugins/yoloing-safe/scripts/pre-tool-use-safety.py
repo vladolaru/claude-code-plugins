@@ -36,7 +36,7 @@ def _mark(label):
 
 DEFAULTS = {
     "credential_patterns": [
-        r"\.env(?!\.sample|\.example|\.template)",
+        r"\.env\b(?!\.sample|\.example|\.template)",
         r"client_secret\.json",
         r"\.credentials\.json",
         r"token\.pickle",
@@ -198,8 +198,8 @@ ALLOWLIST_PATTERNS = [
     ("git_other_dangerous", re.compile(r"^git clean\b.*(--dry-run|-[a-zA-Z]*n)")),
     # Git push with safe force variants
     ("git_force_push", re.compile(r"^git push\b.*--force-(with-lease|if-includes)")),
-    # rm in temp directories
-    ("destructive_deletion", re.compile(r"^rm\s+-[rfRF]*\s+(/tmp/|/var/tmp/|\$TMPDIR/)")),
+    # rm in temp directories — ALL targets must be temp paths (anchored with $)
+    ("destructive_deletion", re.compile(r"^rm\s+-[rfRF]*\s+(?:(?:/tmp/|/var/tmp/|\$TMPDIR/)\S*\s*)+$")),
     # chmod +x (make executable)
     ("permission_changes", re.compile(r"^chmod \+x\b")),
     # Dry-run publishing
@@ -440,8 +440,11 @@ def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
     if remote_cmd_match:
         remote_cmd = remote_cmd_match.group(1).lower()
     else:
-        # Unquoted: check everything after the ssh keyword
-        # Catches: ssh host rm -rf /, ssh -t host rm -rf /, etc.
+        # Unquoted: take everything after 'ssh' as a single string. This is
+        # intentionally naive — it includes flags and hostnames alongside the
+        # actual remote command. That's acceptable because the subsequent
+        # substring checks ("rm ", "drop ", etc.) are forgiving enough to
+        # match within the combined string for real-world invocations.
         parts = command.split(None, 1)
         remote_cmd = parts[1].lower() if len(parts) > 1 else ""
     if not remote_cmd:
@@ -1050,12 +1053,14 @@ def main():
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         allow()
+        return  # defensive: allow() calls sys.exit, but guard against unexpected continuation
     _mark("stdin_parsed")
 
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
     if not isinstance(tool_input, dict):
         allow()
+        return
 
     config = load_config()
     disabled = set(config.get("disable_rules", []))

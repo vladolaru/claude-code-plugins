@@ -3,6 +3,8 @@
   {"command": "/usr/bin/rm -rf /home", "should": "block", "technique": "path_prefix", "rule_id": "destructive_deletion"},
   {"command": "command rm -rf /", "should": "block", "technique": "alias_bypass", "rule_id": "destructive_deletion"},
   {"command": "rm  -rf   /", "should": "block", "technique": "whitespace", "rule_id": "destructive_deletion"},
+  {"command": "rm -rf /tmp/build /home", "should": "block", "technique": "multi_target_temp_prefix", "rule_id": "destructive_deletion"},
+  {"command": "rm -rf /var/tmp/x /etc", "should": "block", "technique": "multi_target_vartmp_prefix", "rule_id": "destructive_deletion"},
   {"command": "find / -name '*.log' | xargs rm", "should": "block", "technique": "xargs_pipe", "rule_id": "alternative_deletion"},
   {"command": "find / -delete", "should": "block", "technique": "find_delete", "rule_id": "alternative_deletion"},
   {"command": "dd if=/dev/zero of=/dev/sda bs=1M", "should": "block", "technique": "dd_device", "rule_id": "disk_formatting"},

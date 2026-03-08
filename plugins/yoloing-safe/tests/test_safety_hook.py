@@ -1474,6 +1474,44 @@ class TestCompoundAllowlist:
         assert result.returncode == 2, f"Should block: {command}"
 
 
+class TestMultiTargetAllowlistBypass:
+    """Verify rm with mixed temp + non-temp targets is NOT allowlisted.
+
+    Regression test: the temp-directory allowlist must only match when ALL
+    rm targets are in temp dirs, not just the first one.
+    """
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5
+        )
+
+    @pytest.mark.parametrize("command", [
+        "rm -rf /tmp/build /home",
+        "rm -rf /tmp/build /home/user",
+        "rm -rf /var/tmp/x /etc",
+        "rm -rf /tmp/a /tmp/b /home",
+    ])
+    def test_mixed_targets_blocked(self, command):
+        """rm with temp prefix followed by non-temp path must be blocked."""
+        result = self._run_hook("Bash", {"command": command})
+        assert result.returncode == 2, f"Should block: {command}"
+
+    @pytest.mark.parametrize("command", [
+        "rm -rf /tmp/build",
+        "rm -rf /tmp/a /tmp/b",
+        "rm -rf /var/tmp/x /var/tmp/y",
+        "rm -rf /tmp/build/dist",
+    ])
+    def test_all_temp_targets_allowed(self, command):
+        """rm targeting only temp directories should be allowed."""
+        result = self._run_hook("Bash", {"command": command})
+        assert result.returncode == 0, f"Should allow: {command}"
+
+
 class TestIntegrationNewAskRules:
     """Integration tests for sensitive_write_target and inline_interpreter."""
     SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")

@@ -25,7 +25,7 @@ The hook auto-wires on install via `hooks.json`. Zero configuration needed — i
 
 | Category | Examples |
 |----------|----------|
-| Destructive deletion | `rm -rf /`, `rm -fr /home`, chained `rm` via `&&`/`;` |
+| Destructive deletion | `rm -rf /`, `rm -fr /home` (compound commands like `&&`/`;` are split and each segment is evaluated) |
 | Alternative deletion | `find / -delete`, `xargs rm`, `eval "rm"` |
 | Disk formatting | `mkfs.ext4 /dev/sda1`, `dd of=/dev/sda` |
 | Network exfiltration | `curl -d @/etc/passwd`, `curl -F`, `curl -T`, `scp` upload, `rsync` upload, piping to `nc`, `wget \| bash` |
@@ -85,7 +85,7 @@ Only keys you include override defaults. Omitted keys keep their built-in values
 
 All rules in the block and ask tiers can be disabled except **self-protection** (which prevents the agent from modifying the hook's own config or script files). Available rule IDs:
 
-**Block tier:** `destructive_deletion`, `chained_deletion`, `alternative_deletion`, `disk_formatting`, `network_exfiltration`, `credential_access`, `package_publishing`, `ssh_remote_destruction`, `github_repo_deletion`, `zero_access_paths`, `git_bare_push`
+**Block tier:** `destructive_deletion`, `alternative_deletion`, `disk_formatting`, `network_exfiltration`, `credential_access`, `package_publishing`, `ssh_remote_destruction`, `github_repo_deletion`, `zero_access_paths`, `git_bare_push`
 
 **Ask tier:** `git_force_push`, `git_hard_reset`, `git_discard_changes`, `git_destroy_stash`, `git_history_rewrite`, `git_config_changes`, `git_other_dangerous`, `permission_changes`, `brew_commands`, `docker_destructive`, `database_destructive`, `terraform_destructive`, `github_cicd_ops`, `sensitive_write_target`, `inline_interpreter`, `inline_heredoc`
 
@@ -107,9 +107,9 @@ A few deliberate choices worth calling out:
 - **Exit 2 for blocks** — Claude treats this as a system error it can't negotiate with. Stronger than a policy denial for behavior shaping.
 - **5-second timeout** — if the script hangs, the tool call proceeds. No blocking the agent forever.
 - **Allowlist checked first** — without it, `git checkout -b feature` would false-positive against `git checkout --`, and `rm -rf /tmp/build` would match the destructive deletion pattern. Order matters.
-- **Compound command guard** — allowlist is skipped when chain operators (`&&`, `;`, `||`) are present, preventing attackers from prefixing a destructive command with an allowlisted one.
+- **Compound command evaluation** — commands with chain operators (`&&`, `;`, `||`) are split into segments, each evaluated independently against the allowlist and rules. This prevents safe-prefix attacks (`git checkout -b safe && rm -rf /`) while correctly allowing compound commands where every segment is safe.
 - **Self-protection** — the hook blocks Write/Edit/Bash writes (redirects, `cp`, `mv`, `tee`, `sed -i`) to its own config file and plugin directory, preventing an agent from disabling all rules then running destructive commands. Paths are resolved through symlinks (`realpath`). This check is hardcoded and cannot be disabled via `disable_rules`.
-- **Tool-scoped rules** — each rule declares which tools it applies to. Read evaluates 2 rules (credential access, protected paths), Write/Edit evaluate 3 (adding sensitive write targets), Bash runs all 26. A new rule must include example commands — the e2e generator fails if examples are missing.
+- **Tool-scoped rules** — each rule declares which tools it applies to. Read evaluates 2 rules (credential access, protected paths), Write/Edit evaluate 3 (adding sensitive write targets), Bash evaluates the rest. A new rule must include example commands — the e2e generator fails if examples are missing.
 - **Command normalization** — strips path prefixes (`/usr/bin/rm` → `rm`) and command wrappers (`sudo`, `env`, `nice`, `nohup`, etc.) so detection works regardless of how the command is invoked.
 - **Path expansion** — zero-access paths are checked in both `~/` form and expanded absolute form (`/Users/you/`), so protection works regardless of which form the tool provides.
 - **Case-insensitive matching** — credential patterns and zero-access paths match case-insensitively (`.ENV`, `~/.AWS/`), so protection works on case-insensitive filesystems like macOS HFS+/APFS.

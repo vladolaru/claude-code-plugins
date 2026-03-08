@@ -10,6 +10,7 @@
   {"tool_name": "Bash", "tool_input": {"command": "git clean -n"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "git push --force-with-lease origin HEAD"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/build"}, "category": "allowlisted"},
+  {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/a /tmp/b"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "chmod +x script.sh"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "npm publish --dry-run"}, "category": "allowlisted"},
   {"tool_name": "Bash", "tool_input": {"command": "rm file.txt"}, "category": "safe_rm"},

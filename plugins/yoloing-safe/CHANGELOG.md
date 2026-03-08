@@ -5,6 +5,17 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-03-08
+
+### Fixed
+- **Security:** `rm -rf /tmp/build /home` bypassed `destructive_deletion` — temp-directory allowlist matched on first target only, silently allowing mixed-target deletions. Tightened regex to require ALL rm targets be in temp directories (anchored with `$`)
+- `.env` credential pattern over-matched filenames like `.envoy.yml` and `.environ` — added `\b` word boundary after `.env`
+- Defensive `return` after `allow()` calls in `main()` early-exit paths to guard against `UnboundLocalError` if `sys.exit` were ever caught
+
+### Changed
+- README.md updated to reflect removal of `chained_deletion` rule and current compound command evaluation design
+- Clarified SSH remote command parsing comment in `detect_ssh_remote_destruction`
+
 ## [1.8.0] - 2026-03-08
 
 ### Changed
