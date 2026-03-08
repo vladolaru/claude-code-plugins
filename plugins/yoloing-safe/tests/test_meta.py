@@ -241,3 +241,45 @@ class TestScenarioCoveragePerRule:
         assert not bad, (
             f"Evasion scenarios with invalid rule_ids: {bad}"
         )
+
+
+@pytest.fixture
+def unit_test_classes():
+    """Extract all Test* class names from test_safety_hook.py."""
+    test_file = Path(__file__).resolve().parent / "test_safety_hook.py"
+    content = test_file.read_text()
+    import re as _re
+    return set(_re.findall(r"^class (Test\w+)", content, _re.MULTILINE))
+
+
+def _rule_id_to_class_name(rule_id):
+    """Convert snake_case rule_id to PascalCase test class name.
+
+    Examples: destructive_deletion -> TestDestructiveDeletion
+              git_bare_push -> TestGitBarePush
+              github_cicd_ops -> TestGitHubCICDOps
+    """
+    IRREGULAR = {
+        "ssh_remote_destruction": "TestSSHRemoteDestruction",
+        "github_repo_deletion": "TestGitHubRepoDelete",
+        "github_cicd_ops": "TestGitHubCICDOps",
+    }
+    if rule_id in IRREGULAR:
+        return IRREGULAR[rule_id]
+    parts = rule_id.split("_")
+    return "Test" + "".join(p.capitalize() for p in parts)
+
+
+class TestUnitTestCoverage:
+    """Every rule_id must have a corresponding unit test class."""
+
+    def test_every_rule_has_unit_test_class(self, rule_ids, unit_test_classes):
+        missing = []
+        for rid in rule_ids:
+            expected_class = _rule_id_to_class_name(rid)
+            if expected_class not in unit_test_classes:
+                missing.append((rid, expected_class))
+        assert missing == [], (
+            f"Rules missing unit test classes: {missing}. "
+            f"Add a Test class for each in test_safety_hook.py."
+        )
