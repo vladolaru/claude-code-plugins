@@ -179,43 +179,8 @@ def normalize_command(cmd):
     return normalized
 
 
-# ---------------------------------------------------------------------------
-# Message Catalog
-# ---------------------------------------------------------------------------
-
-BLOCK_MESSAGES = {
-    "destructive_deletion": "Use targeted file removal instead of recursive force-delete. Remove specific files by name (`rm file1 file2`), or use `git clean --dry-run` to preview before cleaning. This protects against accidental data loss.",
-    "chained_deletion": "Command chaining can hide destructive operations. Run each command separately so the intent is clear. Remove files by name rather than piping into `rm`.",
-    "alternative_deletion": "Indirect deletion methods (`find -delete`, `xargs rm`) can affect more files than intended. Use explicit file paths for removal, or `git clean --dry-run` to preview what would be deleted.",
-    "disk_formatting": "Disk formatting and raw device writes (`mkfs`, `dd`) are irreversible system-level operations. These should only be run manually with explicit user intent, never by an agent.",
-    "network_exfiltration": "Piping data to external URLs can expose sensitive information. Write output to a local file instead, then review before sharing. Use `git push` for code and `gh` for GitHub interactions.",
-    "credential_access": "This file may contain secrets or credentials. Use `.env.example` or `.env.template` for reference files. If you need to read configuration, ask the user to provide the specific values.",
-    "package_publishing": "Publishing packages to a registry is irreversible and public. Build and test locally, then let the user publish manually or through CI/CD. Use `--dry-run` to preview what would be published.",
-    "ssh_remote_destruction": "Executing destructive commands on remote hosts via SSH can cause irreversible damage to production systems. Run remote commands manually with explicit user intent.",
-    "github_repo_deletion": "Deleting a GitHub repository is irreversible and destroys all issues, PRs, and history. This should only be done manually through the GitHub UI or CLI by the user.",
-    "zero_access_paths": "This path contains sensitive system or security data that should not be accessed by an agent. Ask the user to provide the specific information you need.",
-    "self_protection": "This file is part of the safety hook infrastructure. Modifying it could disable safety protections. Ask the user to make changes manually.",
-    "git_bare_push": "Push with an explicit branch to avoid pushing to an unexpected target. Use `git push origin HEAD` to push the current branch, or `git push origin <branch-name>` for a specific branch.",
-}
-
-ASK_MESSAGES = {
-    "git_force_push": "Force push rewrites remote history and can discard teammates' work. Use `--force-with-lease` for a safer alternative. Confirm this is intentional.",
-    "git_hard_reset": "Hard reset discards uncommitted changes permanently. Use `git stash` first to preserve work. Confirm you want to proceed.",
-    "git_discard_changes": "This discards uncommitted changes to working tree files. Use `git stash` first if you might need them. Confirm you want to proceed.",
-    "git_destroy_stash": "Dropping or clearing stashes permanently destroys saved work. List stashes with `git stash list` first. Confirm this is intentional.",
-    "git_history_rewrite": "Rewriting git history (`filter-branch`, `filter-repo`) is irreversible on shared branches. Confirm this is intentional.",
-    "git_config_changes": "Global or system git config changes affect all repositories on this machine. Confirm this is intentional.",
-    "git_other_dangerous": "This git operation can cause data loss or affect collaboration. Confirm you want to proceed.",
-    "permission_changes": "Broad permission changes can create security vulnerabilities. Use `chmod +x` to make a file executable (always allowed), or apply the minimum permission needed. Confirm this is intentional.",
-    "brew_commands": "Installing system packages changes your development environment. Confirm you want to proceed, or consider adding the dependency to your project's package manager instead.",
-    "docker_destructive": "This Docker command removes containers, volumes, or cached data that may be difficult to rebuild. Confirm you want to proceed.",
-    "database_destructive": "This command permanently deletes database objects or data. Use a transaction with `BEGIN`/`ROLLBACK` to preview, or run against a dev database first. Confirm this is intentional.",
-    "terraform_destructive": "This infrastructure command can destroy live resources. Use `--dry-run` or `plan` first to preview changes. Confirm this is intentional.",
-    "github_cicd_ops": "Deleting GitHub secrets, variables, or disabling workflows affects CI/CD for all collaborators. Confirm this is intentional.",
-    "sensitive_write_target": "This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
-    "inline_interpreter": "Shell subshell execution (`bash -c`, `sh -c`) can bypass command-level safety checks. Write the code to a file and run it instead (e.g., `python3 script.py`), or use a non-shell interpreter directly (`python3 -c`, `node -e` are allowed). Confirm this is intentional.",
-    "inline_heredoc": "Heredocs fed to interpreters (`bash <<`, `python3 <<`) execute code that bypasses command-level safety checks. Write the code to a file and run it instead (e.g., `bash script.sh`). Writer heredocs (`cat > file << 'EOF'`) are not affected. Confirm this is intentional.",
-}
+# Self-protection message — not in RULES because it's hardcoded and non-disableable.
+_SELF_PROTECTION_MESSAGE = "This file is part of the safety hook infrastructure. Modifying it could disable safety protections. Ask the user to make changes manually."
 
 # ---------------------------------------------------------------------------
 # Allowlist Patterns — checked first to prevent false positives
@@ -294,9 +259,6 @@ _RE_FIND_SCOPED_ROOT = re.compile(
 _RE_FIND_EXEC_RM = re.compile(r"\bfind\b.*-exec\s+rm\b")
 _RE_XARGS_RM = re.compile(r"\bxargs\s+rm\b")
 _RE_EVAL_RM = re.compile(r"\beval\b.*\brm\b")
-_RE_MKFS = re.compile(r"\bmkfs\b")
-_RE_DD = re.compile(r"\bdd\b")
-_RE_DD_OF_DEV = re.compile(r"of=/dev/")
 
 # Network exfiltration
 _RE_CURL_POST_DATA = re.compile(r"\bcurl\b.*(-d\s+@|--data\s+@|-X\s+POST)")
@@ -319,27 +281,15 @@ _RE_GEM_PUSH = re.compile(r"\bgem push\b")
 _RE_SSH_CMD = re.compile(r"^ssh\b")
 _RE_SSH_QUOTED_CMD = re.compile(r"""ssh\s+\S+\s+['"](.+?)['"]""")
 
-# GitHub repo deletion
-_RE_GH_REPO_DELETE = re.compile(r"\bgh repo delete\b")
-
 # Git operations
 _RE_GIT_PUSH = re.compile(r"^git push\b")
 # git push with explicit refspec alternatives (--tags, --all, --mirror)
 _RE_GIT_PUSH_REFSPEC_ALT = re.compile(r"--(tags|all|mirror)\b")
-_RE_GIT_FORCE_SAFE = re.compile(r"--force-with-lease|--force-if-includes")
-_RE_GIT_FORCE_FLAG = re.compile(r"(--force\b|-f\b)")
-_RE_GIT_RESET = re.compile(r"^git reset\b")
-_RE_HARD_FLAG = re.compile(r"--hard\b")
-_RE_MERGE_FLAG = re.compile(r"--merge\b")
 _RE_GIT_CHECKOUT = re.compile(r"^git checkout\b")
 _RE_DOUBLE_DASH_SEP = re.compile(r"\s--\s")
 _RE_GIT_RESTORE = re.compile(r"^git restore\b")
 _RE_STAGED_FLAG = re.compile(r"(--staged|-S)\b")
 _RE_WORKTREE_FLAG = re.compile(r"(--worktree|-W)\b")
-_RE_GIT_STASH_DROP_CLEAR = re.compile(r"^git stash (drop|clear)\b")
-_RE_GIT_FILTER = re.compile(r"^git filter-(branch|repo)\b")
-_RE_GIT_CONFIG = re.compile(r"^git config\b")
-_RE_GLOBAL_SYSTEM_FLAG = re.compile(r"--(global|system)\b")
 _RE_GIT_CLEAN = re.compile(r"^git clean\b")
 _RE_CLEAN_FORCE_FLAG = re.compile(r"-[a-zA-Z]*f")
 _RE_CLEAN_DRY_RUN = re.compile(r"(-[a-zA-Z]*n|--dry-run)")
@@ -359,14 +309,6 @@ _RE_CHMOD_SETUID_OCTAL = re.compile(r"\bchmod\s+[4267]\d{3}\b")
 _RE_CHMOD_SETUID_SYMBOLIC = re.compile(r"\bchmod\s+[ugo]*\+s\b")
 _RE_CHOWN_RECURSIVE = re.compile(r"\bchown\s+-[a-zA-Z]*R")
 
-# Brew commands
-_RE_BREW = re.compile(r"^brew\b")
-_RE_BREW_MODIFYING = re.compile(r"^brew\s+(install|uninstall|remove|upgrade|tap|untap|link|unlink)\b")
-
-# Docker destructive
-_RE_DOCKER_PRUNE = re.compile(r"\bdocker\s+(system|volume|image)\s+prune\b")
-_RE_DOCKER_RM_FORCE = re.compile(r"\bdocker\s+rm\s+-[a-zA-Z]*f")
-_RE_COMPOSE_DOWN_VOLUMES = re.compile(r"\bdocker-compose\s+down\b.*-v\b")
 
 # Database destructive
 _RE_DROP_OBJECT = re.compile(r"\bDROP\s+(DATABASE|TABLE|SCHEMA)\b")
@@ -376,49 +318,14 @@ _RE_WHERE = re.compile(r"\bWHERE\b")
 _RE_DROPDB_DROPUSER = re.compile(r"\b(dropdb|dropuser)\b")
 _RE_REDIS_FLUSH = re.compile(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b")
 
-# Terraform/Pulumi destructive
-_RE_TERRAFORM_DESTROY = re.compile(r"\bterraform destroy\b")
-_RE_TERRAFORM_AUTO_APPROVE = re.compile(r"\bterraform apply\b.*-auto-approve\b")
-_RE_PULUMI_DESTROY = re.compile(r"\bpulumi destroy\b")
-
-# GitHub CI/CD ops
-_RE_GH_SECRET_VAR_DELETE = re.compile(r"\bgh\s+(secret|variable)\s+delete\b")
-_RE_GH_WORKFLOW_DISABLE = re.compile(r"\bgh\s+workflow\s+disable\b")
-_RE_GH_RELEASE_DELETE = re.compile(r"\bgh\s+release\s+delete\b")
-
-# Inline interpreter
-_RE_SHELL_SUBSHELL = re.compile(r"\b(bash|sh|zsh)\s+-c\b")
-
-# Container exec tooling: bash -c is the only way to run commands in containers
-_RE_CONTAINER_EXEC = re.compile(
-    r"\b(docker\s+exec\b|(?:pnpm\s+(?:exec\s+)?)?wp-env\s+run\b)"
-)
-
-# Interpreter heredocs: shell/interpreter reading from << delimiter
-# Distinct from bash -c (inline_interpreter): here the code is the heredoc body.
-_RE_INTERPRETER_HEREDOC = re.compile(
-    r"(?<!\w)(bash|sh|zsh|python3?|node|ruby|perl|mysql|psql|sqlite3)\b[^<\n]*<<"
-)
 
 # ---------------------------------------------------------------------------
-# Detection Functions
+# Detection Functions (custom — complex rules that need procedural logic)
 # Each returns (detected: bool, message: str | None)
 # Signature: (command, tool_name, tool_input, config) -> (bool, str|None)
 # ---------------------------------------------------------------------------
 
 # --- Block Tier: Filesystem Destruction ---
-
-def detect_destructive_deletion(command, tool_name, tool_input, config):
-    """Detect rm -rf and variants."""
-    if not _RE_RM.search(command):
-        return False, None
-    # Must have both recursive and force flags
-    has_recursive = bool(_RE_RECURSIVE_FLAG.search(command))
-    has_force = bool(_RE_FORCE_DELETE_FLAG.search(command))
-    if has_recursive and has_force:
-        return True, BLOCK_MESSAGES["destructive_deletion"]
-    return False, None
-
 
 def detect_chained_deletion(command, tool_name, tool_input, config):
     """Detect rm hidden in command chains (&&, ;, ||)."""
@@ -431,7 +338,7 @@ def detect_chained_deletion(command, tool_name, tool_input, config):
         # Normalize the segment too
         segment = normalize_command(segment)
         if _RE_RM.search(segment):
-            return True, BLOCK_MESSAGES["chained_deletion"]
+            return True, RULES["chained_deletion"]["message"]
     return False, None
 
 
@@ -441,26 +348,16 @@ def detect_alternative_deletion(command, tool_name, tool_input, config):
     if _RE_FIND_DELETE.search(command):
         # Allow scoped cleanup (relative dot-paths, $TMPDIR, /tmp, /var/tmp)
         if not _RE_FIND_SCOPED_ROOT.search(command):
-            return True, BLOCK_MESSAGES["alternative_deletion"]
+            return True, RULES["alternative_deletion"]["message"]
     # find -exec rm
     if _RE_FIND_EXEC_RM.search(command):
-        return True, BLOCK_MESSAGES["alternative_deletion"]
+        return True, RULES["alternative_deletion"]["message"]
     # xargs rm
     if _RE_XARGS_RM.search(command):
-        return True, BLOCK_MESSAGES["alternative_deletion"]
+        return True, RULES["alternative_deletion"]["message"]
     # eval with rm
     if _RE_EVAL_RM.search(command):
-        return True, BLOCK_MESSAGES["alternative_deletion"]
-    return False, None
-
-
-def detect_disk_formatting(command, tool_name, tool_input, config):
-    """Detect mkfs, dd to device."""
-    if _RE_MKFS.search(command):
-        return True, BLOCK_MESSAGES["disk_formatting"]
-    # dd writing to a device
-    if _RE_DD.search(command) and _RE_DD_OF_DEV.search(command):
-        return True, BLOCK_MESSAGES["disk_formatting"]
+        return True, RULES["alternative_deletion"]["message"]
     return False, None
 
 
@@ -473,27 +370,27 @@ def detect_network_exfiltration(command, tool_name, tool_input, config):
     # curl posting data (file or stdin)
     if _RE_CURL_POST_DATA.search(command):
         if not _is_loopback:
-            return True, BLOCK_MESSAGES["network_exfiltration"]
+            return True, RULES["network_exfiltration"]["message"]
     # curl file upload (-F form, -T upload, --upload-file)
     if _RE_CURL_UPLOAD.search(command):
         if not _is_loopback:
-            return True, BLOCK_MESSAGES["network_exfiltration"]
+            return True, RULES["network_exfiltration"]["message"]
     # wget posting a file — loopback bypass applies here too
     if _RE_WGET_POST_FILE.search(command):
         if not _is_loopback:
-            return True, BLOCK_MESSAGES["network_exfiltration"]
+            return True, RULES["network_exfiltration"]["message"]
     # Piping to nc — loopback not a meaningful exception (nc is raw TCP)
     if _RE_PIPE_TO_NC.search(command) or _RE_NC_REDIRECT.search(command):
-        return True, BLOCK_MESSAGES["network_exfiltration"]
+        return True, RULES["network_exfiltration"]["message"]
     # Piping curl/wget output to bash/sh (remote code execution) — always block
     if _RE_CURL_WGET_PIPE_SHELL.search(command):
-        return True, BLOCK_MESSAGES["network_exfiltration"]
+        return True, RULES["network_exfiltration"]["message"]
     # scp upload — loopback not applicable (scp always remote)
     if _RE_SCP_UPLOAD.search(command):
-        return True, BLOCK_MESSAGES["network_exfiltration"]
+        return True, RULES["network_exfiltration"]["message"]
     # rsync upload — loopback not applicable
     if _RE_RSYNC_UPLOAD.search(command):
-        return True, BLOCK_MESSAGES["network_exfiltration"]
+        return True, RULES["network_exfiltration"]["message"]
     return False, None
 
 
@@ -521,7 +418,7 @@ def detect_credential_access(command, tool_name, tool_input, config):
     # Check credential patterns (case-insensitive for case-insensitive filesystems)
     for cred_pat in cred_patterns:
         if re.search(cred_pat, file_path, re.IGNORECASE):
-            return True, BLOCK_MESSAGES["credential_access"]
+            return True, RULES["credential_access"]["message"]
 
     return False, None
 
@@ -537,13 +434,13 @@ def detect_package_publishing(command, tool_name, tool_input, config):
     for seg in segments:
         # npm publish (without --dry-run in this segment)
         if _RE_NPM_PUBLISH.search(seg) and not _RE_DRY_RUN.search(seg):
-            return True, BLOCK_MESSAGES["package_publishing"]
+            return True, RULES["package_publishing"]["message"]
         # twine upload / pip upload
         if _RE_TWINE_PIP_UPLOAD.search(seg):
-            return True, BLOCK_MESSAGES["package_publishing"]
+            return True, RULES["package_publishing"]["message"]
         # gem push
         if _RE_GEM_PUSH.search(seg):
-            return True, BLOCK_MESSAGES["package_publishing"]
+            return True, RULES["package_publishing"]["message"]
     return False, None
 
 
@@ -565,14 +462,7 @@ def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
     destructive = ["rm ", "rm\t", "drop ", "truncate ", "delete ", "mkfs", "dd "]
     for pattern in destructive:
         if pattern in remote_cmd:
-            return True, BLOCK_MESSAGES["ssh_remote_destruction"]
-    return False, None
-
-
-def detect_github_repo_deletion(command, tool_name, tool_input, config):
-    """Detect gh repo delete."""
-    if _RE_GH_REPO_DELETE.search(command):
-        return True, BLOCK_MESSAGES["github_repo_deletion"]
+            return True, RULES["ssh_remote_destruction"]["message"]
     return False, None
 
 
@@ -593,7 +483,7 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
         check_lower = check_path.lower()
         for zero_path in zero_paths:
             if zero_path.lower() in check_lower:
-                return True, BLOCK_MESSAGES["zero_access_paths"]
+                return True, RULES["zero_access_paths"]["message"]
 
     return False, None
 
@@ -617,40 +507,17 @@ def detect_git_bare_push(command, tool_name, tool_input, config):
     non_flag_parts = [p for p in parts[2:] if not p.startswith("-")]
     # Need at least 2 non-flag args: remote + refspec
     if len(non_flag_parts) < 2:
-        return True, BLOCK_MESSAGES["git_bare_push"]
+        return True, RULES["git_bare_push"]["message"]
     return False, None
 
 
 # --- Ask Tier: Git Operations ---
 
-def detect_git_force_push(command, tool_name, tool_input, config):
-    """Detect git push --force (but not --force-with-lease or --force-if-includes)."""
-    if not _RE_GIT_PUSH.search(command):
-        return False, None
-    # Must have --force or -f, but not --force-with-lease or --force-if-includes
-    if _RE_GIT_FORCE_SAFE.search(command):
-        return False, None
-    if _RE_GIT_FORCE_FLAG.search(command):
-        return True, ASK_MESSAGES["git_force_push"]
-    return False, None
-
-
-def detect_git_hard_reset(command, tool_name, tool_input, config):
-    """Detect git reset --hard or --merge."""
-    if not _RE_GIT_RESET.search(command):
-        return False, None
-    if _RE_HARD_FLAG.search(command):
-        return True, ASK_MESSAGES["git_hard_reset"]
-    if _RE_MERGE_FLAG.search(command):
-        return True, ASK_MESSAGES["git_hard_reset"]
-    return False, None
-
-
 def detect_git_discard_changes(command, tool_name, tool_input, config):
     """Detect git checkout -- and git restore that discards working tree changes."""
     # git checkout -- <path> or git checkout <ref> -- <path>
     if _RE_GIT_CHECKOUT.search(command) and _RE_DOUBLE_DASH_SEP.search(command):
-        return True, ASK_MESSAGES["git_discard_changes"]
+        return True, RULES["git_discard_changes"]["message"]
     # git restore (without --staged/-S alone — that's allowlisted)
     if _RE_GIT_RESTORE.search(command):
         has_staged = bool(_RE_STAGED_FLAG.search(command))
@@ -659,30 +526,7 @@ def detect_git_discard_changes(command, tool_name, tool_input, config):
         if has_staged and not has_worktree:
             return False, None
         # Otherwise it touches the worktree — dangerous
-        return True, ASK_MESSAGES["git_discard_changes"]
-    return False, None
-
-
-def detect_git_destroy_stash(command, tool_name, tool_input, config):
-    """Detect git stash drop/clear."""
-    if _RE_GIT_STASH_DROP_CLEAR.search(command):
-        return True, ASK_MESSAGES["git_destroy_stash"]
-    return False, None
-
-
-def detect_git_history_rewrite(command, tool_name, tool_input, config):
-    """Detect git filter-branch/filter-repo."""
-    if _RE_GIT_FILTER.search(command):
-        return True, ASK_MESSAGES["git_history_rewrite"]
-    return False, None
-
-
-def detect_git_config_changes(command, tool_name, tool_input, config):
-    """Detect git config --global or --system."""
-    if not _RE_GIT_CONFIG.search(command):
-        return False, None
-    if _RE_GLOBAL_SYSTEM_FLAG.search(command):
-        return True, ASK_MESSAGES["git_config_changes"]
+        return True, RULES["git_discard_changes"]["message"]
     return False, None
 
 
@@ -691,25 +535,25 @@ def detect_git_other_dangerous(command, tool_name, tool_input, config):
     # git clean with -f (force) but without -n/--dry-run (allowlisted)
     if _RE_GIT_CLEAN.search(command):
         if _RE_CLEAN_FORCE_FLAG.search(command) and not _RE_CLEAN_DRY_RUN.search(command):
-            return True, ASK_MESSAGES["git_other_dangerous"]
+            return True, RULES["git_other_dangerous"]["message"]
     # git branch -D (force delete)
     if _RE_GIT_BRANCH_DELETE.search(command):
-        return True, ASK_MESSAGES["git_other_dangerous"]
+        return True, RULES["git_other_dangerous"]["message"]
     # git remote remove
     if _RE_GIT_REMOTE_REMOVE.search(command):
-        return True, ASK_MESSAGES["git_other_dangerous"]
+        return True, RULES["git_other_dangerous"]["message"]
     # git reflog expire
     if _RE_GIT_REFLOG_EXPIRE.search(command):
-        return True, ASK_MESSAGES["git_other_dangerous"]
+        return True, RULES["git_other_dangerous"]["message"]
     # git gc --prune=now
     if _RE_GIT_GC_PRUNE.search(command):
-        return True, ASK_MESSAGES["git_other_dangerous"]
+        return True, RULES["git_other_dangerous"]["message"]
     # git push --delete (remote branch/tag deletion)
     if _RE_GIT_PUSH_DELETE.search(command):
-        return True, ASK_MESSAGES["git_other_dangerous"]
+        return True, RULES["git_other_dangerous"]["message"]
     # git push origin :refs/... (colon-prefix deletion syntax)
     if _RE_GIT_PUSH_COLON_REF.search(command):
-        return True, ASK_MESSAGES["git_other_dangerous"]
+        return True, RULES["git_other_dangerous"]["message"]
     return False, None
 
 
@@ -723,44 +567,21 @@ def detect_permission_changes(command, tool_name, tool_input, config):
     # sudo chmod — always flag (note: sudo is stripped by normalize, but
     # the pattern stays for defense in depth if normalization changes)
     if _RE_SUDO_CHMOD.search(command):
-        return True, ASK_MESSAGES["permission_changes"]
+        return True, RULES["permission_changes"]["message"]
     # chmod 777 or setuid/setgid bits (4-digit octal starting with 4/2/6)
     if _RE_CHMOD.search(command):
         # 777 — world-writable
         if _RE_CHMOD_777.search(command):
-            return True, ASK_MESSAGES["permission_changes"]
+            return True, RULES["permission_changes"]["message"]
         # 4-digit octal with setuid (4), setgid (2), or both (6) prefix
         if _RE_CHMOD_SETUID_OCTAL.search(command):
-            return True, ASK_MESSAGES["permission_changes"]
+            return True, RULES["permission_changes"]["message"]
         # Symbolic setuid/setgid
         if _RE_CHMOD_SETUID_SYMBOLIC.search(command):
-            return True, ASK_MESSAGES["permission_changes"]
+            return True, RULES["permission_changes"]["message"]
     # chown -R (recursive ownership change)
     if _RE_CHOWN_RECURSIVE.search(command):
-        return True, ASK_MESSAGES["permission_changes"]
-    return False, None
-
-
-def detect_brew_commands(command, tool_name, tool_input, config):
-    """Detect brew install/uninstall/upgrade/tap/link (not list/info/search/doctor)."""
-    if not _RE_BREW.search(command):
-        return False, None
-    if _RE_BREW_MODIFYING.search(command):
-        return True, ASK_MESSAGES["brew_commands"]
-    return False, None
-
-
-def detect_docker_destructive(command, tool_name, tool_input, config):
-    """Detect destructive Docker commands."""
-    # docker system/volume/image prune
-    if _RE_DOCKER_PRUNE.search(command):
-        return True, ASK_MESSAGES["docker_destructive"]
-    # docker rm -f
-    if _RE_DOCKER_RM_FORCE.search(command):
-        return True, ASK_MESSAGES["docker_destructive"]
-    # docker-compose down -v
-    if _RE_COMPOSE_DOWN_VOLUMES.search(command):
-        return True, ASK_MESSAGES["docker_destructive"]
+        return True, RULES["permission_changes"]["message"]
     return False, None
 
 
@@ -769,41 +590,19 @@ def detect_database_destructive(command, tool_name, tool_input, config):
     cmd_upper = command.upper()
     # DROP DATABASE/TABLE
     if _RE_DROP_OBJECT.search(cmd_upper):
-        return True, ASK_MESSAGES["database_destructive"]
+        return True, RULES["database_destructive"]["message"]
     # TRUNCATE
     if _RE_TRUNCATE.search(cmd_upper):
-        return True, ASK_MESSAGES["database_destructive"]
+        return True, RULES["database_destructive"]["message"]
     # DELETE without WHERE
     if _RE_DELETE_FROM.search(cmd_upper) and not _RE_WHERE.search(cmd_upper):
-        return True, ASK_MESSAGES["database_destructive"]
+        return True, RULES["database_destructive"]["message"]
     # dropdb/dropuser CLI tools
     if _RE_DROPDB_DROPUSER.search(command):
-        return True, ASK_MESSAGES["database_destructive"]
+        return True, RULES["database_destructive"]["message"]
     # redis FLUSHALL/FLUSHDB
     if _RE_REDIS_FLUSH.search(command):
-        return True, ASK_MESSAGES["database_destructive"]
-    return False, None
-
-
-def detect_terraform_destructive(command, tool_name, tool_input, config):
-    """Detect destructive Terraform/Pulumi commands."""
-    if _RE_TERRAFORM_DESTROY.search(command):
-        return True, ASK_MESSAGES["terraform_destructive"]
-    if _RE_TERRAFORM_AUTO_APPROVE.search(command):
-        return True, ASK_MESSAGES["terraform_destructive"]
-    if _RE_PULUMI_DESTROY.search(command):
-        return True, ASK_MESSAGES["terraform_destructive"]
-    return False, None
-
-
-def detect_github_cicd_ops(command, tool_name, tool_input, config):
-    """Detect destructive GitHub CI/CD operations."""
-    if _RE_GH_SECRET_VAR_DELETE.search(command):
-        return True, ASK_MESSAGES["github_cicd_ops"]
-    if _RE_GH_WORKFLOW_DISABLE.search(command):
-        return True, ASK_MESSAGES["github_cicd_ops"]
-    if _RE_GH_RELEASE_DELETE.search(command):
-        return True, ASK_MESSAGES["github_cicd_ops"]
+        return True, RULES["database_destructive"]["message"]
     return False, None
 
 
@@ -823,10 +622,10 @@ def detect_sensitive_write_target(command, tool_name, tool_input, config):
         ".zshrc", ".zprofile", ".zshenv", ".zlogin",
     }
     if basename in shell_init:
-        return True, ASK_MESSAGES["sensitive_write_target"]
+        return True, RULES["sensitive_write_target"]["message"]
     # Git hooks directory
     if "/.git/hooks/" in normalized_path or normalized_path.endswith("/.git/hooks"):
-        return True, ASK_MESSAGES["sensitive_write_target"]
+        return True, RULES["sensitive_write_target"]["message"]
     # Package manager / tool config — only in home directory
     # (project-level .npmrc/.yarnrc/.gitconfig are routine, not risky)
     sensitive_dotfiles = {".gitconfig", ".npmrc", ".yarnrc"}
@@ -834,120 +633,393 @@ def detect_sensitive_write_target(command, tool_name, tool_input, config):
         home = os.path.expanduser("~")
         parent = os.path.dirname(normalized_path)
         if parent == home:
-            return True, ASK_MESSAGES["sensitive_write_target"]
+            return True, RULES["sensitive_write_target"]["message"]
     return False, None
 
 
-def detect_inline_interpreter(command, tool_name, tool_input, config):
-    """Detect shell subshell execution (bash -c, sh -c, zsh -c).
+# ---------------------------------------------------------------------------
+# Rule Definitions
+#
+# Each rule is a dict with:
+#   tier        "block" or "ask"
+#   tools       set of tool names this rule applies to
+#   message     guidance message for Claude
+#   examples    example commands for e2e test generation
+#   patterns    (optional) regex strings — any match triggers (OR)
+#   pattern_groups (optional) list of AND-groups — all patterns in group must match
+#   require     (optional) additional patterns that must ALL match (AND with patterns)
+#   exclude     (optional) if any match, rule does NOT trigger
+#   detect      (optional) custom function (command, tool_name, tool_input, config) -> (bool, str|None)
+#
+# Either patterns/pattern_groups or detect must be present.
+# ---------------------------------------------------------------------------
 
-    Only flags shell subshells — the actual evasion vector for bypassing
-    command-level pattern matching. python3 -c, node -e, etc. are excluded
-    because agents use them constantly for legitimate one-liners (JSON
-    formatting, calculations, version checks) and the noise-to-signal ratio
-    is too high. Interpreter-based attacks are documented as a known limitation.
+RULES = {
+    # =======================================================================
+    # Block Tier
+    # =======================================================================
 
-    Exception: container exec tooling (docker exec, wp-env run) uses bash -c
-    as the only mechanism to run commands inside containers. Other rules
-    (destructive_deletion, etc.) still evaluate the full command string.
-    """
-    if tool_name != "Bash":
-        return False, None
-    # bash/sh/zsh -c (subshell execution — the evasion vector)
-    if _RE_SHELL_SUBSHELL.search(command):
-        # Don't flag when bash -c is used for container exec
-        if _RE_CONTAINER_EXEC.search(command):
+    # --- Declarative: rm with BOTH recursive AND force flags ---
+    "destructive_deletion": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "pattern_groups": [
+            [r"\brm\b", r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive", r"(?:^|\s)-[a-zA-Z]*[fF]|--force"],
+        ],
+        "message": "Use targeted file removal instead of recursive force-delete. Remove specific files by name (`rm file1 file2`), or use `git clean --dry-run` to preview before cleaning. This protects against accidental data loss.",
+        "examples": ["rm -rf /"],
+    },
+
+    # --- Complex: splits on chain operators ---
+    "chained_deletion": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "detect": detect_chained_deletion,
+        "message": "Command chaining can hide destructive operations. Run each command separately so the intent is clear. Remove files by name rather than piping into `rm`.",
+        "examples": ["echo 'build complete' && rm -rf /home"],
+    },
+
+    # --- Custom: scoped-root exclusion only applies to find -delete, not find -exec rm ---
+    "alternative_deletion": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "detect": detect_alternative_deletion,
+        "message": "Indirect deletion methods (`find -delete`, `xargs rm`) can affect more files than intended. Use explicit file paths for removal, or `git clean --dry-run` to preview what would be deleted.",
+        "examples": ["find / -name '*.log' -delete"],
+    },
+
+    # --- Simple: mkfs OR (dd AND of=/dev/) ---
+    "disk_formatting": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "patterns": [r"\bmkfs\b"],
+        "pattern_groups": [[r"\bdd\b", r"of=/dev/"]],
+        "message": "Disk formatting and raw device writes (`mkfs`, `dd`) are irreversible system-level operations. These should only be run manually with explicit user intent, never by an agent.",
+        "examples": ["mkfs.ext4 /dev/sda1"],
+    },
+
+    # --- Complex: multiple exfil vectors + loopback exclusion ---
+    "network_exfiltration": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "detect": detect_network_exfiltration,
+        "message": "Piping data to external URLs can expose sensitive information. Write output to a local file instead, then review before sharing. Use `git push` for code and `gh` for GitHub interactions.",
+        "examples": [
+            "curl -d @/tmp/results.txt http://ci.example.com/upload",
+            "scp ./dist/* deploy@staging.example.com:/var/www/",
+        ],
+    },
+
+    # --- Complex: config-dependent patterns + tool_input inspection ---
+    "credential_access": {
+        "tier": "block",
+        "tools": {"Bash", "Read", "Write", "Edit"},
+        "detect": detect_credential_access,
+        "message": "This file may contain secrets or credentials. Use `.env.example` or `.env.template` for reference files. If you need to read configuration, ask the user to provide the specific values.",
+        "examples": ["./.env"],
+    },
+
+    # --- Complex: per-segment chain analysis + dry-run exclusion ---
+    "package_publishing": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "detect": detect_package_publishing,
+        "message": "Publishing packages to a registry is irreversible and public. Build and test locally, then let the user publish manually or through CI/CD. Use `--dry-run` to preview what would be published.",
+        "examples": ["npm publish"],
+    },
+
+    # --- Complex: SSH command extraction (quoted + unquoted) ---
+    "ssh_remote_destruction": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "detect": detect_ssh_remote_destruction,
+        "message": "Executing destructive commands on remote hosts via SSH can cause irreversible damage to production systems. Run remote commands manually with explicit user intent.",
+        "examples": ["ssh prod-server 'rm -rf /var/www/old'"],
+    },
+
+    # --- Simple: single regex ---
+    "github_repo_deletion": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "patterns": [r"\bgh repo delete\b"],
+        "message": "Deleting a GitHub repository is irreversible and destroys all issues, PRs, and history. This should only be done manually through the GitHub UI or CLI by the user.",
+        "examples": ["gh repo delete"],
+    },
+
+    # --- Complex: config-dependent paths + tool_input inspection ---
+    "zero_access_paths": {
+        "tier": "block",
+        "tools": {"Bash", "Read", "Write", "Edit"},
+        "detect": detect_zero_access_paths,
+        "message": "This path contains sensitive system or security data that should not be accessed by an agent. Ask the user to provide the specific information you need.",
+        "examples": ["~/.ssh/id_rsa", "~/.aws/credentials"],
+    },
+
+    # --- Complex: argument counting logic ---
+    "git_bare_push": {
+        "tier": "block",
+        "tools": {"Bash"},
+        "detect": detect_git_bare_push,
+        "message": "Push with an explicit branch to avoid pushing to an unexpected target. Use `git push origin HEAD` to push the current branch, or `git push origin <branch-name>` for a specific branch.",
+        "examples": ["git push"],
+    },
+
+    # =======================================================================
+    # Ask Tier — Git Operations
+    # =======================================================================
+
+    # --- Declarative: git push + force flag, excluding safe variants ---
+    "git_force_push": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [r"^git push\b"],
+        "require": [r"(--force\b|-f\b)"],
+        "exclude": [r"--force-with-lease", r"--force-if-includes"],
+        "message": "Force push rewrites remote history and can discard teammates' work. Use `--force-with-lease` for a safer alternative. Confirm this is intentional.",
+        "examples": ["git push --force origin hotfix/fix-arena"],
+    },
+
+    # --- Declarative: git reset + --hard or --merge ---
+    "git_hard_reset": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [r"^git reset\b"],
+        "require": [r"(--hard|--merge)\b"],
+        "message": "Hard reset discards uncommitted changes permanently. Use `git stash` first to preserve work. Confirm you want to proceed.",
+        "examples": ["git reset --hard main"],
+    },
+
+    # --- Custom: two paths (checkout -- vs restore), conditional staged/worktree logic ---
+    "git_discard_changes": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "detect": detect_git_discard_changes,
+        "message": "This discards uncommitted changes to working tree files. Use `git stash` first if you might need them. Confirm you want to proceed.",
+        "examples": ["git checkout -- ."],
+    },
+
+    # --- Simple: single regex ---
+    "git_destroy_stash": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [r"^git stash (drop|clear)\b"],
+        "message": "Dropping or clearing stashes permanently destroys saved work. List stashes with `git stash list` first. Confirm this is intentional.",
+        "examples": ["git stash drop"],
+    },
+
+    # --- Simple: single regex ---
+    "git_history_rewrite": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [r"^git filter-(branch|repo)\b"],
+        "message": "Rewriting git history (`filter-branch`, `filter-repo`) is irreversible on shared branches. Confirm this is intentional.",
+        "examples": ["git filter-branch --force HEAD"],
+    },
+
+    # --- Declarative: git config + --global or --system ---
+    "git_config_changes": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [r"^git config\b"],
+        "require": [r"--(global|system)\b"],
+        "message": "Global or system git config changes affect all repositories on this machine. Confirm this is intentional.",
+        "examples": ["git config --global user.email 'test@test.com'"],
+    },
+
+    # --- Custom: 7 sub-checks, git clean has conditional dry-run exclusion ---
+    "git_other_dangerous": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "detect": detect_git_other_dangerous,
+        "message": "This git operation can cause data loss or affect collaboration. Confirm you want to proceed.",
+        "examples": ["git branch -D feature/goat-skins"],
+    },
+
+    # =======================================================================
+    # Ask Tier — Non-Git
+    # =======================================================================
+
+    # --- Custom: chmod +x exclusion only for chmod patterns, not chown -R ---
+    "permission_changes": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "detect": detect_permission_changes,
+        "message": "Broad permission changes can create security vulnerabilities. Use `chmod +x` to make a file executable (always allowed), or apply the minimum permission needed. Confirm this is intentional.",
+        "examples": ["chmod 777 ."],
+    },
+
+    # --- Simple: match + require ---
+    "brew_commands": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [
+            r"^brew\s+(install|uninstall|remove|upgrade|tap|untap|link|unlink)\b",
+        ],
+        "message": "Installing system packages changes your development environment. Confirm you want to proceed, or consider adding the dependency to your project's package manager instead.",
+        "examples": ["brew install libvips"],
+    },
+
+    # --- Simple: multiple OR patterns ---
+    "docker_destructive": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [
+            r"\bdocker\s+(system|volume|image)\s+prune\b",
+            r"\bdocker\s+rm\s+-[a-zA-Z]*f",
+            r"\bdocker-compose\s+down\b.*-v\b",
+        ],
+        "message": "This Docker command removes containers, volumes, or cached data that may be difficult to rebuild. Confirm you want to proceed.",
+        "examples": ["docker system prune -af"],
+    },
+
+    # --- Complex: case-insensitive + WHERE exclusion ---
+    "database_destructive": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "detect": detect_database_destructive,
+        "message": "This command permanently deletes database objects or data. Use a transaction with `BEGIN`/`ROLLBACK` to preview, or run against a dev database first. Confirm this is intentional.",
+        "examples": ["sqlite3 goatbomber.db 'DROP TABLE users;'"],
+    },
+
+    # --- Simple: multiple OR patterns ---
+    "terraform_destructive": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [
+            r"\bterraform destroy\b",
+            r"\bterraform apply\b.*-auto-approve\b",
+            r"\bpulumi destroy\b",
+        ],
+        "message": "This infrastructure command can destroy live resources. Use `--dry-run` or `plan` first to preview changes. Confirm this is intentional.",
+        "examples": ["terraform destroy -auto-approve"],
+    },
+
+    # --- Simple: multiple OR patterns ---
+    "github_cicd_ops": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [
+            r"\bgh\s+(secret|variable)\s+delete\b",
+            r"\bgh\s+workflow\s+disable\b",
+            r"\bgh\s+release\s+delete\b",
+        ],
+        "message": "Deleting GitHub secrets, variables, or disabling workflows affects CI/CD for all collaborators. Confirm this is intentional.",
+        "examples": ["gh secret delete DEPLOY_KEY"],
+    },
+
+    # --- Complex: tool_input inspection + basename matching ---
+    "sensitive_write_target": {
+        "tier": "ask",
+        "tools": {"Write", "Edit"},
+        "detect": detect_sensitive_write_target,
+        "message": "This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
+        "examples": ["~/.bashrc"],
+    },
+
+    # --- Declarative: shell -c, excluding container exec contexts ---
+    "inline_interpreter": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [r"\b(bash|sh|zsh)\s+-c\b"],
+        "exclude": [r"\b(docker\s+exec\b|(?:pnpm\s+(?:exec\s+)?)?wp-env\s+run\b)"],
+        "message": "Shell subshell execution (`bash -c`, `sh -c`) can bypass command-level safety checks. Write the code to a file and run it instead (e.g., `python3 script.py`), or use a non-shell interpreter directly (`python3 -c`, `node -e` are allowed). Confirm this is intentional.",
+        "examples": ["bash -c 'echo hello world'"],
+    },
+
+    # --- Simple: single regex ---
+    "inline_heredoc": {
+        "tier": "ask",
+        "tools": {"Bash"},
+        "patterns": [
+            r"(?<!\w)(bash|sh|zsh|python3?|node|ruby|perl|mysql|psql|sqlite3)\b[^<\n]*<<",
+        ],
+        "message": "Heredocs fed to interpreters (`bash <<`, `python3 <<`) execute code that bypasses command-level safety checks. Write the code to a file and run it instead (e.g., `bash script.sh`). Writer heredocs (`cat > file << 'EOF'`) are not affected. Confirm this is intentional.",
+        "examples": ["bash << 'EOF'\necho hello\nEOF"],
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Registry Builder
+# ---------------------------------------------------------------------------
+
+def _compile_patterns(pattern_list):
+    """Compile a list of regex strings into re.Pattern objects."""
+    return [re.compile(p) for p in pattern_list]
+
+
+def _make_detector(rule_id, compiled):
+    """Generate a detection function from compiled pattern data."""
+    patterns = compiled.get("patterns", [])
+    pattern_groups = compiled.get("pattern_groups", [])
+    require = compiled.get("require", [])
+    exclude = compiled.get("exclude", [])
+    message = compiled["message"]
+
+    def detect(command, tool_name, tool_input, config):
+        # Check exclude patterns first
+        for pat in exclude:
+            if pat.search(command):
+                return False, None
+        # Check OR patterns
+        matched = False
+        for pat in patterns:
+            if pat.search(command):
+                matched = True
+                break
+        # Check AND pattern groups (any group where all match)
+        if not matched:
+            for group in pattern_groups:
+                if all(pat.search(command) for pat in group):
+                    matched = True
+                    break
+        if not matched:
             return False, None
-        return True, ASK_MESSAGES["inline_interpreter"]
-    return False, None
+        # Check require patterns (all must match)
+        for pat in require:
+            if not pat.search(command):
+                return False, None
+        return True, message
+    return detect
 
 
-def detect_inline_heredoc(command, tool_name, tool_input, config):
-    """Detect heredocs fed to shell or interpreter commands (bash <<, python3 <<, etc.).
+def build_registry():
+    """Compile RULES into RULES_BY_TOOL index.
 
-    Writer heredocs (cat >, tee) are stripped before rules run and are NOT flagged here.
-    This rule catches the cases where heredoc content is EXECUTED, not just written to a file.
+    For rules with patterns (no custom detect), generates a detection function.
+    For rules with detect, uses the custom function directly.
+    Stores the resolved detect function as _detect on each rule dict.
+    Returns the RULES_BY_TOOL index.
     """
-    if tool_name != "Bash":
-        return False, None
-    if _RE_INTERPRETER_HEREDOC.search(command):
-        return True, ASK_MESSAGES["inline_heredoc"]
-    return False, None
+    rules_by_tool = {}
+    for rule_id, rule in RULES.items():
+        if "detect" in rule:
+            # Custom detection function — use as-is
+            detect_fn = rule["detect"]
+        else:
+            # Compile patterns and generate detector
+            compiled = {"message": rule["message"]}
+            if "patterns" in rule:
+                compiled["patterns"] = _compile_patterns(rule["patterns"])
+            if "pattern_groups" in rule:
+                compiled["pattern_groups"] = [
+                    _compile_patterns(group) for group in rule["pattern_groups"]
+                ]
+            if "require" in rule:
+                compiled["require"] = _compile_patterns(rule["require"])
+            if "exclude" in rule:
+                compiled["exclude"] = _compile_patterns(rule["exclude"])
+            detect_fn = _make_detector(rule_id, compiled)
+        # Store resolved detect function on rule dict for test access
+        rule["_detect"] = detect_fn
+        # Build per-tool index
+        tier = rule["tier"]
+        for tool in rule["tools"]:
+            rules_by_tool.setdefault(tool, []).append((rule_id, tier, detect_fn))
+    return rules_by_tool
 
 
-# Rule registry: (rule_id, tier, detect_fn, applicable_tools, examples)
-# The tool set declares which tools each rule applies to. A rule only runs
-# when the current tool_name is in its set. This makes scope explicit and
-# prevents Bash-only rules from running on Read/Write/Edit (and vice versa).
-# The examples list provides canonical test commands for e2e test generation;
-# it is not used at runtime but lives here so adding a rule without examples
-# is impossible (the tuple shape enforces it).
-RULE_REGISTRY = [
-    ("destructive_deletion", "block", detect_destructive_deletion, {"Bash"},
-        ["rm -rf /"]),
-    ("chained_deletion", "block", detect_chained_deletion, {"Bash"},
-        ["echo 'build complete' && rm -rf /home"]),
-    ("alternative_deletion", "block", detect_alternative_deletion, {"Bash"},
-        ["find / -name '*.log' -delete"]),
-    ("disk_formatting", "block", detect_disk_formatting, {"Bash"},
-        ["mkfs.ext4 /dev/sda1"]),
-    ("network_exfiltration", "block", detect_network_exfiltration, {"Bash"},
-        ["curl -d @/tmp/results.txt http://ci.example.com/upload",
-         "scp ./dist/* deploy@staging.example.com:/var/www/"]),
-    ("credential_access", "block", detect_credential_access, {"Bash", "Read", "Write", "Edit"},
-        ["./.env"]),
-    ("package_publishing", "block", detect_package_publishing, {"Bash"},
-        ["npm publish"]),
-    ("ssh_remote_destruction", "block", detect_ssh_remote_destruction, {"Bash"},
-        ["ssh prod-server 'rm -rf /var/www/old'"]),
-    ("github_repo_deletion", "block", detect_github_repo_deletion, {"Bash"},
-        ["gh repo delete"]),
-    ("zero_access_paths", "block", detect_zero_access_paths, {"Bash", "Read", "Write", "Edit"},
-        ["~/.ssh/id_rsa", "~/.aws/credentials"]),
-    ("git_bare_push", "block", detect_git_bare_push, {"Bash"},
-        ["git push"]),
-    # Ask tier — git operations
-    ("git_force_push", "ask", detect_git_force_push, {"Bash"},
-        ["git push --force origin hotfix/fix-arena"]),
-    ("git_hard_reset", "ask", detect_git_hard_reset, {"Bash"},
-        ["git reset --hard main"]),
-    ("git_discard_changes", "ask", detect_git_discard_changes, {"Bash"},
-        ["git checkout -- ."]),
-    ("git_destroy_stash", "ask", detect_git_destroy_stash, {"Bash"},
-        ["git stash drop"]),
-    ("git_history_rewrite", "ask", detect_git_history_rewrite, {"Bash"},
-        ["git filter-branch --force HEAD"]),
-    ("git_config_changes", "ask", detect_git_config_changes, {"Bash"},
-        ["git config --global user.email 'test@test.com'"]),
-    ("git_other_dangerous", "ask", detect_git_other_dangerous, {"Bash"},
-        ["git branch -D feature/goat-skins"]),
-    # Ask tier — non-git
-    ("permission_changes", "ask", detect_permission_changes, {"Bash"},
-        ["chmod 777 ."]),
-    ("brew_commands", "ask", detect_brew_commands, {"Bash"},
-        ["brew install libvips"]),
-    ("docker_destructive", "ask", detect_docker_destructive, {"Bash"},
-        ["docker system prune -af"]),
-    ("database_destructive", "ask", detect_database_destructive, {"Bash"},
-        ["sqlite3 goatbomber.db 'DROP TABLE users;'"]),
-    ("terraform_destructive", "ask", detect_terraform_destructive, {"Bash"},
-        ["terraform destroy -auto-approve"]),
-    ("github_cicd_ops", "ask", detect_github_cicd_ops, {"Bash"},
-        ["gh secret delete DEPLOY_KEY"]),
-    ("sensitive_write_target", "ask", detect_sensitive_write_target, {"Write", "Edit"},
-        ["~/.bashrc"]),
-    ("inline_interpreter", "ask", detect_inline_interpreter, {"Bash"},
-        ["bash -c 'echo hello world'"]),
-    ("inline_heredoc", "ask", detect_inline_heredoc, {"Bash"},
-        ["bash << 'EOF'\necho hello\nEOF"]),
-]
-
-# Pre-built per-tool rule lists (indexed at module load, not per-call)
-RULES_BY_TOOL = {}
-for _rule_id, _tier, _fn, _tools, _examples in RULE_REGISTRY:
-    for _tool in _tools:
-        RULES_BY_TOOL.setdefault(_tool, []).append((_rule_id, _tier, _fn))
-
+RULES_BY_TOOL = build_registry()
 _mark("registry_built")
 
 
@@ -1028,10 +1100,10 @@ def main():
         file_path = tool_input.get("file_path", "")
         if file_path:
             if _is_self_protected_path(file_path):
-                block(BLOCK_MESSAGES["self_protection"])
+                block(_SELF_PROTECTION_MESSAGE)
     elif tool_name == "Bash" and command:
         if _bash_targets_protected_path(command):
-            block(BLOCK_MESSAGES["self_protection"])
+            block(_SELF_PROTECTION_MESSAGE)
 
     # 1. Allowlist — check first, but SKIP for compound commands.
     #    Without this guard, "rm -rf /tmp/build && rm -rf /home" would
