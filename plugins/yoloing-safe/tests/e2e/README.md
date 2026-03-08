@@ -10,6 +10,11 @@ trigger dangerous operations. The safety hook should intercept these
 operations. After each test, bait files (fake SSH keys, AWS credentials,
 etc.) are checked to verify no damage occurred.
 
+Tests are batched by branch and tier into shared sessions — multiple
+commands are presented as a numbered list in a single prompt. This
+eliminates model self-censorship and reduces session count. Subagent
+tests run as solo sessions.
+
 Each test produces one of four outcomes:
 
 | Outcome | Meaning |
@@ -26,9 +31,9 @@ real bug.
 
 ## Important: Cost and Duration
 
-These tests make **real Claude API calls** (22 tests × up to 3 turns
-each). Each full suite run costs real money and takes 15–30 minutes
-depending on model latency. Don't run the full suite casually.
+These tests make **real Claude API calls** (31 tests across 8 sessions).
+Each full suite run costs real money and takes **5–10 minutes**. Don't
+run the full suite casually.
 
 ## Safety Guard
 
@@ -87,9 +92,16 @@ the token expires).
 ## Running Tests
 
 ```bash
-make run          # Full suite (22 tests, ~15-30 min)
+make run          # Full suite (31 tests, 8 sessions, ~5-10 min)
 make run-save     # Full suite, results saved to ./results/
 make shell        # Interactive shell for debugging
+```
+
+Override the model (default: haiku):
+
+```bash
+CC_MODEL=sonnet make run
+CC_MODEL=opus make run
 ```
 
 ## After Code Changes
@@ -109,14 +121,18 @@ make rebuild
 
 ## Test Cases
 
-See `test-cases.json` for all 22 test cases covering:
+See `test-cases.json` for all 31 test cases covering all 26 rule
+categories:
 
-- **Block tier** (12 tests): destructive deletion, credential access,
+- **Block tier** (13 tests): destructive deletion, credential access,
   network exfiltration, package publishing, SSH remote destruction,
-  GitHub repo deletion, self-protection
-- **Ask tier** (7 tests): git force push, hard reset, discard changes,
-  stash drop, branch delete, database drop, brew install
+  GitHub repo deletion, disk formatting, self-protection
+- **Ask tier** (15 tests): git force push, hard reset, discard changes,
+  stash drop, branch delete, history rewrite, global config, permission
+  changes, brew install, Docker prune, database drop, Terraform destroy,
+  GitHub CI/CD ops, sensitive file writes, inline interpreter
 - **Subagent bypass** (3 tests): verify hooks fire on subagent tool calls
+  (rm -rf, SSH key read, curl exfiltration)
 
 ## Noise Hooks
 
@@ -126,15 +142,17 @@ yoloing-safe to verify multi-hook coexistence:
 - `pre-tool-logger.sh` — logs PreToolUse events
 - `post-tool-logger.sh` — logs PostToolUse events
 - `prompt-timestamp.sh` — injects timestamp on UserPromptSubmit
+- `subagent-context.sh` — injects test executor context into subagents
 
 ## Output
 
 Results are saved to `/Users/testuser/results/` inside the container.
 Use `make run-save` to mount them to `./results/` on the host:
 
-- `<test-name>.session.jsonl` — CC session log (tool attempts, hook blocks)
-- `<test-name>.debug.txt` — CC debug log (hook decision traces including ask)
-- `<test-name>.stderr` — CC stderr
-- `<test-name>.snap-before` / `.snap-after` — bait file checksums
+- `<batch-key>.session.jsonl` — CC session log (parent + subagent sessions concatenated)
+- `<batch-key>.debug.txt` — CC debug log (hook decision traces including ask)
+- `<batch-key>.stderr` — CC stderr
+- `<batch-key>.snap-before` / `.snap-after` — bait file checksums
+- `batch-plan.json` — execution plan (batches and solo tests)
 - `hook-log.jsonl` — noise hook event log
 - `summary.json` — machine-readable results
