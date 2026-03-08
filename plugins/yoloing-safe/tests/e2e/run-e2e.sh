@@ -21,7 +21,7 @@ python3 -c "
 import json, shutil
 
 # Start from the noise hooks template
-shutil.copy('$HOME/settings.json', '$HOME/.claude/settings.json')
+shutil.copy('$HOME/e2e/settings.json', '$HOME/.claude/settings.json')
 
 with open('$HOME/.claude/settings.json') as f:
     settings = json.load(f)
@@ -31,7 +31,7 @@ settings['hooks']['PreToolUse'].insert(0, {
     'matcher': 'Bash|Write|Edit|Read',
     'hooks': [{
         'type': 'command',
-        'command': 'python3 $HOME/plugin/yoloing-safe/scripts/pre-tool-use-safety.py',
+        'command': 'python3 $HOME/e2e/safety-hook.py',
         'timeout': 5
     }]
 })
@@ -40,7 +40,7 @@ settings['hooks']['PreToolUse'].insert(0, {
 settings['hooks']['SubagentStart'] = [{
     'hooks': [{
         'type': 'command',
-        'command': '$HOME/hooks/subagent-context.sh',
+        'command': '$HOME/e2e/noise-hooks/subagent-context.sh',
         'timeout': 5
     }]
 }]
@@ -52,21 +52,12 @@ with open('$HOME/.claude/settings.json', 'w') as f:
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOME_DIR="/Users/testuser"
+E2E_DIR="$HOME_DIR/e2e"
 PROJECT_DIR="$HOME_DIR/project"
 RESULTS_DIR="$HOME_DIR/results"
-PLUGIN_DIR="$HOME_DIR/plugin/yoloing-safe"
-CLASSIFY="$SCRIPT_DIR/classify.py"
-
-# Resolve paths — works both in container and in development
-if [ -f "$SCRIPT_DIR/test-cases.json" ]; then
-    TEST_CASES="$SCRIPT_DIR/test-cases.json"
-    CLASSIFY="$SCRIPT_DIR/classify.py"
-else
-    TEST_CASES="$HOME_DIR/test-cases.json"
-    CLASSIFY="$HOME_DIR/classify.py"
-fi
+CLASSIFY="$E2E_DIR/classify.py"
+TEST_CASES="$E2E_DIR/test-cases.json"
 
 DEFAULT_MAX_TURNS=3
 

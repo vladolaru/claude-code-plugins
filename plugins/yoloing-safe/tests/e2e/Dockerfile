@@ -45,17 +45,20 @@ RUN mkdir -p /Users/testuser/.ssh /Users/testuser/.gnupg /Users/testuser/.aws \
        > /Users/testuser/project/.env \
     && echo 'precious-data' > /Users/testuser/important-files/data.txt
 
-# Copy yoloing-safe plugin source OUTSIDE ~/.claude/ so the auth volume
-# mount doesn't overlay it. Loaded via --plugin-dir at runtime.
-COPY --chown=testuser:testuser plugins/yoloing-safe/ /Users/testuser/plugin/yoloing-safe/
+# ---------------------------------------------------------------------------
+# E2E test infrastructure — all files under ~/e2e/
+# ---------------------------------------------------------------------------
+
+# Copy only the safety hook script (not the full plugin tree)
+COPY --chown=testuser:testuser plugins/yoloing-safe/scripts/pre-tool-use-safety.py /Users/testuser/e2e/safety-hook.py
 
 # Copy noise hooks
-COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/hooks/ /Users/testuser/hooks/
-RUN chmod +x /Users/testuser/hooks/*.sh
+COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/hooks/ /Users/testuser/e2e/noise-hooks/
+RUN chmod +x /Users/testuser/e2e/noise-hooks/*.sh
 
 # Store noise hooks settings outside ~/.claude/ — the auth volume mount
 # overlays ~/.claude/ at runtime. The entrypoint copies this into place.
-RUN cat > /Users/testuser/settings.json << 'SETTINGS'
+RUN cat > /Users/testuser/e2e/settings.json << 'SETTINGS'
 {
   "hooks": {
     "UserPromptSubmit": [
@@ -63,7 +66,7 @@ RUN cat > /Users/testuser/settings.json << 'SETTINGS'
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/testuser/hooks/prompt-timestamp.sh",
+            "command": "/Users/testuser/e2e/noise-hooks/prompt-timestamp.sh",
             "timeout": 5
           }
         ]
@@ -75,7 +78,7 @@ RUN cat > /Users/testuser/settings.json << 'SETTINGS'
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/testuser/hooks/pre-tool-logger.sh",
+            "command": "/Users/testuser/e2e/noise-hooks/pre-tool-logger.sh",
             "timeout": 5
           }
         ]
@@ -87,7 +90,7 @@ RUN cat > /Users/testuser/settings.json << 'SETTINGS'
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/testuser/hooks/post-tool-logger.sh",
+            "command": "/Users/testuser/e2e/noise-hooks/post-tool-logger.sh",
             "timeout": 5
           }
         ]
@@ -97,16 +100,16 @@ RUN cat > /Users/testuser/settings.json << 'SETTINGS'
 }
 SETTINGS
 
+# Copy e2e test harness scripts
+COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/run-e2e.sh /Users/testuser/e2e/run-e2e.sh
+COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/classify.py /Users/testuser/e2e/classify.py
+COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/test-cases.json /Users/testuser/e2e/test-cases.json
+RUN chmod +x /Users/testuser/e2e/run-e2e.sh
+
 # Create results directory
 RUN mkdir -p /Users/testuser/results
-
-# Copy e2e test harness scripts
-COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/run-e2e.sh /Users/testuser/run-e2e.sh
-COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/classify.py /Users/testuser/classify.py
-COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/test-cases.json /Users/testuser/test-cases.json
-RUN chmod +x /Users/testuser/run-e2e.sh
 
 # Safety guard — only the container sets this env var
 ENV YOLOING_SAFE_E2E=1
 
-ENTRYPOINT ["/Users/testuser/run-e2e.sh"]
+ENTRYPOINT ["/Users/testuser/e2e/run-e2e.sh"]
