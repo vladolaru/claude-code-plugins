@@ -347,8 +347,8 @@ _RE_GIT_BRANCH_DELETE = re.compile(r"^git branch\s+-D\b")
 _RE_GIT_REMOTE_REMOVE = re.compile(r"^git remote remove\b")
 _RE_GIT_REFLOG_EXPIRE = re.compile(r"^git reflog expire\b")
 _RE_GIT_GC_PRUNE = re.compile(r"^git gc\b.*--prune=")
-_RE_GIT_PUSH_DELETE = re.compile(r"^git push\b.*--delete\b")
-_RE_GIT_PUSH_COLON_REF = re.compile(r"^git push\b.*\s:refs/")
+_RE_GIT_PUSH_DELETE = re.compile(r"^git push\b.*(?:--delete|-d)\b")
+_RE_GIT_PUSH_COLON_REF = re.compile(r"^git push\b.*\s:[^-\s]")
 
 # Permission changes
 _RE_CHMOD_PLUS_X = re.compile(r"^chmod \+x\b")

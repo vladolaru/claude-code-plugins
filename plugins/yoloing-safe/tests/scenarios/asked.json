@@ -15,5 +15,7 @@
   {"tool_name": "Bash", "tool_input": {"command": "gh secret delete DEPLOY_KEY"}, "category": "github_cicd_ops"},
   {"tool_name": "Write", "tool_input": {"file_path": "~/.bashrc", "content": "export PATH=/opt/bin:$PATH"}, "category": "sensitive_write_target"},
   {"tool_name": "Bash", "tool_input": {"command": "bash -c 'echo hello world'"}, "category": "inline_interpreter"},
-  {"tool_name": "Bash", "tool_input": {"command": "bash << 'EOF'\necho hello\nEOF"}, "category": "inline_heredoc"}
+  {"tool_name": "Bash", "tool_input": {"command": "bash << 'EOF'\necho hello\nEOF"}, "category": "inline_heredoc"},
+  {"tool_name": "Bash", "tool_input": {"command": "git push origin :feature-branch"}, "category": "git_other_dangerous"},
+  {"tool_name": "Bash", "tool_input": {"command": "git push origin -d feature-branch"}, "category": "git_other_dangerous"}
 ]

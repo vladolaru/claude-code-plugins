@@ -744,6 +744,10 @@ class TestGitOtherDangerous:
         "git push origin --delete feature-branch",
         "git push origin :refs/heads/feature-branch",
         "git push origin :refs/tags/v1.0.0",
+        "git push origin :feature-branch",
+        "git push origin :hotfix/urgent",
+        "git push origin -d feature-branch",
+        "git push -d origin feature-branch",
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
