@@ -1,8 +1,8 @@
 # yoloing-safe — Agent Instructions
 
-## What This Plugin Does
+You maintain a PreToolUse safety hook for Claude Code's YOLO mode (`--dangerously-skip-permissions`). The hook pattern-matches tool calls against a `RULES` dict and either blocks (exit 2) or asks for confirmation (JSON `permissionDecision: "ask"`).
 
-PreToolUse safety hook for Claude Code's YOLO mode (`--dangerously-skip-permissions`). It pattern-matches tool calls against `RULES` and either blocks (exit 2) or asks for confirmation (JSON `permissionDecision: "ask"`).
+The hook script (`scripts/pre-tool-use-safety.py`) is the single source of truth. Every change to rules, detection, or allowlists happens there. This document tells you how.
 
 ## Key Files
 
@@ -18,6 +18,12 @@ PreToolUse safety hook for Claude Code's YOLO mode (`--dangerously-skip-permissi
 | `tests/scenarios/evasion.json` | Adversarial bypass attempts (must be caught). Each entry has a `rule_id` field. |
 | `tests/e2e/test-fixtures.json` | Optional e2e test overrides (tool, branch, subagent, pattern, prompt). Most rules need no entry. |
 | `CHANGELOG.md` | Version history — every behavior change needs an entry. |
+
+## Critical Constraints
+
+- `scripts/pre-tool-use-safety.py` is the single source of truth for all rules, detection, and allowlists.
+- `test-cases.json` is generated — edit `test-fixtures.json` or `RULES` examples instead, then run `make generate`.
+- Block-tier rules come before ask-tier rules in the `RULES` dict.
 
 ## RULES Dict Structure
 
@@ -39,7 +45,9 @@ Each rule in `RULES` is a dict with these keys:
 
 ## Rule Types: Declarative vs Custom
 
-**Declarative** — use when the rule is pure regex matching:
+**Decision test:** Can the rule be expressed entirely as "match X, require Y, exclude Z" against the command string? Use declarative. If you need conditionals, config lookups, `tool_input` fields, or per-segment logic, use custom.
+
+**Declarative** — the rule is regex matching against the command:
 
 ```python
 "git_force_push": {
@@ -53,7 +61,7 @@ Each rule in `RULES` is a dict with these keys:
 },
 ```
 
-**Custom** — use when the rule needs procedural logic (conditional checks, config-dependent patterns, per-segment chain analysis, tool_input inspection):
+**Custom** — the rule needs procedural logic (conditional checks, config-dependent patterns, per-segment chain analysis, tool_input inspection):
 
 ```python
 def detect_my_rule(command, tool_name, tool_input, config):
@@ -118,9 +126,13 @@ See `tests/e2e/README.md` for full setup, output format, and debugging.
 | `tests/scenarios/*.json` | `pytest plugins/yoloing-safe/tests/ -v` |
 | `tests/e2e/test-fixtures.json` | `cd tests/e2e && make generate` |
 
+**When tests fail:** Meta-test failures usually mean a scenario file is missing an entry or a rule lacks required fields — read the assertion message, fix the gap, and rerun. Unit test failures mean detection logic doesn't match expectations — adjust the regex or detection function, not the test.
+
 ## Rule Workflows
 
 ### Adding a New Rule
+
+Before starting, read `scripts/pre-tool-use-safety.py` to understand the current rule layout, naming conventions, and where new rules should be inserted. Check that no existing rule already covers the behavior you want to detect.
 
 **Step 1 — Add regex constants** (if needed, in "Pre-compiled Regex Patterns" section):
 
