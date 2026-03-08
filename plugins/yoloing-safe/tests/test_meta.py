@@ -1,6 +1,6 @@
-"""Structural invariant tests for yoloing-safe rule registry and scenarios.
+"""Structural invariant tests for yoloing-safe RULES dict and scenarios.
 
-These tests catch drift between RULE_REGISTRY, message dicts, allowlist entries,
+These tests catch drift between RULES dict, allowlist entries,
 and scenario files — no subprocess, no I/O beyond JSON loading.
 """
 
@@ -26,20 +26,20 @@ def hook():
 
 @pytest.fixture
 def rule_ids(hook):
-    """All rule_ids from RULE_REGISTRY."""
-    return [r[0] for r in hook.RULE_REGISTRY]
+    """All rule_ids from RULES."""
+    return list(hook.RULES.keys())
 
 
 @pytest.fixture
 def block_rule_ids(hook):
     """Rule_ids with tier 'block'."""
-    return [r[0] for r in hook.RULE_REGISTRY if r[1] == "block"]
+    return [rid for rid, r in hook.RULES.items() if r["tier"] == "block"]
 
 
 @pytest.fixture
 def ask_rule_ids(hook):
     """Rule_ids with tier 'ask'."""
-    return [r[0] for r in hook.RULE_REGISTRY if r[1] == "ask"]
+    return [rid for rid, r in hook.RULES.items() if r["tier"] == "ask"]
 
 
 @pytest.fixture
@@ -98,27 +98,16 @@ SAFE_ALIASES = {
 # ---------------------------------------------------------------------------
 
 class TestRuleMessageSync:
-    """Every block rule has a BLOCK_MESSAGES entry; every ask rule has ASK_MESSAGES."""
+    """Every rule has a message field."""
 
-    def test_block_rules_have_messages(self, hook, block_rule_ids):
-        missing = [rid for rid in block_rule_ids if rid not in hook.BLOCK_MESSAGES]
-        assert missing == [], f"Block rules missing BLOCK_MESSAGES entries: {missing}"
+    def test_every_rule_has_message(self, hook):
+        missing = [rid for rid, r in hook.RULES.items() if not r.get("message")]
+        assert missing == [], f"Rules missing message field: {missing}"
 
-    def test_ask_rules_have_messages(self, hook, ask_rule_ids):
-        missing = [rid for rid in ask_rule_ids if rid not in hook.ASK_MESSAGES]
-        assert missing == [], f"Ask rules missing ASK_MESSAGES entries: {missing}"
-
-    def test_no_orphaned_block_messages(self, hook, block_rule_ids):
-        # self_protection is hardcoded (not in RULE_REGISTRY) — exempt
-        orphaned = [
-            key for key in hook.BLOCK_MESSAGES
-            if key not in block_rule_ids and key != "self_protection"
-        ]
-        assert orphaned == [], f"Orphaned BLOCK_MESSAGES entries: {orphaned}"
-
-    def test_no_orphaned_ask_messages(self, hook, ask_rule_ids):
-        orphaned = [key for key in hook.ASK_MESSAGES if key not in ask_rule_ids]
-        assert orphaned == [], f"Orphaned ASK_MESSAGES entries: {orphaned}"
+    def test_self_protection_message_exists(self, hook):
+        assert hasattr(hook, "_SELF_PROTECTION_MESSAGE"), (
+            "_SELF_PROTECTION_MESSAGE constant missing"
+        )
 
 
 class TestAllowlistIntegrity:
@@ -138,23 +127,17 @@ class TestRuleRegistryExamples:
 
     def test_every_rule_has_examples(self, hook):
         missing = [
-            r[0] for r in hook.RULE_REGISTRY
-            if not r[4]  # examples list is empty or falsy
+            rid for rid, r in hook.RULES.items()
+            if not r.get("examples")
         ]
         assert missing == [], f"Rules with no examples: {missing}"
 
 
 class TestRuleRegistryNoDuplicates:
-    """No duplicate rule_ids in RULE_REGISTRY."""
+    """No duplicate rule_ids (inherently true for dict keys, but documents the invariant)."""
 
     def test_no_duplicate_rule_ids(self, rule_ids):
-        seen = set()
-        dupes = []
-        for rid in rule_ids:
-            if rid in seen:
-                dupes.append(rid)
-            seen.add(rid)
-        assert dupes == [], f"Duplicate rule_ids: {dupes}"
+        assert len(rule_ids) == len(set(rule_ids))
 
 
 class TestScenarioCategoryValidity:
@@ -221,7 +204,7 @@ class TestScenarioCoveragePerRule:
 
     def test_block_rules_have_evasion_scenarios(self, hook):
         """Every block-tier rule should have at least one evasion scenario."""
-        block_ids = {r[0] for r in hook.RULE_REGISTRY if r[1] == "block"}
+        block_ids = {rid for rid, r in hook.RULES.items() if r["tier"] == "block"}
         evasion = self._load_scenarios("evasion.json")
         evasion_rule_ids = {s["rule_id"] for s in evasion if "rule_id" in s}
         uncovered = block_ids - evasion_rule_ids
@@ -350,3 +333,34 @@ class TestUnitTestCoverage:
             f"Rules missing unit test classes: {missing}. "
             f"Add a Test class for each in test_safety_hook.py."
         )
+
+
+class TestDeclarativeRuleStructure:
+    """Structural invariants for the declarative rule format."""
+
+    def test_every_rule_has_detection_method(self, hook):
+        bad = []
+        for rid, r in hook.RULES.items():
+            has_patterns = "patterns" in r or "pattern_groups" in r
+            has_detect = "detect" in r
+            if not has_patterns and not has_detect:
+                bad.append(rid)
+        assert bad == [], (
+            f"Rules with neither patterns nor detect function: {bad}"
+        )
+
+    def test_every_rule_has_compiled_detect(self, hook):
+        """build_registry() should have stored _detect on every rule."""
+        missing = [rid for rid, r in hook.RULES.items() if "_detect" not in r]
+        assert missing == [], f"Rules missing _detect after build_registry(): {missing}"
+
+    def test_tier_values_are_valid(self, hook):
+        bad = [
+            (rid, r["tier"]) for rid, r in hook.RULES.items()
+            if r["tier"] not in ("block", "ask")
+        ]
+        assert bad == [], f"Rules with invalid tier: {bad}"
+
+    def test_tools_are_sets(self, hook):
+        bad = [rid for rid, r in hook.RULES.items() if not isinstance(r["tools"], set)]
+        assert bad == [], f"Rules where tools is not a set: {bad}"
