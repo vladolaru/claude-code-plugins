@@ -49,16 +49,17 @@ All skills must have a `SKILL.md` file with YAML frontmatter:
 
 ### pirategoat-tools
 
-Code review orchestration with 18 parallel review agents, 19 skills, and 6 commands covering security, architecture, testing, WordPress, accessibility, and more.
+Code review orchestration with 18 parallel review agents, 19 skills, and 6 commands covering security, architecture, testing, WordPress, accessibility, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
 
 | Directory | Contents |
 |---|---|
 | `agents/` | 18 review agent definitions + 2 shared protocols in `agents/shared/` |
 | `skills/` | 19 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, etc.) |
 | `commands/` | 6 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/ingest-code-review`, `/pr-update`, `/copy-as`) |
-| `scripts/` | Bootstrap reviewer, ground truth integrators (Jest, PHPUnit, Playwright, ESLint, PHPCS, Semgrep, Bandit), review output, session metrics |
-| `schemas/` | JSON output schemas for review results |
+| `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, reconciliation, ingestion, ground truth integrators, review output |
+| `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
+| `AGENTS.md` | Full development instructions, architecture, agent registry reference |
 
 **Dev notes:** Agents run in parallel by default. Model tier assignment matters (`inherit`/`sonnet`/`haiku` based on reasoning depth). Ground truth tools (linters, scanners) are optional — agents fall back to manual analysis.
 
