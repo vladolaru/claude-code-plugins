@@ -580,6 +580,28 @@ _RE_REDIS_FLUSH = re.compile(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Non-File Commands — skip credential/path checks for these
+# ---------------------------------------------------------------------------
+
+# Commands that do NOT access their arguments as files. When a Bash command
+# starts with one of these, credential_access and zero_access_paths rules
+# skip the whole-command-as-path check to avoid false positives like
+# `echo .env` being blocked.
+_NON_FILE_COMMANDS = frozenset({
+    "echo", "printf", "export", "set", "unset", "test",
+    "[", "[[", "true", "false", "alias", "type", "which",
+    "declare", "local", "readonly", "return", "exit",
+    "break", "continue", "shift", "trap", "read",
+})
+
+
+def _is_non_file_command(command):
+    """Return True if the command doesn't access its arguments as files."""
+    parts = command.split(None, 1)
+    return bool(parts) and parts[0] in _NON_FILE_COMMANDS
+
+
 # Detection Functions (custom — complex rules that need procedural logic)
 # Each returns (detected: bool, message: str | None)
 # Signature: (command, tool_name, tool_input, config) -> (bool, str|None)
@@ -674,8 +696,9 @@ def detect_credential_access(command, tool_name, tool_input, config):
     if tool_name in ("Read", "Edit", "Write"):
         file_path = tool_input.get("file_path", "")
     elif tool_name == "Bash" and command:
-        # Check if bash command accesses credential files
-        file_path = command
+        # Skip commands that don't access their arguments as files
+        if not _is_non_file_command(command):
+            file_path = command
 
     if not file_path:
         return False, None
@@ -750,7 +773,8 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
         if fp:
             paths_to_check.append(fp)
     if tool_name == "Bash" and command:
-        paths_to_check.append(command)
+        if not _is_non_file_command(command):
+            paths_to_check.append(command)
 
     for check_path in paths_to_check:
         check_lower = check_path.lower()

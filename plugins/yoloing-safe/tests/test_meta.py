@@ -92,6 +92,7 @@ SAFE_ALIASES = {
     "safe_inline_interpreter",
     "safe_compound",
     "safe_pipe",
+    "non_file_command",
 }
 
 

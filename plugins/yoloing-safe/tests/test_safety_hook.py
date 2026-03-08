@@ -2094,6 +2094,38 @@ class TestPipeAndBackgroundSplitting:
         assert result.returncode == 0, f"Expected allow but got RC={result.returncode} for: {command}"
 
 
+class TestCredentialFalsePositives:
+    """Commands that mention credential paths but don't access files."""
+
+    @pytest.mark.parametrize("command", [
+        "echo .env",
+        "echo ~/.ssh/",
+        "printf '%s' .env",
+        "export DOTENV=.env",
+        "test -f .env",
+    ])
+    def test_non_file_commands_allowed(self, hook, command):
+        result = subprocess.run(
+            ["python3", str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")],
+            input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"Should be allowed but got RC={result.returncode}: {command}"
+
+    @pytest.mark.parametrize("command", [
+        "cat .env",
+        "cat ~/.ssh/id_rsa",
+        "less .env.local",
+    ])
+    def test_file_commands_still_blocked(self, hook, command):
+        result = subprocess.run(
+            ["python3", str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")],
+            input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 2, f"Should be blocked but got RC={result.returncode}: {command}"
+
+
 class TestIsAllowlistedDisabledRules:
     """Regression: is_allowlisted must respect disabled rules."""
 
