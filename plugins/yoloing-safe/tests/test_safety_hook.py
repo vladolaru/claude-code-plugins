@@ -18,6 +18,11 @@ def hook():
     return mod
 
 
+def get_detect(hook, rule_id):
+    """Get the detection function for a rule, whether custom or generated."""
+    return hook.RULES[rule_id]["_detect"]
+
+
 class TestNormalizeCommand:
     @pytest.mark.parametrize("input_cmd,expected", [
         ("/bin/rm -rf /", "rm -rf /"),
@@ -138,7 +143,8 @@ class TestDestructiveDeletion:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_destructive_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detect = get_detect(hook, "destructive_deletion")
+        detected, msg = detect(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -150,7 +156,8 @@ class TestDestructiveDeletion:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_destructive_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detect = get_detect(hook, "destructive_deletion")
+        detected, _ = detect(cmd, "Bash", {}, hook.DEFAULTS)
         if command == "rm -rf /tmp/build":
             # Detection function itself catches it, allowlist is checked first in main loop
             assert detected is True
@@ -169,7 +176,7 @@ class TestChainedDeletion:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_chained_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "chained_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -180,7 +187,7 @@ class TestChainedDeletion:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_chained_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "chained_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -197,7 +204,7 @@ class TestAlternativeDeletion:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_alternative_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "alternative_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -209,7 +216,7 @@ class TestAlternativeDeletion:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_alternative_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "alternative_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("command", [
@@ -221,7 +228,7 @@ class TestAlternativeDeletion:
     ])
     def test_scoped_find_delete_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_alternative_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "alternative_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("command", [
@@ -232,7 +239,7 @@ class TestAlternativeDeletion:
     ])
     def test_absolute_find_delete_still_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_alternative_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "alternative_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
 
 
@@ -248,7 +255,7 @@ class TestDiskFormatting:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_disk_formatting(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "disk_formatting")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -258,7 +265,7 @@ class TestDiskFormatting:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_disk_formatting(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "disk_formatting")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -279,7 +286,7 @@ class TestNetworkExfiltration:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_network_exfiltration(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "network_exfiltration")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -296,7 +303,7 @@ class TestNetworkExfiltration:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_network_exfiltration(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "network_exfiltration")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("command", [
@@ -311,7 +318,7 @@ class TestNetworkExfiltration:
     def test_new_exfil_detected(self, hook, command):
         """New exfiltration vectors: curl -F/-T, scp upload, rsync upload."""
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_network_exfiltration(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "network_exfiltration")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -324,7 +331,7 @@ class TestNetworkExfiltration:
     ])
     def test_loopback_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_network_exfiltration(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "network_exfiltration")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("command", [
@@ -335,10 +342,10 @@ class TestNetworkExfiltration:
     def test_loopback_still_caught_by_other_rules(self, hook, command):
         # network_exfiltration is skipped for loopback...
         cmd = hook.normalize_command(command)
-        net_detected, _ = hook.detect_network_exfiltration(cmd, "Bash", {}, hook.DEFAULTS)
+        net_detected, _ = get_detect(hook, "network_exfiltration")(cmd, "Bash", {}, hook.DEFAULTS)
         assert net_detected is False
         # ...but credential_access still fires
-        cred_detected, _ = hook.detect_credential_access(cmd, "Bash", {}, hook.DEFAULTS)
+        cred_detected, _ = get_detect(hook, "credential_access")(cmd, "Bash", {}, hook.DEFAULTS)
         assert cred_detected is True
 
 
@@ -355,7 +362,7 @@ class TestCredentialAccess:
         ("Edit", {"file_path": "/project/.env", "old_string": "a", "new_string": "b"}),
     ])
     def test_detected(self, hook, tool_name, tool_input):
-        detected, msg = hook.detect_credential_access("", tool_name, tool_input, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "credential_access")("", tool_name, tool_input, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -369,19 +376,19 @@ class TestCredentialAccess:
     ])
     def test_not_detected(self, hook, tool_name, tool_input):
         cmd = hook.normalize_command(tool_input.get("command", ""))
-        detected, _ = hook.detect_credential_access(cmd, tool_name, tool_input, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "credential_access")(cmd, tool_name, tool_input, hook.DEFAULTS)
         assert detected is False
 
     def test_bash_cat_env(self, hook):
         """Bash cat .env should be detected."""
         cmd = hook.normalize_command("cat .env.local")
-        detected, _ = hook.detect_credential_access(cmd, "Bash", {"command": "cat .env.local"}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "credential_access")(cmd, "Bash", {"command": "cat .env.local"}, hook.DEFAULTS)
         assert detected is True
 
     def test_bash_cat_env_example_safe(self, hook):
         """Bash cat .env.example should not be detected."""
         cmd = hook.normalize_command("cat .env.example")
-        detected, _ = hook.detect_credential_access(cmd, "Bash", {"command": "cat .env.example"}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "credential_access")(cmd, "Bash", {"command": "cat .env.example"}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("tool_name,tool_input", [
@@ -392,7 +399,7 @@ class TestCredentialAccess:
     ])
     def test_case_insensitive_detected(self, hook, tool_name, tool_input):
         """Credential patterns should match regardless of case."""
-        detected, msg = hook.detect_credential_access("", tool_name, tool_input, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "credential_access")("", tool_name, tool_input, hook.DEFAULTS)
         assert detected is True, f"Expected case-insensitive match for {tool_input}"
 
     @pytest.mark.parametrize("tool_name,tool_input", [
@@ -402,7 +409,7 @@ class TestCredentialAccess:
     ])
     def test_case_insensitive_safe_not_detected(self, hook, tool_name, tool_input):
         """Safe credential patterns should also match case-insensitively."""
-        detected, _ = hook.detect_credential_access("", tool_name, tool_input, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "credential_access")("", tool_name, tool_input, hook.DEFAULTS)
         assert detected is False, f"Expected case-insensitive safe match for {tool_input}"
 
 
@@ -415,7 +422,7 @@ class TestPackagePublishing:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_package_publishing(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "package_publishing")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -427,7 +434,7 @@ class TestPackagePublishing:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_package_publishing(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "package_publishing")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -440,7 +447,7 @@ class TestSSHRemoteDestruction:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_ssh_remote_destruction(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "ssh_remote_destruction")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -453,7 +460,7 @@ class TestSSHRemoteDestruction:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_ssh_remote_destruction(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "ssh_remote_destruction")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("command", [
@@ -464,7 +471,7 @@ class TestSSHRemoteDestruction:
     def test_unquoted_detected(self, hook, command):
         """SSH remote destruction with unquoted commands."""
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_ssh_remote_destruction(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "ssh_remote_destruction")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -477,7 +484,7 @@ class TestGitHubRepoDelete:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_github_repo_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "github_repo_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -488,7 +495,7 @@ class TestGitHubRepoDelete:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_github_repo_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "github_repo_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -502,14 +509,14 @@ class TestZeroAccessPaths:
     ])
     def test_detected(self, hook, tool_name, tool_input):
         cmd = ""
-        detected, msg = hook.detect_zero_access_paths(cmd, tool_name, tool_input, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "zero_access_paths")(cmd, tool_name, tool_input, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
     def test_bash_cat_ssh(self, hook):
         """Bash cat ~/.ssh/id_rsa should be detected."""
         cmd = hook.normalize_command("cat ~/.ssh/id_rsa")
-        detected, _ = hook.detect_zero_access_paths(cmd, "Bash", {"command": "cat ~/.ssh/id_rsa"}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "zero_access_paths")(cmd, "Bash", {"command": "cat ~/.ssh/id_rsa"}, hook.DEFAULTS)
         assert detected is True
 
     def test_expanded_path_detected(self, hook):
@@ -517,7 +524,7 @@ class TestZeroAccessPaths:
         home = os.path.expanduser("~")
         config = hook.load_config()
         file_path = f"{home}/.ssh/id_rsa"
-        detected, _ = hook.detect_zero_access_paths("", "Read", {"file_path": file_path}, config)
+        detected, _ = get_detect(hook, "zero_access_paths")("", "Read", {"file_path": file_path}, config)
         assert detected is True
 
     def test_expanded_aws_detected(self, hook):
@@ -525,7 +532,7 @@ class TestZeroAccessPaths:
         home = os.path.expanduser("~")
         config = hook.load_config()
         file_path = f"{home}/.aws/credentials"
-        detected, _ = hook.detect_zero_access_paths("", "Read", {"file_path": file_path}, config)
+        detected, _ = get_detect(hook, "zero_access_paths")("", "Read", {"file_path": file_path}, config)
         assert detected is True
 
     @pytest.mark.parametrize("tool_name,tool_input", [
@@ -534,13 +541,13 @@ class TestZeroAccessPaths:
     ])
     def test_not_detected(self, hook, tool_name, tool_input):
         cmd = ""
-        detected, _ = hook.detect_zero_access_paths(cmd, tool_name, tool_input, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "zero_access_paths")(cmd, tool_name, tool_input, hook.DEFAULTS)
         assert detected is False
 
     def test_bash_ls_local_safe(self, hook):
         """Bash ls ~/.local should not be detected."""
         cmd = hook.normalize_command("ls ~/.local")
-        detected, _ = hook.detect_zero_access_paths(cmd, "Bash", {"command": "ls ~/.local"}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "zero_access_paths")(cmd, "Bash", {"command": "ls ~/.local"}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("tool_name,tool_input", [
@@ -553,7 +560,7 @@ class TestZeroAccessPaths:
     def test_case_insensitive_detected(self, hook, tool_name, tool_input):
         """Zero-access paths should match regardless of case."""
         config = hook.load_config()
-        detected, msg = hook.detect_zero_access_paths("", tool_name, tool_input, config)
+        detected, msg = get_detect(hook, "zero_access_paths")("", tool_name, tool_input, config)
         assert detected is True, f"Expected case-insensitive match for {tool_input}"
 
     def test_case_insensitive_expanded_detected(self, hook):
@@ -561,7 +568,7 @@ class TestZeroAccessPaths:
         home = os.path.expanduser("~")
         config = hook.load_config()
         file_path = f"{home}/.AWS/credentials"
-        detected, _ = hook.detect_zero_access_paths("", "Read", {"file_path": file_path}, config)
+        detected, _ = get_detect(hook, "zero_access_paths")("", "Read", {"file_path": file_path}, config)
         assert detected is True
 
 
@@ -580,7 +587,7 @@ class TestGitBarePush:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_bare_push(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_bare_push")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -596,7 +603,7 @@ class TestGitBarePush:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_git_bare_push(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "git_bare_push")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -609,7 +616,7 @@ class TestGitForcePush:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_force_push(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_force_push")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -621,7 +628,7 @@ class TestGitForcePush:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_git_force_push(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "git_force_push")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -633,7 +640,7 @@ class TestGitHardReset:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_hard_reset(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_hard_reset")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -644,7 +651,7 @@ class TestGitHardReset:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_git_hard_reset(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "git_hard_reset")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -660,7 +667,7 @@ class TestGitDiscardChanges:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_discard_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_discard_changes")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -672,7 +679,7 @@ class TestGitDiscardChanges:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_git_discard_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "git_discard_changes")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -684,7 +691,7 @@ class TestGitDestroyStash:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_destroy_stash(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_destroy_stash")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -696,7 +703,7 @@ class TestGitDestroyStash:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_git_destroy_stash(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "git_destroy_stash")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -707,7 +714,7 @@ class TestGitHistoryRewrite:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_history_rewrite(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_history_rewrite")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -719,7 +726,7 @@ class TestGitConfigChanges:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_config_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_config_changes")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -729,7 +736,7 @@ class TestGitConfigChanges:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_git_config_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "git_config_changes")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -751,7 +758,7 @@ class TestGitOtherDangerous:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_git_other_dangerous(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "git_other_dangerous")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -767,7 +774,7 @@ class TestGitOtherDangerous:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_git_other_dangerous(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "git_other_dangerous")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -785,7 +792,7 @@ class TestPermissionChanges:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_permission_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "permission_changes")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -796,7 +803,7 @@ class TestPermissionChanges:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_permission_changes(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "permission_changes")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -810,7 +817,7 @@ class TestBrewCommands:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_brew_commands(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "brew_commands")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -822,7 +829,7 @@ class TestBrewCommands:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_brew_commands(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "brew_commands")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -835,7 +842,7 @@ class TestDockerDestructive:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_docker_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "docker_destructive")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -847,7 +854,7 @@ class TestDockerDestructive:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_docker_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "docker_destructive")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -863,7 +870,7 @@ class TestDatabaseDestructive:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_database_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "database_destructive")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -876,7 +883,7 @@ class TestDatabaseDestructive:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_database_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "database_destructive")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -888,7 +895,7 @@ class TestTerraformDestructive:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_terraform_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "terraform_destructive")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -900,7 +907,7 @@ class TestTerraformDestructive:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_terraform_destructive(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "terraform_destructive")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -913,7 +920,7 @@ class TestGitHubCICDOps:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_github_cicd_ops(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "github_cicd_ops")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -925,7 +932,7 @@ class TestGitHubCICDOps:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_github_cicd_ops(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "github_cicd_ops")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
@@ -952,7 +959,7 @@ class TestSensitiveWriteTarget:
         "~/.yarnrc",
     ])
     def test_detected(self, hook, file_path):
-        detected, msg = hook.detect_sensitive_write_target(
+        detected, msg = get_detect(hook, "sensitive_write_target")(
             "", "Write", {"file_path": file_path, "content": "x"}, hook.DEFAULTS
         )
         assert detected is True, f"Expected {file_path} to be detected"
@@ -971,21 +978,21 @@ class TestSensitiveWriteTarget:
         "/project/.gitconfig",
     ])
     def test_not_detected(self, hook, file_path):
-        detected, _ = hook.detect_sensitive_write_target(
+        detected, _ = get_detect(hook, "sensitive_write_target")(
             "", "Write", {"file_path": file_path, "content": "x"}, hook.DEFAULTS
         )
         assert detected is False, f"Expected {file_path} to NOT be detected"
 
     def test_bash_not_affected(self, hook):
         """Bash tool should never trigger sensitive_write_target."""
-        detected, _ = hook.detect_sensitive_write_target(
+        detected, _ = get_detect(hook, "sensitive_write_target")(
             "echo hi > ~/.bashrc", "Bash", {"command": "echo hi > ~/.bashrc"}, hook.DEFAULTS
         )
         assert detected is False
 
     def test_read_not_affected(self, hook):
         """Read tool should never trigger sensitive_write_target."""
-        detected, _ = hook.detect_sensitive_write_target(
+        detected, _ = get_detect(hook, "sensitive_write_target")(
             "", "Read", {"file_path": "~/.bashrc"}, hook.DEFAULTS
         )
         assert detected is False
@@ -1001,7 +1008,7 @@ class TestInlineInterpreter:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_inline_interpreter(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "inline_interpreter")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -1021,7 +1028,7 @@ class TestInlineInterpreter:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_inline_interpreter(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "inline_interpreter")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
     @pytest.mark.parametrize("command", [
@@ -1033,22 +1040,22 @@ class TestInlineInterpreter:
     ])
     def test_container_exec_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_inline_interpreter(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "inline_interpreter")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
     def test_container_exec_rm_rf_still_blocked_by_destructive_deletion(self, hook):
         """Container exec exception for inline_interpreter does not suppress destructive_deletion."""
         cmd = hook.normalize_command("docker exec mycontainer bash -c 'rm -rf /'")
         # inline_interpreter is not detected (container exec)
-        inl_detected, _ = hook.detect_inline_interpreter(cmd, "Bash", {}, hook.DEFAULTS)
+        inl_detected, _ = get_detect(hook, "inline_interpreter")(cmd, "Bash", {}, hook.DEFAULTS)
         assert inl_detected is False
         # but destructive_deletion IS detected (rm -rf in command string)
-        dest_detected, _ = hook.detect_destructive_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        dest_detected, _ = get_detect(hook, "destructive_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
         assert dest_detected is True
 
     def test_non_bash_tool_not_affected(self, hook):
         """Non-Bash tools should never trigger inline_interpreter."""
-        detected, _ = hook.detect_inline_interpreter(
+        detected, _ = get_detect(hook, "inline_interpreter")(
             "", "Read", {"file_path": "/project/python3"}, hook.DEFAULTS
         )
         assert detected is False
@@ -1065,7 +1072,7 @@ class TestCredentialPatterns:
         ("Read", {"file_path": "/project/app.keystore"}),
     ])
     def test_new_credential_patterns_detected(self, hook, tool_name, tool_input):
-        detected, msg = hook.detect_credential_access("", tool_name, tool_input, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "credential_access")("", tool_name, tool_input, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -1566,7 +1573,7 @@ class TestInlineHeredoc:
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, msg = hook.detect_inline_heredoc(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, msg = get_detect(hook, "inline_heredoc")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
 
@@ -1582,7 +1589,7 @@ class TestInlineHeredoc:
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
-        detected, _ = hook.detect_inline_heredoc(cmd, "Bash", {}, hook.DEFAULTS)
+        detected, _ = get_detect(hook, "inline_heredoc")(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
 
