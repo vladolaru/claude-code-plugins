@@ -996,27 +996,62 @@ def main():
     # 1. Allowlist — check first, but SKIP for compound commands.
     #    Without this guard, "rm -rf /tmp/build && rm -rf /home" would
     #    match the temp-directory allowlist and bypass all block checks.
-    if command and not _RE_CHAIN_OPS.search(command):
+    is_compound = bool(command and _RE_CHAIN_OPS.search(command))
+    if command and not is_compound:
         for rule_id, pattern in ALLOWLIST_PATTERNS:
             if rule_id not in disabled and pattern.search(command):
                 _mark("allowlisted")
                 allow()
     _mark("rules_start")
 
-    # 2. Block / Ask — iterate per-tool rule list
+    # 2. Block / Ask — pass 1: evaluate full command against all rules.
+    #    This catches rules that need the full chain context (e.g.
+    #    detect_chained_deletion checks for rm hidden after &&).
+    first_ask = None
     for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
         if rule_id in disabled:
             continue
         detected, message = detect_fn(command, tool_name, tool_input, config)
         if detected:
-            _mark("rules_done")
             if tier == "block":
+                _mark("rules_done")
                 block(message)
-            elif tier == "ask":
-                ask(message)
+            elif tier == "ask" and first_ask is None:
+                first_ask = message
+
+    # 3. Chain-aware pass 2: split compound commands and re-evaluate each
+    #    segment. Catches ^-anchored rules (git ops, etc.) hidden after
+    #    chain operators. Only runs for compound Bash commands.
+    if is_compound:
+        for seg in _RE_CHAIN_SPLIT.split(command):
+            seg = normalize_command(seg.strip())
+            if not seg:
+                continue
+            # Per-segment allowlist
+            seg_allowed = False
+            for rule_id, pattern in ALLOWLIST_PATTERNS:
+                if rule_id not in disabled and pattern.search(seg):
+                    seg_allowed = True
+                    break
+            if seg_allowed:
+                continue
+            for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
+                if rule_id in disabled:
+                    continue
+                detected, message = detect_fn(seg, tool_name, tool_input, config)
+                if detected:
+                    if tier == "block":
+                        _mark("rules_done")
+                        block(message)
+                    elif tier == "ask" and first_ask is None:
+                        first_ask = message
+                    break  # first match per segment
     _mark("rules_done")
 
-    # 3. Allow — everything else
+    if first_ask:
+        ask(first_ask)
+
+    # 4. Allow — everything else
     allow()
 
 

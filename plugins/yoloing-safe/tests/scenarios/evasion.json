@@ -35,5 +35,8 @@
   {"command": "bash << 'EOF'\nrm -rf /\nEOF", "should": "ask_or_block", "technique": "interpreter_heredoc_rm"},
   {"command": "cat > /tmp/f.txt << 'EOF'\ncontent\nEOF\n&& rm -rf /home", "should": "block", "technique": "writer_heredoc_chained_rm"},
   {"command": "docker exec mycontainer bash -c 'rm -rf /'", "should": "block", "technique": "container_exec_rm_rf"},
-  {"command": "bash -c 'rm -rf /'", "should": "ask_or_block", "technique": "bare_bash_c_rm"}
+  {"command": "bash -c 'rm -rf /'", "should": "ask_or_block", "technique": "bare_bash_c_rm"},
+  {"command": "echo ok && git push", "should": "block", "technique": "chained_bare_push"},
+  {"command": "echo ok && git push --force origin main", "should": "ask_or_block", "technique": "chained_force_push"},
+  {"command": "echo ok ; git reset --hard", "should": "ask_or_block", "technique": "chained_hard_reset"}
 ]

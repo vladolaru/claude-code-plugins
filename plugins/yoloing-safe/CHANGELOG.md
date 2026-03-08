@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `inline_heredoc` ask rule: flags heredocs fed to shell interpreters or
   databases (`bash << 'EOF'`, `python3 << 'EOF'`, `mysql << 'EOF'`, etc.).
   These are executed — unlike writer heredocs — and warrant confirmation.
+- Chain-aware rule evaluation: compound commands (`&&`, `;`, `||`) are now
+  split into segments and each segment is evaluated independently. Previously,
+  `echo ok && git push` bypassed all `^git`-anchored rules. Two-pass design
+  preserves existing chain-specific rules (e.g. `detect_chained_deletion`)
+  while catching git operations hidden after chain operators.
 
 ### Fixed
 

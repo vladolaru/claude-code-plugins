@@ -1168,6 +1168,22 @@ class TestIntegrationBlock:
         assert r.returncode == 2
         assert "remote" in r.stderr.lower()
 
+    def test_chained_git_push_blocks(self):
+        """git push hidden after && should be caught by per-segment evaluation."""
+        r = self._run_hook("Bash", {"command": "echo ok && git push"})
+        assert r.returncode == 2
+        assert "explicit branch" in r.stderr
+
+    def test_chained_git_push_origin_blocks(self):
+        r = self._run_hook("Bash", {"command": "echo ok && git push origin"})
+        assert r.returncode == 2
+        assert "explicit branch" in r.stderr
+
+    def test_chained_git_push_explicit_branch_allowed(self):
+        r = self._run_hook("Bash", {"command": "echo ok && git push origin HEAD"})
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+
 
 class TestIntegrationAsk:
     """Run the actual script, verify exit 0 + JSON with permissionDecision: ask."""
@@ -1186,6 +1202,19 @@ class TestIntegrationAsk:
         output = json.loads(r.stdout)
         assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
         assert "force-with-lease" in output["hookSpecificOutput"]["systemMessage"]
+
+    def test_chained_force_push_asks(self):
+        """git push --force hidden after && should be caught by per-segment evaluation."""
+        r = self._run_hook("Bash", {"command": "echo ok && git push --force origin main"})
+        assert r.returncode == 0
+        output = json.loads(r.stdout)
+        assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    def test_chained_git_reset_hard_asks(self):
+        r = self._run_hook("Bash", {"command": "echo ok && git reset --hard"})
+        assert r.returncode == 0
+        output = json.loads(r.stdout)
+        assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
 
     def test_brew_install_asks(self):
         r = self._run_hook("Bash", {"command": "brew install node"})
