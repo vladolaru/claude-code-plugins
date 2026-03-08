@@ -1,4 +1,4 @@
-# ccaffeinated
+# caffeinate-claude
 
 Keeps your Mac awake during Claude Code sessions using macOS's built-in `caffeinate` command. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end.
 

@@ -195,8 +195,8 @@
       "strict": true
     },
     {
-      "name": "ccaffeinated",
-      "source": "./plugins/ccaffeinated",
+      "name": "caffeinate-claude",
+      "source": "./plugins/caffeinate-claude",
       "description": "Keeps your Mac awake during Claude Code sessions using macOS caffeinate. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end.",
       "version": "1.0.0",
       "author": {
