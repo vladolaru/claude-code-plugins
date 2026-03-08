@@ -52,6 +52,11 @@ class TestNormalizeCommand:
         ("git -C /tmp -c user.name=test commit -m 'msg'", "git commit -m 'msg'"),
         ("git --git-dir=/tmp/.git push", "git push"),
         ("git --work-tree=/tmp push", "git push"),
+        # npm global option stripping
+        ("npm --registry https://registry.npmjs.org publish", "npm publish"),
+        ("npm --registry=https://npm.pkg.github.com publish --dry-run", "npm publish --dry-run"),
+        ("npm install", "npm install"),
+        ("npm publish", "npm publish"),
     ])
     def test_normalize(self, hook, input_cmd, expected):
         assert hook.normalize_command(input_cmd) == expected
@@ -71,6 +76,19 @@ class TestGitGlobalOptionBypass:
         detected, msg = get_detect(hook, rule_id)(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is True
         assert msg is not None
+
+
+class TestNpmOptionBypass:
+    """Verify npm publish is caught regardless of option ordering."""
+
+    @pytest.mark.parametrize("command", [
+        "npm --registry https://registry.npmjs.org publish",
+        "npm --registry=https://npm.pkg.github.com publish",
+    ])
+    def test_npm_reordered_publish_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = get_detect(hook, "package_publishing")(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
 
 
 class TestLoadConfig:

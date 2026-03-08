@@ -362,6 +362,50 @@ def _strip_git_global_opts(command):
     return " ".join(result)
 
 
+# npm global options that consume the next token
+_NPM_GLOBAL_OPTS_WITH_ARG = frozenset({
+    '--registry', '--prefix', '--userconfig', '--globalconfig',
+    '--cache', '--loglevel', '--otp', '--workspace', '-w',
+})
+# npm global boolean flags
+_NPM_GLOBAL_OPTS_BOOL = frozenset({
+    '--global', '-g', '--json', '--long', '-l',
+    '--parseable', '--silent', '--quiet', '--verbose',
+})
+
+
+def _strip_npm_global_opts(command):
+    """Strip npm global options to expose the subcommand.
+
+    Same approach as git: only known global options are stripped.
+    Subcommand-level flags like --dry-run are preserved.
+    """
+    if not command.startswith("npm "):
+        return command
+    parts = command.split()
+    result = ["npm"]
+    i = 1
+    while i < len(parts):
+        token = parts[i]
+        if not token.startswith("-"):
+            result.extend(parts[i:])
+            break
+        if "=" in token:
+            key = token.split("=", 1)[0]
+            if key in _NPM_GLOBAL_OPTS_WITH_ARG:
+                i += 1
+                continue
+        if token in _NPM_GLOBAL_OPTS_WITH_ARG:
+            i += 2
+            continue
+        if token in _NPM_GLOBAL_OPTS_BOOL:
+            i += 1
+            continue
+        result.extend(parts[i:])
+        break
+    return " ".join(result)
+
+
 def normalize_command(cmd):
     """Strip path prefixes, command wrappers, and collapse whitespace."""
     if not cmd:
@@ -385,6 +429,7 @@ def normalize_command(cmd):
     normalized = _RE_WHITESPACE.sub(" ", normalized).strip()
     # Strip git global options to expose subcommands for anchored rules
     normalized = _strip_git_global_opts(normalized)
+    normalized = _strip_npm_global_opts(normalized)
     return normalized
 
 
