@@ -1,12 +1,14 @@
 # pirategoat-tools — Agent Instructions
 
-You maintain a code review orchestration system. It dispatches domain-specific reviewer agents in parallel, reconciles their findings, and ingests the results through a multi-phase validation pipeline.
+You are the maintainer of pirategoat-tools, a code review orchestration plugin. You dispatch domain-specific reviewer agents in parallel, reconcile their findings, and ingest results through a multi-phase validation pipeline.
 
 ## Key Files
 
+**IMPORTANT: `scripts/agent-registry.json` is the single source of truth for all reviewer agent configuration.** Every agent change starts and ends here.
+
 | File | Role |
 |------|------|
-| `scripts/agent-registry.json` | **Single source of truth** for all reviewer agent configuration — domain, protocols, dispatch class, triage criteria, model tier. |
+| `scripts/agent-registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
 | `scripts/bootstrap-reviewer.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. |
 | `scripts/review-scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. |
 | `scripts/plan-review-dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Used by all review commands. |
@@ -59,7 +61,7 @@ Skip-list (sections bootstrap replaces with concrete values):
 
 ### Bootstrap Output Positioning
 
-The prompt bootstrap builds uses deliberate section ordering:
+The prompt bootstrap builds uses deliberate section ordering. Preserve this order when modifying `bootstrap-reviewer.py` or protocol files:
 
 1. **REVIEW RULES** (top) — behavioral steering via primacy effect. Agent reads rules first, anchoring behavior.
 2. **REVIEW CONTENT** (middle) — the actual diff/scope. Processing zone where the agent does its work.
@@ -85,12 +87,12 @@ The prompt bootstrap builds uses deliberate section ordering:
 
 ### Dispatch Classes
 
-| Class | Behavior | Count |
-|-------|----------|-------|
-| `always` | Auto-dispatched on every review | 8 agents |
-| `conditional` | Dispatched only when triage criteria match the diff | 7 agents |
-| `manual` | Only on explicit user request | 1 agent (tests-mutation-reviewer) |
-| `special` | Orchestration/synthesis agents, not dispatched by triage | 3 agents (gemini, codex, reconciliator) |
+| Class | Behavior |
+|-------|----------|
+| `always` | Auto-dispatched on every review |
+| `conditional` | Dispatched only when triage criteria match the diff |
+| `manual` | Only on explicit user request |
+| `special` | Orchestration/synthesis agents, not dispatched by triage |
 
 Commands handle triage at step 3.6 — they check each conditional agent's `triage_criteria` against the diffstat and commit messages.
 
@@ -137,6 +139,14 @@ Verdict is auto-calculated from issue severities: any critical → `block`, any 
 1. Create `skills/<skill-name>/SKILL.md` with YAML frontmatter (`name`, `description`) and Markdown body
 2. Add skill to `.claude-plugin/marketplace.json` in the `skills` array
 
+### Expected Failures
+
+These are normal — handle them, do not stop or apologize:
+
+- **`review-scope.py` returns empty scope**: The diff has no files matching this agent's domain. Skip the agent — this is correct triage behavior.
+- **Tests fail after your changes**: Read the failure output, fix the root cause, and re-run. Test failures are feedback, not errors.
+- **`bootstrap-reviewer.py` can't find plugin root**: Ensure you are running from within the repository. The script walks up from CWD looking for `.claude-plugin/`.
+
 ### Testing
 
-See the root `AGENTS.md` [Testing > pirategoat-tools](#pirategoat-tools) section for the full test lookup table, test principles, and agent compliance eval commands.
+**Always run tests after modifying scripts, agents, or commands.** See the root `AGENTS.md` [Testing > pirategoat-tools](#pirategoat-tools) section for the full test lookup table, test principles, and agent compliance eval commands.
