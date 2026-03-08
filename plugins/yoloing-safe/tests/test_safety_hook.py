@@ -165,31 +165,6 @@ class TestDestructiveDeletion:
             assert detected is False
 
 
-class TestChainedDeletion:
-    """Test detect_chained_deletion."""
-
-    @pytest.mark.parametrize("command", [
-        "echo done && rm -rf /",
-        "true ; rm -rf /home",
-        "false || rm -rf /foo",
-        "ls -la && rm -fr /bar",
-    ])
-    def test_detected(self, hook, command):
-        cmd = hook.normalize_command(command)
-        detected, msg = get_detect(hook, "chained_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
-        assert detected is True
-        assert msg is not None
-
-    @pytest.mark.parametrize("command", [
-        "echo done && echo hello",
-        "ls -la ; pwd",
-        "rm -rf /",  # direct rm, not chained — handled by destructive_deletion
-    ])
-    def test_not_detected(self, hook, command):
-        cmd = hook.normalize_command(command)
-        detected, _ = get_detect(hook, "chained_deletion")(cmd, "Bash", {}, hook.DEFAULTS)
-        assert detected is False
-
 
 class TestAlternativeDeletion:
     """Test detect_alternative_deletion."""
@@ -1464,6 +1439,39 @@ class TestIntegrationAllowlistChainBypass:
         r = self._run_hook("Bash", {"command": "rm -rf /tmp/build"})
         assert r.returncode == 0
         assert r.stdout.strip() == ""
+
+
+class TestCompoundAllowlist:
+    """Verify compound commands with allowlisted segments are allowed,
+    while compound commands with dangerous non-allowlisted segments are blocked."""
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5
+        )
+
+    @pytest.mark.parametrize("command", [
+        "mkdir -p /tmp/test && rm -rf /tmp/test",
+        "git checkout -b feature && git push origin HEAD",
+        "rm -rf /tmp/build && echo done",
+    ])
+    def test_allowed(self, command):
+        """Safe compound commands should exit 0."""
+        result = self._run_hook("Bash", {"command": command})
+        assert result.returncode == 0, f"Should allow: {command}"
+
+    @pytest.mark.parametrize("command", [
+        "echo ok && rm -rf /home",
+        "rm -rf /tmp/build && rm -rf /home",
+        "git checkout -b feature && rm -rf /",
+    ])
+    def test_blocked(self, command):
+        """Compound commands with dangerous non-allowlisted segments should block."""
+        result = self._run_hook("Bash", {"command": command})
+        assert result.returncode == 2, f"Should block: {command}"
 
 
 class TestIntegrationNewAskRules:

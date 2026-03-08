@@ -90,6 +90,7 @@ SAFE_ALIASES = {
     "safe_chmod",
     "safe_write_target",
     "safe_inline_interpreter",
+    "safe_compound",
 }
 
 
@@ -252,7 +253,6 @@ class TestScenarioCoveragePerRule:
 
         RULE_SAFE_ALIAS_MAP = {
             "destructive_deletion": {"safe_rm", "allowlisted"},
-            "chained_deletion": {"safe_rm", "safe_general"},
             "alternative_deletion": {"scoped_find_delete"},
             "disk_formatting": {"safe_general"},
             "network_exfiltration": {"loopback_curl", "safe_scp_download"},

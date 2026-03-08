@@ -328,20 +328,6 @@ _RE_REDIS_FLUSH = re.compile(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b", re.IGNORECASE)
 
 # --- Block Tier: Filesystem Destruction ---
 
-def detect_chained_deletion(command, tool_name, tool_input, config):
-    """Detect rm hidden in command chains (&&, ;, ||)."""
-    if not _RE_CHAIN_OPS.search(command):
-        return False, None
-    # Split on chain operators and check each segment
-    segments = _RE_CHAIN_SPLIT.split(command)
-    for segment in segments:
-        segment = segment.strip()
-        # Normalize the segment too
-        segment = normalize_command(segment)
-        if _RE_RM.search(segment):
-            return True, RULES["chained_deletion"]["message"]
-    return False, None
-
 
 def detect_alternative_deletion(command, tool_name, tool_input, config):
     """Detect find -delete, find -exec rm, xargs rm, eval rm."""
@@ -669,15 +655,6 @@ RULES = {
         ],
         "message": "Use targeted file removal instead of recursive force-delete. Remove specific files by name (`rm file1 file2`), or use `git clean --dry-run` to preview before cleaning. This protects against accidental data loss.",
         "examples": ["rm -rf /"],
-    },
-
-    # --- Complex: splits on chain operators ---
-    "chained_deletion": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "detect": detect_chained_deletion,
-        "message": "Command chaining can hide destructive operations. Run each command separately so the intent is clear. Remove files by name rather than piping into `rm`.",
-        "examples": ["echo 'build complete' && rm -rf /home"],
     },
 
     # --- Custom: scoped-root exclusion only applies to find -delete, not find -exec rm ---
@@ -1106,36 +1083,24 @@ def main():
         if _bash_targets_protected_path(command):
             block(_SELF_PROTECTION_MESSAGE)
 
-    # 1. Allowlist — check first, but SKIP for compound commands.
-    #    Without this guard, "rm -rf /tmp/build && rm -rf /home" would
-    #    match the temp-directory allowlist and bypass all block checks.
+    # 1. Allowlist + Rules — single pass.
+    #    Simple commands: check allowlist, then evaluate against rules.
+    #    Compound commands: split into segments, check each segment
+    #    against allowlist then rules.
     is_compound = bool(command and _RE_CHAIN_OPS.search(command))
+
     if command and not is_compound:
+        # Simple command: allowlist check
         for rule_id, pattern in ALLOWLIST_PATTERNS:
             if rule_id not in disabled and pattern.search(command):
                 _mark("allowlisted")
                 allow()
     _mark("rules_start")
 
-    # 2. Block / Ask — pass 1: evaluate full command against all rules.
-    #    This catches rules that need the full chain context (e.g.
-    #    detect_chained_deletion checks for rm hidden after &&).
     first_ask = None
-    for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
-        if rule_id in disabled:
-            continue
-        detected, message = detect_fn(command, tool_name, tool_input, config)
-        if detected:
-            if tier == "block":
-                _mark("rules_done")
-                block(message)
-            elif tier == "ask" and first_ask is None:
-                first_ask = message
 
-    # 3. Chain-aware pass 2: split compound commands and re-evaluate each
-    #    segment. Catches ^-anchored rules (git ops, etc.) hidden after
-    #    chain operators. Only runs for compound Bash commands.
     if is_compound:
+        # Compound command: per-segment evaluation
         for seg in _RE_CHAIN_SPLIT.split(command):
             seg = normalize_command(seg.strip())
             if not seg:
@@ -1148,6 +1113,7 @@ def main():
                     break
             if seg_allowed:
                 continue
+            # Per-segment rules
             for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
                 if rule_id in disabled:
                     continue
@@ -1159,12 +1125,25 @@ def main():
                     elif tier == "ask" and first_ask is None:
                         first_ask = message
                     break  # first match per segment
+    else:
+        # Simple command (or non-Bash): evaluate against all rules
+        for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
+            if rule_id in disabled:
+                continue
+            detected, message = detect_fn(command, tool_name, tool_input, config)
+            if detected:
+                if tier == "block":
+                    _mark("rules_done")
+                    block(message)
+                elif tier == "ask" and first_ask is None:
+                    first_ask = message
+
     _mark("rules_done")
 
     if first_ask:
         ask(first_ask)
 
-    # 4. Allow — everything else
+    # 2. Allow — everything else
     allow()
 
 

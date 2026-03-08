@@ -5,6 +5,15 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-03-08
+
+### Changed
+- Simplified compound command evaluation from two passes to one per-segment pass
+- Compound commands with allowlisted segments (e.g., `mkdir -p /tmp/x && rm -rf /tmp/x`) now pass through correctly
+
+### Removed
+- `chained_deletion` rule — per-segment evaluation already catches `rm -rf` via `destructive_deletion`; blocking plain `rm file` in chains was overly broad
+
 ## [1.7.2] - 2026-03-08
 
 ### Fixed

@@ -52,5 +52,8 @@
   {"tool_name": "Bash", "tool_input": {"command": "chmod 644 README.md"}, "category": "safe_chmod"},
   {"tool_name": "Write", "tool_input": {"file_path": "/project/.npmrc", "content": "registry=https://registry.npmjs.org/"}, "category": "safe_write_target"},
   {"tool_name": "Bash", "tool_input": {"command": "python3 -c 'print(1+1)'"}, "category": "safe_inline_interpreter"},
-  {"tool_name": "Bash", "tool_input": {"command": "node -e 'console.log(42)'"}, "category": "safe_inline_interpreter"}
+  {"tool_name": "Bash", "tool_input": {"command": "node -e 'console.log(42)'"}, "category": "safe_inline_interpreter"},
+  {"tool_name": "Bash", "tool_input": {"command": "mkdir -p /tmp/test && rm -rf /tmp/test"}, "category": "safe_compound"},
+  {"tool_name": "Bash", "tool_input": {"command": "git checkout -b feature && git push origin HEAD"}, "category": "safe_compound"},
+  {"tool_name": "Bash", "tool_input": {"command": "npm install && npm test"}, "category": "safe_compound"}
 ]

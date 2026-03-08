@@ -64,11 +64,11 @@
       "pattern": "chmod +x"
     },
     {
-      "_doc": "Happy path: rm in temp dir is allowlisted (vs blocked rm -rf /). Must be a simple command — compound commands skip the allowlist.",
+      "_doc": "Happy path: rm in temp dir works even in compound commands",
       "rule_id": "safe_temp_cleanup",
       "tier": "allow",
       "tool": "Bash",
-      "examples": ["rm -rf /tmp/test-output/"],
+      "examples": ["mkdir -p /tmp/test-output && rm -rf /tmp/test-output/"],
       "pattern": "rm -rf /tmp/"
     },
     {
