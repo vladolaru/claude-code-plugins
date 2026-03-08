@@ -12,6 +12,15 @@ if [ "${YOLOING_SAFE_E2E:-}" != "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Auth check — fail fast if Claude Code is not authenticated
+# ---------------------------------------------------------------------------
+if ! claude auth status >/dev/null 2>&1; then
+    echo "ERROR: Claude Code is not authenticated." >&2
+    echo "       Run 'make auth' and then 'claude auth login' inside the container." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Bootstrap — merge noise hooks + yoloing-safe hook into ~/.claude/settings.json
 # The --plugin-dir flag loads plugin metadata but does NOT activate hooks.json,
 # so we register the safety hook directly in user settings.
