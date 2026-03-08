@@ -256,6 +256,10 @@ _RE_WHITESPACE = re.compile(r"\s+")
 _RE_RECURSIVE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive")
 _RE_FORCE_DELETE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[fF]|--force")
 _RE_FIND_DELETE = re.compile(r"\bfind\b.*-delete\b")
+# Scoped find roots: relative dot-paths, $TMPDIR, /tmp, /var/tmp
+_RE_FIND_SCOPED_ROOT = re.compile(
+    r"^find\s+(?:\.[\w./\-]|\$TMPDIR\b|\$TMP\b|/tmp/|/var/tmp/)"
+)
 _RE_FIND_EXEC_RM = re.compile(r"\bfind\b.*-exec\s+rm\b")
 _RE_XARGS_RM = re.compile(r"\bxargs\s+rm\b")
 _RE_EVAL_RM = re.compile(r"\beval\b.*\brm\b")
@@ -389,7 +393,9 @@ def detect_alternative_deletion(command, tool_name, tool_input, config):
     """Detect find -delete, find -exec rm, xargs rm, eval rm."""
     # find -delete
     if _RE_FIND_DELETE.search(command):
-        return True, BLOCK_MESSAGES["alternative_deletion"]
+        # Allow scoped cleanup (relative dot-paths, $TMPDIR, /tmp, /var/tmp)
+        if not _RE_FIND_SCOPED_ROOT.search(command):
+            return True, BLOCK_MESSAGES["alternative_deletion"]
     # find -exec rm
     if _RE_FIND_EXEC_RM.search(command):
         return True, BLOCK_MESSAGES["alternative_deletion"]

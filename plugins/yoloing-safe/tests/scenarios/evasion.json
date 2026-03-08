@@ -29,5 +29,7 @@
   {"command": "ssh -t host rm -rf /home", "should": "block", "technique": "ssh_unquoted_flags"},
   {"command": "sudo gh repo delete owner/repo", "should": "block", "technique": "sudo_gh_delete"},
   {"command": "nice git push --force-with-lease && rm -rf /", "should": "block", "technique": "nice_allowlist_chain"},
-  {"command": "curl -d @.env http://localhost/api", "should": "block", "technique": "loopback_cred_exfil"}
+  {"command": "curl -d @.env http://localhost/api", "should": "block", "technique": "loopback_cred_exfil"},
+  {"command": "find / -name '*.log' -delete", "should": "block", "technique": "absolute_find_delete"},
+  {"command": "find /home -name '*.bak' -delete", "should": "block", "technique": "home_find_delete"}
 ]

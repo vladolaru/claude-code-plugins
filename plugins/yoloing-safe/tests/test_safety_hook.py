@@ -212,6 +212,29 @@ class TestAlternativeDeletion:
         detected, _ = hook.detect_alternative_deletion(cmd, "Bash", {}, hook.DEFAULTS)
         assert detected is False
 
+    @pytest.mark.parametrize("command", [
+        "find .claude/tmp/screenshots -name '*.png' -mtime +7 -delete",
+        "find ./build -name '*.tmp' -delete",
+        "find $TMPDIR/cache -name '*.log' -delete",
+        "find /tmp/workdir -name '*.pyc' -delete",
+        "find /var/tmp/ci -name '*.o' -delete",
+    ])
+    def test_scoped_find_delete_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_alternative_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+
+    @pytest.mark.parametrize("command", [
+        "find / -name '*.log' -delete",
+        "find /home -name '*.bak' -delete",
+        "find ~ -name '*.key' -delete",
+        "find /etc -name '*.conf' -delete",
+    ])
+    def test_absolute_find_delete_still_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_alternative_deletion(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+
 
 class TestDiskFormatting:
     """Test detect_disk_formatting."""
