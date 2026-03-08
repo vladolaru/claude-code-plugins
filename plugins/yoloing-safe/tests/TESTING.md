@@ -100,4 +100,4 @@ These are deliberately generous — the goal is catching regressions, not micro-
 | `scripts/pre-tool-use-safety.py` | `pytest plugins/yoloing-safe/tests/ -v` (full suite including benchmark) |
 | `tests/scenarios/*.json` | `pytest plugins/yoloing-safe/tests/ -k "TestBlockedScenarios or TestAllowedScenarios or TestEvasionSuite" -v` |
 | `tests/scenarios/benchmark.json` | `pytest plugins/yoloing-safe/tests/benchmark_hook.py -v` |
-| `config/defaults.json` | No tests reference this file directly (defaults are hardcoded in script) |
+| `config/defaults.json` | N/A (removed — defaults are hardcoded in script) |

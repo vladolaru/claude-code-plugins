@@ -43,7 +43,7 @@ clean:
 clean-all: clean
 	docker volume rm $(AUTH_VOL) 2>/dev/null || true
 
-## Regenerate test-cases.json from RULE_REGISTRY + test-fixtures.json
+## Regenerate test-cases.json from RULE_REGISTRY examples + overrides
 generate:
 	python3 generate-test-cases.py
 
@@ -62,7 +62,7 @@ help:
 	@echo "  run-save   Run tests and save results to ./results/"
 	@echo "  shell      Interactive shell for debugging"
 	@echo "  rebuild    Rebuild image after code changes (auth survives)"
-	@echo "  generate   Regenerate test-cases.json from rule registry + fixtures"
+	@echo "  generate   Regenerate test-cases.json from RULE_REGISTRY examples + overrides"
 	@echo "  check      Validate test-cases.json is up to date"
 	@echo "  clean      Remove image and local results (auth volume kept)"
 	@echo "  clean-all  Remove everything including auth volume (requires re-login)"

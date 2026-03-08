@@ -5,6 +5,34 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-03-08
+
+### Changed
+
+- E2E test examples now live in `RULE_REGISTRY` as a 5th tuple element.
+  Adding a new rule without examples fails the generator — drift between
+  rules and e2e tests is no longer possible.
+- `test-fixtures.json` reduced from 148 lines to 25 — now holds only
+  optional overrides (tool, branch, subagent, pattern, prompt). Most rules
+  need no fixture entry.
+- Generator derives batch prompts from tool-specific templates, patterns
+  from example commands, and test name suffixes from command first words.
+- Removed `config/defaults.json` — defaults are hardcoded in the hook script
+  and documented in README. The file was not loaded at runtime and risked
+  drifting from actual defaults.
+- Updated all docs to reflect current rule counts (27 rules, 33 e2e tests,
+  28 rule categories) and added `git_bare_push` / `inline_heredoc` to
+  disableable rule ID lists and "What Gets Caught" tables.
+
+### Fixed
+
+- E2E classifier no longer silently defaults to `HOOK_BLOCKED` when no hook
+  trace is found. New `HOOK_UNKNOWN` outcome distinguishes "hook confirmed
+  the block" from "something stopped it but we can't prove it was the hook."
+- `run-e2e.sh` now handles `HOOK_UNKNOWN` as inconclusive (was falling into
+  the error wildcard and counting as failure).
+- Generator validates no duplicate test names across all rules.
+
 ## [1.6.0] - 2026-03-08
 
 ### Added

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate test-cases.json from RULE_REGISTRY + test-fixtures.json.
 
-The safety hook's RULE_REGISTRY is the canonical list of rules.
-test-fixtures.json provides the test command/pattern per rule.
-This script derives everything else: name, tier, batch, prompts.
+The safety hook's RULE_REGISTRY is the canonical list of rules. Each rule
+includes example commands (5th tuple element) that drive e2e test generation.
+test-fixtures.json provides optional overrides (tool, branch, subagent,
+pattern, prompt) and extra_rules not in the registry.
 
 Usage:
     python3 generate-test-cases.py [--check]
@@ -31,10 +32,23 @@ RULE_REGISTRY = mod.RULE_REGISTRY
 FIXTURES_PATH = os.path.join(SCRIPT_DIR, "test-fixtures.json")
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "test-cases.json")
 
+# ---------------------------------------------------------------------------
+# Prompt templates per tool type
+# ---------------------------------------------------------------------------
 
-def load_fixtures():
+PROMPT_TEMPLATES = {
+    "Bash": "Run this command using the Bash tool: {example}",
+    "Read": "Read the file at {example} using the Read tool",
+    "Write": "Use the Write tool to create the file {example} with the content 'test content'",
+    "Edit": "Use the Edit tool to modify the file {example}",
+}
+
+
+def load_overrides():
+    """Load optional overrides and extra_rules from test-fixtures.json."""
     with open(FIXTURES_PATH) as f:
-        return json.load(f)
+        data = json.load(f)
+    return data.get("overrides", {}), data.get("extra_rules", [])
 
 
 def branch_slug(branch):
@@ -46,7 +60,7 @@ def branch_slug(branch):
     slug = parts[-1]
     for prefix in ("add-", "fix-", "goat-"):
         if slug.startswith(prefix):
-            slug = slug[len(prefix) :]
+            slug = slug[len(prefix):]
     return slug
 
 
@@ -87,36 +101,49 @@ def make_test_name(rule_id, tier, suffix=None):
     return f"{base}-{tier_suffix}"
 
 
-def determine_tool(fixture, registry_tools):
-    """Determine the CC tool for a test. Fixture override > first from registry."""
-    if "tool" in fixture:
-        return fixture["tool"]
+def determine_tool(override, registry_tools):
+    """Determine the CC tool for a test. Override > first from registry."""
+    if override and "tool" in override:
+        return override["tool"]
     # Default to Bash for Bash-only rules; first tool otherwise
     if "Bash" in registry_tools:
         return "Bash"
     return sorted(registry_tools)[0]
 
 
+def auto_suffix(example):
+    """Derive a short suffix from an example command for multi-example rules.
+
+    Strategy: take the first word/token, strip any path prefixes (directory
+    components), and return the basename.
+    Examples:
+        'scp ./dist/* ...'   -> 'scp'
+        '~/.aws/credentials' -> 'credentials'
+        '~/.ssh/id_rsa'      -> 'id_rsa'
+    """
+    token = example.split()[0]
+    # Strip path: take basename
+    basename = token.rsplit("/", 1)[-1]
+    # Strip leading dots/tildes for cleanliness
+    basename = basename.lstrip(".~")
+    return basename or token
+
+
 def generate():
-    fixtures_data = load_fixtures()
-    fixtures = fixtures_data["fixtures"]
-    extra_rules = fixtures_data.get("extra_rules", [])
+    overrides, extra_rules = load_overrides()
 
-    # Build registry lookup: rule_id -> (tier, applicable_tools)
-    registry = {}
-    for rule_id, tier, _fn, tools in RULE_REGISTRY:
-        registry[rule_id] = (tier, tools)
-
-    # Validate: every registry rule has a fixture
+    # Validate: every rule in RULE_REGISTRY has non-empty examples
     errors = []
-    for rule_id in registry:
-        if rule_id not in fixtures:
-            errors.append(f"Rule '{rule_id}' in RULE_REGISTRY has no fixture")
+    registry_ids = set()
+    for rule_id, _tier, _fn, _tools, examples in RULE_REGISTRY:
+        registry_ids.add(rule_id)
+        if not examples:
+            errors.append(f"Rule '{rule_id}' in RULE_REGISTRY has empty examples list")
 
-    # Validate: no orphan fixtures
-    for rule_id in fixtures:
-        if rule_id not in registry:
-            errors.append(f"Fixture '{rule_id}' has no matching RULE_REGISTRY entry")
+    # Validate: no orphan overrides
+    for rule_id in overrides:
+        if rule_id not in registry_ids:
+            errors.append(f"Override '{rule_id}' has no matching RULE_REGISTRY entry")
 
     if errors:
         for err in errors:
@@ -125,47 +152,56 @@ def generate():
 
     tests = []
 
-    # Generate tests from RULE_REGISTRY + fixtures
-    for rule_id, tier, _fn, tools in RULE_REGISTRY:
-        fixture = fixtures[rule_id]
-        branch = fixture.get("branch", "main")
-        tool = determine_tool(fixture, tools)
+    # Generate tests from RULE_REGISTRY + overrides
+    for rule_id, tier, _fn, tools, examples in RULE_REGISTRY:
+        override = overrides.get(rule_id, {})
+        branch = override.get("branch", "main")
+        tool = determine_tool(override, tools)
         slug = branch_slug(branch)
         batch_key = f"{tier}-{slug}"
 
-        # Primary test
-        test = {
-            "name": make_test_name(rule_id, tier),
-            "tier": tier,
-            "category": rule_id,
-            "dir": "project",
-            "batch": batch_key,
-            "prompt": make_solo_prompt(fixture["batch_prompt"], tier),
-            "batch_prompt": fixture["batch_prompt"],
-            "pattern": fixture["pattern"],
-            "tool": tool,
-        }
-        if branch != "main":
-            test["branch"] = branch
-        tests.append(test)
+        # Track suffixes for collision detection within this rule
+        used_suffixes = set()
 
-        # Extra tests for the same rule (e.g., scp for network_exfiltration)
-        for extra in fixture.get("extra_tests", []):
-            extra_tool = extra.get("tool", tool)
-            extra_test = {
-                "name": make_test_name(rule_id, tier, extra["name_suffix"]),
+        for idx, example in enumerate(examples):
+            # Determine prompt
+            if override.get("prompt"):
+                batch_prompt = override["prompt"]
+            else:
+                template = PROMPT_TEMPLATES.get(tool, PROMPT_TEMPLATES["Bash"])
+                batch_prompt = template.format(example=example)
+
+            # Determine pattern
+            pattern = override.get("pattern", example)
+
+            # Determine suffix for 2nd+ examples
+            suffix = None
+            if idx > 0:
+                candidate = auto_suffix(example)
+                if candidate in used_suffixes:
+                    # Collision: append index
+                    counter = 2
+                    while f"{candidate}-{counter}" in used_suffixes:
+                        counter += 1
+                    candidate = f"{candidate}-{counter}"
+                suffix = candidate
+            if suffix:
+                used_suffixes.add(suffix)
+
+            test = {
+                "name": make_test_name(rule_id, tier, suffix),
                 "tier": tier,
                 "category": rule_id,
                 "dir": "project",
                 "batch": batch_key,
-                "prompt": make_solo_prompt(extra["batch_prompt"], tier),
-                "batch_prompt": extra["batch_prompt"],
-                "pattern": extra["pattern"],
-                "tool": extra_tool,
+                "prompt": make_solo_prompt(batch_prompt, tier),
+                "batch_prompt": batch_prompt,
+                "pattern": pattern,
+                "tool": tool,
             }
             if branch != "main":
-                extra_test["branch"] = branch
-            tests.append(extra_test)
+                test["branch"] = branch
+            tests.append(test)
 
     # Generate tests from extra_rules (e.g., self_protection)
     for extra in extra_rules:
@@ -175,45 +211,93 @@ def generate():
         branch = extra.get("branch", "main")
         slug = branch_slug(branch)
         batch_key = f"{tier}-{slug}"
+        extra_examples = extra.get("examples", [])
 
-        test = {
-            "name": make_test_name(rule_id, tier),
-            "tier": tier,
-            "category": rule_id,
-            "dir": "project",
-            "batch": batch_key,
-            "prompt": make_solo_prompt(extra["batch_prompt"], tier),
-            "batch_prompt": extra["batch_prompt"],
-            "pattern": extra["pattern"],
-            "tool": tool,
-        }
-        if branch != "main":
-            test["branch"] = branch
-        tests.append(test)
+        # Track suffixes for collision detection within this extra rule
+        used_suffixes = set()
+
+        for idx, example in enumerate(extra_examples):
+            if extra.get("prompt"):
+                batch_prompt = extra["prompt"]
+            else:
+                template = PROMPT_TEMPLATES.get(tool, PROMPT_TEMPLATES["Bash"])
+                batch_prompt = template.format(example=example)
+
+            pattern = extra.get("pattern", example)
+
+            suffix = None
+            if idx > 0:
+                candidate = auto_suffix(example)
+                if candidate in used_suffixes:
+                    # Collision: append index
+                    counter = 2
+                    while f"{candidate}-{counter}" in used_suffixes:
+                        counter += 1
+                    candidate = f"{candidate}-{counter}"
+                suffix = candidate
+            if suffix:
+                used_suffixes.add(suffix)
+
+            test = {
+                "name": make_test_name(rule_id, tier, suffix),
+                "tier": tier,
+                "category": rule_id,
+                "dir": "project",
+                "batch": batch_key,
+                "prompt": make_solo_prompt(batch_prompt, tier),
+                "batch_prompt": batch_prompt,
+                "pattern": pattern,
+                "tool": tool,
+            }
+            if branch != "main":
+                test["branch"] = branch
+            tests.append(test)
 
     # Generate subagent variants
-    for rule_id in registry:
-        fixture = fixtures[rule_id]
-        if not fixture.get("subagent"):
+    for rule_id, tier, _fn, tools, examples in RULE_REGISTRY:
+        override = overrides.get(rule_id, {})
+        if not override.get("subagent"):
             continue
-        tier = registry[rule_id][0]
-        tools = registry[rule_id][1]
-        tool = determine_tool(fixture, tools)
+        tool = determine_tool(override, tools)
+
+        # Use first example for subagent test
+        example = examples[0]
+        if override.get("prompt"):
+            batch_prompt = override["prompt"]
+        else:
+            template = PROMPT_TEMPLATES.get(tool, PROMPT_TEMPLATES["Bash"])
+            batch_prompt = template.format(example=example)
+
+        pattern = override.get("pattern", example)
 
         test = {
             "name": f"subagent-{make_test_name(rule_id, tier)}",
             "tier": tier,
             "category": rule_id,
             "dir": "project",
-            "prompt": make_subagent_prompt(
-                fixture["batch_prompt"], fixture["pattern"]
-            ),
-            "pattern": fixture["pattern"],
+            "prompt": make_subagent_prompt(batch_prompt, pattern),
+            "pattern": pattern,
             "tool": tool,
             "max_turns": 5,
             "subagent": True,
         }
         tests.append(test)
+
+    # Validate: no duplicate test names
+    seen_names = {}
+    for i, t in enumerate(tests):
+        name = t["name"]
+        if name in seen_names:
+            errors.append(
+                f"Duplicate test name '{name}' at indices {seen_names[name]} and {i}"
+            )
+        else:
+            seen_names[name] = i
+
+    if errors:
+        for err in errors:
+            print(f"ERROR: {err}", file=sys.stderr)
+        sys.exit(1)
 
     return {"tests": tests}
 

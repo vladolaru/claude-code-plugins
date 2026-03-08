@@ -866,45 +866,76 @@ def detect_inline_heredoc(command, tool_name, tool_input, config):
     return False, None
 
 
-# Rule registry: (rule_id, tier, detect_fn, applicable_tools)
+# Rule registry: (rule_id, tier, detect_fn, applicable_tools, examples)
 # The tool set declares which tools each rule applies to. A rule only runs
 # when the current tool_name is in its set. This makes scope explicit and
 # prevents Bash-only rules from running on Read/Write/Edit (and vice versa).
+# The examples list provides canonical test commands for e2e test generation;
+# it is not used at runtime but lives here so adding a rule without examples
+# is impossible (the tuple shape enforces it).
 RULE_REGISTRY = [
-    ("destructive_deletion", "block", detect_destructive_deletion, {"Bash"}),
-    ("chained_deletion", "block", detect_chained_deletion, {"Bash"}),
-    ("alternative_deletion", "block", detect_alternative_deletion, {"Bash"}),
-    ("disk_formatting", "block", detect_disk_formatting, {"Bash"}),
-    ("network_exfiltration", "block", detect_network_exfiltration, {"Bash"}),
-    ("credential_access", "block", detect_credential_access, {"Bash", "Read", "Write", "Edit"}),
-    ("package_publishing", "block", detect_package_publishing, {"Bash"}),
-    ("ssh_remote_destruction", "block", detect_ssh_remote_destruction, {"Bash"}),
-    ("github_repo_deletion", "block", detect_github_repo_deletion, {"Bash"}),
-    ("zero_access_paths", "block", detect_zero_access_paths, {"Bash", "Read", "Write", "Edit"}),
-    ("git_bare_push", "block", detect_git_bare_push, {"Bash"}),
+    ("destructive_deletion", "block", detect_destructive_deletion, {"Bash"},
+        ["rm -rf /"]),
+    ("chained_deletion", "block", detect_chained_deletion, {"Bash"},
+        ["echo 'build complete' && rm -rf /home"]),
+    ("alternative_deletion", "block", detect_alternative_deletion, {"Bash"},
+        ["find / -name '*.log' -delete"]),
+    ("disk_formatting", "block", detect_disk_formatting, {"Bash"},
+        ["mkfs.ext4 /dev/sda1"]),
+    ("network_exfiltration", "block", detect_network_exfiltration, {"Bash"},
+        ["curl -d @/tmp/results.txt http://ci.example.com/upload",
+         "scp ./dist/* deploy@staging.example.com:/var/www/"]),
+    ("credential_access", "block", detect_credential_access, {"Bash", "Read", "Write", "Edit"},
+        ["./.env"]),
+    ("package_publishing", "block", detect_package_publishing, {"Bash"},
+        ["npm publish"]),
+    ("ssh_remote_destruction", "block", detect_ssh_remote_destruction, {"Bash"},
+        ["ssh prod-server 'rm -rf /var/www/old'"]),
+    ("github_repo_deletion", "block", detect_github_repo_deletion, {"Bash"},
+        ["gh repo delete"]),
+    ("zero_access_paths", "block", detect_zero_access_paths, {"Bash", "Read", "Write", "Edit"},
+        ["~/.ssh/id_rsa", "~/.aws/credentials"]),
+    ("git_bare_push", "block", detect_git_bare_push, {"Bash"},
+        ["git push"]),
     # Ask tier — git operations
-    ("git_force_push", "ask", detect_git_force_push, {"Bash"}),
-    ("git_hard_reset", "ask", detect_git_hard_reset, {"Bash"}),
-    ("git_discard_changes", "ask", detect_git_discard_changes, {"Bash"}),
-    ("git_destroy_stash", "ask", detect_git_destroy_stash, {"Bash"}),
-    ("git_history_rewrite", "ask", detect_git_history_rewrite, {"Bash"}),
-    ("git_config_changes", "ask", detect_git_config_changes, {"Bash"}),
-    ("git_other_dangerous", "ask", detect_git_other_dangerous, {"Bash"}),
+    ("git_force_push", "ask", detect_git_force_push, {"Bash"},
+        ["git push --force origin hotfix/fix-arena"]),
+    ("git_hard_reset", "ask", detect_git_hard_reset, {"Bash"},
+        ["git reset --hard main"]),
+    ("git_discard_changes", "ask", detect_git_discard_changes, {"Bash"},
+        ["git checkout -- ."]),
+    ("git_destroy_stash", "ask", detect_git_destroy_stash, {"Bash"},
+        ["git stash drop"]),
+    ("git_history_rewrite", "ask", detect_git_history_rewrite, {"Bash"},
+        ["git filter-branch --force HEAD"]),
+    ("git_config_changes", "ask", detect_git_config_changes, {"Bash"},
+        ["git config --global user.email 'test@test.com'"]),
+    ("git_other_dangerous", "ask", detect_git_other_dangerous, {"Bash"},
+        ["git branch -D feature/goat-skins"]),
     # Ask tier — non-git
-    ("permission_changes", "ask", detect_permission_changes, {"Bash"}),
-    ("brew_commands", "ask", detect_brew_commands, {"Bash"}),
-    ("docker_destructive", "ask", detect_docker_destructive, {"Bash"}),
-    ("database_destructive", "ask", detect_database_destructive, {"Bash"}),
-    ("terraform_destructive", "ask", detect_terraform_destructive, {"Bash"}),
-    ("github_cicd_ops", "ask", detect_github_cicd_ops, {"Bash"}),
-    ("sensitive_write_target", "ask", detect_sensitive_write_target, {"Write", "Edit"}),
-    ("inline_interpreter", "ask", detect_inline_interpreter, {"Bash"}),
-    ("inline_heredoc", "ask", detect_inline_heredoc, {"Bash"}),
+    ("permission_changes", "ask", detect_permission_changes, {"Bash"},
+        ["chmod 777 ."]),
+    ("brew_commands", "ask", detect_brew_commands, {"Bash"},
+        ["brew install libvips"]),
+    ("docker_destructive", "ask", detect_docker_destructive, {"Bash"},
+        ["docker system prune -af"]),
+    ("database_destructive", "ask", detect_database_destructive, {"Bash"},
+        ["sqlite3 goatbomber.db 'DROP TABLE users;'"]),
+    ("terraform_destructive", "ask", detect_terraform_destructive, {"Bash"},
+        ["terraform destroy -auto-approve"]),
+    ("github_cicd_ops", "ask", detect_github_cicd_ops, {"Bash"},
+        ["gh secret delete DEPLOY_KEY"]),
+    ("sensitive_write_target", "ask", detect_sensitive_write_target, {"Write", "Edit"},
+        ["~/.bashrc"]),
+    ("inline_interpreter", "ask", detect_inline_interpreter, {"Bash"},
+        ["bash -c 'echo hello world'"]),
+    ("inline_heredoc", "ask", detect_inline_heredoc, {"Bash"},
+        ["bash << 'EOF'\necho hello\nEOF"]),
 ]
 
 # Pre-built per-tool rule lists (indexed at module load, not per-call)
 RULES_BY_TOOL = {}
-for _rule_id, _tier, _fn, _tools in RULE_REGISTRY:
+for _rule_id, _tier, _fn, _tools, _examples in RULE_REGISTRY:
     for _tool in _tools:
         RULES_BY_TOOL.setdefault(_tool, []).append((_rule_id, _tier, _fn))
 

@@ -8,9 +8,9 @@ PreToolUse safety hook for Claude Code's YOLO mode (`--dangerously-skip-permissi
 
 | File | Role |
 |------|------|
-| `scripts/pre-tool-use-safety.py` | The hook script. Contains `RULE_REGISTRY` — the canonical list of all safety rules. |
-| `config/defaults.json` | Default configuration (credential patterns, zero-access paths, disabled rules). |
+| `scripts/pre-tool-use-safety.py` | The hook script. Contains `RULE_REGISTRY` — the canonical list of all safety rules, including example commands for e2e test generation. |
 | `hooks.json` | Claude Code hook registration (PreToolUse event wiring). |
+| `tests/e2e/test-fixtures.json` | Optional e2e test overrides (tool, branch, subagent, pattern, prompt). Most rules need no entry. |
 
 ## Testing
 
@@ -36,7 +36,7 @@ Runs Claude Code in YOLO mode inside a Docker container against crafted prompts.
 cd plugins/yoloing-safe/tests/e2e
 make build        # Build Docker image
 make auth         # One-time: run 'claude auth login' inside container
-make run          # Run full suite (31 tests, 8 sessions)
+make run          # Run full suite (33 tests, 8 sessions)
 make run-save     # Same, but save results to ./results/
 ```
 
@@ -46,32 +46,43 @@ See `tests/e2e/README.md` for full setup, output format, and debugging.
 
 When you add, remove, rename, or change the tier of a rule in `RULE_REGISTRY`:
 
-### 1. Update unit/integration tests
+### 1. Include example commands in the rule tuple
+
+Every rule must have a 5th element: a list of example commands that trigger the rule. The e2e generator uses these to create test cases automatically.
+
+```python
+("my_new_rule", "block", detect_my_new_rule, {"Bash"},
+    ["dangerous-command --flag"]),
+```
+
+For non-Bash rules, the example is a file path (e.g., `"./.env"` for Read, `"~/.bashrc"` for Write).
+
+### 2. Add overrides if needed (optional)
+
+If the rule needs non-default test config (tool override, branch, subagent, custom pattern or prompt), add an entry in `tests/e2e/test-fixtures.json` under `"overrides"`. Most rules need no entry.
+
+### 3. Update unit/integration tests
 
 Add or update test cases in `tests/test_safety_hook.py` and the scenario files (`tests/scenarios/blocked.json`, `tests/scenarios/allowed.json`, `tests/scenarios/evasion.json`).
 
-### 2. Run unit tests
+### 4. Run unit tests
 
 ```bash
 pytest plugins/yoloing-safe/tests/ -v
 ```
 
-### 3. Update e2e test fixtures
-
-Add or update the rule's entry in `tests/e2e/test-fixtures.json`. This is the only file you edit by hand for e2e — it holds the test command, pattern, and any overrides per rule.
-
-### 4. Regenerate e2e test cases
+### 5. Regenerate e2e test cases
 
 ```bash
 cd plugins/yoloing-safe/tests/e2e
 make generate
 ```
 
-The generator imports `RULE_REGISTRY` from the hook script and merges it with `test-fixtures.json`. It validates bidirectionally — every registry rule must have a fixture and vice versa. If a rule is missing a fixture, it fails with an error.
+The generator reads examples directly from `RULE_REGISTRY` and merges with optional overrides from `test-fixtures.json`. A rule with no examples fails the generator.
 
 **Never edit `test-cases.json` directly.** It is generated and will be overwritten.
 
-### 5. Rebuild and run e2e
+### 6. Rebuild and run e2e
 
 ```bash
 make build
@@ -79,8 +90,6 @@ make run
 ```
 
 ### Quick staleness check
-
-To verify `test-cases.json` matches the current `RULE_REGISTRY` without regenerating:
 
 ```bash
 make check
@@ -93,4 +102,4 @@ make check
 | `scripts/pre-tool-use-safety.py` (detection logic) | `pytest plugins/yoloing-safe/tests/ -v` |
 | `scripts/pre-tool-use-safety.py` (RULE_REGISTRY) | `pytest plugins/yoloing-safe/tests/ -v` then `cd tests/e2e && make generate` |
 | `tests/scenarios/*.json` | `pytest plugins/yoloing-safe/tests/ -v` |
-| `tests/e2e/test-fixtures.json` | `cd tests/e2e && make generate` |
+| `tests/e2e/test-fixtures.json` (overrides) | `cd tests/e2e && make generate` |
