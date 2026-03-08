@@ -222,6 +222,8 @@ class TestAlternativeDeletion:
     @pytest.mark.parametrize("command", [
         "find .claude/tmp/screenshots -name '*.png' -mtime +7 -delete",
         "find ./build -name '*.tmp' -delete",
+        "find . -name '*.pyc' -delete",
+        "find . -type f -name '*.tmp' -delete",
         "find $TMPDIR/cache -name '*.log' -delete",
         "find /tmp/workdir -name '*.pyc' -delete",
         "find /var/tmp/ci -name '*.o' -delete",
@@ -370,6 +372,7 @@ class TestCredentialAccess:
         ("Read", {"file_path": "/project/.env.example"}),
         ("Read", {"file_path": "/project/.env.template"}),
         ("Read", {"file_path": "/project/.env.sample"}),
+        ("Read", {"file_path": "/project/.envrc"}),
         ("Read", {"file_path": "/project/config.json"}),
         ("Read", {"file_path": "/project/README.md"}),
         ("Bash", {"command": "echo hello"}),
@@ -839,6 +842,7 @@ class TestDockerDestructive:
         "docker volume prune",
         "docker rm -f container",
         "docker-compose down -v",
+        "docker compose down -v",
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
@@ -867,6 +871,9 @@ class TestDatabaseDestructive:
         "dropuser myuser",
         "redis-cli FLUSHALL",
         "redis-cli FLUSHDB",
+        "redis-cli flushall",
+        "redis-cli flushdb",
+        "redis-cli Flushall",
     ])
     def test_detected(self, hook, command):
         cmd = hook.normalize_command(command)
@@ -880,6 +887,7 @@ class TestDatabaseDestructive:
         'mysql -e "INSERT INTO users VALUES (1)"',
         "createdb mydb",
         "redis-cli GET key",
+        "redis-cli get key",
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)

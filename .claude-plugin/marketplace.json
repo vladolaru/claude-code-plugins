@@ -178,7 +178,7 @@
       "name": "yoloing-safe",
       "source": "./plugins/yoloing-safe",
       "description": "YOLO mode safety net — PreToolUse guardrails that block destructive commands (rm -rf, disk formatting, data exfiltration), ask for confirmation on the risky-but-maybe-intentional stuff (force push, permission changes), and nudge Claude toward safer alternatives. Configurable credential file protection. Because shipping fast shouldn't mean losing your home directory.",
-      "version": "1.7.1",
+      "version": "1.7.2",
       "author": {
         "name": "Vlad Olaru"
       },

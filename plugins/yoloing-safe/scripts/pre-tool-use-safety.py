@@ -54,6 +54,7 @@ DEFAULTS = {
         r"\.env\.sample",
         r"\.env\.example",
         r"\.env\.template",
+        r"\.envrc$",
     ],
     "zero_access_paths": [
         "~/.ssh/",
@@ -254,7 +255,7 @@ _RE_FORCE_DELETE_FLAG = re.compile(r"(?:^|\s)-[a-zA-Z]*[fF]|--force")
 _RE_FIND_DELETE = re.compile(r"\bfind\b.*-delete\b")
 # Scoped find roots: relative dot-paths, $TMPDIR, /tmp, /var/tmp
 _RE_FIND_SCOPED_ROOT = re.compile(
-    r"^find\s+(?:\.[\w./\-]|\$TMPDIR\b|\$TMP\b|/tmp/|/var/tmp/)"
+    r"^find\s+(?:\.(?:$|[\w./\-]|\s)|\$TMPDIR\b|\$TMP\b|/tmp/|/var/tmp/)"
 )
 _RE_FIND_EXEC_RM = re.compile(r"\bfind\b.*-exec\s+rm\b")
 _RE_XARGS_RM = re.compile(r"\bxargs\s+rm\b")
@@ -316,7 +317,7 @@ _RE_TRUNCATE = re.compile(r"\bTRUNCATE\b")
 _RE_DELETE_FROM = re.compile(r"\bDELETE\s+FROM\b")
 _RE_WHERE = re.compile(r"\bWHERE\b")
 _RE_DROPDB_DROPUSER = re.compile(r"\b(dropdb|dropuser)\b")
-_RE_REDIS_FLUSH = re.compile(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b")
+_RE_REDIS_FLUSH = re.compile(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -866,7 +867,7 @@ RULES = {
         "patterns": [
             r"\bdocker\s+(system|volume|image)\s+prune\b",
             r"\bdocker\s+rm\s+-[a-zA-Z]*f",
-            r"\bdocker-compose\s+down\b.*-v\b",
+            r"\bdocker[\s-]compose\s+down\b.*-v\b",
         ],
         "message": "This Docker command removes containers, volumes, or cached data that may be difficult to rebuild. Confirm you want to proceed.",
         "examples": ["docker system prune -af"],
