@@ -206,14 +206,14 @@ ASK_MESSAGES = {
     "git_history_rewrite": "Rewriting git history (`filter-branch`, `filter-repo`) is irreversible on shared branches. Confirm this is intentional.",
     "git_config_changes": "Global or system git config changes affect all repositories on this machine. Confirm this is intentional.",
     "git_other_dangerous": "This git operation can cause data loss or affect collaboration. Confirm you want to proceed.",
-    "permission_changes": "Broad permission changes can create security vulnerabilities. Confirm this is the minimum permission needed.",
+    "permission_changes": "Broad permission changes can create security vulnerabilities. Use `chmod +x` to make a file executable (always allowed), or apply the minimum permission needed. Confirm this is intentional.",
     "brew_commands": "Installing system packages changes your development environment. Confirm you want to proceed, or consider adding the dependency to your project's package manager instead.",
     "docker_destructive": "This Docker command removes containers, volumes, or cached data that may be difficult to rebuild. Confirm you want to proceed.",
     "database_destructive": "This command permanently deletes database objects or data. Use a transaction with `BEGIN`/`ROLLBACK` to preview, or run against a dev database first. Confirm this is intentional.",
     "terraform_destructive": "This infrastructure command can destroy live resources. Use `--dry-run` or `plan` first to preview changes. Confirm this is intentional.",
     "github_cicd_ops": "Deleting GitHub secrets, variables, or disabling workflows affects CI/CD for all collaborators. Confirm this is intentional.",
     "sensitive_write_target": "This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
-    "inline_interpreter": "Inline interpreter execution can bypass command-level safety checks. Review the code being executed and confirm this is intentional.",
+    "inline_interpreter": "Shell subshell execution (`bash -c`, `sh -c`) can bypass command-level safety checks. Write the code to a file and run it instead (e.g., `python3 script.py`), or use a non-shell interpreter directly (`python3 -c`, `node -e` are allowed). Confirm this is intentional.",
 }
 
 # ---------------------------------------------------------------------------
