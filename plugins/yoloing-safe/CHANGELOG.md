@@ -5,6 +5,19 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-03-08
+
+### Fixed
+- **Security:** Zero-access paths (`~/.ssh/`, `~/.aws/`, etc.) could be bypassed via `$HOME` and `${HOME}` shell variable forms — now expanded alongside `~` in config loading
+- **Security:** `find -delete` scoped-root allowance could be bypassed via parent-directory traversal (`find ./../../etc -delete`) — added `..` traversal detection
+- **Security:** `su -c` subshell execution was not caught by `inline_interpreter` rule — added `su -c` (with optional username) to the pattern
+- **Security:** Self-protection Bash detection missed interpreter-based writes (`python3 -c`, `node -e`) to protected paths — added interpreter write pattern detection
+- **Security:** command normalization now strips any leading absolute binary path (for example `/opt/homebrew/bin/git`), closing bypasses where anchored rules (`^git push`, `^brew`, etc.) were skipped
+- **Security:** Bash self-protection now resolves write targets as real paths with relative-path handling and `cd ... &&` chain awareness, closing bypasses like `cd plugins/yoloing-safe && echo '{}' > hooks/hooks.json`
+- **Security:** loopback exception for network exfiltration now checks parsed URL hosts, preventing false loopback matches from unrelated substrings (for example `?x=localhost` on non-loopback URLs)
+- **Behavior:** `git push --force` now consistently triggers the `git_force_push` ask flow (including no-refspec form), instead of being blocked by `git_bare_push` precedence
+- `is_allowlisted()` did not respect `disable_rules` config, inconsistent with `main()` behavior — now accepts optional `disabled` parameter
+
 ## [1.8.1] - 2026-03-08
 
 ### Fixed

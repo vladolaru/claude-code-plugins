@@ -12,9 +12,10 @@ Fails open on any error (exit 0).
 import json
 import os
 import re
+import shlex
 import sys
 import time
-from pathlib import Path
+from urllib.parse import urlparse
 
 # ---------------------------------------------------------------------------
 # Profiling (zero-cost when disabled)
@@ -79,6 +80,15 @@ SELF_PROTECTED_PATHS = [
 ]
 
 
+def _is_path_within_self_protected(real_path):
+    """Check whether a resolved path is in self-protected locations."""
+    for protected in SELF_PROTECTED_PATHS:
+        protected_real = os.path.realpath(protected)
+        if real_path == protected_real or real_path.startswith(protected_real + os.sep):
+            return True
+    return False
+
+
 def _is_self_protected_path(file_path):
     """Check if a file path resolves to a self-protected location.
 
@@ -86,48 +96,172 @@ def _is_self_protected_path(file_path):
     """
     try:
         real_path = os.path.realpath(os.path.expanduser(file_path))
-        for protected in SELF_PROTECTED_PATHS:
-            protected_real = os.path.realpath(protected)
-            if real_path == protected_real or real_path.startswith(protected_real + os.sep):
-                return True
+        if _is_path_within_self_protected(real_path):
+            return True
     except (ValueError, OSError):
         pass
     return False
 
 
-# Pre-compiled patterns for Bash self-protection detection
-_RE_SHELL_REDIRECT = re.compile(r"[12]?>")
-_RE_BASH_WRITE_CMDS = re.compile(
-    r"\b(cp|mv|tee|install|rsync)\b"
-)
-_RE_SED_INPLACE = re.compile(r"\bsed\b.*\s-i")
+_SHELL_SEPARATORS = {"&&", "||", ";", "|", "&"}
+_WRAPPER_COMMANDS = {
+    "command", "env", "sudo", "nice", "nohup", "time", "exec", "strace", "ionice", "taskset"
+}
+_REDIRECT_TOKENS = {">", ">>", "1>", "1>>", "2>", "2>>"}
+_RE_INLINE_REDIRECT = re.compile(r"^(?:[12]?>{1,2}|>{1,2})(.+)$")
+_RE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+# Interpreter-based file writes (python3 -c, node -e, ruby -e, perl -e)
+_RE_INTERPRETER_WRITE = re.compile(r"\b(python3?|node|ruby|perl)\b.*(-c\b|-e\b)")
 
 
-def _bash_targets_protected_path(command):
-    """Check if a Bash command writes to a self-protected path.
+def _tokenize_shell(command):
+    """Tokenize shell command with operator tokens preserved."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
 
-    Detects shell redirects (>, >>), copy/move commands, tee, and sed -i
-    that reference self-protected paths.
-    """
-    might_write = (
-        _RE_SHELL_REDIRECT.search(command)
-        or _RE_BASH_WRITE_CMDS.search(command)
-        or _RE_SED_INPLACE.search(command)
-    )
-    if not might_write:
-        return False
-    # Check if any protected path appears in the command
+
+def _split_shell_segments(tokens):
+    """Split token list into command segments on chain operators."""
+    segments = []
+    current = []
+    for tok in tokens:
+        if tok in _SHELL_SEPARATORS:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(tok)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _resolve_candidate_path(path_token, cwd):
+    """Resolve candidate path token to a real filesystem path."""
+    if not path_token:
+        return None
+    expanded = os.path.expanduser(path_token)
+    if not os.path.isabs(expanded):
+        expanded = os.path.join(cwd, expanded)
+    try:
+        return os.path.realpath(expanded)
+    except (OSError, ValueError):
+        return None
+
+
+def _segment_command_and_args(segment):
+    """Extract command name + args, skipping env assignments and wrappers."""
+    idx = 0
+    while idx < len(segment) and _RE_ASSIGNMENT.match(segment[idx]):
+        idx += 1
+    while idx < len(segment) and os.path.basename(segment[idx]) in _WRAPPER_COMMANDS:
+        idx += 1
+    if idx >= len(segment):
+        return "", []
+    return os.path.basename(segment[idx]), segment[idx + 1:]
+
+
+def _collect_redirection_targets(segment):
+    """Collect shell redirection targets from one tokenized segment."""
+    targets = []
+    for i, tok in enumerate(segment):
+        if tok in _REDIRECT_TOKENS and i + 1 < len(segment):
+            target = segment[i + 1]
+            if target and not target.startswith("&"):
+                targets.append(target)
+            continue
+        inline = _RE_INLINE_REDIRECT.match(tok)
+        if inline:
+            target = inline.group(1)
+            if target and not target.startswith("&"):
+                targets.append(target)
+    return targets
+
+
+def _collect_positional_args(args):
+    """Collect command positional args, skipping options and `--` marker."""
+    positional = []
+    after_double_dash = False
+    for arg in args:
+        if arg == "--":
+            after_double_dash = True
+            continue
+        if not after_double_dash and arg.startswith("-"):
+            continue
+        positional.append(arg)
+    return positional
+
+
+def _collect_write_targets_for_segment(segment):
+    """Collect likely write targets from a command segment."""
+    targets = _collect_redirection_targets(segment)
+    cmd, args = _segment_command_and_args(segment)
+    if not cmd:
+        return targets
+
+    positional = _collect_positional_args(args)
+    if cmd in {"cp", "mv", "install", "rsync"} and positional:
+        targets.append(positional[-1])
+    elif cmd == "tee" and positional:
+        targets.extend(positional)
+    elif cmd == "sed":
+        has_inplace = any(arg == "-i" or arg.startswith("-i") for arg in args)
+        if has_inplace and len(positional) >= 2:
+            # positional[0] is usually sed expression; rest are target files
+            targets.extend(positional[1:])
+
+    return targets
+
+
+def _update_cwd_from_cd(segment, cwd):
+    """Track explicit `cd <dir>` segments for relative-path resolution."""
+    cmd, args = _segment_command_and_args(segment)
+    if cmd != "cd" or not args:
+        return cwd
+    dest = _resolve_candidate_path(args[0], cwd)
+    return dest or cwd
+
+
+def _command_mentions_protected_path(command):
+    """Fallback for interpreter one-liners writing to protected paths."""
     for protected in SELF_PROTECTED_PATHS:
         protected_real = os.path.realpath(protected)
-        # Check both the raw path and expanded forms
         if protected in command or protected_real in command:
             return True
-        # Also check with ~ unexpanded (e.g., ~/.claude/yoloing-safe.json)
         home = os.path.expanduser("~")
         if protected_real.startswith(home):
             tilde_form = "~" + protected_real[len(home):]
             if tilde_form in command:
                 return True
+    return False
+
+
+def _bash_targets_protected_path(command, tool_input):
+    """Check if Bash command writes to a self-protected path."""
+    base_cwd = os.getcwd()
+    if isinstance(tool_input, dict):
+        maybe_cwd = tool_input.get("cwd")
+        if isinstance(maybe_cwd, str) and maybe_cwd:
+            base_cwd = os.path.expanduser(maybe_cwd)
+
+    try:
+        tokens = _tokenize_shell(command)
+    except ValueError:
+        tokens = []
+
+    cwd = os.path.realpath(base_cwd)
+    for segment in _split_shell_segments(tokens):
+        for target in _collect_write_targets_for_segment(segment):
+            resolved = _resolve_candidate_path(target, cwd)
+            if resolved and _is_path_within_self_protected(resolved):
+                return True
+        cwd = _update_cwd_from_cd(segment, cwd)
+
+    # Keep strict guard for interpreter one-liners that include protected paths.
+    if _RE_INTERPRETER_WRITE.search(command) and _command_mentions_protected_path(command):
+        return True
     return False
 
 
@@ -143,13 +277,20 @@ def load_config():
                 config[key] = user[key]
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
-    # Expand ~ in zero_access_paths so both tilde and absolute forms match
+    # Expand zero_access_paths so tilde, absolute, and shell variable forms match.
+    # e.g., ~/.ssh/ → also /Users/user/.ssh/, $HOME/.ssh/, ${HOME}/.ssh/
     expanded = []
     for p in config["zero_access_paths"]:
         expanded.append(p)
         ep = os.path.expanduser(p)
         if ep != p:
             expanded.append(ep)
+            # Add $HOME and ${HOME} forms to catch shell variable usage
+            home = os.path.expanduser("~")
+            if ep.startswith(home):
+                suffix = ep[len(home):]
+                expanded.append("$HOME" + suffix)
+                expanded.append("${HOME}" + suffix)
     config["zero_access_paths"] = expanded
     return config
 
@@ -167,9 +308,16 @@ def normalize_command(cmd):
     """Strip path prefixes, command wrappers, and collapse whitespace."""
     if not cmd:
         return ""
+    stripped = cmd.lstrip()
+    parts = stripped.split(None, 1)
+    normalized = stripped
     # Strip leading absolute path from the command binary only
-    # e.g., /usr/bin/git → git, but rm /home/user/bin/rm stays unchanged
-    normalized = _RE_PATH_PREFIX.sub("", cmd)
+    # e.g., /opt/homebrew/bin/git → git, but rm /home/user/bin/rm stays unchanged
+    if parts:
+        binary = parts[0]
+        if binary.startswith("/") and "/" in binary[1:]:
+            remainder = parts[1] if len(parts) > 1 else ""
+            normalized = f"{os.path.basename(binary)} {remainder}".strip()
     # Strip command wrappers, looping for nesting (sudo env rm → rm)
     prev = None
     while prev != normalized:
@@ -217,7 +365,6 @@ _RE_CHAIN_OPS = re.compile(r"(&&|;|\|\|)")
 _RE_CHAIN_SPLIT = re.compile(r"&&|;|\|\|")
 
 # Command normalization
-_RE_PATH_PREFIX = re.compile(r"^(?:/usr/local/bin/|/usr/bin/|/bin/|/sbin/|/usr/sbin/)")
 _RE_WHITESPACE = re.compile(r"\s+")
 
 # ---------------------------------------------------------------------------
@@ -257,6 +404,8 @@ _RE_FIND_DELETE = re.compile(r"\bfind\b.*-delete\b")
 _RE_FIND_SCOPED_ROOT = re.compile(
     r"^find\s+(?:\.(?:$|[\w./\-]|\s)|\$TMPDIR\b|\$TMP\b|/tmp/|/var/tmp/)"
 )
+# Parent-directory traversal in find paths — blocks scoped-root allowance
+_RE_FIND_TRAVERSAL = re.compile(r"^find\s+\S*\.\.")
 _RE_FIND_EXEC_RM = re.compile(r"\bfind\b.*-exec\s+rm\b")
 _RE_XARGS_RM = re.compile(r"\bxargs\s+rm\b")
 _RE_EVAL_RM = re.compile(r"\beval\b.*\brm\b")
@@ -270,7 +419,8 @@ _RE_NC_REDIRECT = re.compile(r"\bnc\b.*<")
 _RE_CURL_WGET_PIPE_SHELL = re.compile(r"\b(curl|wget)\b.*\|\s*(bash|sh|zsh)\b")
 _RE_SCP_UPLOAD = re.compile(r"\bscp\b.*\s\S+@\S+:\S*$")
 _RE_RSYNC_UPLOAD = re.compile(r"\brsync\b.*\s\S+@\S+:\S*$")
-_RE_LOOPBACK = re.compile(r"\b(localhost|127\.0\.0\.1)(:\d+)?|\[?::1\]?(:\d+)?")
+_RE_URL = re.compile(r"https?://[^\s'\"<>]+")
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 # Package publishing
 _RE_NPM_PUBLISH = re.compile(r"\bnpm publish\b")
@@ -284,6 +434,7 @@ _RE_SSH_QUOTED_CMD = re.compile(r"""ssh\s+\S+\s+['"](.+?)['"]""")
 
 # Git operations
 _RE_GIT_PUSH = re.compile(r"^git push\b")
+_RE_GIT_FORCE_FLAG = re.compile(r"(--force\b|-f\b)")
 # git push with explicit refspec alternatives (--tags, --all, --mirror)
 _RE_GIT_PUSH_REFSPEC_ALT = re.compile(r"--(tags|all|mirror)\b")
 _RE_GIT_CHECKOUT = re.compile(r"^git checkout\b")
@@ -334,7 +485,8 @@ def detect_alternative_deletion(command, tool_name, tool_input, config):
     # find -delete
     if _RE_FIND_DELETE.search(command):
         # Allow scoped cleanup (relative dot-paths, $TMPDIR, /tmp, /var/tmp)
-        if not _RE_FIND_SCOPED_ROOT.search(command):
+        # but block parent-directory traversal (find ./../../etc -delete)
+        if _RE_FIND_TRAVERSAL.search(command) or not _RE_FIND_SCOPED_ROOT.search(command):
             return True, RULES["alternative_deletion"]["message"]
     # find -exec rm
     if _RE_FIND_EXEC_RM.search(command):
@@ -350,21 +502,40 @@ def detect_alternative_deletion(command, tool_name, tool_input, config):
 
 # --- Block Tier: Network, Credentials, Publishing, SSH, GitHub, Paths ---
 
+
+def _targets_only_loopback(command):
+    """Return True when every parsed URL target host is loopback."""
+    urls = _RE_URL.findall(command)
+    if not urls:
+        return False
+    hosts = []
+    for url in urls:
+        try:
+            host = (urlparse(url).hostname or "").lower()
+        except ValueError:
+            continue
+        if host:
+            hosts.append(host)
+    if not hosts:
+        return False
+    return all(host in _LOOPBACK_HOSTS for host in hosts)
+
+
 def detect_network_exfiltration(command, tool_name, tool_input, config):
     """Detect data exfiltration via curl, wget, nc, scp, rsync."""
-    _is_loopback = bool(_RE_LOOPBACK.search(command))
+    is_loopback_target = _targets_only_loopback(command)
 
     # curl posting data (file or stdin)
     if _RE_CURL_POST_DATA.search(command):
-        if not _is_loopback:
+        if not is_loopback_target:
             return True, RULES["network_exfiltration"]["message"]
     # curl file upload (-F form, -T upload, --upload-file)
     if _RE_CURL_UPLOAD.search(command):
-        if not _is_loopback:
+        if not is_loopback_target:
             return True, RULES["network_exfiltration"]["message"]
     # wget posting a file — loopback bypass applies here too
     if _RE_WGET_POST_FILE.search(command):
-        if not _is_loopback:
+        if not is_loopback_target:
             return True, RULES["network_exfiltration"]["message"]
     # Piping to nc — loopback not a meaningful exception (nc is raw TCP)
     if _RE_PIPE_TO_NC.search(command) or _RE_NC_REDIRECT.search(command):
@@ -488,6 +659,9 @@ def detect_git_bare_push(command, tool_name, tool_input, config):
     --tags, --all, --mirror as refspec alternatives.
     """
     if not _RE_GIT_PUSH.search(command):
+        return False, None
+    # Force-push variants are handled by git_force_push ask rule.
+    if _RE_GIT_FORCE_FLAG.search(command):
         return False, None
     # --tags, --all, --mirror are explicit refspec alternatives
     if _RE_GIT_PUSH_REFSPEC_ALT.search(command):
@@ -901,10 +1075,10 @@ RULES = {
     "inline_interpreter": {
         "tier": "ask",
         "tools": {"Bash"},
-        "patterns": [r"\b(bash|sh|zsh)\s+-c\b"],
+        "patterns": [r"\b(bash|sh|zsh)\s+-c\b", r"\bsu\s+(?:\S+\s+)?-c\b"],
         "exclude": [r"\b(docker\s+exec\b|(?:pnpm\s+(?:exec\s+)?)?wp-env\s+run\b)"],
-        "message": "Shell subshell execution (`bash -c`, `sh -c`) can bypass command-level safety checks. Write the code to a file and run it instead (e.g., `python3 script.py`), or use a non-shell interpreter directly (`python3 -c`, `node -e` are allowed). Confirm this is intentional.",
-        "examples": ["bash -c 'echo hello world'"],
+        "message": "Shell subshell execution (`bash -c`, `sh -c`, `su -c`) can bypass command-level safety checks. Write the code to a file and run it instead (e.g., `python3 script.py`), or use a non-shell interpreter directly (`python3 -c`, `node -e` are allowed). Confirm this is intentional.",
+        "examples": ["bash -c 'echo hello world'", "su -c 'rm -rf /tmp/old'"],
     },
 
     # --- Simple: single regex ---
@@ -1004,10 +1178,16 @@ RULES_BY_TOOL = build_registry()
 _mark("registry_built")
 
 
-def is_allowlisted(command):
-    """Check if command matches any allowlist pattern."""
-    for _rule_id, pattern in ALLOWLIST_PATTERNS:
-        if pattern.search(command):
+def is_allowlisted(command, disabled=None):
+    """Check if command matches any allowlist pattern.
+
+    Respects disabled rules — if a rule is disabled, its allowlist entries
+    are also skipped (consistent with main() behavior).
+    """
+    if disabled is None:
+        disabled = set()
+    for rule_id, pattern in ALLOWLIST_PATTERNS:
+        if rule_id not in disabled and pattern.search(command):
             return True
     return False
 
@@ -1085,7 +1265,7 @@ def main():
             if _is_self_protected_path(file_path):
                 block(_SELF_PROTECTION_MESSAGE)
     elif tool_name == "Bash" and command:
-        if _bash_targets_protected_path(command):
+        if _bash_targets_protected_path(command, tool_input):
             block(_SELF_PROTECTION_MESSAGE)
 
     # 1. Allowlist + Rules — single pass.
