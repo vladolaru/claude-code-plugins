@@ -5,6 +5,29 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-03-08
+
+### Added
+
+- Meta-test suite (`test_meta.py`) validates structural invariants between
+  `RULE_REGISTRY`, message catalogs, allowlist patterns, and scenario files.
+  Prevents drift at the fast test layer — 13 invariant checks.
+- Detection for `git push --delete` and `git push origin :refs/...` (remote
+  branch/tag deletion) under the `git_other_dangerous` ask-tier rule.
+- `scenarios/asked.json` — regression scenarios for all 16 ask-tier rules.
+- Evasion scenarios for `git_bare_push` (3), `inline_heredoc` (4),
+  `network_exfiltration` (2), and `zero_access_paths` (1) — 10 new
+  adversarial bypass tests.
+- `rule_id` field in `evasion.json` entries for per-rule coverage validation.
+- Expanded `allowed.json` with safe variants of terraform, docker, brew,
+  gh, database, git config, chmod, and interpreter commands.
+- Rule add/remove/rename templates and checklists in `CLAUDE.md`.
+
+### Changed
+
+- `TESTING.md` updated to document the meta-test layer (layer 6),
+  `asked.json` file, evasion `rule_id` field, and structural sync validation.
+
 ## [1.6.1] - 2026-03-08
 
 ### Changed

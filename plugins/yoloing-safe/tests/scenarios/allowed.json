@@ -34,5 +34,21 @@
   {"tool_name": "Bash", "tool_input": {"command": "find $TMPDIR/cache -name '*.log' -delete"}, "category": "scoped_find_delete"},
   {"tool_name": "Bash", "tool_input": {"command": "cat > \"$TMPDIR/clipboard-content.txt\" << 'CLIPBOARD_EOF'\nsome content with rm in it\nCLIPBOARD_EOF"}, "category": "writer_heredoc"},
   {"tool_name": "Bash", "tool_input": {"command": "docker exec -i mycontainer bash -c 'ls -la /var/www'"}, "category": "container_exec"},
-  {"tool_name": "Bash", "tool_input": {"command": "pnpm wp-env run wordpress -- bash -c 'wp option get siteurl'"}, "category": "container_exec"}
+  {"tool_name": "Bash", "tool_input": {"command": "pnpm wp-env run wordpress -- bash -c 'wp option get siteurl'"}, "category": "container_exec"},
+  {"tool_name": "Bash", "tool_input": {"command": "git reset --soft HEAD~1"}, "category": "safe_git_reset"},
+  {"tool_name": "Bash", "tool_input": {"command": "git stash list"}, "category": "safe_git_stash"},
+  {"tool_name": "Bash", "tool_input": {"command": "git config --local user.email 'dev@example.com'"}, "category": "safe_git_config"},
+  {"tool_name": "Bash", "tool_input": {"command": "git clean -nd"}, "category": "safe_git_clean"},
+  {"tool_name": "Bash", "tool_input": {"command": "terraform plan"}, "category": "safe_terraform"},
+  {"tool_name": "Bash", "tool_input": {"command": "terraform validate"}, "category": "safe_terraform"},
+  {"tool_name": "Bash", "tool_input": {"command": "gh secret list"}, "category": "safe_github_cicd"},
+  {"tool_name": "Bash", "tool_input": {"command": "docker ps"}, "category": "safe_docker"},
+  {"tool_name": "Bash", "tool_input": {"command": "docker images"}, "category": "safe_docker"},
+  {"tool_name": "Bash", "tool_input": {"command": "brew list"}, "category": "safe_brew"},
+  {"tool_name": "Bash", "tool_input": {"command": "brew info node"}, "category": "safe_brew"},
+  {"tool_name": "Bash", "tool_input": {"command": "sqlite3 app.db 'SELECT * FROM users WHERE id = 1;'"}, "category": "safe_database"},
+  {"tool_name": "Bash", "tool_input": {"command": "chmod 644 README.md"}, "category": "safe_chmod"},
+  {"tool_name": "Write", "tool_input": {"file_path": "/project/.npmrc", "content": "registry=https://registry.npmjs.org/"}, "category": "safe_write_target"},
+  {"tool_name": "Bash", "tool_input": {"command": "python3 -c 'print(1+1)'"}, "category": "safe_inline_interpreter"},
+  {"tool_name": "Bash", "tool_input": {"command": "node -e 'console.log(42)'"}, "category": "safe_inline_interpreter"}
 ]

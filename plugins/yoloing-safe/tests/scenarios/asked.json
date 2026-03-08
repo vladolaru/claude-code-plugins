@@ -1,0 +1,19 @@
+[
+  {"tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}, "category": "git_force_push"},
+  {"tool_name": "Bash", "tool_input": {"command": "git reset --hard HEAD~3"}, "category": "git_hard_reset"},
+  {"tool_name": "Bash", "tool_input": {"command": "git checkout -- src/app.js"}, "category": "git_discard_changes"},
+  {"tool_name": "Bash", "tool_input": {"command": "git stash drop stash@{0}"}, "category": "git_destroy_stash"},
+  {"tool_name": "Bash", "tool_input": {"command": "git filter-branch --force HEAD"}, "category": "git_history_rewrite"},
+  {"tool_name": "Bash", "tool_input": {"command": "git config --global user.email 'dev@example.com'"}, "category": "git_config_changes"},
+  {"tool_name": "Bash", "tool_input": {"command": "git branch -D feature/old-branch"}, "category": "git_other_dangerous"},
+  {"tool_name": "Bash", "tool_input": {"command": "git push origin --delete feature-branch"}, "category": "git_other_dangerous"},
+  {"tool_name": "Bash", "tool_input": {"command": "chmod 777 /var/www/html"}, "category": "permission_changes"},
+  {"tool_name": "Bash", "tool_input": {"command": "brew install libvips"}, "category": "brew_commands"},
+  {"tool_name": "Bash", "tool_input": {"command": "docker system prune -af"}, "category": "docker_destructive"},
+  {"tool_name": "Bash", "tool_input": {"command": "sqlite3 app.db 'DROP TABLE sessions;'"}, "category": "database_destructive"},
+  {"tool_name": "Bash", "tool_input": {"command": "terraform destroy -auto-approve"}, "category": "terraform_destructive"},
+  {"tool_name": "Bash", "tool_input": {"command": "gh secret delete DEPLOY_KEY"}, "category": "github_cicd_ops"},
+  {"tool_name": "Write", "tool_input": {"file_path": "~/.bashrc", "content": "export PATH=/opt/bin:$PATH"}, "category": "sensitive_write_target"},
+  {"tool_name": "Bash", "tool_input": {"command": "bash -c 'echo hello world'"}, "category": "inline_interpreter"},
+  {"tool_name": "Bash", "tool_input": {"command": "bash << 'EOF'\necho hello\nEOF"}, "category": "inline_heredoc"}
+]

@@ -101,5 +101,111 @@ make check
 |---|---|
 | `scripts/pre-tool-use-safety.py` (detection logic) | `pytest plugins/yoloing-safe/tests/ -v` |
 | `scripts/pre-tool-use-safety.py` (RULE_REGISTRY) | `pytest plugins/yoloing-safe/tests/ -v` then `cd tests/e2e && make generate` |
+| `RULE_REGISTRY` (add/remove/rename rule) | `pytest plugins/yoloing-safe/tests/test_meta.py -v` (catches desync immediately) |
+| `BLOCK_MESSAGES` / `ASK_MESSAGES` | `pytest plugins/yoloing-safe/tests/test_meta.py -v` |
+| `ALLOWLIST_PATTERNS` | `pytest plugins/yoloing-safe/tests/test_meta.py -v` |
 | `tests/scenarios/*.json` | `pytest plugins/yoloing-safe/tests/ -v` |
 | `tests/e2e/test-fixtures.json` (overrides) | `cd tests/e2e && make generate` |
+
+## Rule Templates
+
+### Adding a New Rule
+
+Copy-paste template. Replace `my_rule` with your rule_id (snake_case).
+
+**1. Add regex** (in "Pre-compiled Regex Patterns" section of `pre-tool-use-safety.py`):
+
+```python
+_RE_MY_RULE = re.compile(r"my_pattern")
+```
+
+**2. Add message** (in `BLOCK_MESSAGES` or `ASK_MESSAGES`):
+
+```python
+# Block tier:
+"my_rule": "Guidance message telling Claude what to do instead."
+# Ask tier:
+"my_rule": "Explanation of the risk. Confirm this is intentional."
+```
+
+**3. Add detection function** (in "Detection Functions" section):
+
+```python
+def detect_my_rule(command, tool_name, tool_input, config):
+    """One-line description of what this detects."""
+    if _RE_MY_RULE.search(command):
+        return True, BLOCK_MESSAGES["my_rule"]  # or ASK_MESSAGES
+    return False, None
+```
+
+**4. Add to RULE_REGISTRY** (maintain block-before-ask ordering):
+
+```python
+("my_rule", "block", detect_my_rule, {"Bash"},
+    ["example-dangerous-command"]),
+```
+
+**5. Add unit test class** (in `test_safety_hook.py`):
+
+Test class naming convention: `Test{PascalCaseRuleId}` (e.g., `TestMyRule`).
+
+```python
+class TestMyRule:
+    @pytest.mark.parametrize("command", [
+        "example that should trigger",
+    ])
+    def test_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, msg = hook.detect_my_rule(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is True
+        assert msg is not None
+
+    @pytest.mark.parametrize("command", [
+        "similar but safe command",
+    ])
+    def test_not_detected(self, hook, command):
+        cmd = hook.normalize_command(command)
+        detected, _ = hook.detect_my_rule(cmd, "Bash", {}, hook.DEFAULTS)
+        assert detected is False
+```
+
+**6. Add scenario entries:**
+
+- Block-tier: add to `scenarios/blocked.json`
+- Ask-tier: add to `scenarios/asked.json`
+- Add safe variant to `scenarios/allowed.json`
+- Block-tier rules: add at least one evasion to `scenarios/evasion.json` (with `rule_id` field)
+
+**7. Run meta-tests to verify sync:**
+
+```bash
+pytest plugins/yoloing-safe/tests/test_meta.py -v
+```
+
+If meta-tests pass, all structural invariants are satisfied.
+
+### Removing a Rule
+
+1. Remove the tuple from `RULE_REGISTRY`
+2. Remove the detection function (`detect_xxx`)
+3. Remove associated `_RE_` regex patterns (verify not shared with other rules)
+4. Remove the message from `BLOCK_MESSAGES` or `ASK_MESSAGES`
+5. Remove any `ALLOWLIST_PATTERNS` entries with this rule_id
+6. Remove scenarios from `blocked.json`, `asked.json`, `allowed.json`, `evasion.json`
+7. Remove the unit test class from `test_safety_hook.py`
+8. Remove any override from `tests/e2e/test-fixtures.json`
+9. Run meta-tests: `pytest plugins/yoloing-safe/tests/test_meta.py -v`
+10. Regenerate e2e: `cd tests/e2e && make generate`
+
+### Renaming a Rule
+
+Rename in ALL of these locations (meta-tests will catch any you miss):
+
+1. `RULE_REGISTRY` tuple — first element
+2. `BLOCK_MESSAGES` or `ASK_MESSAGES` — dict key
+3. `ALLOWLIST_PATTERNS` — rule_id field (if applicable)
+4. Detection function return — message dict key reference
+5. `blocked.json` / `asked.json` / `allowed.json` — `category` field
+6. `evasion.json` — `rule_id` field
+7. `test-fixtures.json` — override key (if applicable)
+8. Unit test class docstring (if it references the rule_id)
