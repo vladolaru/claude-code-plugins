@@ -5,6 +5,17 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-03-08
+
+### Fixed
+- **Security:** Git global options (`-C`, `-c`, `--git-dir`, `--work-tree`, `--no-pager`, etc.) between `git` and the subcommand bypassed all anchored git rules — added `_strip_git_global_opts()` normalization
+- **Security:** npm global options (`--registry`, `--prefix`, etc.) before the subcommand bypassed `package_publishing` detection — added `_strip_npm_global_opts()` normalization
+- **Security:** Pipe (`|`) and background (`&`) operators were not treated as compound command separators, allowing `echo ok | git push` to bypass detection — expanded chain splitting regex
+- **Behavior:** `echo .env` and `echo ~/.ssh/` incorrectly triggered credential_access and zero_access_paths rules — added non-file-command exclusion for `echo`, `printf`, `export`, `test`, and other non-file-accessing builtins
+
+### Changed
+- Removed unused regex constants (`_RE_RM`, `_RE_RECURSIVE_FLAG`, `_RE_FORCE_DELETE_FLAG`)
+
 ## [1.8.2] - 2026-03-08
 
 ### Fixed
