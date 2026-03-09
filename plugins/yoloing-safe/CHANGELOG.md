@@ -5,6 +5,14 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-03-09
+
+### Changed
+- Refactored the hook implementation into an internal `scripts/yoloing_safe/` package, splitting config, shell parsing, path handling, registry assembly, runtime orchestration, and domain rule logic while keeping `scripts/pre-tool-use-safety.py` as the stable runtime entrypoint
+- Reworked custom rule detectors so rule messages are attached by the registry layer instead of being looked up directly from the global `RULES` dict, reducing cross-module coupling and drift risk
+- Split the test suite into domain and integration entrypoints (`test_core.py`, `test_rules_*.py`, `test_integration.py`, `test_scenarios.py`) while preserving the existing assertions through a non-collected legacy backing module
+- Updated maintainer and testing documentation to describe the new assembled-rule architecture and split test layout
+
 ## [1.10.0] - 2026-03-09
 
 ### Fixed
@@ -93,7 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Short `-d` flag deletion (`git push origin -d branch`) now detected — previously only `--delete` was matched
 
 ### Added
-- Meta-test: every rule_id has a corresponding unit test class in `test_safety_hook.py`
+- Meta-test: every rule_id has a corresponding unit test class in the hook test suite
 - Meta-test: every rule_id has safe-variant coverage in `allowed.json`
 - Meta-test: critical ask-tier rules require evasion scenario coverage
 - 10 evasion scenarios for ask-tier rules (git_force_push, git_hard_reset, permission_changes, docker_destructive, database_destructive)

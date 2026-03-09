@@ -19,6 +19,19 @@ A `PreToolUse` hook evaluates every Bash, Read, Write, and Edit tool call agains
 
 The hook auto-wires on install via `hooks.json`. Zero configuration needed — it just works.
 
+## Architecture
+
+The runtime entrypoint stays at `scripts/pre-tool-use-safety.py`, but the implementation now lives in `scripts/yoloing_safe/`:
+
+- `config.py` — defaults, config loading, self-protection constants
+- `shell.py` — command normalization, tokenization, heredoc stripping
+- `paths.py` — path extraction and sensitive target handling
+- `registry.py` — declarative detector compilation and custom detector wrapping
+- `runtime.py` — allow/block/ask/allow flow
+- `rules/` — domain rule modules plus the assembled ordered `RULES` registry
+
+This keeps the hook path stable for Claude Code while making rule maintenance less error-prone.
+
 ## What Gets Caught
 
 ### Blocked (hard stop)
