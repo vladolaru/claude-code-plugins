@@ -98,6 +98,10 @@ All rules in the block and ask tiers can be disabled except **self-protection** 
 
 No dependencies — Python 3 stdlib only.
 
+## Alternatives
+
+If you want a different style of safety layer, there are other projects in this space. One worth evaluating is [destructive_command_guard](https://github.com/Dicklesworthstone/destructive_command_guard), another AI-agent command safety hook with a broader cross-agent focus. `yoloing-safe` is intentionally narrower: a Claude Code plugin that installs as a `PreToolUse` hook and guards Bash plus Claude Code `Read`/`Write`/`Edit` operations with allowlist, block, and ask tiers.
+
 ## Design Decisions
 
 A few deliberate choices worth calling out:
