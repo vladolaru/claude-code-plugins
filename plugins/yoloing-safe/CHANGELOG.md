@@ -5,6 +5,16 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] - 2026-03-08
+
+### Fixed
+- **Security:** newline-separated Bash commands now participate in compound-command splitting, closing allowlist-prefix bypasses like `git checkout -b feature` on one line followed by `rm -rf /` on the next
+- **Security:** self-protection now blocks additional Bash-side mutations of hook files, including `rm`, `ln -s`, `touch`, `chmod`, and `chown`, not just redirects and copy-style writes
+- **Security:** `network_exfiltration` now catches additional `curl` file-post forms including `--data-binary`, `--data-raw`, and `--data=@file`
+- **Behavior:** `permission_changes` now asks on common variants such as `chmod -R 777`, `chmod 0777`, and `chown --recursive`
+- **Behavior:** Bash credential/protected-path detection now extracts likely file arguments instead of scanning the whole command string, eliminating false positives for search commands like `grep -R '.env' README.md`
+- **Behavior:** `sensitive_write_target` now covers Bash writes and destructive mutations to shell init files, git hooks, and home-directory package-manager config, not just Write/Edit tools
+
 ## [1.9.0] - 2026-03-08
 
 ### Fixed

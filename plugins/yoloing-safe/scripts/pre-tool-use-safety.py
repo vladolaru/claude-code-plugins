@@ -103,20 +103,27 @@ def _is_self_protected_path(file_path):
     return False
 
 
-_SHELL_SEPARATORS = {"&&", "||", ";", "|", "&"}
+_SHELL_SEPARATORS = {"&&", "||", ";", "|", "&", "\n"}
 _WRAPPER_COMMANDS = {
     "command", "env", "sudo", "nice", "nohup", "time", "exec", "strace", "ionice", "taskset"
 }
 _REDIRECT_TOKENS = {">", ">>", "1>", "1>>", "2>", "2>>"}
 _RE_INLINE_REDIRECT = re.compile(r"^(?:[12]?>{1,2}|>{1,2})(.+)$")
+_INPUT_REDIRECT_TOKENS = {"<", "0<"}
+_RE_INLINE_INPUT_REDIRECT = re.compile(r"^(?:0?<)(?!<)(.+)$")
 _RE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 # Interpreter-based file writes (python3 -c, node -e, ruby -e, perl -e)
 _RE_INTERPRETER_WRITE = re.compile(r"\b(python3?|node|ruby|perl)\b.*(-c\b|-e\b)")
+_GREP_LIKE_COMMANDS = {"grep", "egrep", "fgrep", "rg", "ag", "ack"}
+_SED_SCRIPT_OPTIONS = {"-e", "-f", "--expression", "--file"}
+_AWK_SCRIPT_OPTIONS = {"-f", "--file"}
+_FIND_PRE_EXPR_OPTIONS = {"-H", "-L", "-P"}
 
 
 def _tokenize_shell(command):
     """Tokenize shell command with operator tokens preserved."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="|&;\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     lexer.commenters = ""
     return list(lexer)
@@ -180,6 +187,23 @@ def _collect_redirection_targets(segment):
     return targets
 
 
+def _collect_input_redirection_sources(segment):
+    """Collect shell input-redirection sources from one tokenized segment."""
+    sources = []
+    for i, tok in enumerate(segment):
+        if tok in _INPUT_REDIRECT_TOKENS and i + 1 < len(segment):
+            source = segment[i + 1]
+            if source and not source.startswith("&"):
+                sources.append(source)
+            continue
+        inline = _RE_INLINE_INPUT_REDIRECT.match(tok)
+        if inline:
+            source = inline.group(1)
+            if source and not source.startswith("&"):
+                sources.append(source)
+    return sources
+
+
 def _collect_positional_args(args):
     """Collect command positional args, skipping options and `--` marker."""
     positional = []
@@ -195,24 +219,52 @@ def _collect_positional_args(args):
 
 
 def _collect_write_targets_for_segment(segment):
-    """Collect likely write targets from a command segment."""
+    """Collect likely content-write or destructive file targets from a segment."""
     targets = _collect_redirection_targets(segment)
     cmd, args = _segment_command_and_args(segment)
     if not cmd:
         return targets
 
     positional = _collect_positional_args(args)
-    if cmd in {"cp", "mv", "install", "rsync"} and positional:
+    if cmd in {"cp", "install", "rsync", "ln"} and positional:
         targets.append(positional[-1])
+    elif cmd == "mv" and positional:
+        targets.extend(positional)
     elif cmd == "tee" and positional:
         targets.extend(positional)
     elif cmd == "sed":
-        has_inplace = any(arg == "-i" or arg.startswith("-i") for arg in args)
+        has_inplace = any(
+            arg == "-i"
+            or arg.startswith("-i")
+            or arg == "--in-place"
+            or arg.startswith("--in-place=")
+            for arg in args
+        )
         if has_inplace and len(positional) >= 2:
             # positional[0] is usually sed expression; rest are target files
             targets.extend(positional[1:])
+    elif cmd in {"touch", "truncate", "rm", "unlink", "rmdir"}:
+        targets.extend(positional)
 
-    return targets
+    return _dedupe(targets)
+
+
+def _collect_protected_mutation_targets_for_segment(segment):
+    """Collect targets that would mutate or disable protected infrastructure."""
+    targets = list(_collect_write_targets_for_segment(segment))
+    cmd, args = _segment_command_and_args(segment)
+    if not cmd:
+        return targets
+
+    positional = _collect_positional_args(args)
+    if cmd == "mkdir":
+        targets.extend(positional)
+    elif cmd == "chmod" and len(positional) >= 2:
+        targets.extend(positional[1:])
+    elif cmd in {"chown", "chgrp"} and len(positional) >= 2:
+        targets.extend(positional[1:])
+
+    return _dedupe(targets)
 
 
 def _update_cwd_from_cd(segment, cwd):
@@ -222,6 +274,61 @@ def _update_cwd_from_cd(segment, cwd):
         return cwd
     dest = _resolve_candidate_path(args[0], cwd)
     return dest or cwd
+
+
+def _dedupe(items):
+    """Dedupe a sequence while preserving order."""
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _base_cwd_for_bash(tool_input):
+    """Resolve the effective cwd for Bash path handling."""
+    base_cwd = os.getcwd()
+    if isinstance(tool_input, dict):
+        maybe_cwd = tool_input.get("cwd")
+        if isinstance(maybe_cwd, str) and maybe_cwd:
+            base_cwd = os.path.expanduser(maybe_cwd)
+    return os.path.realpath(base_cwd)
+
+
+def _collect_bash_targets(command, tool_input, target_collector):
+    """Collect raw + resolved Bash command targets using the provided collector."""
+    try:
+        tokens = _tokenize_shell(command)
+    except ValueError:
+        tokens = []
+
+    cwd = _base_cwd_for_bash(tool_input)
+    targets = []
+    for segment in _split_shell_segments(tokens):
+        for target in target_collector(segment):
+            targets.append((target, _resolve_candidate_path(target, cwd)))
+        cwd = _update_cwd_from_cd(segment, cwd)
+    return targets
+
+
+def _split_bash_segments(command):
+    """Split a Bash command into normalized segments using shell-aware tokenization."""
+    if not command:
+        return []
+    try:
+        tokens = _tokenize_shell(command)
+    except ValueError:
+        command = normalize_command(command)
+        return [command] if command else []
+
+    segments = []
+    for segment in _split_shell_segments(tokens):
+        seg = normalize_command(" ".join(segment).strip())
+        if seg:
+            segments.append(seg)
+    return segments
 
 
 def _command_mentions_protected_path(command):
@@ -240,24 +347,13 @@ def _command_mentions_protected_path(command):
 
 def _bash_targets_protected_path(command, tool_input):
     """Check if Bash command writes to a self-protected path."""
-    base_cwd = os.getcwd()
-    if isinstance(tool_input, dict):
-        maybe_cwd = tool_input.get("cwd")
-        if isinstance(maybe_cwd, str) and maybe_cwd:
-            base_cwd = os.path.expanduser(maybe_cwd)
-
-    try:
-        tokens = _tokenize_shell(command)
-    except ValueError:
-        tokens = []
-
-    cwd = os.path.realpath(base_cwd)
-    for segment in _split_shell_segments(tokens):
-        for target in _collect_write_targets_for_segment(segment):
-            resolved = _resolve_candidate_path(target, cwd)
-            if resolved and _is_path_within_self_protected(resolved):
-                return True
-        cwd = _update_cwd_from_cd(segment, cwd)
+    for _target, resolved in _collect_bash_targets(
+        command,
+        tool_input,
+        _collect_protected_mutation_targets_for_segment,
+    ):
+        if resolved and _is_path_within_self_protected(resolved):
+            return True
 
     # Keep strict guard for interpreter one-liners that include protected paths.
     if _RE_INTERPRETER_WRITE.search(command) and _command_mentions_protected_path(command):
@@ -425,11 +521,13 @@ def normalize_command(cmd):
     while prev != normalized:
         prev = normalized
         normalized = _WRAPPER_RE.sub("", normalized)
-    # Collapse whitespace
+    # Collapse horizontal whitespace but preserve newlines as command separators.
     normalized = _RE_WHITESPACE.sub(" ", normalized).strip()
-    # Strip git global options to expose subcommands for anchored rules
-    normalized = _strip_git_global_opts(normalized)
-    normalized = _strip_npm_global_opts(normalized)
+    # Strip git/npm global options only for single segments. Compound commands
+    # are normalized segment-by-segment later, after shell-aware splitting.
+    if not _RE_CHAIN_OPS.search(normalized):
+        normalized = _strip_git_global_opts(normalized)
+        normalized = _strip_npm_global_opts(normalized)
     return normalized
 
 
@@ -465,11 +563,10 @@ ALLOWLIST_PATTERNS = [
 # ---------------------------------------------------------------------------
 
 # Shared patterns (used by multiple detection functions)
-_RE_CHAIN_OPS = re.compile(r"(&&|\|\||[|;&])")
-_RE_CHAIN_SPLIT = re.compile(r"&&|\|\||[|;&]")
+_RE_CHAIN_OPS = re.compile(r"(&&|\|\||[|;&]|\n)")
 
 # Command normalization
-_RE_WHITESPACE = re.compile(r"\s+")
+_RE_WHITESPACE = re.compile(r"[^\S\n]+")
 
 # ---------------------------------------------------------------------------
 # Heredoc Stripping
@@ -513,8 +610,22 @@ _RE_XARGS_RM = re.compile(r"\bxargs\s+rm\b")
 _RE_EVAL_RM = re.compile(r"\beval\b.*\brm\b")
 
 # Network exfiltration
-_RE_CURL_POST_DATA = re.compile(r"\bcurl\b.*(-d\s+@|--data\s+@|-X\s+POST)")
-_RE_CURL_UPLOAD = re.compile(r"\bcurl\b.*(-F\s+|--form\s+|-T\s+|--upload-file\s+)")
+_RE_CURL_POST_DATA = re.compile(
+    r"\bcurl\b.*("
+    r"-d\s+@|"
+    r"--data(?:-ascii|-binary|-raw)?(?:\s+|=)@|"
+    r"--json(?:\s+|=)@|"
+    r"-X\s+POST"
+    r")"
+)
+_RE_CURL_UPLOAD = re.compile(
+    r"\bcurl\b.*("
+    r"-F\s+|"
+    r"--form(?:\s+|=)|"
+    r"-T\s+|"
+    r"--upload-file(?:\s+|=)"
+    r")"
+)
 _RE_WGET_POST_FILE = re.compile(r"\bwget\b.*--post-file")
 _RE_PIPE_TO_NC = re.compile(r"\|\s*nc\b")
 _RE_NC_BARE = re.compile(r"^nc\b")
@@ -561,10 +672,6 @@ _RE_GIT_PUSH_COLON_REF = re.compile(r"^git push\b.*\s:[^-\s]")
 _RE_CHMOD_PLUS_X = re.compile(r"^chmod \+x\b")
 _RE_SUDO_CHMOD = re.compile(r"\bsudo\s+chmod\b")
 _RE_CHMOD = re.compile(r"\bchmod\b")
-_RE_CHMOD_777 = re.compile(r"\bchmod\s+777\b")
-_RE_CHMOD_SETUID_OCTAL = re.compile(r"\bchmod\s+[4267]\d{3}\b")
-_RE_CHMOD_SETUID_SYMBOLIC = re.compile(r"\bchmod\s+[ugo]*\+s\b")
-_RE_CHOWN_RECURSIVE = re.compile(r"\bchown\s+-[a-zA-Z]*R")
 
 
 # Database destructive
@@ -591,6 +698,169 @@ _NON_FILE_COMMANDS = frozenset({
     "declare", "local", "readonly", "return", "exit",
     "break", "continue", "shift", "trap", "read",
 })
+
+_RE_REMOTE_PATH = re.compile(r"^\S+@\S+:\S+$")
+
+
+def _token_matches_credential_pattern(token, config):
+    """Return True when a single token looks like a credential file/path."""
+    cred_patterns = config.get("credential_patterns", DEFAULTS["credential_patterns"])
+    return any(re.search(cred_pat, token, re.IGNORECASE) for cred_pat in cred_patterns)
+
+
+def _extract_path_candidates_from_arg(arg, config, include_credential_names=False):
+    """Extract likely filesystem path candidates from one shell arg token."""
+    if not arg:
+        return []
+    if arg.startswith(("http://", "https://", "file://")):
+        return []
+    if _RE_REMOTE_PATH.match(arg):
+        return []
+
+    def _candidate_from_value(value):
+        if not value:
+            return []
+        if value.startswith(("http://", "https://", "file://")):
+            return []
+        if _RE_REMOTE_PATH.match(value):
+            return []
+        if value.startswith("@") and len(value) > 1:
+            value = value[1:]
+        if value.startswith(("/", "~", "./", "../", "$HOME/", "${HOME}/", "$TMPDIR/", "$TMP/", ".")):
+            return [value]
+        if include_credential_names and _token_matches_credential_pattern(value, config):
+            return [value]
+        return []
+
+    candidates = _candidate_from_value(arg)
+    if "=" in arg:
+        candidates.extend(_candidate_from_value(arg.split("=", 1)[1]))
+    return _dedupe(candidates)
+
+
+def _collect_find_roots(args, config):
+    """Collect find root paths without treating patterns like -name '.env' as files."""
+    roots = []
+    i = 0
+    while i < len(args) and (
+        args[i] in _FIND_PRE_EXPR_OPTIONS
+        or args[i].startswith("-D")
+        or args[i].startswith("-O")
+    ):
+        i += 1
+
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            i += 1
+            continue
+        if arg.startswith("-") or arg in {"(", ")", "!", "-o", "-a", ","}:
+            break
+        roots.extend(_extract_path_candidates_from_arg(arg, config))
+        i += 1
+
+    return roots
+
+
+def _collect_bash_path_candidates(command, config, include_credential_names=False):
+    """Collect likely Bash file/path arguments without treating search patterns as files."""
+    try:
+        tokens = _tokenize_shell(command)
+    except ValueError:
+        tokens = []
+
+    candidates = []
+    for segment in _split_shell_segments(tokens):
+        candidates.extend(_collect_input_redirection_sources(segment))
+        cmd, args = _segment_command_and_args(segment)
+        if not cmd or cmd in _NON_FILE_COMMANDS:
+            continue
+
+        positional = _collect_positional_args(args)
+        skip_first_positional = False
+        if cmd in _GREP_LIKE_COMMANDS:
+            has_explicit_pattern = any(
+                arg in {"-e", "--regexp", "-f", "--file"}
+                or arg.startswith("--regexp=")
+                or arg.startswith("--file=")
+                for arg in args
+            )
+            skip_first_positional = bool(positional) and not has_explicit_pattern
+        elif cmd == "sed":
+            has_explicit_script = any(
+                arg in _SED_SCRIPT_OPTIONS
+                or arg.startswith("--expression=")
+                or arg.startswith("--file=")
+                for arg in args
+            )
+            has_inplace = any(
+                arg == "-i"
+                or arg.startswith("-i")
+                or arg == "--in-place"
+                or arg.startswith("--in-place=")
+                for arg in args
+            )
+            skip_first_positional = bool(positional) and not has_explicit_script and not has_inplace
+        elif cmd == "awk":
+            has_explicit_program = any(
+                arg in _AWK_SCRIPT_OPTIONS or arg.startswith("--file=")
+                for arg in args
+            )
+            skip_first_positional = bool(positional) and not has_explicit_program
+        elif cmd == "find":
+            candidates.extend(_collect_find_roots(args, config))
+            continue
+
+        skipped = False
+        for arg in args:
+            if skip_first_positional and not skipped and positional and arg == positional[0]:
+                skipped = True
+                continue
+            candidates.extend(
+                _extract_path_candidates_from_arg(
+                    arg,
+                    config,
+                    include_credential_names=include_credential_names,
+                )
+            )
+
+    return _dedupe(candidates)
+
+
+def _candidate_sensitive_paths(file_path):
+    """Yield path variants for sensitive-write matching."""
+    expanded = os.path.expanduser(file_path)
+    candidates = [expanded]
+    try:
+        real = os.path.realpath(expanded)
+        if real not in candidates:
+            candidates.append(real)
+    except (OSError, ValueError):
+        pass
+    return candidates
+
+
+def _is_sensitive_write_target_path(file_path):
+    """Check if a path should trigger the sensitive_write_target ask flow."""
+    shell_init = {
+        ".bashrc", ".bash_profile", ".bash_login", ".profile",
+        ".zshrc", ".zprofile", ".zshenv", ".zlogin",
+    }
+    sensitive_dotfiles = {".gitconfig", ".npmrc", ".yarnrc"}
+    hooks_dir = f"{os.sep}.git{os.sep}hooks"
+    home = os.path.expanduser("~")
+
+    for candidate in _candidate_sensitive_paths(file_path):
+        normalized_path = candidate.rstrip(os.sep)
+        basename = os.path.basename(normalized_path)
+        if basename in shell_init:
+            return True
+        if hooks_dir + os.sep in normalized_path or normalized_path.endswith(hooks_dir):
+            return True
+        if basename in sensitive_dotfiles and os.path.dirname(normalized_path) == home:
+            return True
+
+    return False
 
 
 def _is_non_file_command(command):
@@ -688,26 +958,29 @@ def detect_credential_access(command, tool_name, tool_input, config):
     cred_patterns = config.get("credential_patterns", DEFAULTS["credential_patterns"])
     safe_patterns = config.get("credential_safe_patterns", DEFAULTS["credential_safe_patterns"])
 
-    # Get the file path to check
-    file_path = ""
+    paths_to_check = []
     if tool_name in ("Read", "Edit", "Write"):
         file_path = tool_input.get("file_path", "")
+        if file_path:
+            paths_to_check.append(file_path)
     elif tool_name == "Bash" and command:
-        # Skip commands that don't access their arguments as files
-        if not _is_non_file_command(command):
-            file_path = command
+        paths_to_check.extend(
+            _collect_bash_path_candidates(
+                command,
+                config,
+                include_credential_names=True,
+            )
+        )
 
-    if not file_path:
+    if not paths_to_check:
         return False, None
 
-    # Check safe patterns first (case-insensitive for case-insensitive filesystems)
-    for safe_pat in safe_patterns:
-        if re.search(safe_pat, file_path, re.IGNORECASE):
-            return False, None
-
-    # Check credential patterns (case-insensitive for case-insensitive filesystems)
-    for cred_pat in cred_patterns:
-        if re.search(cred_pat, file_path, re.IGNORECASE):
+    for file_path in paths_to_check:
+        # Check safe patterns first (case-insensitive for case-insensitive filesystems)
+        if any(re.search(safe_pat, file_path, re.IGNORECASE) for safe_pat in safe_patterns):
+            continue
+        # Check credential patterns (case-insensitive for case-insensitive filesystems)
+        if any(re.search(cred_pat, file_path, re.IGNORECASE) for cred_pat in cred_patterns):
             return True, RULES["credential_access"]["message"]
 
     return False, None
@@ -718,9 +991,7 @@ def detect_package_publishing(command, tool_name, tool_input, config):
     # For compound commands, check each segment independently
     # (prevents "npm publish --dry-run && npm publish" from being allowed
     #  because --dry-run appears in the first segment)
-    segments = [command]
-    if _RE_CHAIN_OPS.search(command):
-        segments = [s.strip() for s in _RE_CHAIN_SPLIT.split(command)]
+    segments = _split_bash_segments(command) or [command]
     for seg in segments:
         # npm publish (without --dry-run in this segment)
         if _RE_NPM_PUBLISH.search(seg) and not _RE_DRY_RUN.search(seg):
@@ -770,8 +1041,7 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
         if fp:
             paths_to_check.append(fp)
     if tool_name == "Bash" and command:
-        if not _is_non_file_command(command):
-            paths_to_check.append(command)
+        paths_to_check.extend(_collect_bash_path_candidates(command, config))
 
     for check_path in paths_to_check:
         check_lower = check_path.lower()
@@ -865,20 +1135,26 @@ def detect_permission_changes(command, tool_name, tool_input, config):
     # the pattern stays for defense in depth if normalization changes)
     if _RE_SUDO_CHMOD.search(command):
         return True, RULES["permission_changes"]["message"]
-    # chmod 777 or setuid/setgid bits (4-digit octal starting with 4/2/6)
-    if _RE_CHMOD.search(command):
-        # 777 — world-writable
-        if _RE_CHMOD_777.search(command):
+    try:
+        tokens = _tokenize_shell(command)
+    except ValueError:
+        tokens = []
+    for segment in _split_shell_segments(tokens):
+        cmd, args = _segment_command_and_args(segment)
+        positional = _collect_positional_args(args)
+        if cmd == "chmod" and positional:
+            mode = positional[0]
+            if re.fullmatch(r"0?777", mode):
+                return True, RULES["permission_changes"]["message"]
+            if re.fullmatch(r"0?[4267]\d{3}", mode):
+                return True, RULES["permission_changes"]["message"]
+            if re.fullmatch(r"[ugo]*\+s", mode):
+                return True, RULES["permission_changes"]["message"]
+        if cmd in {"chown", "chgrp"} and any(
+            arg == "--recursive" or (arg.startswith("-") and "R" in arg[1:])
+            for arg in args
+        ):
             return True, RULES["permission_changes"]["message"]
-        # 4-digit octal with setuid (4), setgid (2), or both (6) prefix
-        if _RE_CHMOD_SETUID_OCTAL.search(command):
-            return True, RULES["permission_changes"]["message"]
-        # Symbolic setuid/setgid
-        if _RE_CHMOD_SETUID_SYMBOLIC.search(command):
-            return True, RULES["permission_changes"]["message"]
-    # chown -R (recursive ownership change)
-    if _RE_CHOWN_RECURSIVE.search(command):
-        return True, RULES["permission_changes"]["message"]
     return False, None
 
 
@@ -905,31 +1181,21 @@ def detect_database_destructive(command, tool_name, tool_input, config):
 
 def detect_sensitive_write_target(command, tool_name, tool_input, config):
     """Detect Write/Edit to shell init files, git hooks, or package config."""
-    if tool_name not in ("Write", "Edit"):
-        return False, None
-    file_path = tool_input.get("file_path", "")
-    if not file_path:
-        return False, None
-    # Normalize the path for matching
-    normalized_path = os.path.expanduser(file_path)
-    basename = os.path.basename(normalized_path)
-    # Shell init files
-    shell_init = {
-        ".bashrc", ".bash_profile", ".bash_login", ".profile",
-        ".zshrc", ".zprofile", ".zshenv", ".zlogin",
-    }
-    if basename in shell_init:
-        return True, RULES["sensitive_write_target"]["message"]
-    # Git hooks directory
-    if "/.git/hooks/" in normalized_path or normalized_path.endswith("/.git/hooks"):
-        return True, RULES["sensitive_write_target"]["message"]
-    # Package manager / tool config — only in home directory
-    # (project-level .npmrc/.yarnrc/.gitconfig are routine, not risky)
-    sensitive_dotfiles = {".gitconfig", ".npmrc", ".yarnrc"}
-    if basename in sensitive_dotfiles:
-        home = os.path.expanduser("~")
-        parent = os.path.dirname(normalized_path)
-        if parent == home:
+    paths_to_check = []
+    if tool_name in ("Write", "Edit"):
+        file_path = tool_input.get("file_path", "")
+        if file_path:
+            paths_to_check.append(file_path)
+    elif tool_name == "Bash" and command:
+        for raw_path, resolved_path in _collect_bash_targets(
+            command,
+            tool_input,
+            _collect_write_targets_for_segment,
+        ):
+            paths_to_check.append(resolved_path or raw_path)
+
+    for file_path in paths_to_check:
+        if _is_sensitive_write_target_path(file_path):
             return True, RULES["sensitive_write_target"]["message"]
     return False, None
 
@@ -1198,7 +1464,7 @@ RULES = {
     # --- Complex: tool_input inspection + basename matching ---
     "sensitive_write_target": {
         "tier": "ask",
-        "tools": {"Write", "Edit"},
+        "tools": {"Bash", "Write", "Edit"},
         "detect": detect_sensitive_write_target,
         "message": "This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
         "examples": ["~/.bashrc"],
@@ -1381,6 +1647,7 @@ def main():
 
     # Extract command for Bash tool
     command = ""
+    bash_segments = []
     if tool_name == "Bash":
         raw_command = tool_input.get("command", "")
         # Strip writer heredoc bodies (cat >, tee) BEFORE normalization so
@@ -1388,6 +1655,7 @@ def main():
         # heredocs (bash <<, python3 <<) are NOT stripped.
         raw_command = strip_writer_heredocs(raw_command)
         command = normalize_command(raw_command)
+        bash_segments = _split_bash_segments(command)
 
     # Self-protection: prevent modification of hook config or plugin files.
     # NOT configurable — cannot be disabled via disable_rules.
@@ -1403,9 +1671,9 @@ def main():
 
     # 1. Allowlist + Rules — single pass.
     #    Simple commands: check allowlist, then evaluate against rules.
-    #    Compound commands: split into segments, check each segment
-    #    against allowlist then rules.
-    is_compound = bool(command and _RE_CHAIN_OPS.search(command))
+    #    Compound commands: shell-aware split into segments, check each
+    #    segment against allowlist then rules.
+    is_compound = tool_name == "Bash" and len(bash_segments) > 1
 
     if command and not is_compound:
         # Simple command: allowlist check
@@ -1419,10 +1687,7 @@ def main():
 
     if is_compound:
         # Compound command: per-segment evaluation
-        for seg in _RE_CHAIN_SPLIT.split(command):
-            seg = normalize_command(seg.strip())
-            if not seg:
-                continue
+        for seg in bash_segments:
             # Per-segment allowlist
             seg_allowed = False
             for rule_id, pattern in ALLOWLIST_PATTERNS:
