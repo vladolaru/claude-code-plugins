@@ -580,6 +580,22 @@ class TestZeroAccessPaths:
         detected, _ = get_detect(hook, "zero_access_paths")(cmd, tool_name, tool_input, hook.DEFAULTS)
         assert detected is False
 
+    def test_path_containing_ssh_substring_not_detected(self, hook):
+        """A project path that contains '.ssh' as substring should not trigger."""
+        config = hook.load_config()
+        detected, _ = get_detect(hook, "zero_access_paths")(
+            "", "Read", {"file_path": "/workspace/project/.ssh-keys/readme.txt"}, config
+        )
+        assert detected is False
+
+    def test_path_with_literal_tilde_not_detected(self, hook):
+        """A path with literal ~ in a non-home context should not trigger."""
+        config = hook.load_config()
+        detected, _ = get_detect(hook, "zero_access_paths")(
+            "", "Read", {"file_path": "/data/backups/~/.ssh/old_key"}, config
+        )
+        assert detected is False
+
     def test_bash_ls_local_safe(self, hook):
         """Bash ls ~/.local should not be detected."""
         cmd = hook.normalize_command("ls ~/.local")

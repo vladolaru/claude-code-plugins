@@ -1263,10 +1263,26 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
         paths_to_check.extend(_collect_bash_path_candidates(command, config))
 
     for check_path in paths_to_check:
-        check_lower = check_path.lower()
+        # Resolve to absolute path for prefix matching
+        try:
+            resolved = os.path.realpath(os.path.expanduser(check_path))
+        except (OSError, ValueError):
+            resolved = None
+
         for zero_path in zero_paths:
-            if zero_path.lower() in check_lower:
-                return True, RULES["zero_access_paths"]["message"]
+            # For absolute/expanded paths: use prefix matching on resolved path
+            expanded_zero = os.path.expanduser(zero_path)
+            if os.path.isabs(expanded_zero):
+                if resolved:
+                    norm_zero = expanded_zero.rstrip("/").lower()
+                    norm_resolved = resolved.lower()
+                    if norm_resolved == norm_zero or norm_resolved.startswith(norm_zero + "/"):
+                        return True, RULES["zero_access_paths"]["message"]
+            else:
+                # For shell-variable forms ($HOME/.ssh/) and tilde forms:
+                # substring match on the original (unexpanded) path
+                if zero_path.lower() in check_path.lower():
+                    return True, RULES["zero_access_paths"]["message"]
 
     return False, None
 
