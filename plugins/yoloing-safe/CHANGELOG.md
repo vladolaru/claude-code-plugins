@@ -5,6 +5,16 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-03-09
+
+### Changed
+- **E2E harness:** Docker image now copies the full `yoloing_safe/` package alongside the shim, making the e2e container match the real runtime layout
+- **Test suite:** Eliminated the `_legacy_safety_hook_tests.py` backing module — all test classes now live directly in their split entrypoints (`test_core.py`, `test_rules_*.py`, `test_integration.py`, `test_scenarios.py`)
+- **Rule assembly:** Domain modules now export ordered `RULE_SPECS` lists of `(rule_id, spec)` tuples; the aggregator concatenates them with a two-pass assembly (block first, ask second) instead of manually re-listing every rule ID
+- **Detector interface:** Custom detectors now take an `EvalContext` object with cached `whole_command` and `segments` properties, computed at most once per evaluation pass regardless of how many detectors run
+- **Rule builders:** New `block_rule()` and `ask_rule()` helpers in `registry.py` replace raw dict literals, enforcing required fields and reducing boilerplate in domain modules
+- Updated `AGENTS.md` to reflect the new architecture: `EvalContext`, rule builders, domain module pattern, and simplified rule workflows
+
 ## [1.10.1] - 2026-03-09
 
 ### Changed
