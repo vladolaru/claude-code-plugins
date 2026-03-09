@@ -68,5 +68,6 @@
   {"tool_name": "Bash", "tool_input": {"command": "echo ~/.ssh/"}, "category": "non_file_command"},
   {"tool_name": "Bash", "tool_input": {"command": "printf '%s' .env"}, "category": "non_file_command"},
   {"tool_name": "Bash", "tool_input": {"command": "export DOTENV=.env"}, "category": "non_file_command"},
-  {"tool_name": "Bash", "tool_input": {"command": "test -f .env"}, "category": "non_file_command"}
+  {"tool_name": "Bash", "tool_input": {"command": "test -f .env"}, "category": "non_file_command"},
+  {"tool_name": "Bash", "tool_input": {"command": "diff <(ls dir1) <(ls dir2)"}, "category": "safe_inline_interpreter"}
 ]
