@@ -94,6 +94,15 @@ SELF_PROTECTED_PATHS = [
     _PLUGIN_ROOT,
 ]
 
+# Critical rules that cannot be disabled via config.
+# Defense-in-depth: even if config is compromised, core safety stays active.
+NON_DISABLEABLE_RULES = frozenset({
+    "destructive_deletion",
+    "network_exfiltration",
+    "credential_access",
+    "zero_access_paths",
+})
+
 
 def _is_path_within_self_protected(real_path):
     """Check whether a resolved path is in self-protected locations."""
@@ -1863,6 +1872,8 @@ def main():
 
     config = load_config()
     disabled = set(config.get("disable_rules", []))
+    # Critical rules cannot be disabled — filter them out.
+    disabled -= NON_DISABLEABLE_RULES
     _mark("config_loaded")
 
     # Extract command for Bash tool
