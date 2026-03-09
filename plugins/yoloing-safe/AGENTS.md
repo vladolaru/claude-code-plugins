@@ -37,6 +37,24 @@ The runtime entrypoint stays at `scripts/pre-tool-use-safety.py`, but that file 
 - Block-tier rules must stay before ask-tier rules in `scripts/yoloing_safe/rules/__init__.py`.
 - Preserve the public compatibility surface exposed by `scripts/pre-tool-use-safety.py` unless you intentionally update tests, docs, and e2e tooling together.
 
+## Public Testing Contract
+
+The shim (`scripts/pre-tool-use-safety.py`) must export these names for tests, e2e, and benchmark to work. `TestShimCompatContract` in `test_meta.py` enforces this — if a refactor removes any of them, the test fails before downstream tooling breaks silently.
+
+| Name | Type | Consumers |
+|------|------|-----------|
+| `RULES` | `dict` | All test suites, e2e generator, benchmark |
+| `RULES_BY_TOOL` | `dict` | Runtime, benchmark |
+| `ALLOWLIST_PATTERNS` | `list` | Test suites, runtime |
+| `DEFAULTS` | `dict` | Config tests |
+| `NON_DISABLEABLE_RULES` | `set`/`frozenset` | Config tests |
+| `normalize_command` | callable | Unit tests |
+| `load_config` | callable | Config tests, runtime |
+| `is_allowlisted` | callable | Allowlist tests, runtime |
+| `strip_writer_heredocs` | callable | Unit tests |
+
+The e2e generator (`tests/e2e/generate-test-cases.py`) imports `RULES` directly from the package (`from yoloing_safe.rules import RULES`) rather than going through the shim, so it depends only on the canonical registry.
+
 ## Rule Structure
 
 Each assembled `RULES` entry has:

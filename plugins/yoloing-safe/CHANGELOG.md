@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Detector interface:** Custom detectors now take an `EvalContext` object with cached `whole_command` and `segments` properties, computed at most once per evaluation pass regardless of how many detectors run
 - **Rule builders:** New `block_rule()` and `ask_rule()` helpers in `registry.py` replace raw dict literals, enforcing required fields and reducing boilerplate in domain modules
 - Updated `AGENTS.md` to reflect the new architecture: `EvalContext`, rule builders, domain module pattern, and simplified rule workflows
+- **Meta tests:** Added `TestShimCompatContract` to `test_meta.py` — enforces the shim's public testing contract (9 names) so refactors can't silently break test, e2e, or benchmark tooling
+- **E2E generator:** Now imports `RULES` directly from the `yoloing_safe.rules` package instead of going through the shim, reducing implicit coupling to the compatibility surface
+- Documented the public testing contract in `AGENTS.md`
 
 ## [1.10.1] - 2026-03-09
 

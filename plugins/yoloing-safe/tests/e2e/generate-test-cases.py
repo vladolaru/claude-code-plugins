@@ -12,7 +12,6 @@ Usage:
     --check   Validate only, don't write. Exit 1 if test-cases.json is stale.
 """
 
-import importlib.util
 import json
 import os
 import sys
@@ -20,14 +19,12 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
-# Import RULES from the hook script (hyphenated filename requires importlib)
-spec = importlib.util.spec_from_file_location(
-    "pre_tool_use_safety",
-    os.path.join(PLUGIN_DIR, "scripts", "pre-tool-use-safety.py"),
-)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-RULES = mod.RULES
+# Import the assembled registry from the package directly, not the shim.
+_SCRIPTS_DIR = os.path.join(PLUGIN_DIR, "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from yoloing_safe.rules import RULES
 
 FIXTURES_PATH = os.path.join(SCRIPT_DIR, "test-fixtures.json")
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "test-cases.json")

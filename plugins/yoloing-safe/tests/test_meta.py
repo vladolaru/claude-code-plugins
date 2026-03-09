@@ -349,6 +349,65 @@ class TestUnitTestCoverage:
         )
 
 
+# ---------------------------------------------------------------------------
+# Public testing contract — names the shim must export for tests, e2e, and
+# benchmark to work. If a refactor removes any of these, this test fails
+# before downstream tooling breaks silently.
+# ---------------------------------------------------------------------------
+
+SHIM_CONTRACT = {
+    # Data
+    "RULES",
+    "RULES_BY_TOOL",
+    "ALLOWLIST_PATTERNS",
+    "DEFAULTS",
+    "NON_DISABLEABLE_RULES",
+    # Functions
+    "normalize_command",
+    "load_config",
+    "is_allowlisted",
+    "strip_writer_heredocs",
+}
+
+
+class TestShimCompatContract:
+    """The shim must export all names that tests, e2e, and benchmark depend on."""
+
+    def test_all_contract_names_exist(self, hook):
+        missing = [name for name in sorted(SHIM_CONTRACT) if not hasattr(hook, name)]
+        assert missing == [], (
+            f"Shim missing contract names: {missing}. "
+            f"Update the shim re-exports or the contract if intentionally removed."
+        )
+
+    def test_rules_is_dict(self, hook):
+        assert isinstance(hook.RULES, dict)
+
+    def test_rules_by_tool_is_dict(self, hook):
+        assert isinstance(hook.RULES_BY_TOOL, dict)
+
+    def test_allowlist_patterns_is_list(self, hook):
+        assert isinstance(hook.ALLOWLIST_PATTERNS, list)
+
+    def test_defaults_is_dict(self, hook):
+        assert isinstance(hook.DEFAULTS, dict)
+
+    def test_non_disableable_rules_is_set(self, hook):
+        assert isinstance(hook.NON_DISABLEABLE_RULES, (set, frozenset))
+
+    def test_normalize_command_callable(self, hook):
+        assert callable(hook.normalize_command)
+
+    def test_load_config_callable(self, hook):
+        assert callable(hook.load_config)
+
+    def test_is_allowlisted_callable(self, hook):
+        assert callable(hook.is_allowlisted)
+
+    def test_strip_writer_heredocs_callable(self, hook):
+        assert callable(hook.strip_writer_heredocs)
+
+
 class TestDeclarativeRuleStructure:
     """Structural invariants for the declarative rule format."""
 
