@@ -49,8 +49,9 @@ RUN mkdir -p /Users/testuser/.ssh /Users/testuser/.gnupg /Users/testuser/.aws \
 # E2E test infrastructure — all files under ~/e2e/
 # ---------------------------------------------------------------------------
 
-# Copy only the safety hook script (not the full plugin tree)
+# Copy the safety hook shim and its backing package
 COPY --chown=testuser:testuser plugins/yoloing-safe/scripts/pre-tool-use-safety.py /Users/testuser/e2e/safety-hook.py
+COPY --chown=testuser:testuser plugins/yoloing-safe/scripts/yoloing_safe/ /Users/testuser/e2e/yoloing_safe/
 
 # Copy noise hooks
 COPY --chown=testuser:testuser plugins/yoloing-safe/tests/e2e/hooks/ /Users/testuser/e2e/noise-hooks/

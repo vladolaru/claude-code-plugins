@@ -123,7 +123,7 @@ make rebuild
 ## Modifying Tests
 
 Tests are generated from two sources:
-- **`RULES`** assembled in `scripts/yoloing_safe/rules/__init__.py` and re-exported by `scripts/pre-tool-use-safety.py` — the canonical rule dict, including example commands per rule
+- **`RULES`** assembled in `scripts/yoloing_safe/rules/__init__.py` and re-exported by `scripts/pre-tool-use-safety.py` — the canonical rule dict, including example commands per rule. The Docker image copies both the shim (`safety-hook.py`) and the full `yoloing_safe/` package so imports work inside the container.
 - **`test-fixtures.json`** — optional overrides (tool, branch, subagent, pattern, prompt) for rules that need non-default test config
 
 After modifying rules or overrides, regenerate and rebuild:
