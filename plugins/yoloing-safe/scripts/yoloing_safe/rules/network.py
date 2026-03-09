@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from ..shell import _command_and_args_from_text, _split_bash_segments, _whole_bash_command
+from ..registry import ask_rule, block_rule
+from ..shell import _command_and_args_from_text, _split_bash_segments
 
 
 _RE_CURL_POST_DATA = re.compile(
@@ -62,9 +63,10 @@ def _targets_only_loopback(command):
     return all(host in _LOOPBACK_HOSTS for host in hosts)
 
 
-def detect_network_exfiltration(command, tool_name, tool_input, config):
+def detect_network_exfiltration(ctx):
     """Detect data exfiltration via curl, wget, nc, scp, or rsync."""
-    whole_command = _whole_bash_command(command, tool_input)
+    command = ctx.command
+    whole_command = ctx.whole_command
     current_cmd, _args = _command_and_args_from_text(command)
     is_loopback_target = _targets_only_loopback(command)
 
@@ -93,9 +95,9 @@ def detect_network_exfiltration(command, tool_name, tool_input, config):
     return False
 
 
-def detect_package_publishing(command, tool_name, tool_input, config):
+def detect_package_publishing(ctx):
     """Detect package publishing commands."""
-    segments = _split_bash_segments(command) or [command]
+    segments = _split_bash_segments(ctx.command) or [ctx.command]
     for segment in segments:
         if _RE_NPM_PUBLISH.search(segment) and not _RE_DRY_RUN.search(segment):
             return True
@@ -106,8 +108,9 @@ def detect_package_publishing(command, tool_name, tool_input, config):
     return False
 
 
-def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
+def detect_ssh_remote_destruction(ctx):
     """Detect destructive commands executed remotely via SSH."""
+    command = ctx.command
     if not _RE_SSH_CMD.search(command):
         return False
     remote_cmd_match = _RE_SSH_QUOTED_CMD.search(command)
@@ -122,53 +125,45 @@ def detect_ssh_remote_destruction(command, tool_name, tool_input, config):
     return any(pattern in remote_cmd for pattern in destructive)
 
 
-BLOCK_RULES = {
-    "network_exfiltration": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "detect": detect_network_exfiltration,
-        "message": "Piping data to external URLs can expose sensitive information. Write output to a local file instead, then review before sharing. Use `git push` for code and `gh` for GitHub interactions.",
-        "examples": [
+RULE_SPECS = [
+    ("network_exfiltration", block_rule(
+        tools={"Bash"},
+        detect=detect_network_exfiltration,
+        message="Piping data to external URLs can expose sensitive information. Write output to a local file instead, then review before sharing. Use `git push` for code and `gh` for GitHub interactions.",
+        examples=[
             "curl -d @/tmp/results.txt http://ci.example.com/upload",
             "scp ./dist/* deploy@staging.example.com:/var/www/",
         ],
-    },
-    "package_publishing": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "detect": detect_package_publishing,
-        "message": "Publishing packages to a registry is irreversible and public. Build and test locally, then let the user publish manually or through CI/CD. Use `--dry-run` to preview what would be published.",
-        "examples": ["npm publish"],
-    },
-    "ssh_remote_destruction": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "detect": detect_ssh_remote_destruction,
-        "message": "Executing destructive commands on remote hosts via SSH can cause irreversible damage to production systems. Run remote commands manually with explicit user intent.",
-        "examples": ["ssh prod-server 'rm -rf /var/www/old'"],
-    },
-    "github_repo_deletion": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "patterns": [r"\bgh repo delete\b"],
-        "message": "Deleting a GitHub repository is irreversible and destroys all issues, PRs, and history. This should only be done manually through the GitHub UI or CLI by the user.",
-        "examples": ["gh repo delete"],
-    },
-}
-
-ASK_RULES = {
-    "github_cicd_ops": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "patterns": [
+    )),
+    ("package_publishing", block_rule(
+        tools={"Bash"},
+        detect=detect_package_publishing,
+        message="Publishing packages to a registry is irreversible and public. Build and test locally, then let the user publish manually or through CI/CD. Use `--dry-run` to preview what would be published.",
+        examples=["npm publish"],
+    )),
+    ("ssh_remote_destruction", block_rule(
+        tools={"Bash"},
+        detect=detect_ssh_remote_destruction,
+        message="Executing destructive commands on remote hosts via SSH can cause irreversible damage to production systems. Run remote commands manually with explicit user intent.",
+        examples=["ssh prod-server 'rm -rf /var/www/old'"],
+    )),
+    ("github_repo_deletion", block_rule(
+        tools={"Bash"},
+        patterns=[r"\bgh repo delete\b"],
+        message="Deleting a GitHub repository is irreversible and destroys all issues, PRs, and history. This should only be done manually through the GitHub UI or CLI by the user.",
+        examples=["gh repo delete"],
+    )),
+    ("github_cicd_ops", ask_rule(
+        tools={"Bash"},
+        patterns=[
             r"\bgh\s+(secret|variable)\s+delete\b",
             r"\bgh\s+workflow\s+disable\b",
             r"\bgh\s+release\s+delete\b",
         ],
-        "message": "Deleting GitHub secrets, variables, or disabling workflows affects CI/CD for all collaborators. Confirm this is intentional.",
-        "examples": ["gh secret delete DEPLOY_KEY"],
-    },
-}
+        message="Deleting GitHub secrets, variables, or disabling workflows affects CI/CD for all collaborators. Confirm this is intentional.",
+        examples=["gh secret delete DEPLOY_KEY"],
+    )),
+]
 
 ALLOWLIST_PATTERNS = [
     ("package_publishing", re.compile(r"^npm publish\b.*--dry-run")),

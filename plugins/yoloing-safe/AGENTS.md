@@ -15,19 +15,19 @@ The runtime entrypoint stays at `scripts/pre-tool-use-safety.py`, but that file 
 |------|------|
 | `scripts/pre-tool-use-safety.py` | Runtime entrypoint and legacy compatibility surface. Re-exports `RULES`, `RULES_BY_TOOL`, `ALLOWLIST_PATTERNS`, `DEFAULTS`, and helpers for tests and e2e tooling. |
 | `scripts/yoloing_safe/config.py` | Defaults, user config loading, self-protection constants, non-disableable rules. |
+| `scripts/yoloing_safe/context.py` | `EvalContext` — cached evaluation context shared across detectors per invocation. |
 | `scripts/yoloing_safe/shell.py` | Command normalization, shell tokenization, heredoc stripping, segment splitting. |
 | `scripts/yoloing_safe/paths.py` | Path extraction, sensitive target detection, Bash mutation target collection. |
-| `scripts/yoloing_safe/registry.py` | Declarative detector compilation and custom detector wrapping. |
+| `scripts/yoloing_safe/registry.py` | Declarative detector compilation, custom detector wrapping, and rule builders (`block_rule`, `ask_rule`). |
 | `scripts/yoloing_safe/runtime.py` | Main evaluation loop and block/ask/allow output helpers. |
 | `scripts/yoloing_safe/rules/__init__.py` | Canonical ordered rule assembly plus allowlist aggregation. |
 | `scripts/yoloing_safe/rules/*.py` | Domain rule implementations. Add new rules here. |
 | `hooks/hooks.json` | Claude Code hook registration. Do not change the entrypoint path casually. |
 | `tests/test_core.py` | Core compatibility, config, allowlist, and utility tests. |
-| `tests/test_rules_*.py` | Domain rule test entrypoints. |
+| `tests/test_rules_*.py` | Domain rule tests — each file owns its test classes directly. |
 | `tests/test_integration.py` | End-to-end subprocess regression tests. |
 | `tests/test_scenarios.py` | Scenario and evasion regression suites. |
 | `tests/test_meta.py` | Structural invariant checks for rules, allowlists, and scenarios. |
-| `tests/_legacy_safety_hook_tests.py` | Backing module for the current split test entrypoints. Add or edit test classes here, then re-export them from the matching split suite. |
 | `tests/e2e/test-fixtures.json` | Optional e2e overrides. Most rules need no entry. |
 | `CHANGELOG.md` | Version history. Every behavior or shipped architecture change needs an entry. |
 
@@ -47,7 +47,7 @@ Each assembled `RULES` entry has:
 | `tools` | yes | Tool names the rule applies to |
 | `message` | yes | Guidance for Claude |
 | `examples` | yes | Example commands or file paths for e2e generation |
-| `detect` | custom only | Internal detector function returning `bool` or `(bool, custom_message)` |
+| `detect` | custom only | Detector function taking `ctx` (EvalContext), returning `bool` or `(bool, custom_message)` |
 | `patterns` | declarative only | Regex strings, OR semantics |
 | `pattern_groups` | optional | List of AND groups, OR semantics across groups |
 | `require` | optional | Additional regexes that must all match |
@@ -57,34 +57,45 @@ For declarative rules, `registry.py` compiles patterns and generates the legacy 
 
 ## Rule Types
 
-Use a declarative rule when the behavior is fully expressible as regex match plus require/exclude conditions.
+Use a declarative rule when the behavior is fully expressible as regex match plus require/exclude conditions. Use the `ask_rule()` or `block_rule()` builders from `registry.py`:
 
 ```python
-"git_force_push": {
-    "tier": "ask",
-    "tools": {"Bash"},
-    "patterns": [r"^git push\b"],
-    "require": [r"(--force\b|-f\b)"],
-    "exclude": [r"--force-with-lease", r"--force-if-includes"],
-    "message": "Force push rewrites remote history. Use --force-with-lease instead.",
-    "examples": ["git push --force origin hotfix/fix-arena"],
-}
+("git_force_push", ask_rule(
+    tools={"Bash"},
+    patterns=[r"^git push\b"],
+    require=[r"(--force\b|-f\b)"],
+    exclude=[r"--force-with-lease", r"--force-if-includes"],
+    message="Force push rewrites remote history. Use --force-with-lease instead.",
+    examples=["git push --force origin hotfix/fix-arena"],
+)),
 ```
 
-Use a custom rule when you need config lookups, tool-specific path handling, chain-aware logic, or anything procedural.
+Use a custom rule when you need config lookups, tool-specific path handling, chain-aware logic, or anything procedural. Custom detectors take an `EvalContext` object:
 
 ```python
-def detect_my_rule(command, tool_name, tool_input, config):
-    return bool(_RE_MY_PATTERN.search(command))
+def detect_my_rule(ctx):
+    # ctx.command, ctx.tool_name, ctx.tool_input, ctx.config
+    # ctx.whole_command (cached), ctx.segments (cached)
+    return bool(_RE_MY_PATTERN.search(ctx.command))
 
-"my_rule": {
-    "tier": "block",
-    "tools": {"Bash"},
-    "detect": detect_my_rule,
-    "message": "Guidance message.",
-    "examples": ["dangerous-command --flag"],
-}
+("my_rule", block_rule(
+    tools={"Bash"},
+    detect=detect_my_rule,
+    message="Guidance message.",
+    examples=["dangerous-command --flag"],
+)),
 ```
+
+## Domain Modules
+
+Each domain module exports an ordered `RULE_SPECS` list of `(rule_id, spec)` tuples and an `ALLOWLIST_PATTERNS` list. The aggregator in `rules/__init__.py` concatenates them with block-tier first, ask-tier second.
+
+| Module | Domain |
+|--------|--------|
+| `rules/filesystem.py` | Destructive deletion, credential access, zero-access paths, sensitive writes |
+| `rules/git.py` | Push safety, force push, hard reset, discard changes, stash, history rewrite |
+| `rules/network.py` | Data exfiltration, package publishing, SSH destruction, GitHub operations |
+| `rules/system.py` | Permissions, brew, Docker, database, Terraform, inline interpreters |
 
 ## Testing
 
@@ -121,50 +132,43 @@ make run
 
 1. Choose the domain module in `scripts/yoloing_safe/rules/`.
 2. Add regex constants and helpers in that module if needed.
-3. Add the rule to the module's `BLOCK_RULES`, `ASK_RULES`, or both as appropriate.
-4. If the rule needs a safe variant, add it to that module's `ALLOWLIST_PATTERNS`.
-5. Assemble the rule in `scripts/yoloing_safe/rules/__init__.py` in the correct global order.
-6. Add a `Test{PascalCaseRuleId}` class to `tests/_legacy_safety_hook_tests.py`.
-7. Re-export that class from the matching split suite (`test_rules_*.py`, `test_integration.py`, or `test_core.py`).
-8. Add scenarios:
+3. For custom rules: write a `detect_my_rule(ctx)` function.
+4. Add the rule to the module's `RULE_SPECS` using `block_rule()` or `ask_rule()`.
+5. If the rule needs a safe variant, add it to that module's `ALLOWLIST_PATTERNS`.
+6. Add a `Test{PascalCaseRuleId}` class to the matching split suite (`test_rules_*.py`).
+7. Add scenarios:
    - block rule: `scenarios/blocked.json` and at least one `scenarios/evasion.json` entry
    - ask rule: `scenarios/asked.json`
    - both: safe variant in `scenarios/allowed.json`
-9. Run the [After Any Rule Change](#after-any-rule-change) steps.
+8. Run the [After Any Rule Change](#after-any-rule-change) steps.
 
 ### Removing a Rule
 
-1. Remove it from the domain module.
-2. Remove it from `scripts/yoloing_safe/rules/__init__.py`.
-3. Remove any allowlist entries for that rule.
-4. Remove scenarios from `blocked.json`, `asked.json`, `allowed.json`, and `evasion.json`.
-5. Remove the unit test class from `tests/_legacy_safety_hook_tests.py`.
-6. Remove its re-export from the matching split suite.
-7. Remove any `tests/e2e/test-fixtures.json` override.
-8. Run the [After Any Rule Change](#after-any-rule-change) steps.
+1. Remove it from the domain module's `RULE_SPECS`.
+2. Remove any allowlist entries for that rule.
+3. Remove scenarios from `blocked.json`, `asked.json`, `allowed.json`, and `evasion.json`.
+4. Remove the unit test class from the matching split suite.
+5. Remove any `tests/e2e/test-fixtures.json` override.
+6. Run the [After Any Rule Change](#after-any-rule-change) steps.
 
 ### Renaming a Rule
 
 Rename it in all of these places:
 
-1. Domain module rule key
-2. Domain module detector function name if applicable
-3. `scripts/yoloing_safe/rules/__init__.py`
-4. Module `ALLOWLIST_PATTERNS`
-5. `blocked.json`, `asked.json`, `allowed.json`, `evasion.json`
-6. `tests/e2e/test-fixtures.json`
-7. Test class and any explicit references in tests
-8. Run the [After Any Rule Change](#after-any-rule-change) steps
+1. Domain module `RULE_SPECS` key and detector function name if applicable
+2. Module `ALLOWLIST_PATTERNS`
+3. `blocked.json`, `asked.json`, `allowed.json`, `evasion.json`
+4. `tests/e2e/test-fixtures.json`
+5. Test class and any explicit references in tests
+6. Run the [After Any Rule Change](#after-any-rule-change) steps
 
 ### Changing a Rule's Tier
 
-1. Change `"tier"` in the rule definition.
-2. If needed, move the rule between `BLOCK_RULES` and `ASK_RULES`.
-3. Keep the global order correct in `rules/__init__.py`.
-4. Move scenario entries between `blocked.json` and `asked.json`.
-5. If promoting to block, add evasion scenarios.
-6. Update the message tone to match the new tier.
-7. Run the [After Any Rule Change](#after-any-rule-change) steps.
+1. Change the builder from `block_rule()` to `ask_rule()` or vice versa.
+2. Move scenario entries between `blocked.json` and `asked.json`.
+3. If promoting to block, add evasion scenarios.
+4. Update the message tone to match the new tier.
+5. Run the [After Any Rule Change](#after-any-rule-change) steps.
 
 ### After Any Rule Change
 

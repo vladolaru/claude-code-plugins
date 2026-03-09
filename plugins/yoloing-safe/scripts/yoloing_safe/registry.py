@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from .context import EvalContext
+
 
 def _compile_patterns(pattern_list):
     """Compile a list of regex strings into `re.Pattern` objects."""
@@ -11,9 +13,33 @@ def _compile_patterns(pattern_list):
 
 
 def _wrap_custom_detector(detect_fn, message):
-    """Normalize custom detectors to the legacy `(bool, message)` interface."""
-    def detect(command, tool_name, tool_input, config):
-        result = detect_fn(command, tool_name, tool_input, config)
+    """Wrap a ctx-aware custom detector to the legacy test interface.
+
+    Custom detectors have signature ``detect(ctx) -> bool | (bool, msg)``.
+    The wrapper returns ``(bool, message)`` and creates a fresh EvalContext
+    per call so tests can call ``_detect(command, tool_name, tool_input, config)``.
+    """
+    def _detect(command, tool_name, tool_input, config):
+        ctx = EvalContext(tool_name, tool_input, config, command)
+        result = detect_fn(ctx)
+        if isinstance(result, tuple):
+            detected, custom_message = result
+            if detected:
+                return True, custom_message or message
+            return False, None
+        if result:
+            return True, message
+        return False, None
+    return _detect
+
+
+def _wrap_custom_detector_ctx(detect_fn, message):
+    """Wrap a ctx-aware custom detector for runtime use.
+
+    Returns ``(bool, message)`` from a shared EvalContext.
+    """
+    def detect(ctx):
+        result = detect_fn(ctx)
         if isinstance(result, tuple):
             detected, custom_message = result
             if detected:
@@ -26,7 +52,7 @@ def _wrap_custom_detector(detect_fn, message):
 
 
 def _make_detector(compiled):
-    """Generate a detector from compiled declarative rule data."""
+    """Generate a legacy detector from compiled declarative rule data."""
     patterns = compiled.get("patterns", [])
     pattern_groups = compiled.get("pattern_groups", [])
     require = compiled.get("require", [])
@@ -58,12 +84,25 @@ def _make_detector(compiled):
     return detect
 
 
+def _adapt_for_ctx(legacy_detect_fn):
+    """Adapt a legacy declarative detector to accept EvalContext."""
+    def detect(ctx):
+        return legacy_detect_fn(ctx.command, ctx.tool_name, ctx.tool_input, ctx.config)
+    return detect
+
+
 def build_registry(rules):
-    """Compile rules into the per-tool evaluation registry."""
+    """Compile rules into the per-tool evaluation registry.
+
+    Each rule gets two detector forms:
+    - ``_detect(command, tool_name, tool_input, config)`` — legacy test interface
+    - runtime detector in ``RULES_BY_TOOL`` — takes ``EvalContext``
+    """
     rules_by_tool = {}
     for rule_id, rule in rules.items():
         if "detect" in rule:
-            detect_fn = _wrap_custom_detector(rule["detect"], rule["message"])
+            legacy_fn = _wrap_custom_detector(rule["detect"], rule["message"])
+            runtime_fn = _wrap_custom_detector_ctx(rule["detect"], rule["message"])
         else:
             compiled = {"message": rule["message"]}
             if "patterns" in rule:
@@ -76,12 +115,13 @@ def build_registry(rules):
                 compiled["require"] = _compile_patterns(rule["require"])
             if "exclude" in rule:
                 compiled["exclude"] = _compile_patterns(rule["exclude"])
-            detect_fn = _make_detector(compiled)
+            legacy_fn = _make_detector(compiled)
+            runtime_fn = _adapt_for_ctx(legacy_fn)
 
-        rule["_detect"] = detect_fn
+        rule["_detect"] = legacy_fn
         tier = rule["tier"]
         for tool in rule["tools"]:
-            rules_by_tool.setdefault(tool, []).append((rule_id, tier, detect_fn))
+            rules_by_tool.setdefault(tool, []).append((rule_id, tier, runtime_fn))
     return rules_by_tool
 
 
@@ -93,3 +133,45 @@ def is_allowlisted(command, allowlist_patterns, disabled=None):
         if rule_id not in disabled and pattern.search(command):
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Rule builders — reduce boilerplate and enforce required fields
+# ---------------------------------------------------------------------------
+
+def block_rule(*, tools, message, examples, detect=None, patterns=None,
+               pattern_groups=None, require=None, exclude=None):
+    """Build a block-tier rule spec dict."""
+    return _build_rule("block", tools=tools, message=message, examples=examples,
+                       detect=detect, patterns=patterns, pattern_groups=pattern_groups,
+                       require=require, exclude=exclude)
+
+
+def ask_rule(*, tools, message, examples, detect=None, patterns=None,
+             pattern_groups=None, require=None, exclude=None):
+    """Build an ask-tier rule spec dict."""
+    return _build_rule("ask", tools=tools, message=message, examples=examples,
+                       detect=detect, patterns=patterns, pattern_groups=pattern_groups,
+                       require=require, exclude=exclude)
+
+
+def _build_rule(tier, *, tools, message, examples, detect=None, patterns=None,
+                pattern_groups=None, require=None, exclude=None):
+    """Assemble a rule spec dict with validation."""
+    spec = {
+        "tier": tier,
+        "tools": tools if isinstance(tools, set) else set(tools),
+        "message": message,
+        "examples": examples,
+    }
+    if detect is not None:
+        spec["detect"] = detect
+    if patterns is not None:
+        spec["patterns"] = patterns
+    if pattern_groups is not None:
+        spec["pattern_groups"] = pattern_groups
+    if require is not None:
+        spec["require"] = require
+    if exclude is not None:
+        spec["exclude"] = exclude
+    return spec

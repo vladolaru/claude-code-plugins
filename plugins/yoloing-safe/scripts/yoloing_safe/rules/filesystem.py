@@ -14,10 +14,10 @@ from ..paths import (
     _is_non_file_command,
     _is_sensitive_write_target_path,
 )
+from ..registry import ask_rule, block_rule
 from ..shell import (
     RE_CHAIN_OPS,
     _segment_command_and_args,
-    _split_bash_segments,
     _tokenized_segments,
 )
 
@@ -78,9 +78,10 @@ def _command_contains_rm_rf(command):
     return False
 
 
-def detect_destructive_deletion(command, tool_name, tool_input, config):
+def detect_destructive_deletion(ctx):
     """Detect rm with recursive+force while skipping inert string mentions."""
-    segments = _tokenized_segments(command)
+    command = ctx.command
+    segments = ctx.segments
     if not segments:
         return False
 
@@ -102,8 +103,9 @@ def detect_destructive_deletion(command, tool_name, tool_input, config):
     return False
 
 
-def detect_alternative_deletion(command, tool_name, tool_input, config):
+def detect_alternative_deletion(ctx):
     """Detect find -delete, find -exec rm, xargs rm, eval rm."""
+    command = ctx.command
     if _RE_FIND_DELETE.search(command):
         if _RE_FIND_TRAVERSAL.search(command) or not _RE_FIND_SCOPED_ROOT.search(command):
             return True
@@ -116,21 +118,21 @@ def detect_alternative_deletion(command, tool_name, tool_input, config):
     return False
 
 
-def detect_credential_access(command, tool_name, tool_input, config):
+def detect_credential_access(ctx):
     """Detect access to credential files via Read/Edit/Write tools or Bash."""
-    cred_patterns = config.get("credential_patterns", DEFAULTS["credential_patterns"])
-    safe_patterns = config.get("credential_safe_patterns", DEFAULTS["credential_safe_patterns"])
+    cred_patterns = ctx.config.get("credential_patterns", DEFAULTS["credential_patterns"])
+    safe_patterns = ctx.config.get("credential_safe_patterns", DEFAULTS["credential_safe_patterns"])
 
     paths_to_check = []
-    if tool_name in ("Read", "Edit", "Write"):
-        file_path = tool_input.get("file_path", "")
+    if ctx.tool_name in ("Read", "Edit", "Write"):
+        file_path = ctx.tool_input.get("file_path", "")
         if file_path:
             paths_to_check.append(file_path)
-    elif tool_name == "Bash" and command:
+    elif ctx.tool_name == "Bash" and ctx.command:
         paths_to_check.extend(
             _collect_bash_path_candidates(
-                command,
-                config,
+                ctx.command,
+                ctx.config,
                 include_credential_names=True,
             )
         )
@@ -147,17 +149,17 @@ def detect_credential_access(command, tool_name, tool_input, config):
     return False
 
 
-def detect_zero_access_paths(command, tool_name, tool_input, config):
+def detect_zero_access_paths(ctx):
     """Detect access to zero-access paths (e.g., ~/.ssh/, ~/.gnupg/)."""
-    zero_paths = config.get("zero_access_paths", DEFAULTS["zero_access_paths"])
+    zero_paths = ctx.config.get("zero_access_paths", DEFAULTS["zero_access_paths"])
 
     paths_to_check = []
-    if tool_name in ("Read", "Edit", "Write"):
-        file_path = tool_input.get("file_path", "")
+    if ctx.tool_name in ("Read", "Edit", "Write"):
+        file_path = ctx.tool_input.get("file_path", "")
         if file_path:
             paths_to_check.append(file_path)
-    if tool_name == "Bash" and command:
-        paths_to_check.extend(_collect_bash_path_candidates(command, config))
+    if ctx.tool_name == "Bash" and ctx.command:
+        paths_to_check.extend(_collect_bash_path_candidates(ctx.command, ctx.config))
 
     for check_path in paths_to_check:
         try:
@@ -180,17 +182,17 @@ def detect_zero_access_paths(command, tool_name, tool_input, config):
     return False
 
 
-def detect_sensitive_write_target(command, tool_name, tool_input, config):
+def detect_sensitive_write_target(ctx):
     """Detect Write/Edit to shell init files, git hooks, or package config."""
     paths_to_check = []
-    if tool_name in ("Write", "Edit"):
-        file_path = tool_input.get("file_path", "")
+    if ctx.tool_name in ("Write", "Edit"):
+        file_path = ctx.tool_input.get("file_path", "")
         if file_path:
             paths_to_check.append(file_path)
-    elif tool_name == "Bash" and command:
+    elif ctx.tool_name == "Bash" and ctx.command:
         for raw_path, resolved_path in _collect_bash_targets(
-            command,
-            tool_input,
+            ctx.command,
+            ctx.tool_input,
             _collect_write_targets_for_segment,
         ):
             paths_to_check.append(resolved_path or raw_path)
@@ -201,54 +203,45 @@ def detect_sensitive_write_target(command, tool_name, tool_input, config):
     return False
 
 
-BLOCK_RULES = {
-    "destructive_deletion": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "detect": detect_destructive_deletion,
-        "message": "Use targeted file removal instead of recursive force-delete. Remove specific files by name (`rm file1 file2`), or use `git clean --dry-run` to preview before cleaning. This protects against accidental data loss.",
-        "examples": ["rm -rf /"],
-    },
-    "alternative_deletion": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "detect": detect_alternative_deletion,
-        "message": "Indirect deletion methods (`find -delete`, `xargs rm`) can affect more files than intended. Use explicit file paths for removal, or `git clean --dry-run` to preview what would be deleted.",
-        "examples": ["find / -name '*.log' -delete"],
-    },
-    "disk_formatting": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "patterns": [r"\bmkfs\b"],
-        "pattern_groups": [[r"\bdd\b", r"of=/dev/"]],
-        "message": "Disk formatting and raw device writes (`mkfs`, `dd`) are irreversible system-level operations. These should only be run manually with explicit user intent, never by an agent.",
-        "examples": ["mkfs.ext4 /dev/sda1"],
-    },
-    "credential_access": {
-        "tier": "block",
-        "tools": {"Bash", "Read", "Write", "Edit"},
-        "detect": detect_credential_access,
-        "message": "This file may contain secrets or credentials. Use `.env.example` or `.env.template` for reference files. If you need to read configuration, ask the user to provide the specific values.",
-        "examples": ["./.env"],
-    },
-    "zero_access_paths": {
-        "tier": "block",
-        "tools": {"Bash", "Read", "Write", "Edit"},
-        "detect": detect_zero_access_paths,
-        "message": "This path contains sensitive system or security data that should not be accessed by an agent. Ask the user to provide the specific information you need.",
-        "examples": ["~/.ssh/id_rsa", "~/.aws/credentials"],
-    },
-}
-
-ASK_RULES = {
-    "sensitive_write_target": {
-        "tier": "ask",
-        "tools": {"Bash", "Write", "Edit"},
-        "detect": detect_sensitive_write_target,
-        "message": "This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
-        "examples": ["~/.bashrc"],
-    },
-}
+RULE_SPECS = [
+    ("destructive_deletion", block_rule(
+        tools={"Bash"},
+        detect=detect_destructive_deletion,
+        message="Use targeted file removal instead of recursive force-delete. Remove specific files by name (`rm file1 file2`), or use `git clean --dry-run` to preview before cleaning. This protects against accidental data loss.",
+        examples=["rm -rf /"],
+    )),
+    ("alternative_deletion", block_rule(
+        tools={"Bash"},
+        detect=detect_alternative_deletion,
+        message="Indirect deletion methods (`find -delete`, `xargs rm`) can affect more files than intended. Use explicit file paths for removal, or `git clean --dry-run` to preview what would be deleted.",
+        examples=["find / -name '*.log' -delete"],
+    )),
+    ("disk_formatting", block_rule(
+        tools={"Bash"},
+        patterns=[r"\bmkfs\b"],
+        pattern_groups=[[r"\bdd\b", r"of=/dev/"]],
+        message="Disk formatting and raw device writes (`mkfs`, `dd`) are irreversible system-level operations. These should only be run manually with explicit user intent, never by an agent.",
+        examples=["mkfs.ext4 /dev/sda1"],
+    )),
+    ("credential_access", block_rule(
+        tools={"Bash", "Read", "Write", "Edit"},
+        detect=detect_credential_access,
+        message="This file may contain secrets or credentials. Use `.env.example` or `.env.template` for reference files. If you need to read configuration, ask the user to provide the specific values.",
+        examples=["./.env"],
+    )),
+    ("zero_access_paths", block_rule(
+        tools={"Bash", "Read", "Write", "Edit"},
+        detect=detect_zero_access_paths,
+        message="This path contains sensitive system or security data that should not be accessed by an agent. Ask the user to provide the specific information you need.",
+        examples=["~/.ssh/id_rsa", "~/.aws/credentials"],
+    )),
+    ("sensitive_write_target", ask_rule(
+        tools={"Bash", "Write", "Edit"},
+        detect=detect_sensitive_write_target,
+        message="This file controls shell behavior, git hooks, or package manager configuration. Modifying it can have persistent side effects beyond this session. Confirm this is intentional.",
+        examples=["~/.bashrc"],
+    )),
+]
 
 ALLOWLIST_PATTERNS = [
     ("destructive_deletion", re.compile(r"^rm\s+-[rfRF]*\s+(?:(?:/tmp/|/var/tmp/|\$TMPDIR/)\S*\s*)+$")),

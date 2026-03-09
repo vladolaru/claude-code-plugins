@@ -11,6 +11,7 @@ from .config import (
     is_self_protected_path,
     load_config,
 )
+from .context import EvalContext
 from .paths import _bash_targets_protected_path
 from .registry import is_allowlisted
 from .rules import ALLOWLIST_PATTERNS, RULES_BY_TOOL
@@ -95,15 +96,17 @@ def main(mark=None):
             allow(mark)
     mark("rules_start")
 
+    ctx = EvalContext(tool_name, tool_input, config, command)
     first_ask = None
     if is_compound:
         for segment in bash_segments:
             if is_allowlisted(segment, ALLOWLIST_PATTERNS, disabled):
                 continue
+            seg_ctx = ctx.for_segment(segment)
             for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
                 if rule_id in disabled:
                     continue
-                detected, message = detect_fn(segment, tool_name, tool_input, config)
+                detected, message = detect_fn(seg_ctx)
                 if not detected:
                     continue
                 if tier == "block":
@@ -116,7 +119,7 @@ def main(mark=None):
         for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
             if rule_id in disabled:
                 continue
-            detected, message = detect_fn(command, tool_name, tool_input, config)
+            detected, message = detect_fn(ctx)
             if not detected:
                 continue
             if tier == "block":

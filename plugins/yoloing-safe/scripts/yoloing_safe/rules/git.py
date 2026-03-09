@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from ..registry import ask_rule, block_rule
+
 
 _RE_GIT_PUSH = re.compile(r"^git push\b")
 _RE_GIT_FORCE_FLAG = re.compile(r"(--force\b|-f\b)")
@@ -24,8 +26,9 @@ _RE_GIT_PUSH_DELETE = re.compile(r"^git push\b.*(?:--delete|-d)\b")
 _RE_GIT_PUSH_COLON_REF = re.compile(r"^git push\b.*\s:[^-\s]")
 
 
-def detect_git_bare_push(command, tool_name, tool_input, config):
+def detect_git_bare_push(ctx):
     """Detect git push without explicit branch specification."""
+    command = ctx.command
     if not _RE_GIT_PUSH.search(command):
         return False
     if _RE_GIT_FORCE_FLAG.search(command):
@@ -39,8 +42,9 @@ def detect_git_bare_push(command, tool_name, tool_input, config):
     return False
 
 
-def detect_git_discard_changes(command, tool_name, tool_input, config):
+def detect_git_discard_changes(ctx):
     """Detect git checkout -- and git restore that discards working tree changes."""
+    command = ctx.command
     if _RE_GIT_CHECKOUT.search(command) and _RE_DOUBLE_DASH_SEP.search(command):
         return True
     if _RE_GIT_RESTORE.search(command):
@@ -52,8 +56,9 @@ def detect_git_discard_changes(command, tool_name, tool_input, config):
     return False
 
 
-def detect_git_other_dangerous(command, tool_name, tool_input, config):
+def detect_git_other_dangerous(ctx):
     """Detect other dangerous git ops that can discard history or refs."""
+    command = ctx.command
     if _RE_GIT_CLEAN.search(command):
         if _RE_CLEAN_FORCE_FLAG.search(command) and not _RE_CLEAN_DRY_RUN.search(command):
             return True
@@ -72,71 +77,60 @@ def detect_git_other_dangerous(command, tool_name, tool_input, config):
     return False
 
 
-BLOCK_RULES = {
-    "git_bare_push": {
-        "tier": "block",
-        "tools": {"Bash"},
-        "detect": detect_git_bare_push,
-        "message": "Push with an explicit branch to avoid pushing to an unexpected target. Use `git push origin HEAD` to push the current branch, or `git push origin <branch-name>` for a specific branch.",
-        "examples": ["git push"],
-    },
-}
-
-ASK_RULES = {
-    "git_force_push": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "patterns": [r"^git push\b"],
-        "require": [r"(--force\b|-f\b)"],
-        "exclude": [r"--force-with-lease", r"--force-if-includes"],
-        "message": "Force push rewrites remote history and can discard teammates' work. Use `--force-with-lease` for a safer alternative. Confirm this is intentional.",
-        "examples": ["git push --force origin hotfix/fix-arena"],
-    },
-    "git_hard_reset": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "patterns": [r"^git reset\b"],
-        "require": [r"(--hard|--merge)\b"],
-        "message": "Hard reset discards uncommitted changes permanently. Use `git stash` first to preserve work. Confirm you want to proceed.",
-        "examples": ["git reset --hard main"],
-    },
-    "git_discard_changes": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "detect": detect_git_discard_changes,
-        "message": "This discards uncommitted changes to working tree files. Use `git stash` first if you might need them. Confirm you want to proceed.",
-        "examples": ["git checkout -- ."],
-    },
-    "git_destroy_stash": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "patterns": [r"^git stash (drop|clear)\b"],
-        "message": "Dropping or clearing stashes permanently destroys saved work. List stashes with `git stash list` first. Confirm this is intentional.",
-        "examples": ["git stash drop"],
-    },
-    "git_history_rewrite": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "patterns": [r"^git filter-(branch|repo)\b"],
-        "message": "Rewriting git history (`filter-branch`, `filter-repo`) is irreversible on shared branches. Confirm this is intentional.",
-        "examples": ["git filter-branch --force HEAD"],
-    },
-    "git_config_changes": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "patterns": [r"^git config\b"],
-        "require": [r"--(global|system)\b"],
-        "message": "Global or system git config changes affect all repositories on this machine. Confirm this is intentional.",
-        "examples": ["git config --global user.email 'test@test.com'"],
-    },
-    "git_other_dangerous": {
-        "tier": "ask",
-        "tools": {"Bash"},
-        "detect": detect_git_other_dangerous,
-        "message": "This git operation can cause data loss or affect collaboration. Confirm you want to proceed.",
-        "examples": ["git branch -D feature/goat-skins"],
-    },
-}
+RULE_SPECS = [
+    ("git_bare_push", block_rule(
+        tools={"Bash"},
+        detect=detect_git_bare_push,
+        message="Push with an explicit branch to avoid pushing to an unexpected target. Use `git push origin HEAD` to push the current branch, or `git push origin <branch-name>` for a specific branch.",
+        examples=["git push"],
+    )),
+    ("git_force_push", ask_rule(
+        tools={"Bash"},
+        patterns=[r"^git push\b"],
+        require=[r"(--force\b|-f\b)"],
+        exclude=[r"--force-with-lease", r"--force-if-includes"],
+        message="Force push rewrites remote history and can discard teammates' work. Use `--force-with-lease` for a safer alternative. Confirm this is intentional.",
+        examples=["git push --force origin hotfix/fix-arena"],
+    )),
+    ("git_hard_reset", ask_rule(
+        tools={"Bash"},
+        patterns=[r"^git reset\b"],
+        require=[r"(--hard|--merge)\b"],
+        message="Hard reset discards uncommitted changes permanently. Use `git stash` first to preserve work. Confirm you want to proceed.",
+        examples=["git reset --hard main"],
+    )),
+    ("git_discard_changes", ask_rule(
+        tools={"Bash"},
+        detect=detect_git_discard_changes,
+        message="This discards uncommitted changes to working tree files. Use `git stash` first if you might need them. Confirm you want to proceed.",
+        examples=["git checkout -- ."],
+    )),
+    ("git_destroy_stash", ask_rule(
+        tools={"Bash"},
+        patterns=[r"^git stash (drop|clear)\b"],
+        message="Dropping or clearing stashes permanently destroys saved work. List stashes with `git stash list` first. Confirm this is intentional.",
+        examples=["git stash drop"],
+    )),
+    ("git_history_rewrite", ask_rule(
+        tools={"Bash"},
+        patterns=[r"^git filter-(branch|repo)\b"],
+        message="Rewriting git history (`filter-branch`, `filter-repo`) is irreversible on shared branches. Confirm this is intentional.",
+        examples=["git filter-branch --force HEAD"],
+    )),
+    ("git_config_changes", ask_rule(
+        tools={"Bash"},
+        patterns=[r"^git config\b"],
+        require=[r"--(global|system)\b"],
+        message="Global or system git config changes affect all repositories on this machine. Confirm this is intentional.",
+        examples=["git config --global user.email 'test@test.com'"],
+    )),
+    ("git_other_dangerous", ask_rule(
+        tools={"Bash"},
+        detect=detect_git_other_dangerous,
+        message="This git operation can cause data loss or affect collaboration. Confirm you want to proceed.",
+        examples=["git branch -D feature/goat-skins"],
+    )),
+]
 
 ALLOWLIST_PATTERNS = [
     ("git_discard_changes", re.compile(r"^git checkout (-b|--orphan) ")),
