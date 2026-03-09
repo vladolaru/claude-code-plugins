@@ -297,11 +297,23 @@ class TestScenarioCoveragePerRule:
 
 @pytest.fixture
 def unit_test_classes():
-    """Extract all Test* class names from the non-collected legacy unit test module."""
-    test_file = Path(__file__).resolve().parent / "_legacy_safety_hook_tests.py"
-    content = test_file.read_text()
+    """Extract all Test* class names from the split test suite files."""
     import re as _re
-    return set(_re.findall(r"^class (Test\w+)", content, _re.MULTILINE))
+    test_dir = Path(__file__).resolve().parent
+    split_files = [
+        "test_core.py",
+        "test_rules_filesystem.py",
+        "test_rules_git.py",
+        "test_rules_network.py",
+        "test_rules_system.py",
+        "test_integration.py",
+        "test_scenarios.py",
+    ]
+    classes = set()
+    for filename in split_files:
+        content = (test_dir / filename).read_text()
+        classes.update(_re.findall(r"^class (Test\w+)", content, _re.MULTILINE))
+    return classes
 
 
 def _rule_id_to_class_name(rule_id):
