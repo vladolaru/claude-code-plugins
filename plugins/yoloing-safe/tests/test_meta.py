@@ -297,8 +297,8 @@ class TestScenarioCoveragePerRule:
 
 @pytest.fixture
 def unit_test_classes():
-    """Extract all Test* class names from test_safety_hook.py."""
-    test_file = Path(__file__).resolve().parent / "test_safety_hook.py"
+    """Extract all Test* class names from the non-collected legacy unit test module."""
+    test_file = Path(__file__).resolve().parent / "_legacy_safety_hook_tests.py"
     content = test_file.read_text()
     import re as _re
     return set(_re.findall(r"^class (Test\w+)", content, _re.MULTILINE))
@@ -333,7 +333,7 @@ class TestUnitTestCoverage:
                 missing.append((rid, expected_class))
         assert missing == [], (
             f"Rules missing unit test classes: {missing}. "
-            f"Add a Test class for each in test_safety_hook.py."
+            f"Add a Test class for each in the split rule suites."
         )
 
 
