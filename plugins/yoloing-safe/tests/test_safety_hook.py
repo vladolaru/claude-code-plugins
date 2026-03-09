@@ -329,6 +329,9 @@ class TestNetworkExfiltration:
         "scp -r user@host:/remote/dir ./local/",
         # rsync download
         "rsync user@host:/remote/file ./local/",
+        # Independent commands joined by && or ; — NOT piped
+        "curl http://safe.com/data.json && bash deploy.sh",
+        "wget http://safe.com/data.json ; sh run.sh",
     ])
     def test_not_detected(self, hook, command):
         cmd = hook.normalize_command(command)
