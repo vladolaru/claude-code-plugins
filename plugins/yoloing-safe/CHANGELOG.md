@@ -5,6 +5,16 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-03-09
+
+### Fixed
+- **Security:** self-protection now blocks `ln -s` when the symlink target points to a protected path, closing a TOCTOU bypass where a compound command could create a symlink and write through it in one invocation
+- **Security:** `bash <(curl ...)` process substitution now triggers the `inline_interpreter` ask rule, closing an evasion equivalent to `curl | bash`
+- **Security:** `zero_access_paths` now uses prefix matching on resolved paths instead of substring matching, preventing false positives on paths containing `.ssh` or `.gnupg` as substrings
+
+### Added
+- **Security:** critical block-tier rules (`destructive_deletion`, `network_exfiltration`, `credential_access`, `zero_access_paths`) are now non-disableable via config, matching self-protection's defense-in-depth model
+
 ## [1.9.2] - 2026-03-09
 
 ### Fixed
