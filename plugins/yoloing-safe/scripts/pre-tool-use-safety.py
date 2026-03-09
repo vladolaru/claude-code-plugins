@@ -31,6 +31,21 @@ def _mark(label):
         elapsed_ms = (time.monotonic() - _T0) * 1000
         print(f"[yoloing-safe:profile] {label} {elapsed_ms:.3f}ms", file=sys.stderr)
 
+
+def _merge_clobber_redirect_tokens(tokens):
+    """Merge `>|` forms that shlex splits into redirect + pipe tokens."""
+    merged = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in {">", "1>", "2>"} and i + 1 < len(tokens) and tokens[i + 1] == "|":
+            merged.append(tok + "|")
+            i += 2
+            continue
+        merged.append(tok)
+        i += 1
+    return merged
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -107,17 +122,21 @@ _SHELL_SEPARATORS = {"&&", "||", ";", "|", "&", "\n"}
 _WRAPPER_COMMANDS = {
     "command", "env", "sudo", "nice", "nohup", "time", "exec", "strace", "ionice", "taskset"
 }
-_REDIRECT_TOKENS = {">", ">>", "1>", "1>>", "2>", "2>>"}
-_RE_INLINE_REDIRECT = re.compile(r"^(?:[12]?>{1,2}|>{1,2})(.+)$")
+_REDIRECT_TOKENS = {">", ">>", ">|", "1>", "1>>", "1>|", "2>", "2>>", "2>|"}
+_RE_INLINE_REDIRECT = re.compile(r"^(?:[12]?>{1,2}\|?|>{1,2}\|?)(.+)$")
 _INPUT_REDIRECT_TOKENS = {"<", "0<"}
 _RE_INLINE_INPUT_REDIRECT = re.compile(r"^(?:0?<)(?!<)(.+)$")
 _RE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
-# Interpreter-based file writes (python3 -c, node -e, ruby -e, perl -e)
-_RE_INTERPRETER_WRITE = re.compile(r"\b(python3?|node|ruby|perl)\b.*(-c\b|-e\b)")
+_RE_INTERPRETER_WRITE_SYNTAX = re.compile(
+    r"\b(?:open\(|Path\(|write(?:File|FileSync|Text|Bytes)|appendFile(?:Sync)?\(|"
+    r"createWriteStream\(|File\.(?:write|binwrite|open)\()",
+    re.DOTALL,
+)
 _GREP_LIKE_COMMANDS = {"grep", "egrep", "fgrep", "rg", "ag", "ack"}
 _SED_SCRIPT_OPTIONS = {"-e", "-f", "--expression", "--file"}
 _AWK_SCRIPT_OPTIONS = {"-f", "--file"}
 _FIND_PRE_EXPR_OPTIONS = {"-H", "-L", "-P"}
+_SHELL_INLINE_COMMANDS = {"bash", "sh", "zsh"}
 
 
 def _tokenize_shell(command):
@@ -126,7 +145,7 @@ def _tokenize_shell(command):
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     lexer.commenters = ""
-    return list(lexer)
+    return _merge_clobber_redirect_tokens(list(lexer))
 
 
 def _split_shell_segments(tokens):
@@ -143,6 +162,14 @@ def _split_shell_segments(tokens):
     if current:
         segments.append(current)
     return segments
+
+
+def _tokenized_segments(command):
+    """Return shell-tokenized command segments."""
+    try:
+        return _split_shell_segments(_tokenize_shell(command))
+    except ValueError:
+        return []
 
 
 def _resolve_candidate_path(path_token, cwd):
@@ -168,6 +195,14 @@ def _segment_command_and_args(segment):
     if idx >= len(segment):
         return "", []
     return os.path.basename(segment[idx]), segment[idx + 1:]
+
+
+def _command_and_args_from_text(command):
+    """Extract command name + args from command text."""
+    segments = _tokenized_segments(command)
+    if not segments:
+        return "", []
+    return _segment_command_and_args(segments[0])
 
 
 def _collect_redirection_targets(segment):
@@ -297,6 +332,15 @@ def _base_cwd_for_bash(tool_input):
     return os.path.realpath(base_cwd)
 
 
+def _whole_bash_command(command, tool_input):
+    """Return the normalized full Bash command when available."""
+    if isinstance(tool_input, dict):
+        raw_command = tool_input.get("command")
+        if isinstance(raw_command, str) and raw_command:
+            return normalize_command(strip_writer_heredocs(raw_command))
+    return command or ""
+
+
 def _collect_bash_targets(command, tool_input, target_collector):
     """Collect raw + resolved Bash command targets using the provided collector."""
     try:
@@ -331,6 +375,45 @@ def _split_bash_segments(command):
     return segments
 
 
+_INTERPRETER_WRITE_PATH_PATTERNS = [
+    re.compile(
+        r"""open\(\s*(['"])(?P<path>.+?)\1\s*,\s*(['"])[^'"]*[wax+][^'"]*\3""",
+        re.DOTALL,
+    ),
+    re.compile(
+        r"""Path\(\s*(['"])(?P<path>.+?)\1\s*\)\.(?:write_text|write_bytes)\(""",
+        re.DOTALL,
+    ),
+    re.compile(
+        r"""Path\(\s*(['"])(?P<path>.+?)\1\s*\)\.open\(\s*(['"])[^'"]*[wax+][^'"]*\3""",
+        re.DOTALL,
+    ),
+    re.compile(
+        r"""(?:writeFileSync|writeFile|appendFileSync|appendFile|openSync|createWriteStream)\(\s*(['"])(?P<path>.+?)\1""",
+        re.DOTALL,
+    ),
+    re.compile(
+        r"""File\.(?:write|binwrite)\(\s*(['"])(?P<path>.+?)\1""",
+        re.DOTALL,
+    ),
+    re.compile(
+        r"""File\.open\(\s*(['"])(?P<path>.+?)\1\s*,\s*(['"])[^'"]*[wax+][^'"]*\3""",
+        re.DOTALL,
+    ),
+]
+
+
+def _collect_interpreter_write_targets(command, tool_input):
+    """Collect interpreter-side write targets from inline code."""
+    cwd = _base_cwd_for_bash(tool_input)
+    targets = []
+    for pattern in _INTERPRETER_WRITE_PATH_PATTERNS:
+        for match in pattern.finditer(command):
+            target = match.group("path")
+            targets.append((target, _resolve_candidate_path(target, cwd)))
+    return _dedupe(targets)
+
+
 def _command_mentions_protected_path(command):
     """Fallback for interpreter one-liners writing to protected paths."""
     for protected in SELF_PROTECTED_PATHS:
@@ -355,8 +438,13 @@ def _bash_targets_protected_path(command, tool_input):
         if resolved and _is_path_within_self_protected(resolved):
             return True
 
-    # Keep strict guard for interpreter one-liners that include protected paths.
-    if _RE_INTERPRETER_WRITE.search(command) and _command_mentions_protected_path(command):
+    for _target, resolved in _collect_interpreter_write_targets(command, tool_input):
+        if resolved and _is_path_within_self_protected(resolved):
+            return True
+
+    # Keep a conservative fallback for write APIs that mention protected paths
+    # literally but are not covered by the path extractors above.
+    if _RE_INTERPRETER_WRITE_SYNTAX.search(command) and _command_mentions_protected_path(command):
         return True
     return False
 
@@ -608,14 +696,15 @@ _RE_FIND_TRAVERSAL = re.compile(r"^find\s+\S*\.\.")
 _RE_FIND_EXEC_RM = re.compile(r"\bfind\b.*-exec\s+rm\b")
 _RE_XARGS_RM = re.compile(r"\bxargs\s+rm\b")
 _RE_EVAL_RM = re.compile(r"\beval\b.*\brm\b")
+_RE_RM_RECURSIVE = re.compile(r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive")
+_RE_RM_FORCE = re.compile(r"(?:^|\s)-[a-zA-Z]*[fF]|--force")
 
 # Network exfiltration
 _RE_CURL_POST_DATA = re.compile(
     r"\bcurl\b.*("
     r"-d\s+@|"
     r"--data(?:-ascii|-binary|-raw)?(?:\s+|=)@|"
-    r"--json(?:\s+|=)@|"
-    r"-X\s+POST"
+    r"--json(?:\s+|=)@"
     r")"
 )
 _RE_CURL_UPLOAD = re.compile(
@@ -681,6 +770,7 @@ _RE_DELETE_FROM = re.compile(r"\bDELETE\s+FROM\b")
 _RE_WHERE = re.compile(r"\bWHERE\b")
 _RE_DROPDB_DROPUSER = re.compile(r"\b(dropdb|dropuser)\b")
 _RE_REDIS_FLUSH = re.compile(r"\bredis-cli\b.*\bFLUSH(ALL|DB)\b", re.IGNORECASE)
+_RE_PIPE_TO_DB_CLIENT = re.compile(r"\|\s*(psql|mysql|sqlite3|redis-cli)\b")
 
 
 # ---------------------------------------------------------------------------
@@ -869,12 +959,92 @@ def _is_non_file_command(command):
     return bool(parts) and parts[0] in _NON_FILE_COMMANDS
 
 
+def _rm_has_recursive_force(args):
+    """Return True when rm args include both recursive and force flags."""
+    has_recursive = False
+    has_force = False
+    for arg in args:
+        if arg == "--":
+            break
+        if arg == "--recursive":
+            has_recursive = True
+        elif arg == "--force":
+            has_force = True
+        elif arg.startswith("-") and not arg.startswith("--"):
+            flags = arg[1:]
+            if "r" in flags.lower():
+                has_recursive = True
+            if "f" in flags.lower():
+                has_force = True
+    return has_recursive and has_force
+
+
+def _shell_payloads(cmd, args):
+    """Extract payload strings executed by shell-style `-c` invocations."""
+    payloads = []
+    for i, arg in enumerate(args[:-1]):
+        if arg == "-c":
+            payloads.append(args[i + 1])
+    if cmd in _SHELL_INLINE_COMMANDS or cmd == "su":
+        return payloads
+
+    nested_payloads = []
+    for i in range(len(args) - 2):
+        if args[i] in _SHELL_INLINE_COMMANDS and args[i + 1] == "-c":
+            nested_payloads.append(args[i + 2])
+    return nested_payloads
+
+
+def _command_contains_rm_rf(command):
+    """Return True when command text includes an actual rm -rf style invocation."""
+    for segment in _tokenized_segments(command):
+        cmd, args = _segment_command_and_args(segment)
+        if cmd == "rm" and _rm_has_recursive_force(args):
+            return True
+    return False
+
+
+def _command_invokes_database_client(cmd, args):
+    """Return True when the command or its wrapper args invoke a DB client."""
+    database_clients = {"psql", "mysql", "sqlite3", "redis-cli", "dropdb", "dropuser"}
+    if cmd in database_clients:
+        return True
+    return any(arg in database_clients for arg in args)
+
+
 # Detection Functions (custom — complex rules that need procedural logic)
 # Each returns (detected: bool, message: str | None)
 # Signature: (command, tool_name, tool_input, config) -> (bool, str|None)
 # ---------------------------------------------------------------------------
 
 # --- Block Tier: Filesystem Destruction ---
+
+
+def detect_destructive_deletion(command, tool_name, tool_input, config):
+    """Detect rm with recursive+force while skipping inert string mentions."""
+    segments = _tokenized_segments(command)
+    if not segments:
+        return False, None
+
+    for segment in segments:
+        cmd, args = _segment_command_and_args(segment)
+        if not cmd:
+            continue
+        if cmd in _NON_FILE_COMMANDS:
+            continue
+        if cmd == "rm" and _rm_has_recursive_force(args):
+            return True, RULES["destructive_deletion"]["message"]
+        for payload in _shell_payloads(cmd, args):
+            if _command_contains_rm_rf(payload):
+                return True, RULES["destructive_deletion"]["message"]
+
+    # Shell tokenization around heredocs can leave chained `rm -rf` text inside
+    # a single `cat <<EOF ... && rm -rf` segment. Fall back only for heredoc or
+    # chain contexts so inert strings like `echo 'rm -rf /'` stay allowed.
+    if ("<<" in command or _RE_CHAIN_OPS.search(command)) and not _is_non_file_command(command):
+        if re.search(r"\brm\b", command) and _RE_RM_RECURSIVE.search(command) and _RE_RM_FORCE.search(command):
+            return True, RULES["destructive_deletion"]["message"]
+    return False, None
 
 
 def detect_alternative_deletion(command, tool_name, tool_input, config):
@@ -920,6 +1090,8 @@ def _targets_only_loopback(command):
 
 def detect_network_exfiltration(command, tool_name, tool_input, config):
     """Detect data exfiltration via curl, wget, nc, scp, rsync."""
+    whole_command = _whole_bash_command(command, tool_input)
+    current_cmd, _args = _command_and_args_from_text(command)
     is_loopback_target = _targets_only_loopback(command)
 
     # curl posting data (file or stdin)
@@ -939,6 +1111,8 @@ def detect_network_exfiltration(command, tool_name, tool_input, config):
         return True, RULES["network_exfiltration"]["message"]
     # Piping curl/wget output to bash/sh (remote code execution) — always block
     if _RE_CURL_WGET_PIPE_SHELL.search(command):
+        return True, RULES["network_exfiltration"]["message"]
+    if current_cmd in {"curl", "wget"} and _RE_CURL_WGET_PIPE_SHELL.search(whole_command):
         return True, RULES["network_exfiltration"]["message"]
     # wget/curl writing to stdout from remote URL (segment of a pipe-to-shell)
     if _RE_WGET_TO_STDOUT.search(command) or _RE_CURL_TO_STDOUT.search(command):
@@ -1160,22 +1334,30 @@ def detect_permission_changes(command, tool_name, tool_input, config):
 
 def detect_database_destructive(command, tool_name, tool_input, config):
     """Detect destructive database commands."""
-    cmd_upper = command.upper()
-    # DROP DATABASE/TABLE
-    if _RE_DROP_OBJECT.search(cmd_upper):
-        return True, RULES["database_destructive"]["message"]
-    # TRUNCATE
-    if _RE_TRUNCATE.search(cmd_upper):
-        return True, RULES["database_destructive"]["message"]
-    # DELETE without WHERE
-    if _RE_DELETE_FROM.search(cmd_upper) and not _RE_WHERE.search(cmd_upper):
-        return True, RULES["database_destructive"]["message"]
-    # dropdb/dropuser CLI tools
-    if _RE_DROPDB_DROPUSER.search(command):
-        return True, RULES["database_destructive"]["message"]
-    # redis FLUSHALL/FLUSHDB
-    if _RE_REDIS_FLUSH.search(command):
-        return True, RULES["database_destructive"]["message"]
+    whole_command = _whole_bash_command(command, tool_input)
+    pipes_to_db = bool(_RE_PIPE_TO_DB_CLIENT.search(whole_command))
+
+    for segment in _tokenized_segments(command):
+        cmd, args = _segment_command_and_args(segment)
+        if not cmd:
+            continue
+
+        segment_command = " ".join(segment)
+        segment_upper = segment_command.upper()
+        invokes_database = pipes_to_db or _command_invokes_database_client(cmd, args)
+
+        if _RE_DROPDB_DROPUSER.search(segment_command) and invokes_database:
+            return True, RULES["database_destructive"]["message"]
+        if _RE_REDIS_FLUSH.search(segment_command) and invokes_database:
+            return True, RULES["database_destructive"]["message"]
+        if not invokes_database:
+            continue
+        if _RE_DROP_OBJECT.search(segment_upper):
+            return True, RULES["database_destructive"]["message"]
+        if _RE_TRUNCATE.search(segment_upper):
+            return True, RULES["database_destructive"]["message"]
+        if _RE_DELETE_FROM.search(segment_upper) and not _RE_WHERE.search(segment_upper):
+            return True, RULES["database_destructive"]["message"]
     return False, None
 
 
@@ -1222,13 +1404,11 @@ RULES = {
     # Block Tier
     # =======================================================================
 
-    # --- Declarative: rm with BOTH recursive AND force flags ---
+    # --- Custom: token-aware rm -rf detection with shell-payload support ---
     "destructive_deletion": {
         "tier": "block",
         "tools": {"Bash"},
-        "pattern_groups": [
-            [r"\brm\b", r"(?:^|\s)-[a-zA-Z]*[rR]|--recursive", r"(?:^|\s)-[a-zA-Z]*[fF]|--force"],
-        ],
+        "detect": detect_destructive_deletion,
         "message": "Use targeted file removal instead of recursive force-delete. Remove specific files by name (`rm file1 file2`), or use `git clean --dry-run` to preview before cleaning. This protects against accidental data loss.",
         "examples": ["rm -rf /"],
     },

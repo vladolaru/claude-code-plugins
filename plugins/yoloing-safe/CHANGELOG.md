@@ -5,6 +5,15 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] - 2026-03-09
+
+### Fixed
+- **Security:** self-protection now catches interpreter-based writes to hook files even when the path is relative to `cwd` (for example `python3 -c "open('hooks/hooks.json','w')"` from the plugin root)
+- **Security:** `network_exfiltration` now blocks `curl ... | bash/sh/zsh` in real hook execution, not just direct detector tests, closing a compound-command drift bug
+- **Security:** clobber redirects (`>|`, `1>|`, `2>|`) now count as writes for both self-protection and `sensitive_write_target`, preventing bypasses like `echo ... >| ~/.bashrc`
+- **Behavior:** ordinary HTTP requests such as `curl -X POST https://api.example.com/health` no longer false-positive as exfiltration when they are not uploading file/stdin data
+- **Behavior:** destructive-deletion and database-destructive rules now ignore inert string mentions like `echo 'rm -rf /'` or `echo 'DROP TABLE users'` while still catching execution contexts such as shell `-c` payloads and SQL piped into database clients
+
 ## [1.9.1] - 2026-03-08
 
 ### Fixed

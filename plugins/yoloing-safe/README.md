@@ -28,7 +28,7 @@ The hook auto-wires on install via `hooks.json`. Zero configuration needed — i
 | Destructive deletion | `rm -rf /`, `rm -fr /home` (compound commands like `&&`, `;`, pipes/background ops, and newline-separated commands are split and each segment is evaluated) |
 | Alternative deletion | `find / -delete`, `xargs rm`, `eval "rm"` |
 | Disk formatting | `mkfs.ext4 /dev/sda1`, `dd of=/dev/sda` |
-| Network exfiltration | `curl -d @/etc/passwd`, `curl -F`, `curl -T`, `scp` upload, `rsync` upload, piping to `nc`, `wget \| bash` |
+| Network exfiltration | `curl -d @/etc/passwd`, `curl -F`, `curl -T`, `scp` upload, `rsync` upload, piping to `nc`, `curl \| bash`, `wget \| bash` |
 | Credential access | `.env`, `.pem`, `id_rsa`, `id_ecdsa`, `.p12`, `.pfx`, `.jks`, `.keystore` via any tool (configurable) |
 | Package publishing | `npm publish`, `twine upload`, `gem push` |
 | SSH remote destruction | `ssh host "rm -rf /"`, `ssh host rm -rf /` (quoted or unquoted), `ssh host "DROP DATABASE"` |
@@ -53,13 +53,13 @@ The hook auto-wires on install via `hooks.json`. Zero configuration needed — i
 | Database | `DROP TABLE`, `TRUNCATE`, `DELETE` without `WHERE` |
 | Infrastructure | `terraform destroy`, `terraform apply -auto-approve` |
 | GitHub CI/CD | `gh secret delete`, `gh workflow disable` |
-| Sensitive writes | Shell init files (`~/.bashrc`, `~/.zshrc`), git hooks (`.git/hooks/*`), home-directory `~/.gitconfig`, `~/.npmrc` via Write/Edit or Bash writes like `echo ... > ~/.bashrc` (project-level dotfiles are allowed) |
+| Sensitive writes | Shell init files (`~/.bashrc`, `~/.zshrc`), git hooks (`.git/hooks/*`), home-directory `~/.gitconfig`, `~/.npmrc` via Write/Edit or Bash writes like `echo ... > ~/.bashrc` or `echo ... >| ~/.bashrc` (project-level dotfiles are allowed) |
 | Shell subshell execution | `bash -c`, `sh -c`, `zsh -c` (interpreter one-liners like `python3 -c` are allowed — see Known Limitations) |
 | Interpreter heredocs | `bash << 'EOF'`, `python3 << 'EOF'`, `mysql << 'EOF'` (writer heredocs like `cat >` are not flagged) |
 
 ### Allowed (safe variants pass through)
 
-`git checkout -b`, `git restore --staged`, `git clean --dry-run`, `git push --force-with-lease`, `rm -rf /tmp/...`, `chmod +x`, `npm publish --dry-run`.
+`git checkout -b`, `git restore --staged`, `git clean --dry-run`, `git push --force-with-lease`, `rm -rf /tmp/...`, `chmod +x`, `npm publish --dry-run`, `curl -X POST https://api.example.com/health`.
 
 ## Configuration
 
@@ -108,7 +108,7 @@ A few deliberate choices worth calling out:
 - **5-second timeout** — if the script hangs, the tool call proceeds. No blocking the agent forever.
 - **Allowlist checked first** — without it, `git checkout -b feature` would false-positive against `git checkout --`, and `rm -rf /tmp/build` would match the destructive deletion pattern. Order matters.
 - **Compound command evaluation** — commands with shell separators (`&&`, `;`, `||`, `|`, `&`, newline) are split into segments, each evaluated independently against the allowlist and rules. This prevents safe-prefix attacks (`git checkout -b safe && rm -rf /` or `git checkout -b safe` on one line followed by `rm -rf /` on the next) while correctly allowing compound commands where every segment is safe.
-- **Self-protection** — the hook blocks Write/Edit/Bash writes and destructive mutations (`>`, `cp`, `mv`, `tee`, `sed -i`, `rm`, `ln -s`, `touch`, `chmod`, `chown`, etc.) to its own config file and plugin directory, preventing an agent from disabling all rules then running destructive commands. Path checks resolve symlinks (`realpath`) and relative targets (including `cd ... &&` command chains). This check is hardcoded and cannot be disabled via `disable_rules`.
+- **Self-protection** — the hook blocks Write/Edit/Bash writes and destructive mutations (`>`, `>|`, `cp`, `mv`, `tee`, `sed -i`, `rm`, `ln -s`, `touch`, `chmod`, `chown`, interpreter writes, etc.) to its own config file and plugin directory, preventing an agent from disabling all rules then running destructive commands. Path checks resolve symlinks (`realpath`) and relative targets (including `cd ... &&` command chains). This check is hardcoded and cannot be disabled via `disable_rules`.
 - **Tool-scoped rules** — each rule declares which tools it applies to. Read evaluates 2 rules (credential access, protected paths), Write/Edit evaluate 3, and Bash evaluates the rest plus Bash-side sensitive-write detection for redirects/copies/moves/removals into shell init files, git hooks, and home-directory package config. A new rule must include example commands — the e2e generator fails if examples are missing.
 - **Command normalization** — strips leading binary paths (`/usr/bin/rm` or `/opt/homebrew/bin/git` → `rm`/`git`) and command wrappers (`sudo`, `env`, `nice`, `nohup`, etc.) so detection works regardless of how the command is invoked.
 - **Path expansion** — zero-access paths are checked in both `~/` form and expanded absolute form (`/Users/you/`), so protection works regardless of which form the tool provides.
