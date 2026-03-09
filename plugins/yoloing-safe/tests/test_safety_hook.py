@@ -2168,6 +2168,49 @@ class TestSelfProtectionInterpreterWrite:
         assert r.returncode == 0
 
 
+class TestSelfProtectionSymlinkToctou:
+    """TOCTOU: ln -s to protected path + write through symlink in compound command."""
+    SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "pre-tool-use-safety.py")
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        return subprocess.run(
+            ["python3", self.SCRIPT],
+            input=payload, capture_output=True, text=True,
+        )
+
+    def test_ln_symlink_to_config_then_write_blocked(self):
+        """Compound: ln -s <protected> <tmp> && echo > <tmp> must be blocked."""
+        config = os.path.expanduser("~/.claude/yoloing-safe.json")
+        r = self._run_hook("Bash", {
+            "command": f"ln -s {config} /tmp/config-link && echo '{{}}' > /tmp/config-link"
+        })
+        assert r.returncode == 2
+
+    def test_ln_symlink_to_plugin_dir_blocked(self):
+        """ln -s pointing to plugin directory should be blocked."""
+        plugin_root = str(Path(self.SCRIPT).parent.parent)
+        r = self._run_hook("Bash", {
+            "command": f"ln -s {plugin_root}/hooks/hooks.json /tmp/hook-link"
+        })
+        assert r.returncode == 2
+
+    def test_ln_symlink_to_unprotected_path_allowed(self):
+        """ln -s to non-protected paths should not be blocked."""
+        r = self._run_hook("Bash", {
+            "command": "ln -s /tmp/source /tmp/destination"
+        })
+        # Should NOT be blocked by self-protection (may hit other rules or pass)
+        assert r.returncode != 2
+
+    def test_ln_hardlink_to_unprotected_allowed(self):
+        """ln (without -s) to non-protected path is fine."""
+        r = self._run_hook("Bash", {
+            "command": "ln /tmp/source /tmp/destination"
+        })
+        assert r.returncode == 0
+
+
 class TestPipeAndBackgroundSplitting:
     """Verify pipe and background operators are treated as compound separators."""
 

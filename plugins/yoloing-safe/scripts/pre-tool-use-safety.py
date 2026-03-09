@@ -284,6 +284,32 @@ def _collect_write_targets_for_segment(segment):
     return _dedupe(targets)
 
 
+def _collect_symlink_source_targets(segment):
+    """Collect the SOURCE argument of `ln -s` commands.
+
+    When creating a symlink (`ln -s target link_name`), the first positional
+    arg is the TARGET (what the symlink points to). If that target is a
+    self-protected path, creating the symlink could enable TOCTOU bypasses
+    where a later segment writes through the symlink.
+    """
+    cmd, args = _segment_command_and_args(segment)
+    if cmd != "ln":
+        return []
+    # Only applies to symbolic links (-s flag)
+    has_symlink_flag = any(
+        arg == "-s" or (arg.startswith("-") and not arg.startswith("--") and "s" in arg[1:])
+        for arg in args
+        if arg != "--"
+    )
+    if not has_symlink_flag:
+        return []
+    positional = _collect_positional_args(args)
+    # First positional is the target (what the symlink points to)
+    if positional:
+        return [positional[0]]
+    return []
+
+
 def _collect_protected_mutation_targets_for_segment(segment):
     """Collect targets that would mutate or disable protected infrastructure."""
     targets = list(_collect_write_targets_for_segment(segment))
@@ -434,6 +460,16 @@ def _bash_targets_protected_path(command, tool_input):
         command,
         tool_input,
         _collect_protected_mutation_targets_for_segment,
+    ):
+        if resolved and _is_path_within_self_protected(resolved):
+            return True
+
+    # Check symlink source targets: ln -s <protected_path> <link> enables
+    # TOCTOU if a later segment writes through the link.
+    for _target, resolved in _collect_bash_targets(
+        command,
+        tool_input,
+        _collect_symlink_source_targets,
     ):
         if resolved and _is_path_within_self_protected(resolved):
             return True
