@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.44.0] - 2026-03-10
+
+### Added
+
+- **switch-to command:** New `/switch-to` slash command for switching to a branch or PR. Accepts a branch name or GitHub PR URL. Handles dirty working tree (stash/commit/cancel), fork PR remotes, remote sync with pull options (rebase/merge/skip), base branch fetching for PRs, and post-switch context (recent commits, ahead/behind, PR metadata and checks). Includes early exit when already on target branch and error normalization for expected git/gh failures.
+
 ## [1.43.12] - 2026-03-06
 
 ### Fixed
