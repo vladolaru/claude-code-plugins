@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.45.1] - 2026-03-10
+
+### Improved
+
+- **pr-review command prompt optimization:** Applied 5 research-backed prompt engineering techniques to improve agent execution reliability. Phase 2 now has explicit tool invocation with OUTPUT_DIR arg and "do not present yet" constraint (was a single terse sentence). Step 8 override is self-contained with 3 concrete sub-steps instead of cross-referencing full-code-review internals. Added error normalization for phase-level failures — partial results over stopping. Consolidated decision-critic outcome handling into Step 5 (was split across Steps 5 and 6). Clarified pipeline overview to prevent misreading "skill + dispatch" as two separate invocations.
+
 ## [1.45.0] - 2026-03-10
 
 ### Added

@@ -6,12 +6,21 @@ You are a PR review orchestrator. Your mission: chain together the pr-reviewing 
 
 **RULE 0: Run all phases autonomously.** Use sensible defaults for every decision point. The only user interaction is at the very end when asking about branch restoration.
 
+**Phase failures are recoverable.** If a phase encounters errors:
+- **Phase 1 failure** (pr-reviewing skill): Note what failed, skip to Step 6 with a partial report explaining what context is missing
+- **Phase 2 failure** (no findings to ingest): Write a report noting "No findings from review agents" and proceed to Step 6
+- **Phase 3 failure** (decision-critic error): Skip the critic step, note "Decision critic unavailable" in the report, present as-is
+
+Adapt and continue — partial results are more valuable than no results.
+
 ### Pipeline
 
 ```
-Phase 1  →  PR context + code review    (pr-reviewing skill + /full-code-review dispatch)
-Phase 2  →  Validate findings            (/ingest-code-review)
-Phase 3  →  Generate report + stress-test + present  (review-report.md + decision critic)
+Phase 1  →  PR context + code review    (pr-reviewing skill, with dispatch override
+                                          for full agent triage — see Step 2 overrides)
+Phase 2  →  Validate findings            (/ingest-code-review on OUTPUT_DIR)
+Phase 3  →  Generate report + stress-test + present
+             (review-report.md → decision critic → user summary)
 ```
 
 ## Phase 1: PR Context and Code Review (via pr-reviewing skill)
@@ -31,7 +40,7 @@ Phase 3  →  Generate report + stress-test + present  (review-report.md + decis
 | Step 0 (Ask for PR URL) | **Skip** — URL provided in step 1 above |
 | Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking |
 | Step 3 (Ask how to proceed) | **Always "Full review"** — skip the question |
-| Step 8 (Agent dispatch) | **Use `/full-code-review` dispatch** (steps 3.5–4: run `plan-review-dispatch.py --mode pr`, apply triage, execute plan) instead of the skill's selective dispatch — ensures all eligible agents run with triage regardless of PR size |
+| Step 8 (Agent dispatch) | **Replace the skill's selective dispatch with the full-code-review dispatch pipeline.** Run three sub-steps in order: **(a)** Generate dispatch plan: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan-review-dispatch.py --mode pr --git-range "${GIT_RANGE}" --output-dir "${OUTPUT_DIR}"`. **(b)** Apply triage: for each conditional agent the planner marked DISPATCH, check its `triage_criteria` against the diffstat and commit messages; keep or downgrade to SKIP (when in doubt, DISPATCH). **(c)** Execute plan: dispatch ALL eligible agents in a SINGLE message with MULTIPLE Agent tool calls for parallel execution. After all agents return, run `reconcile-reviews.py` and dispatch the `review-reconciliator`. This ensures all eligible agents run with triage regardless of PR size. |
 
 All other skill steps execute as documented.
 
@@ -41,7 +50,15 @@ All other skill steps execute as documented.
 
 ### Step 3: Validate Findings and Build Action Plan
 
-Apply `/ingest-code-review`.
+Invoke `/ingest-code-review` with `OUTPUT_DIR` as the argument:
+
+```
+Skill tool:
+  skill: pirategoat-tools:ingest-code-review
+  args: ${OUTPUT_DIR}
+```
+
+Follow the ingest command's full workflow (preprocessing + 3-step verification). Proceed directly to Phase 3 after completion — present results to the user only in Step 6.
 
 ## Phase 3: Output
 
@@ -143,11 +160,11 @@ Skill tool:
   args: <OUTPUT_DIR>/review-report.md
 ```
 
-Follow the skill's full 7-step workflow. After the SYNTHESIS step produces a verdict:
+Follow the skill's full 7-step workflow. After the SYNTHESIS step produces a verdict, update the report and note how to present it:
 
-- **STAND:** The review conclusions are sound. No report updates needed.
-- **REVISE:** Update `review-report.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items) based on the critic's analysis.
-- **ESCALATE:** Update `review-report.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings.
+- **STAND:** No report changes. Present findings as-is in Step 6.
+- **REVISE:** Update `review-report.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items). In Step 6, include a brief note of what the critic changed and why.
+- **ESCALATE:** Update `review-report.md` — add a prominent warning that findings have significant validity concerns. In Step 6, flag prominently that findings need human review before acting.
 
 ### Step 6: Present Results and Ask About Workspace Restore
 
@@ -166,8 +183,6 @@ All review files: <OUTPUT_DIR>/
 Currently on branch: <headRefName> (PR branch)
 Your previous branch: <ORIGINAL_BRANCH>
 ```
-
-If the decision-critic verdict was REVISE, include a brief note of what was adjusted. If ESCALATE, prominently flag that findings need human review before acting.
 
 **Ask the user whether to restore the previous branch:**
 
