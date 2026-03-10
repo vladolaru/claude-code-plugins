@@ -198,16 +198,48 @@ Task tool:
 
 The reconciliator reads the pre-processed `reconciled-structured.json` and agent review files, then produces a narrative executive summary (`reconciled.md` and `reconciled.json`).
 
-## Step 6: Present Reconciled Summary
+## Step 6: Ingest Review Findings
 
-Show the reconciliator's summary to the user:
+Invoke the ingest skill to validate findings, filter false positives, and produce an action plan:
+
+```
+Skill tool:
+  skill: pirategoat-tools:ingest-code-review
+  args: <OUTPUT_DIR>
+```
+
+Do not present results to the user yet — the pipeline continues to the decision-critic step.
+
+## Step 7: Decision Critic
+
+Stress-test the review's conclusions by running the decision-critic on the reconciled report.
+
+```
+Skill tool:
+  skill: pirategoat-tools:decision-critic
+  args: <OUTPUT_DIR>/reconciled.md
+```
+
+Follow the skill's full 7-step workflow. After the SYNTHESIS step produces a verdict:
+
+- **STAND:** The review conclusions are sound. No report updates needed.
+- **REVISE:** Update `reconciled.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items) based on the critic's analysis.
+- **ESCALATE:** Update `reconciled.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings.
+
+Do not present results between Step 6 and Step 7 — run them back-to-back.
+
+## Step 8: Present Final Summary
+
+Present the final review results to the user, incorporating the decision-critic's assessment:
+
 - Overall verdict and confidence
-- Critical issues (must fix before PR)
+- Decision-critic verdict (STAND / REVISE / ESCALATE) with key insight
+- Critical issues (must fix)
 - Important issues (should address)
-- Pattern and history insights
-- Full review path: `<OUTPUT_DIR>/reconciled.md`
+- Any adjustments the decision-critic recommended (if REVISE)
+- Full review files: `<OUTPUT_DIR>/`
 
-If the user wants to drill down on a specific topic (e.g., "tell me more about the security findings"), re-invoke the reconciliator in focused mode:
+If the user wants to drill down on a specific topic, re-invoke the reconciliator in focused mode:
 
 ```
 Task tool:
@@ -217,15 +249,3 @@ Task tool:
     Mode: focused
     Focus Topic: <topic>
 ```
-
-## Step 7: Ingest Review Findings
-
-After presenting the reconciled summary, automatically invoke the ingest skill to validate findings, filter false positives, and produce an action plan:
-
-```
-Skill tool:
-  skill: pirategoat-tools:ingest-code-review
-  args: <OUTPUT_DIR>
-```
-
-Do not wait for user input between Step 6 and Step 7 — run them back-to-back.

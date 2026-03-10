@@ -4,14 +4,14 @@ description: End-to-end PR review — gathers context, dispatches all review age
 
 You are a PR review orchestrator. Your mission: chain together the pr-reviewing skill and the ingest-code-review validation into a single uninterrupted run that produces a saved review document.
 
-**RULE 0: Run Phases 1–2 autonomously.** Use sensible defaults for every decision point. The only user interaction is at the very end (Phase 3) when asking about branch restoration.
+**RULE 0: Run all phases autonomously.** Use sensible defaults for every decision point. The only user interaction is at the very end when asking about branch restoration.
 
 ### Pipeline
 
 ```
 Phase 1  →  PR context + code review    (pr-reviewing skill + /full-code-review dispatch)
 Phase 2  →  Validate findings            (/ingest-code-review)
-Phase 3  →  Generate review-report.md + ask about branch restore
+Phase 3  →  Generate report + stress-test + present  (review-report.md + decision critic)
 ```
 
 ## Phase 1: PR Context and Code Review (via pr-reviewing skill)
@@ -133,14 +133,31 @@ All agent review files are in: `<OUTPUT_DIR>/`
 - Individual agents: `<agent>-review.json`
 ```
 
-### Step 5: Present Results and Ask About Workspace Restore
+### Step 5: Decision Critic
 
-**Present brief summary to user:**
+Stress-test the review's conclusions before presenting them.
+
+```
+Skill tool:
+  skill: pirategoat-tools:decision-critic
+  args: <OUTPUT_DIR>/review-report.md
+```
+
+Follow the skill's full 7-step workflow. After the SYNTHESIS step produces a verdict:
+
+- **STAND:** The review conclusions are sound. No report updates needed.
+- **REVISE:** Update `review-report.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items) based on the critic's analysis.
+- **ESCALATE:** Update `review-report.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings.
+
+### Step 6: Present Results and Ask About Workspace Restore
+
+**Present brief summary to user based on the updated report:**
 
 ```
 Review complete for PR #<PR_NUMBER> — <PR_TITLE>
 
 Verdict: <APPROVE / REQUEST_CHANGES / COMMENT>
+Decision Critic: <STAND / REVISE / ESCALATE> — <one-line key insight>
 Findings: X critical, Y important, Z consider (W dismissed)
 
 Full report: <OUTPUT_DIR>/review-report.md
@@ -149,6 +166,8 @@ All review files: <OUTPUT_DIR>/
 Currently on branch: <headRefName> (PR branch)
 Your previous branch: <ORIGINAL_BRANCH>
 ```
+
+If the decision-critic verdict was REVISE, include a brief note of what was adjusted. If ESCALATE, prominently flag that findings need human review before acting.
 
 **Ask the user whether to restore the previous branch:**
 

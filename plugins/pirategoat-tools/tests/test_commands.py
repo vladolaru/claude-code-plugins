@@ -109,6 +109,18 @@ def _load_marketplace_agents() -> list:
     return []
 
 
+def _load_marketplace_skills() -> list:
+    """Load skill list from marketplace.json for the pirategoat-tools plugin."""
+    data = json.loads(MARKETPLACE_JSON.read_text())
+    for plugin in data["plugins"]:
+        if plugin["name"] == "pirategoat-tools":
+            # Extract skill short names from paths like "./skills/decision-critic"
+            return [
+                Path(s).name for s in plugin.get("skills", [])
+            ]
+    return []
+
+
 def _load_marketplace_commands() -> list:
     """Load command list from marketplace.json for the pirategoat-tools plugin."""
     data = json.loads(MARKETPLACE_JSON.read_text())
@@ -135,6 +147,12 @@ def tmp_dir():
 def marketplace_agents():
     """Agent names from marketplace.json (e.g., 'pr-reviewer', 'security-reviewer')."""
     return _load_marketplace_agents()
+
+
+@pytest.fixture(scope="module")
+def marketplace_skills():
+    """Skill names from marketplace.json (e.g., 'decision-critic', 'pr-reviewing')."""
+    return _load_marketplace_skills()
 
 
 @pytest.fixture(scope="module")
@@ -180,9 +198,11 @@ class TestAgentReferences:
     """Agent names in dispatch tables match marketplace.json."""
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_agents_exist_in_marketplace(self, command, marketplace_agents):
+    def test_agents_exist_in_marketplace(self, command, marketplace_agents, marketplace_skills):
         content = _read_command(command)
         refs = _extract_agent_refs(content)
+        # Filter out skill references (e.g., decision-critic is a skill, not an agent)
+        refs = [r for r in refs if r not in marketplace_skills]
         assert len(refs) > 0, f"{command}: no agent references found"
 
         # Exclude reconciliator since it's dispatched separately, not in the table
@@ -192,11 +212,13 @@ class TestAgentReferences:
                 f"{command}: agent '{ref}' not in marketplace.json agents: {reviewer_agents}"
             )
 
-    def test_dispatch_agents_consistent(self):
+    def test_dispatch_agents_consistent(self, marketplace_skills):
         """All dispatch commands should dispatch the same set of agents."""
+        skills = set(marketplace_skills)
         agent_sets = {}
         for cmd in DISPATCH_COMMANDS:
-            agent_sets[cmd] = set(_extract_agent_refs(_read_command(cmd)))
+            # Filter out skill references before comparing
+            agent_sets[cmd] = set(_extract_agent_refs(_read_command(cmd))) - skills
         first_cmd = DISPATCH_COMMANDS[0]
         for cmd in DISPATCH_COMMANDS[1:]:
             assert agent_sets[first_cmd] == agent_sets[cmd], (
@@ -206,12 +228,13 @@ class TestAgentReferences:
             )
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_dispatches_14_agents(self, command):
+    def test_dispatches_14_agents(self, command, marketplace_skills):
         """Each dispatch command references exactly 14 agents."""
         content = _read_command(command)
         refs = _extract_agent_refs(content)
-        # Exclude reconciliator from the count (dispatched in a separate step)
-        dispatch_refs = [r for r in refs if r != "review-reconciliator"]
+        # Exclude reconciliator and skill references from the count
+        skills = set(marketplace_skills)
+        dispatch_refs = [r for r in refs if r != "review-reconciliator" and r not in skills]
         assert len(dispatch_refs) == 14, (
             f"{command}: expected 14 dispatch agents, found {len(dispatch_refs)}: {dispatch_refs}"
         )
