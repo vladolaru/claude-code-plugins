@@ -123,6 +123,21 @@ Keeps your Mac awake during Claude Code sessions using macOS `caffeinate`. Suppo
 1. Create directory: `plugins/<name>/` with subdirs as needed (`skills/`, `commands/`, `agents/`, `scripts/`)
 2. Add a `CHANGELOG.md` following [Keep a Changelog](https://keepachangelog.com/) format
 3. Register in `.claude-plugin/marketplace.json` — follow the structure of existing entries
+4. Update the [Plugin Inventory](#plugin-inventory) section in this file with counts and contents
+5. Update `README.md` directory tree with the new plugin entry
+
+## Adding Commands, Skills, or Agents to Existing Plugins
+
+**Every new command, skill, or agent requires doc updates in multiple locations.** Plugins with their own `AGENTS.md` (like pirategoat-tools) document the full checklist there. The common locations are:
+
+| # | File | What to update |
+|---|------|----------------|
+| 1 | `.claude-plugin/marketplace.json` | Add entry to the plugin's `commands`, `skills`, or `agents` array |
+| 2 | Plugin's `README.md` | Update count + add to the relevant table |
+| 3 | This file → [Plugin Inventory](#plugin-inventory) | Update summary count + contents row for the plugin |
+| 4 | Root `README.md` | Update count in directory tree |
+
+Skipping these updates causes stale counts that mislead future agents and humans.
 
 ## Testing
 

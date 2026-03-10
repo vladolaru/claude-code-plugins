@@ -132,12 +132,15 @@ Verdict is auto-calculated from issue severities: any critical → `block`, any 
 2. Create `commands/<command-name>.md` — commands are orchestrators that invoke agents via the `/Agent` tool
 3. Use `plan-review-dispatch.py` for triage decisions (don't duplicate triage logic)
 4. Add command to `.claude-plugin/marketplace.json` in the `commands` array
-5. Run tests: `pytest plugins/pirategoat-tools/tests/test_commands.py -v`
+5. Add structural tests in `tests/test_commands.py` (new `TestXxx` class)
+6. Run tests: `pytest plugins/pirategoat-tools/tests/test_commands.py -v`
+7. **Update all docs** — see [Doc Update Checklist](#doc-update-checklist-for-new-commands-skills-or-agents) below
 
 ### Adding a Skill
 
 1. Create `skills/<skill-name>/SKILL.md` with YAML frontmatter (`name`, `description`) and Markdown body
 2. Add skill to `.claude-plugin/marketplace.json` in the `skills` array
+3. **Update all docs** — see [Doc Update Checklist](#doc-update-checklist-for-new-commands-skills-or-agents) below
 
 ### Expected Failures
 
@@ -150,3 +153,14 @@ These are normal — handle them, do not stop or apologize:
 ### Testing
 
 **Always run tests after modifying scripts, agents, or commands.** See the root `AGENTS.md` [Testing > pirategoat-tools](#pirategoat-tools) section for the full test lookup table, test principles, and agent compliance eval commands.
+
+### Doc Update Checklist for New Commands, Skills, or Agents
+
+**Every new command, skill, or agent requires updates in all four locations below.** Do not skip — stale counts and missing entries make the plugin inventory unreliable.
+
+| # | File | What to update |
+|---|------|----------------|
+| 1 | `.claude-plugin/marketplace.json` | Add entry to the plugin's `commands`, `skills`, or `agents` array |
+| 2 | `plugins/pirategoat-tools/README.md` | Update count in directory tree + add row to the relevant table |
+| 3 | Root `AGENTS.md` → Plugin Inventory → pirategoat-tools | Update summary count + add to the `commands/`/`skills/`/`agents/` contents row |
+| 4 | Root `README.md` | Update count in directory tree (e.g., "19 agents, 19 skills, 7 commands") |
