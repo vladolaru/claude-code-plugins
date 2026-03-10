@@ -193,18 +193,29 @@ Show the user a concise summary of where they landed.
 # Recent commits on this branch
 git log --oneline -10
 
-# Ahead/behind vs remote tracking
+# Ahead/behind vs remote tracking branch
+# Output format: BEHIND<tab>AHEAD
+#   Column 1 (left)  = commits in REMOTE not in HEAD → BEHIND count
+#   Column 2 (right) = commits in HEAD not in REMOTE → AHEAD count
 git rev-list --left-right --count <REMOTE_NAME>/<TARGET_BRANCH>...HEAD 2>/dev/null
 ```
 
 **If `IS_PR` is true, also show:**
 ```bash
 # Ahead/behind vs base branch
+# SAME column order: Column 1 = BEHIND, Column 2 = AHEAD
 git rev-list --left-right --count origin/<BASE_BRANCH>...HEAD
 
 # PR metadata
 gh pr view <PR_NUMBER> --json title,state,author,labels,reviewDecision,statusCheckRollup
 ```
+
+**CRITICAL — interpreting `git rev-list --left-right --count A...B`:**
+The output is two tab-separated numbers. For `A...HEAD`:
+- **Column 1 (left/A side)** = commits in A not in HEAD = how far HEAD is **behind** A
+- **Column 2 (right/HEAD side)** = commits in HEAD not in A = how far HEAD is **ahead** of A
+
+Example: output `13	6` for `origin/trunk...HEAD` means **6 ahead, 13 behind** (NOT 13 ahead, 6 behind).
 
 Present a concise summary. Always include:
 
@@ -220,8 +231,10 @@ Recent commits:
 ```
 PR #<PR_NUMBER>: <PR_TITLE>
   Author: <PR_AUTHOR>  |  State: <PR_STATE>  |  Review: <reviewDecision or "pending">
-  Base: <BASE_BRANCH> — <ahead> ahead, <behind> behind
+  Base: <BASE_BRANCH> — <AHEAD> ahead, <BEHIND> behind
   Checks: <summary of statusCheckRollup — e.g. "3/4 passed, 1 pending">
 ```
+
+Where `AHEAD` = column 2 and `BEHIND` = column 1 from the `rev-list` output.
 
 **If `STASHED` is true**, append: "Your changes from `<CURRENT_BRANCH>` are stashed. Run `git stash pop` after switching back."
