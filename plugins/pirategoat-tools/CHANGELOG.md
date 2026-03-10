@@ -5,6 +5,16 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.45.0] - 2026-03-10
+
+### Added
+
+- **decision-critic pipeline integration:** Both `/pr-review` and `/full-code-review` now run the decision-critic skill after ingest to stress-test review conclusions — severity assignments, categorizations, and dismissals. On REVISE or ESCALATE, the report is updated with adjusted findings. Removes the intermediary "Present Reconciled Summary" step; only the final, stress-tested results are shown.
+
+### Fixed
+
+- **switch-to command:** Clarified `git rev-list --left-right --count` column interpretation — column 1 is behind, column 2 is ahead. Added inline comments, a CRITICAL interpretation block, and explicit column references in the summary template.
+
 ## [1.44.0] - 2026-03-10
 
 ### Added
