@@ -74,6 +74,7 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | `/pr-review` | End-to-end PR review pipeline (context + agents + validation) |
 | `/pr-update` | Update PR description with accurate summary of current changes |
 | `/copy-as [content] [slack\|p2]` | Copy content to clipboard — markdown, Slack mrkdwn, or P2 HTML |
+| `/switch-to <branch\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |
 
 ### Ground Truth Integration
 
@@ -136,7 +137,7 @@ Agents use ground truth results at confidence 1.0 and fall back to manual analys
 ```
 pirategoat-tools/
 ├── agents/           # 19 review agent definitions
-├── commands/         # 6 slash commands
+├── commands/         # 7 slash commands
 ├── skills/           # 19 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library

@@ -67,7 +67,7 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 19 agents, 19 skills, 6 commands
+│   ├── pirategoat-tools/         # 19 agents, 19 skills, 7 commands
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   ├── image-optimizer/          # 1 command, optimization scripts
