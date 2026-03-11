@@ -115,161 +115,6 @@ def _write_jest_results(output_dir, success=True, failures=None):
         json.dump(data, f)
 
 
-# =============================================================================
-# File classification tests
-# =============================================================================
-
-
-class TestClassifyChangedFiles:
-    """Tests for classify_changed_files."""
-
-    def test_php_files_classified(self):
-        result = _mod.classify_changed_files(["src/handler.php", "src/utils.php"])
-        assert result["php"] == ["src/handler.php", "src/utils.php"]
-        assert result["js"] == []
-
-    def test_js_files_classified(self):
-        result = _mod.classify_changed_files(
-            ["src/app.js", "src/utils.ts", "src/component.tsx"]
-        )
-        assert len(result["js"]) == 3
-        assert result["php"] == []
-
-    def test_mixed_files(self):
-        files = ["src/app.js", "src/handler.php", "README.md"]
-        result = _mod.classify_changed_files(files)
-        assert result["php"] == ["src/handler.php"]
-        assert result["js"] == ["src/app.js"]
-        assert len(result["all"]) == 3
-
-    def test_production_code_detected(self):
-        result = _mod.classify_changed_files(["src/app.js", "tests/app.test.js"])
-        assert result["has_production_code"] is True
-
-    def test_test_only_no_production(self):
-        result = _mod.classify_changed_files(
-            ["tests/app.test.js", "tests/handler.spec.php"]
-        )
-        assert result["has_production_code"] is False
-
-    def test_empty_files(self):
-        result = _mod.classify_changed_files([])
-        assert result["php"] == []
-        assert result["js"] == []
-        assert result["all"] == []
-        assert result["has_production_code"] is False
-
-
-# =============================================================================
-# Test file detection tests
-# =============================================================================
-
-
-class TestIsTestFile:
-    """Tests for is_test_file."""
-
-    def test_jest_test(self):
-        assert _mod.is_test_file("src/app.test.js") is True
-
-    def test_spec_file(self):
-        assert _mod.is_test_file("src/handler.spec.php") is True
-
-    def test_tests_directory(self):
-        assert _mod.is_test_file("tests/unit/auth.php") is True
-
-    def test_test_directory(self):
-        assert _mod.is_test_file("test/helpers.js") is True
-
-    def test_dunder_tests(self):
-        assert _mod.is_test_file("src/__tests__/app.js") is True
-
-    def test_production_file(self):
-        assert _mod.is_test_file("src/handler.php") is False
-
-    def test_production_with_test_in_name(self):
-        # "testimonial.php" should not be detected as test
-        # but our heuristic catches "test." — this is a known limitation
-        # The function checks for patterns, not full words
-        assert _mod.is_test_file("src/testimonial-widget.php") is False
-
-
-# =============================================================================
-# Tool detection tests (mocked)
-# =============================================================================
-
-
-class TestDetectTools:
-    """Tests for tool detection functions."""
-
-    @patch("shutil.which", return_value="/usr/bin/npx")
-    def test_eslint_detected_with_config(self, mock_which, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".eslintrc.json").write_text("{}")
-        assert _mod.detect_eslint() is True
-
-    @patch("shutil.which", return_value="/usr/bin/npx")
-    def test_eslint_detected_via_package_json(self, mock_which, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "package.json").write_text(
-            json.dumps({"devDependencies": {"eslint": "^8.0.0"}})
-        )
-        assert _mod.detect_eslint() is True
-
-    @patch("shutil.which", return_value=None)
-    def test_eslint_not_detected_without_npx(self, mock_which, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".eslintrc.json").write_text("{}")
-        assert _mod.detect_eslint() is False
-
-    @patch("shutil.which", return_value="/usr/bin/phpcs")
-    def test_phpcs_detected(self, mock_which):
-        assert _mod.detect_phpcs() is True
-
-    @patch("shutil.which", return_value=None)
-    def test_phpcs_not_detected(self, mock_which):
-        assert _mod.detect_phpcs() is False
-
-    @patch("shutil.which", return_value="/usr/bin/semgrep")
-    def test_semgrep_detected(self, mock_which):
-        assert _mod.detect_semgrep() is True
-
-    @patch("shutil.which", return_value=None)
-    def test_semgrep_not_detected(self, mock_which):
-        assert _mod.detect_semgrep() is False
-
-
-# =============================================================================
-# Tool execution tests (mocked subprocess)
-# =============================================================================
-
-
-class TestRunTool:
-    """Tests for run_tool helper."""
-
-    @patch("subprocess.run")
-    def test_success(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="output", stderr=""
-        )
-        ok, stdout, stderr = _mod.run_tool(["echo", "hi"], 30, "test")
-        assert ok is True
-        assert stdout == "output"
-
-    @patch("subprocess.run", side_effect=TimeoutError)
-    def test_timeout(self, mock_run):
-        # subprocess.TimeoutExpired needs args
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(["cmd"], 30)
-        ok, stdout, stderr = _mod.run_tool(["slow-cmd"], 30, "SlowTool")
-        assert ok is False
-        assert "timed out" in stderr
-
-    @patch("subprocess.run", side_effect=FileNotFoundError)
-    def test_command_not_found(self, mock_run):
-        ok, stdout, stderr = _mod.run_tool(["nonexistent"], 30, "Missing")
-        assert ok is False
-        assert "not found" in stderr
 
 
 # =============================================================================
@@ -608,35 +453,29 @@ class TestRunConfiguredTool:
 
 
 # =============================================================================
-# Output schema tests
+# Output schema tests — config-driven
 # =============================================================================
 
 
 class TestOutputSchema:
     """Tests for ground-truth-summary.json output format."""
 
-    def test_empty_run_produces_valid_schema(self, tmp_output_dir):
-        summary = _mod.collect_ground_truth([], tmp_output_dir)
-        assert "tools_run" in summary
-        assert "tools_skipped" in summary
-        assert "tools_unavailable" in summary
-        assert "findings" in summary
-        assert isinstance(summary["tools_run"], list)
-        assert isinstance(summary["findings"], list)
-
-    @patch.object(_mod, "detect_tools", return_value={
-        "eslint": False, "phpcs": False, "semgrep": False,
-        "jest": False, "phpunit": False,
-    })
-    def test_no_tools_available(self, mock_detect, tmp_output_dir):
-        summary = _mod.collect_ground_truth(
-            ["src/app.js"], tmp_output_dir
-        )
+    def test_no_config_produces_all_not_configured(self, tmp_output_dir):
+        summary = _mod.collect_ground_truth(["src/app.js"], tmp_output_dir, tool_config={})
         assert summary["tools_run"] == []
-        assert "eslint" in summary["tools_unavailable"]
+        assert summary["tools_failed"] == []
+        assert set(summary["tools_not_configured"]) == _mod.KNOWN_TOOLS
+        assert summary["findings"] == []
+
+    def test_empty_changed_files_produces_valid_schema(self, tmp_output_dir):
+        summary = _mod.collect_ground_truth([], tmp_output_dir, tool_config={})
+        assert "tools_run" in summary
+        assert "tools_failed" in summary
+        assert "tools_not_configured" in summary
+        assert "findings" in summary
 
     def test_summary_written_to_file(self, tmp_output_dir):
-        _mod.collect_ground_truth([], tmp_output_dir)
+        _mod.collect_ground_truth([], tmp_output_dir, tool_config={})
         summary_path = os.path.join(tmp_output_dir, "ground-truth-summary.json")
         assert os.path.exists(summary_path)
         with open(summary_path) as f:
@@ -645,74 +484,58 @@ class TestOutputSchema:
 
 
 # =============================================================================
-# Integration test — full pipeline with mocked tool execution
+# Integration tests — config-driven pipeline
 # =============================================================================
 
 
 class TestCollectGroundTruthIntegration:
-    """Integration tests for collect_ground_truth with mocked tools."""
+    """Integration tests for collect_ground_truth with mocked tool execution."""
 
-    @patch.object(_mod, "detect_tools", return_value={
-        "eslint": True, "phpcs": False, "semgrep": False,
-        "jest": False, "phpunit": False,
-    })
-    @patch.object(_mod, "run_eslint")
-    def test_eslint_findings_in_summary(
-        self, mock_eslint, mock_detect, tmp_output_dir
+    @patch.object(_mod, "run_configured_tool")
+    def test_configured_tool_runs_and_findings_collected(
+        self, mock_run, tmp_output_dir
     ):
-        # Mock eslint to write results file and return path
-        def write_results(files, out_dir, timeout):
+        def side_effect(tool, cmd, out_dir, files, timeout):
             _write_eslint_results(out_dir)
-            return os.path.join(out_dir, "eslint-results.json")
+            return True, ""
 
-        mock_eslint.side_effect = write_results
+        mock_run.side_effect = side_effect
+        config = {"eslint": "npx eslint --format json --output-file {output_file} {files}"}
 
         summary = _mod.collect_ground_truth(
-            ["src/app.js"], tmp_output_dir
+            ["src/app.js"], tmp_output_dir, tool_config=config
         )
         assert "eslint" in summary["tools_run"]
         assert len(summary["findings"]) >= 1
         assert summary["findings"][0]["tool"] == "eslint"
 
-    @patch.object(_mod, "detect_tools", return_value={
-        "eslint": False, "phpcs": True, "semgrep": True,
-        "jest": False, "phpunit": False,
-    })
-    @patch.object(_mod, "run_phpcs")
-    @patch.object(_mod, "run_semgrep")
-    def test_multiple_tools(
-        self, mock_semgrep, mock_phpcs, mock_detect, tmp_output_dir
-    ):
-        def write_phpcs(files, out_dir, timeout):
-            _write_phpcs_results(out_dir)
-            return os.path.join(out_dir, "phpcs-results.json")
+    @patch.object(_mod, "run_configured_tool")
+    def test_multiple_tools(self, mock_run, tmp_output_dir):
+        def side_effect(tool, cmd, out_dir, files, timeout):
+            if tool == "phpcs":
+                _write_phpcs_results(out_dir)
+            elif tool == "semgrep":
+                _write_semgrep_results(out_dir)
+            return True, ""
 
-        def write_semgrep(files, out_dir, timeout):
-            _write_semgrep_results(out_dir)
-            return os.path.join(out_dir, "semgrep-results.json")
-
-        mock_phpcs.side_effect = write_phpcs
-        mock_semgrep.side_effect = write_semgrep
+        mock_run.side_effect = side_effect
+        config = {
+            "phpcs": "phpcs {files}",
+            "semgrep": "semgrep {files}",
+        }
 
         summary = _mod.collect_ground_truth(
-            ["src/handler.php"], tmp_output_dir
+            ["src/handler.php"], tmp_output_dir, tool_config=config
         )
         assert "phpcs" in summary["tools_run"]
         assert "semgrep" in summary["tools_run"]
-        # Should have lint + security findings
         categories = {f["category"] for f in summary["findings"]}
         assert "lint" in categories
         assert "security" in categories
 
-    @patch.object(_mod, "detect_tools", return_value={
-        "eslint": False, "phpcs": False, "semgrep": False,
-        "jest": True, "phpunit": False,
-    })
-    @patch.object(_mod, "run_jest")
-    def test_test_results_included(
-        self, mock_jest, mock_detect, tmp_output_dir
-    ):
-        def write_jest(out_dir, timeout):
+    @patch.object(_mod, "run_configured_tool")
+    def test_test_results_included(self, mock_run, tmp_output_dir):
+        def side_effect(tool, cmd, out_dir, files, timeout):
             _write_jest_results(out_dir, success=False, failures=[
                 {
                     "name": "tests/auth.test.js",
@@ -720,44 +543,69 @@ class TestCollectGroundTruthIntegration:
                     "failureMessages": ["Assertion failed"],
                 }
             ])
-            return os.path.join(out_dir, "jest-results.json")
+            return True, ""
 
-        mock_jest.side_effect = write_jest
+        mock_run.side_effect = side_effect
+        config = {"jest": "npx jest --json --outputFile={output_file}"}
 
         summary = _mod.collect_ground_truth(
-            ["src/app.js"], tmp_output_dir
+            ["src/app.js"], tmp_output_dir, tool_config=config
         )
         assert "jest" in summary["tools_run"]
         assert "test_results" in summary
         assert summary["test_results"]["failed"] == 2
 
-    @patch.object(_mod, "detect_tools", return_value={
-        "eslint": False, "phpcs": False, "semgrep": False,
-        "jest": True, "phpunit": False,
-    })
-    def test_tests_skipped_for_test_only_changes(
-        self, mock_detect, tmp_output_dir
-    ):
-        """Test runners don't execute when only test files changed."""
-        summary = _mod.collect_ground_truth(
-            ["tests/app.test.js", "tests/handler.spec.js"],
-            tmp_output_dir,
-        )
-        # Jest should not be in tools_run because has_production_code is False
-        assert "jest" not in summary["tools_run"]
-        assert "test_results" not in summary
+    @patch.object(_mod, "run_configured_tool")
+    def test_failed_tool_in_tools_failed(self, mock_run, tmp_output_dir):
+        mock_run.return_value = (False, "eslint: command not found")
+        config = {"eslint": "eslint {files}"}
 
-    @patch.object(_mod, "detect_tools", return_value={
-        "eslint": True, "phpcs": False, "semgrep": False,
-        "jest": False, "phpunit": False,
-    })
-    @patch.object(_mod, "run_eslint", return_value=None)
-    def test_tool_failure_handled_gracefully(
-        self, mock_eslint, mock_detect, tmp_output_dir
-    ):
-        """Tool that fails to produce output is moved to skipped."""
         summary = _mod.collect_ground_truth(
-            ["src/app.js"], tmp_output_dir
+            ["src/app.js"], tmp_output_dir, tool_config=config
         )
-        assert "eslint" in summary["tools_skipped"]
+        assert "eslint" in summary["tools_failed"]
+        assert "eslint" not in summary["tools_run"]
         assert summary["findings"] == []
+
+    @patch.object(_mod, "run_configured_tool")
+    def test_unconfigured_tools_listed(self, mock_run, tmp_output_dir):
+        mock_run.return_value = (True, "")
+        # Only configure eslint — everything else should be not_configured
+        config = {"eslint": "eslint {files}"}
+        # Write mock results so eslint "succeeds"
+        _write_eslint_results(tmp_output_dir)
+
+        summary = _mod.collect_ground_truth(
+            ["src/app.js"], tmp_output_dir, tool_config=config
+        )
+        assert "eslint" not in summary["tools_not_configured"]
+        assert "phpcs" in summary["tools_not_configured"]
+        assert "semgrep" in summary["tools_not_configured"]
+        assert "jest" in summary["tools_not_configured"]
+
+    @patch.object(_mod, "run_configured_tool")
+    def test_coverage_included_when_configured(self, mock_run, tmp_output_dir):
+        def side_effect(tool, cmd, out_dir, files, timeout):
+            if tool == "jest_coverage":
+                # Write mock Jest coverage summary
+                data = {
+                    "total": {
+                        "lines": {"pct": 85.5},
+                        "branches": {"pct": 72.0},
+                        "functions": {"pct": 90.0},
+                        "statements": {"pct": 85.0},
+                    }
+                }
+                with open(os.path.join(out_dir, "jest-coverage-summary.json"), "w") as f:
+                    json.dump(data, f)
+            return True, ""
+
+        mock_run.side_effect = side_effect
+        config = {"jest_coverage": "npx jest --coverage"}
+
+        summary = _mod.collect_ground_truth(
+            ["src/app.js"], tmp_output_dir, tool_config=config
+        )
+        assert "jest_coverage" in summary["tools_run"]
+        assert "coverage" in summary
+        assert summary["coverage"]["overall_line"] > 0

@@ -20,21 +20,12 @@ import importlib.util
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-
-# ---------------------------------------------------------------------------
-# File type classification
-# ---------------------------------------------------------------------------
-
-PHP_EXTENSIONS = frozenset({".php"})
-JS_EXTENSIONS = frozenset({".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"})
-TEST_PATTERNS = ("test.", "spec.", "__tests__", "tests/", "test/")
 
 DEFAULT_TIMEOUT = 60  # seconds per tool
 
@@ -122,248 +113,6 @@ def run_configured_tool(
     return False, f"{tool_name}: command ran but produced no output file"
 
 
-def is_test_file(filepath: str) -> bool:
-    """Check if a file is a test file."""
-    lower = filepath.lower()
-    return any(pat in lower for pat in TEST_PATTERNS)
-
-
-def classify_changed_files(changed_files: List[str]) -> Dict[str, List[str]]:
-    """Classify changed files by type.
-
-    Returns dict with keys: 'php', 'js', 'all', 'has_production_code'.
-    """
-    php_files: List[str] = []
-    js_files: List[str] = []
-    has_production = False
-
-    for f in changed_files:
-        ext = os.path.splitext(f)[1].lower()
-        if ext in PHP_EXTENSIONS:
-            php_files.append(f)
-        elif ext in JS_EXTENSIONS:
-            js_files.append(f)
-
-        if not is_test_file(f):
-            has_production = True
-
-    return {
-        "php": php_files,
-        "js": js_files,
-        "all": changed_files,
-        "has_production_code": has_production,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Tool detection
-# ---------------------------------------------------------------------------
-
-
-def detect_eslint() -> bool:
-    """Check if ESLint is available in the project."""
-    # Check for ESLint config files
-    config_files = [
-        ".eslintrc.js",
-        ".eslintrc.json",
-        ".eslintrc.yml",
-        ".eslintrc.yaml",
-        ".eslintrc",
-        "eslint.config.js",
-        "eslint.config.mjs",
-        "eslint.config.cjs",
-    ]
-    if any(os.path.exists(cf) for cf in config_files):
-        return shutil.which("npx") is not None
-
-    # Check package.json for eslint dependency
-    if os.path.exists("package.json"):
-        try:
-            with open("package.json") as f:
-                pkg = json.load(f)
-            deps = {
-                **pkg.get("dependencies", {}),
-                **pkg.get("devDependencies", {}),
-            }
-            if "eslint" in deps:
-                return shutil.which("npx") is not None
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    return False
-
-
-def detect_phpcs() -> bool:
-    """Check if PHPCS is available."""
-    return shutil.which("phpcs") is not None
-
-
-def detect_semgrep() -> bool:
-    """Check if Semgrep is available."""
-    return shutil.which("semgrep") is not None
-
-
-def detect_jest() -> bool:
-    """Check if Jest is available in the project."""
-    if not os.path.exists("package.json"):
-        return False
-    try:
-        with open("package.json") as f:
-            pkg = json.load(f)
-        deps = {
-            **pkg.get("dependencies", {}),
-            **pkg.get("devDependencies", {}),
-        }
-        return "jest" in deps and shutil.which("npx") is not None
-    except (json.JSONDecodeError, OSError):
-        return False
-
-
-def detect_phpunit() -> bool:
-    """Check if PHPUnit is available."""
-    return (
-        os.path.exists("phpunit.xml") or os.path.exists("phpunit.xml.dist")
-    ) and shutil.which("phpunit") is not None
-
-
-def detect_tools() -> Dict[str, bool]:
-    """Detect all available tools."""
-    return {
-        "eslint": detect_eslint(),
-        "phpcs": detect_phpcs(),
-        "semgrep": detect_semgrep(),
-        "jest": detect_jest(),
-        "phpunit": detect_phpunit(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Tool execution
-# ---------------------------------------------------------------------------
-
-
-def run_tool(
-    cmd: List[str], timeout: int, label: str
-) -> Tuple[bool, str, str]:
-    """Run a tool with timeout. Returns (success, stdout, stderr)."""
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
-        )
-        # Many tools exit non-zero when findings exist — that's still success
-        return True, result.stdout, result.stderr
-    except subprocess.TimeoutExpired:
-        return False, "", f"{label} timed out after {timeout}s"
-    except FileNotFoundError:
-        return False, "", f"{label} command not found"
-    except OSError as e:
-        return False, "", f"{label} error: {e}"
-
-
-def run_eslint(
-    files: List[str], output_dir: str, timeout: int
-) -> Optional[str]:
-    """Run ESLint on specific files. Returns path to results file or None."""
-    if not files:
-        return None
-
-    output_file = os.path.join(output_dir, "eslint-results.json")
-    cmd = ["npx", "eslint", "--format", "json", "--output-file", output_file]
-    cmd.extend(files)
-
-    ok, _, stderr = run_tool(cmd, timeout, "ESLint")
-    # ESLint writes to output file even on violations (exit 1)
-    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-        return output_file
-    if not ok:
-        print(f"  ESLint: {stderr}", file=sys.stderr)
-    return None
-
-
-def run_phpcs(
-    files: List[str], output_dir: str, timeout: int
-) -> Optional[str]:
-    """Run PHPCS on specific files. Returns path to results file or None."""
-    if not files:
-        return None
-
-    output_file = os.path.join(output_dir, "phpcs-results.json")
-
-    # Try WordPress-Extra first, fall back to PSR12
-    for standard in ("WordPress-Extra", "PSR12"):
-        cmd = [
-            "phpcs",
-            f"--standard={standard}",
-            "--report=json",
-            f"--report-file={output_file}",
-        ]
-        cmd.extend(files)
-
-        ok, _, stderr = run_tool(cmd, timeout, f"PHPCS ({standard})")
-        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-            return output_file
-        # If standard not found, try next
-        if "standard" in stderr.lower() and "not found" in stderr.lower():
-            continue
-        break
-
-    return None
-
-
-def run_semgrep(
-    files: List[str], output_dir: str, timeout: int
-) -> Optional[str]:
-    """Run Semgrep on specific files. Returns path to results file or None."""
-    if not files:
-        return None
-
-    output_file = os.path.join(output_dir, "semgrep-results.json")
-    cmd = [
-        "semgrep",
-        "--config=auto",
-        "--json",
-        f"--output={output_file}",
-    ]
-    cmd.extend(files)
-
-    ok, _, stderr = run_tool(cmd, timeout, "Semgrep")
-    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-        return output_file
-    if not ok:
-        print(f"  Semgrep: {stderr}", file=sys.stderr)
-    return None
-
-
-def run_jest(output_dir: str, timeout: int) -> Optional[str]:
-    """Run Jest test suite. Returns path to results file or None."""
-    output_file = os.path.join(output_dir, "jest-results.json")
-    cmd = [
-        "npx",
-        "jest",
-        "--json",
-        f"--outputFile={output_file}",
-        "--forceExit",
-    ]
-
-    ok, _, stderr = run_tool(cmd, timeout, "Jest")
-    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-        return output_file
-    if not ok:
-        print(f"  Jest: {stderr}", file=sys.stderr)
-    return None
-
-
-def run_phpunit(output_dir: str, timeout: int) -> Optional[str]:
-    """Run PHPUnit test suite. Returns path to results file or None."""
-    output_file = os.path.join(output_dir, "phpunit-results.json")
-    cmd = ["phpunit", f"--log-json={output_file}"]
-
-    ok, _, stderr = run_tool(cmd, timeout, "PHPUnit")
-    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
-        return output_file
-    if not ok:
-        print(f"  PHPUnit: {stderr}", file=sys.stderr)
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -603,101 +352,68 @@ def _file_in_changeset(filepath: str, changed_files_set: frozenset) -> bool:
 def collect_ground_truth(
     changed_files: List[str],
     output_dir: str,
+    tool_config: Optional[Dict[str, str]] = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> Dict[str, Any]:
-    """Run all available tools and collect ground truth findings.
+    """Run configured tools and collect ground truth findings.
+
+    Args:
+        changed_files: List of changed file paths.
+        output_dir: Directory to write results to.
+        tool_config: Mapping of tool name -> command template. If None or empty,
+                     all tools are marked as not_configured.
+        timeout: Per-tool timeout in seconds.
 
     Returns the ground-truth summary dict (also written to output_dir).
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    classified = classify_changed_files(changed_files)
-    available = detect_tools()
-    changed_set = frozenset(changed_files)
+    if tool_config is None:
+        tool_config = {}
 
+    changed_set = frozenset(changed_files)
     tools_run: List[str] = []
-    tools_skipped: List[str] = []
-    tools_unavailable: List[str] = []
+    tools_failed: List[str] = []
+    tools_not_configured = sorted(KNOWN_TOOLS - set(tool_config.keys()))
     all_findings: List[Dict[str, Any]] = []
     test_results: Optional[Dict[str, Any]] = None
     coverage: Optional[Dict[str, Any]] = None
 
-    # --- Linters (run all, then parse once) ---
-
-    # ESLint (JS/TS files)
-    if classified["js"]:
-        if available["eslint"]:
-            if run_eslint(classified["js"], output_dir, timeout):
-                tools_run.append("eslint")
-            else:
-                tools_skipped.append("eslint")
+    # --- Run each configured tool ---
+    for tool_name, cmd_template in tool_config.items():
+        ok, err = run_configured_tool(
+            tool_name, cmd_template, output_dir, changed_files, timeout
+        )
+        if ok:
+            tools_run.append(tool_name)
         else:
-            tools_unavailable.append("eslint")
+            tools_failed.append(tool_name)
+            if err:
+                print(f"  {err}", file=sys.stderr)
 
-    # PHPCS (PHP files)
-    if classified["php"]:
-        if available["phpcs"]:
-            if run_phpcs(classified["php"], output_dir, timeout):
-                tools_run.append("phpcs")
-            else:
-                tools_skipped.append("phpcs")
-        else:
-            tools_unavailable.append("phpcs")
+    # --- Parse results from tools that ran ---
 
-    # Parse all linter results at once (handles both eslint + phpcs)
+    # Linters
     if "eslint" in tools_run or "phpcs" in tools_run:
         all_findings.extend(parse_linter_findings(output_dir, changed_set))
 
-    # --- Security ---
+    # Security
+    if "semgrep" in tools_run:
+        all_findings.extend(parse_security_findings(output_dir, changed_set))
 
-    # Semgrep (all file types)
-    if classified["all"]:
-        if available["semgrep"]:
-            result_file = run_semgrep(
-                classified["all"], output_dir, timeout
-            )
-            if result_file:
-                tools_run.append("semgrep")
-                all_findings.extend(
-                    parse_security_findings(output_dir, changed_set)
-                )
-            else:
-                tools_skipped.append("semgrep")
-        else:
-            tools_unavailable.append("semgrep")
-
-    # --- Tests (only if production code changed) ---
-
-    if classified["has_production_code"]:
-        # Jest
-        if available["jest"]:
-            result_file = run_jest(output_dir, timeout)
-            if result_file:
-                tools_run.append("jest")
-            else:
-                tools_skipped.append("jest")
-        else:
-            tools_unavailable.append("jest")
-
-        # PHPUnit
-        if available["phpunit"]:
-            result_file = run_phpunit(output_dir, timeout)
-            if result_file:
-                tools_run.append("phpunit")
-            else:
-                tools_skipped.append("phpunit")
-        else:
-            tools_unavailable.append("phpunit")
-
-        # Parse test results (covers all frameworks)
+    # Tests
+    if "jest" in tools_run or "phpunit" in tools_run:
         test_results = parse_test_results(output_dir)
 
-    # --- Build summary ---
+    # Coverage
+    if "jest_coverage" in tools_run or "phpunit_coverage" in tools_run:
+        coverage = parse_coverage_results(output_dir, changed_set)
 
+    # --- Build summary ---
     summary: Dict[str, Any] = {
         "tools_run": tools_run,
-        "tools_skipped": tools_skipped,
-        "tools_unavailable": tools_unavailable,
+        "tools_failed": tools_failed,
+        "tools_not_configured": tools_not_configured,
         "findings": all_findings,
     }
 
@@ -740,6 +456,11 @@ def main():
         help="Path to file containing changed files (one per line).",
     )
     parser.add_argument(
+        "--tool-config",
+        default=None,
+        help="Path to tool-config.json with tool commands.",
+    )
+    parser.add_argument(
         "--timeout",
         type=int,
         default=DEFAULT_TIMEOUT,
@@ -760,26 +481,18 @@ def main():
                 line.strip() for line in f if line.strip()
             )
 
-    if not changed_files:
-        print("No changed files provided. Nothing to check.", file=sys.stderr)
-        # Write empty summary
-        os.makedirs(args.output_dir, exist_ok=True)
-        summary = {
-            "tools_run": [],
-            "tools_skipped": [],
-            "tools_unavailable": [],
-            "findings": [],
-        }
-        with open(
-            os.path.join(args.output_dir, "ground-truth-summary.json"), "w"
-        ) as f:
-            json.dump(summary, f, indent=2)
-        print(json.dumps(summary, indent=2))
-        sys.exit(0)
+    # Load tool config
+    tool_config: Dict[str, str] = {}
+    if args.tool_config and os.path.exists(args.tool_config):
+        try:
+            tool_config = load_tool_config(args.tool_config)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  Warning: could not load tool config: {e}", file=sys.stderr)
 
     summary = collect_ground_truth(
         changed_files=changed_files,
         output_dir=args.output_dir,
+        tool_config=tool_config,
         timeout=args.timeout,
     )
 
