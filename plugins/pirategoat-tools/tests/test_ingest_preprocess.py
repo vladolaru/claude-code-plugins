@@ -1059,10 +1059,10 @@ class TestStructuredSourceAgents:
 
 
 class TestGroundTruthFastTrack:
-    """Tests for ground_truth_match -> verified pre-classification."""
+    """Tests for ground_truth_match -> needs_verification with corroboration flag."""
 
-    def test_ground_truth_match_classified_as_verified(self, tmp_output_dir):
-        """Finding with ground_truth_match=True gets 'verified' classification."""
+    def test_ground_truth_match_classified_as_needs_verification_with_flag(self, tmp_output_dir):
+        """Finding with ground_truth_match=True gets needs_verification + corroboration flag."""
         finding = _make_finding(title="Unused var", file="src/app.php", line=25)
         finding["ground_truth_match"] = True
         finding["ground_truth_tool"] = "phpcs"
@@ -1077,7 +1077,8 @@ class TestGroundTruthFastTrack:
             git_range="main..HEAD",
         )
         processed = result["findings"][0]
-        assert processed["pre_classification"] == "verified"
+        assert processed["pre_classification"] == "needs_verification"
+        assert processed["ground_truth_corroborated"] is True
         assert processed["scope_status"] == "IN_HUNK"
 
     def test_no_ground_truth_match_classified_as_needs_verification(self, tmp_output_dir):
@@ -1095,6 +1096,7 @@ class TestGroundTruthFastTrack:
         )
         processed = result["findings"][0]
         assert processed["pre_classification"] == "needs_verification"
+        assert processed["ground_truth_corroborated"] is False
 
     def test_ground_truth_match_false_classified_as_needs_verification(self, tmp_output_dir):
         """Finding with ground_truth_match=False gets 'needs_verification'."""
@@ -1112,6 +1114,7 @@ class TestGroundTruthFastTrack:
         )
         processed = result["findings"][0]
         assert processed["pre_classification"] == "needs_verification"
+        assert processed["ground_truth_corroborated"] is False
 
     def test_ground_truth_out_of_scope_stays_out(self, tmp_output_dir):
         """Ground truth match doesn't override out-of-scope classification."""
@@ -1130,9 +1133,10 @@ class TestGroundTruthFastTrack:
         processed = result["findings"][0]
         assert processed["pre_classification"] == "out_of_scope"
         assert processed["scope_status"] == "OUT_OF_SCOPE"
+        assert processed["ground_truth_corroborated"] is False  # out of scope doesn't count
 
-    def test_verified_count_in_summary(self, tmp_output_dir):
-        """Summary includes verified_by_ground_truth count."""
+    def test_corroborated_count_in_summary(self, tmp_output_dir):
+        """Summary includes ground_truth_corroborated count."""
         f1 = _make_finding(title="GT match", file="src/app.php", line=25)
         f1["ground_truth_match"] = True
         f2 = _make_finding(title="No match", file="src/app.php", line=26)
@@ -1146,5 +1150,5 @@ class TestGroundTruthFastTrack:
             diff_hunks={"src/app.php": [(20, 30)]},
             git_range="main..HEAD",
         )
-        assert result["summary"]["verified_by_ground_truth"] == 1
-        assert result["summary"]["needs_verification"] == 1
+        assert result["summary"]["ground_truth_corroborated"] == 1
+        assert result["summary"]["needs_verification"] == 2  # both GT-matched and regular are needs_verification now

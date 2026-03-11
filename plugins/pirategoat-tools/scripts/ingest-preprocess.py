@@ -101,8 +101,7 @@ def classify_finding(
         OUT_OF_SCOPE           — file not in diff, or line far from all hunks
 
     Pre-classification values:
-        verified           — corroborated by ground truth tools; skips LLM verification
-        needs_verification — in scope but needs LLM confirmation
+        needs_verification — in scope, needs LLM confirmation
         out_of_scope       — outside changed code
 
     Returns:
@@ -111,15 +110,14 @@ def classify_finding(
     file_path = finding.get("file", "")
     line = finding.get("line")
 
-    # Check 0: Ground truth match — fast-track to verified
+    # Check 0: Ground truth match — used for corroboration flag (no longer fast-tracks)
     is_gt_match = finding.get("ground_truth_match", False)
 
     # Check 1: Is the file in the diff?
     if file_path not in changed_files:
         return "OUT_OF_SCOPE", "file not in diff", "out_of_scope"
 
-    # Determine classification: verified if ground truth matched, else needs_verification
-    in_scope_class = "verified" if is_gt_match else "needs_verification"
+    in_scope_class = "needs_verification"
 
     # Check 2: Does the finding have a line number?
     file_hunks = diff_hunks.get(file_path, [])
@@ -216,7 +214,7 @@ def preprocess_findings(
     processed_findings = []
     scope_counts = {"IN_HUNK": 0, "INTERACTS_WITH_CHANGE": 0, "FILE_LEVEL": 0, "OUT_OF_SCOPE": 0}
     needs_verification_count = 0
-    verified_by_ground_truth_count = 0
+    ground_truth_corroborated_count = 0
     auto_classified_count = 0
 
     for idx, finding in enumerate(sorted_raw, start=1):
@@ -242,18 +240,19 @@ def preprocess_findings(
             "description": finding.get("description", ""),
             "recommendation": finding.get("recommendation", ""),
             "category": finding.get("category", "general"),
+            "ground_truth_corroborated": bool(finding.get("ground_truth_match", False)) and scope_status != "OUT_OF_SCOPE",
         }
 
         processed_findings.append(processed)
         scope_counts[scope_status] = scope_counts.get(scope_status, 0) + 1
 
-        if pre_classification == "verified":
-            verified_by_ground_truth_count += 1
-            auto_classified_count += 1
-        elif pre_classification == "needs_verification":
+        if pre_classification == "needs_verification":
             needs_verification_count += 1
         else:
             auto_classified_count += 1
+
+        if finding.get("ground_truth_match", False) and scope_status != "OUT_OF_SCOPE":
+            ground_truth_corroborated_count += 1
 
     # in_scope = everything except OUT_OF_SCOPE (backward compatible)
     in_scope_count = sum(v for k, v in scope_counts.items() if k != "OUT_OF_SCOPE")
@@ -269,7 +268,7 @@ def preprocess_findings(
             "out_of_scope": out_of_scope_count,
             "by_scope_status": scope_counts,
             "needs_verification": needs_verification_count,
-            "verified_by_ground_truth": verified_by_ground_truth_count,
+            "ground_truth_corroborated": ground_truth_corroborated_count,
             "auto_classified": auto_classified_count,
         },
     }
@@ -372,8 +371,8 @@ def main():
         print(f"  In scope:            {s['in_scope']}")
         print(f"  Out of scope:        {s['out_of_scope']}")
         print(f"  Needs verification:  {s['needs_verification']}")
-        if s.get("verified_by_ground_truth", 0) > 0:
-            print(f"  Verified (ground truth): {s['verified_by_ground_truth']}")
+        if s.get("ground_truth_corroborated", 0) > 0:
+            print(f"  Ground truth corroborated: {s['ground_truth_corroborated']}")
         print(f"  Auto-classified:     {s['auto_classified']}")
         print(f"  Output: {os.path.join(args.output_dir, 'ingest-preprocessed.json')}")
 
