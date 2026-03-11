@@ -37,6 +37,51 @@ TEST_PATTERNS = ("test.", "spec.", "__tests__", "tests/", "test/")
 
 DEFAULT_TIMEOUT = 60  # seconds per tool
 
+# ---------------------------------------------------------------------------
+# Tool configuration
+# ---------------------------------------------------------------------------
+
+KNOWN_TOOLS = frozenset({
+    "eslint", "phpcs", "semgrep",
+    "jest", "jest_coverage",
+    "phpunit", "phpunit_coverage",
+})
+
+TOOL_OUTPUT_FILES = {
+    "eslint": "eslint-results.json",
+    "phpcs": "phpcs-results.json",
+    "semgrep": "semgrep-results.json",
+    "jest": "jest-results.json",
+    "jest_coverage": "jest-coverage-summary.json",
+    "phpunit": "phpunit-results.json",
+    "phpunit_coverage": "phpunit-coverage.xml",
+}
+
+
+def load_tool_config(config_path: str) -> Dict[str, str]:
+    """Load tool configuration from a JSON file.
+
+    Returns a dict mapping tool name -> command template.
+    Unknown tool names and invalid entries are skipped with warnings.
+    """
+    with open(config_path) as f:
+        raw = json.load(f)
+
+    config: Dict[str, str] = {}
+    for tool_name, entry in raw.items():
+        if tool_name not in KNOWN_TOOLS:
+            print(f"  Warning: unknown tool '{tool_name}', skipping", file=sys.stderr)
+            continue
+        if not isinstance(entry, dict) or "cmd" not in entry:
+            print(f"  Warning: tool '{tool_name}' missing 'cmd', skipping", file=sys.stderr)
+            continue
+        cmd = entry["cmd"].strip()
+        if not cmd:
+            continue
+        config[tool_name] = cmd
+
+    return config
+
 
 def is_test_file(filepath: str) -> bool:
     """Check if a file is a test file."""

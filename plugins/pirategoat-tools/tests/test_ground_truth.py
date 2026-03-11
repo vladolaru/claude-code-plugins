@@ -418,6 +418,94 @@ class TestFileInChangeset:
 
 
 # =============================================================================
+# Tool config loader tests
+# =============================================================================
+
+
+class TestLoadToolConfig:
+    """Tests for load_tool_config — loading and validating tool-config.json."""
+
+    def test_valid_config_loaded(self, tmp_output_dir):
+        config = {
+            "eslint": {"cmd": "npx eslint --format json --output-file {output_file} {files}"},
+            "jest": {"cmd": "npx jest --json --outputFile={output_file}"},
+        }
+        path = os.path.join(tmp_output_dir, "tool-config.json")
+        with open(path, "w") as f:
+            json.dump(config, f)
+        result = _mod.load_tool_config(path)
+        assert result == {
+            "eslint": "npx eslint --format json --output-file {output_file} {files}",
+            "jest": "npx jest --json --outputFile={output_file}",
+        }
+
+    def test_unknown_tool_skipped(self, tmp_output_dir):
+        config = {
+            "eslint": {"cmd": "npx eslint {files}"},
+            "unknown_tool": {"cmd": "run-something"},
+        }
+        path = os.path.join(tmp_output_dir, "tool-config.json")
+        with open(path, "w") as f:
+            json.dump(config, f)
+        result = _mod.load_tool_config(path)
+        assert "eslint" in result
+        assert "unknown_tool" not in result
+
+    def test_missing_cmd_skipped(self, tmp_output_dir):
+        config = {
+            "eslint": {"version": "8.0"},  # no cmd key
+        }
+        path = os.path.join(tmp_output_dir, "tool-config.json")
+        with open(path, "w") as f:
+            json.dump(config, f)
+        result = _mod.load_tool_config(path)
+        assert result == {}
+
+    def test_null_entry_skipped(self, tmp_output_dir):
+        config = {
+            "eslint": {"cmd": "npx eslint {files}"},
+            "phpcs": None,
+        }
+        path = os.path.join(tmp_output_dir, "tool-config.json")
+        with open(path, "w") as f:
+            json.dump(config, f)
+        result = _mod.load_tool_config(path)
+        assert "eslint" in result
+        assert "phpcs" not in result
+
+    def test_empty_cmd_skipped(self, tmp_output_dir):
+        config = {"eslint": {"cmd": "  "}}
+        path = os.path.join(tmp_output_dir, "tool-config.json")
+        with open(path, "w") as f:
+            json.dump(config, f)
+        result = _mod.load_tool_config(path)
+        assert result == {}
+
+    def test_empty_config_returns_empty(self, tmp_output_dir):
+        path = os.path.join(tmp_output_dir, "tool-config.json")
+        with open(path, "w") as f:
+            json.dump({}, f)
+        result = _mod.load_tool_config(path)
+        assert result == {}
+
+    def test_all_seven_tools_accepted(self, tmp_output_dir):
+        config = {
+            "eslint": {"cmd": "a"},
+            "phpcs": {"cmd": "b"},
+            "semgrep": {"cmd": "c"},
+            "jest": {"cmd": "d"},
+            "jest_coverage": {"cmd": "e"},
+            "phpunit": {"cmd": "f"},
+            "phpunit_coverage": {"cmd": "g"},
+        }
+        path = os.path.join(tmp_output_dir, "tool-config.json")
+        with open(path, "w") as f:
+            json.dump(config, f)
+        result = _mod.load_tool_config(path)
+        assert len(result) == 7
+
+
+# =============================================================================
 # Output schema tests
 # =============================================================================
 
