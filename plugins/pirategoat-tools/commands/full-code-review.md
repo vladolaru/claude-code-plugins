@@ -212,19 +212,21 @@ Do not present results to the user yet — the pipeline continues to the decisio
 
 ## Step 7: Decision Critic
 
-Stress-test the review's conclusions by running the decision-critic on the reconciled report.
+Stress-test the review's conclusions by dispatching the decision-reviewer agent:
 
 ```
-Skill tool:
-  skill: pirategoat-tools:decision-critic
-  args: <OUTPUT_DIR>/reconciled.md
+Agent tool:
+  subagent_type: pirategoat-tools:decision-reviewer
+  prompt: |
+    Document Path: ${OUTPUT_DIR}/reconciled.md
+    Output Directory: ${OUTPUT_DIR}
 ```
 
-Follow the skill's full 7-step workflow. After the SYNTHESIS step produces a verdict:
+The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Parse the agent's return message for the `Verdict:` line, then act on it:
 
 - **STAND:** The review conclusions are sound. No report updates needed.
-- **REVISE:** Update `reconciled.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items) based on the critic's analysis.
-- **ESCALATE:** Update `reconciled.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings.
+- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. Update `reconciled.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items).
+- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. Update `reconciled.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings.
 
 Do not present results between Step 6 and Step 7 — run them back-to-back.
 
