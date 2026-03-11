@@ -86,7 +86,8 @@
         "./agents/history-insights-reviewer.md",
         "./agents/dead-code-reviewer.md",
         "./agents/a11y-reviewer.md",
-        "./agents/reliability-reviewer.md"
+        "./agents/reliability-reviewer.md",
+        "./agents/decision-reviewer.md"
       ]
     },
     {
