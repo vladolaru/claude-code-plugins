@@ -246,6 +246,13 @@ class TestOptionalFields:
                     f"Agent '{agent_name}': file_history must be a boolean"
                 )
 
+    def test_no_semantic_filter_is_boolean(self, agents):
+        for agent_name, config in agents.items():
+            if "no_semantic_filter" in config:
+                assert isinstance(config["no_semantic_filter"], bool), (
+                    f"Agent '{agent_name}': no_semantic_filter must be a boolean"
+                )
+
     def test_triage_criteria_strings(self, agents):
         for agent_name, config in agents.items():
             if "triage_criteria" in config:

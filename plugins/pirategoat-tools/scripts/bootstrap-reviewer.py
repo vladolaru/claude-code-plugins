@@ -589,6 +589,8 @@ def main():
     if config["domain"] is not None:
         # Run primary scope discovery
         scope_flags = list(config.get("scope_flags", []))
+        if config.get("no_semantic_filter", False):
+            scope_flags.append("--no-semantic-filter")
         rc, scope_output = run_scope_discovery(
             plugin_root, config["domain"], scope_flags, args.range,
             output_dir=args.output_dir,
@@ -620,6 +622,8 @@ def main():
         # Run secondary domain scope discovery (e.g., config-ops for security/architecture)
         for sec_domain in config.get("secondary_domains", []):
             sec_flags = list(config.get("scope_flags", []))
+            if config.get("no_semantic_filter", False):
+                sec_flags.append("--no-semantic-filter")
             sec_rc, sec_output = run_scope_discovery(
                 plugin_root, sec_domain, sec_flags, args.range,
                 output_dir=args.output_dir,

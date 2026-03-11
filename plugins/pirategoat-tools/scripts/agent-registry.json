@@ -81,6 +81,7 @@
       "domain": "wp-architecture",
       "protocols": ["reviewer"],
       "scope_flags": [],
+      "no_semantic_filter": true,
       "dispatch_class": "conditional",
       "triage_criteria": [
         "PHP files using WordPress APIs (hooks, filters, options, transients, REST)",
@@ -132,6 +133,7 @@
       "domain": "patterns",
       "protocols": ["reviewer"],
       "scope_flags": [],
+      "no_semantic_filter": true,
       "extra_scope": ["--base-ref-only"],
       "dispatch_class": "always",
       "focus": "Existing patterns, consolidation",
