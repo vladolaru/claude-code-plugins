@@ -96,11 +96,14 @@ Only keys you include override defaults. Omitted keys keep their built-in values
 
 ### Disableable Rules
 
-All rules in the block and ask tiers can be disabled except **self-protection** (which prevents the agent from modifying the hook's own config or script files). Available rule IDs:
+Most rules can be disabled via `disable_rules` in your config file. The following **cannot** be disabled:
 
-**Block tier:** `destructive_deletion`, `alternative_deletion`, `disk_formatting`, `network_exfiltration`, `credential_access`, `package_publishing`, `ssh_remote_destruction`, `github_repo_deletion`, `zero_access_paths`, `git_bare_push`
+- **Self-protection** — prevents the agent from modifying the hook's own config or plugin files (hardcoded, not a named rule)
+- `destructive_deletion`, `network_exfiltration`, `credential_access`, `zero_access_paths` — critical safety rules that are non-disableable to prevent defense-in-depth bypass
 
-**Ask tier:** `git_force_push`, `git_hard_reset`, `git_discard_changes`, `git_destroy_stash`, `git_history_rewrite`, `git_config_changes`, `git_other_dangerous`, `permission_changes`, `brew_commands`, `docker_destructive`, `database_destructive`, `terraform_destructive`, `github_cicd_ops`, `sensitive_write_target`, `inline_interpreter`, `inline_heredoc`
+**Disableable block tier:** `alternative_deletion`, `disk_formatting`, `package_publishing`, `ssh_remote_destruction`, `github_repo_deletion`, `git_bare_push`
+
+**Disableable ask tier:** `git_force_push`, `git_hard_reset`, `git_discard_changes`, `git_destroy_stash`, `git_history_rewrite`, `git_config_changes`, `git_other_dangerous`, `permission_changes`, `brew_commands`, `docker_destructive`, `database_destructive`, `terraform_destructive`, `github_cicd_ops`, `sensitive_write_target`, `inline_interpreter`, `inline_heredoc`
 
 ## Installation
 

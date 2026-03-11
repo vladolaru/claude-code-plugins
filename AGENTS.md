@@ -101,7 +101,8 @@ YOLO mode safety net — PreToolUse hook that blocks destructive commands, asks 
 
 | File/Directory | Contents |
 |---|---|
-| `scripts/pre-tool-use-safety.py` | **Single source of truth** — RULES dict, detection logic, allowlist, all runtime behavior |
+| `scripts/pre-tool-use-safety.py` | Runtime entrypoint — compatibility shim re-exporting from the internal package |
+| `scripts/yoloing_safe/` | Internal implementation package: config, shell parsing, path handling, registry, runtime, and domain rule modules (`rules/filesystem.py`, `rules/git.py`, `rules/network.py`, `rules/system.py`) |
 | `hooks/hooks.json` | Hook registration for PreToolUse event |
 | `tests/` | Unit, integration, meta, and e2e tests |
 | `AGENTS.md` | Full development instructions, rule workflows, testing |
