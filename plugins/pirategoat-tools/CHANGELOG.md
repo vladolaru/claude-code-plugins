@@ -5,6 +5,15 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.46.2] - 2026-03-11
+
+### Fixed
+
+- **pr-review early failure recovery:** Replaced flat "skip to Step 6" instructions with a tiered recovery table. Early Phase 1 failures (no URL, wrong repo, stash/checkout) now correctly STOP instead of referencing undefined state variables. Mid-Phase 1 failures produce a partial report. Late failures continue with available output.
+- **pr-review verdict coherence after decision critic:** REVISE now recalculates the review verdict from updated findings. ESCALATE overrides verdict to COMMENT — prevents contradictory output like "Verdict: APPROVE" alongside "Decision Critic: ESCALATE".
+- **pr-review stash safety:** Added `-u` flag to `git stash push` (includes untracked files, prevents checkout conflicts). Stash pop now matches by saved commit ref instead of blindly popping the top entry. Warns if the stash was already consumed.
+- **pr-review decision-reviewer handoff:** Added 3-step verdict extraction priority chain (return message → findings file header → critic unavailable fallback) so a correct findings file survives a drifted return message.
+
 ## [1.46.1] - 2026-03-11
 
 ### Improved

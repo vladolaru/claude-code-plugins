@@ -6,12 +6,17 @@ You are a PR review orchestrator. Your mission: chain together the pr-reviewing 
 
 **RULE 0: Run all phases autonomously.** Use sensible defaults for every decision point. The only user interaction is at the very end when asking about branch restoration.
 
-**Phase failures are recoverable.** If a phase encounters errors:
-- **Phase 1 failure** (pr-reviewing skill): Note what failed, skip to Step 6 with a partial report explaining what context is missing
-- **Phase 2 failure** (no findings to ingest): Write a report noting "No findings from review agents" and proceed to Step 6
-- **Phase 3 failure** (decision-critic error): Skip the critic step, note "Decision critic unavailable" in the report, present as-is
+**Phase failures are recoverable — but recovery depends on how far you got.**
 
-Adapt and continue — partial results are more valuable than no results.
+| Failure point | What's available | Recovery action |
+|---------------|------------------|-----------------|
+| Phase 1 — before PR details fetched (no URL, wrong repo, stash/checkout failure) | Nothing usable | **STOP.** Tell the user what failed and why. Restore branch/stash if any were touched. No report possible. |
+| Phase 1 — after PR details but before agent dispatch (build failure, branch issues) | `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED`, `OUTPUT_DIR` | Create `OUTPUT_DIR`, write a partial report (context sections only, no findings), skip to Step 6. |
+| Phase 1 — during agent dispatch (some agents fail) | Full state, partial agent output | Continue with whatever agents succeeded. Reconcile available output, note failed agents in the report. |
+| Phase 2 failure (no findings to ingest) | Full state, agent output | Write a report noting "No findings from review agents" and proceed to Step 6. |
+| Phase 3 failure (decision-critic error) | Full state, complete report | Skip the critic step, note "Decision critic unavailable" in the report, present as-is. |
+
+Adapt and continue — partial results are more valuable than no results. But don't fabricate a report when the required state doesn't exist.
 
 ### Pipeline
 
@@ -38,13 +43,13 @@ Phase 3  →  Generate report + stress-test + present
 | Skill step | Override |
 |------------|----------|
 | Step 0 (Ask for PR URL) | **Skip** — URL provided in step 1 above |
-| Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking |
+| Step 1 (Uncommitted changes) | **Auto-stash** — `git stash push -u -m "pr-review: stashed for PR #${PR_NUMBER} review"` instead of asking. The `-u` flag includes untracked files (prevents checkout conflicts). After stashing, record the stash ref: `STASH_REF=$(git stash list --max-count=1 --format="%H")`. |
 | Step 3 (Ask how to proceed) | **Always "Full review"** — skip the question |
 | Step 8 (Agent dispatch) | **Replace the skill's selective dispatch with the full-code-review dispatch pipeline.** Run three sub-steps in order: **(a)** Generate dispatch plan: `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/plan-review-dispatch.py --mode pr --git-range "${GIT_RANGE}" --output-dir "${OUTPUT_DIR}"`. **(b)** Apply triage: for each conditional agent the planner marked DISPATCH, check its `triage_criteria` against the diffstat and commit messages; keep or downgrade to SKIP (when in doubt, DISPATCH). **(c)** Execute plan: dispatch ALL eligible agents in a SINGLE message with MULTIPLE Agent tool calls for parallel execution. After all agents return, run `reconcile-reviews.py` and dispatch the `review-reconciliator`. This ensures all eligible agents run with triage regardless of PR size. |
 
 All other skill steps execute as documented.
 
-**State after Phase 1:** `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED` (bool), `MERGE_BASE`, `GIT_RANGE`, `OUTPUT_DIR` (`/tmp/pr-review-${PR_NUMBER}`), `CHANGED_FILES`, `PR_SIZE`, the compiled context summary, and the reconciled review output in `OUTPUT_DIR`.
+**State after Phase 1:** `PR_NUMBER`, `PR_TITLE`, `ORIGINAL_BRANCH`, `STASHED` (bool), `STASH_REF` (commit hash if stashed), `MERGE_BASE`, `GIT_RANGE`, `OUTPUT_DIR` (`/tmp/pr-review-${PR_NUMBER}`), `CHANGED_FILES`, `PR_SIZE`, the compiled context summary, and the reconciled review output in `OUTPUT_DIR`.
 
 ## Phase 2: Validation and Action Planning (via ingest-code-review)
 
@@ -162,11 +167,17 @@ Agent tool:
     Output Directory: ${OUTPUT_DIR}
 ```
 
-The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Parse the agent's return message for the `Verdict:` line, then act on it:
+The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Extract the verdict using this priority chain:
+
+1. **Return message:** Parse the agent's return message for the `Verdict:` line (expected format: `Verdict: STAND|REVISE|ESCALATE`).
+2. **Findings file fallback:** If the return message doesn't contain a parseable verdict, read `${OUTPUT_DIR}/decision-critic-findings.md` and extract the `**Verdict:**` value from its header.
+3. **Critic unavailable:** If both sources fail (no file, no parseable verdict), treat as Phase 3 failure — note "Decision critic unavailable" in the report and present as-is.
+
+Once you have a verdict, act on it:
 
 - **STAND:** No report changes. Present findings as-is in Step 6.
-- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. Update `review-report.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items). In Step 6, include a brief note of what changed and why.
-- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. Update `review-report.md` — add a prominent warning that findings have significant validity concerns. In Step 6, flag prominently that findings need human review before acting.
+- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. Update `review-report.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items). **Recalculate the review verdict** from the updated findings (any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`). In Step 6, include a brief note of what changed and why.
+- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. Update `review-report.md` — add a prominent warning that findings have significant validity concerns. **Override the review verdict to `COMMENT`** regardless of original verdict — the findings need human judgment before acting on any approve or request-changes signal. In Step 6, flag prominently that findings need human review before acting.
 
 ### Step 6: Present Results and Ask About Workspace Restore
 
@@ -205,9 +216,12 @@ AskUserQuestion:
 git checkout ${ORIGINAL_BRANCH}
 ```
 
-If changes were stashed earlier:
+If changes were stashed earlier (`STASHED` is true), find and pop the correct stash entry by matching the saved `STASH_REF`:
 ```bash
-git stash pop
+# Find the stash index that matches our saved ref
+STASH_INDEX=$(git stash list --format="%gd %H" | grep "${STASH_REF}" | head -1 | cut -d' ' -f1)
+git stash pop "${STASH_INDEX}"
 ```
+If `STASH_REF` is not found in the stash list (e.g., it was already popped), skip the pop and warn the user: "The stash created for this review was not found — it may have been popped or dropped already."
 
-**If user chooses "Stay on PR branch":** If changes were stashed, remind the user: "Note: You have stashed changes from `<ORIGINAL_BRANCH>`. Run `git stash pop` after switching back."
+**If user chooses "Stay on PR branch":** If changes were stashed, remind the user: "Note: You have stashed changes from `<ORIGINAL_BRANCH>`. To restore them later, find the stash entry matching message `pr-review: stashed for PR #${PR_NUMBER} review` and run `git stash pop <index>`."
