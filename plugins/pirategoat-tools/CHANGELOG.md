@@ -5,7 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.45.1] - 2026-03-10
+## [1.46.0] - 2026-03-11
+
+### Added
+
+- New `decision-reviewer` agent — runs the 7-step decision-critic workflow in a subagent to preserve main session context. General-purpose: accepts a document path or inline text, produces its own findings document, returns verdict (STAND/REVISE/ESCALATE) + findings path. Pre-loads the decision-critic skill via `skills` frontmatter.
+
+### Changed
+
+- `pr-review` command now dispatches `decision-reviewer` agent instead of inlining the decision-critic skill (Step 5)
+- `full-code-review` command now dispatches `decision-reviewer` agent instead of inlining the decision-critic skill (Step 7)
+- Dispatch planner (`plan-review-dispatch.py`) now skips `special` class agents (same as `manual`)
 
 ### Improved
 
