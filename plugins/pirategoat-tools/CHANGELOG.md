@@ -5,6 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.49.1] - 2026-03-11
+
+### Fixed
+
+- **Scope status vocabulary mismatch:** The ingest verification pipeline (`ingest-code-review.py`) still referenced `IN_SCOPE`/`OUT_OF_SCOPE` in all its LLM prompts, but the preprocessor outputs `IN_HUNK`/`INTERACTS_WITH_CHANGE`/`FILE_LEVEL`/`OUT_OF_SCOPE`. Updated all three preprocessed-mode step prompts and made the `state_requirement` string mode-aware.
+- **`add_issue(line=None)` crashes agents:** Hard `ValueError` on missing line lost ALL agent findings, conflicting with "partial results > no results" philosophy. Now soft-redirects to `add_observation()`, preserving valid findings. Hard enforcement remains for `line=0`/negative.
+- **Ground truth proximity match bypassed verification:** Findings near ground truth results (file + line ±3) were set to `pre_classification="verified"`, skipping LLM verification. Match only checks location, not category — coincidental proximity could fast-track false positives. Now stays `needs_verification` with a `ground_truth_corroborated` flag for higher confidence.
+
+### Added
+
+- **Per-agent semantic filter opt-out:** `no_semantic_filter` flag in agent registry causes bootstrap to pass `--no-semantic-filter` to `review-scope.py`. Enabled for `wp-architecture-reviewer` (preserves `@since`, `@deprecated`, `@hook` annotations) and `patterns-reviewer` (preserves pattern documentation in comments).
+
+### Changed
+
+- **Clarified deterministic triage interaction:** Step 3.6 in `full-code-review.md` and `code-review.md` now explicitly states that the dispatch planner's deterministic triage is preliminary — LLM triage in Step 3.6 is the quality gate.
+
 ## [1.49.0] - 2026-03-11
 
 ### Added
@@ -12,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ground truth pre-dispatch evidence phase:** New `run-ground-truth.py` orchestrator collects objective tool findings (ESLint, PHPCS, Semgrep, Jest, PHPUnit) before agent dispatch. File-type routing sends PHP files to PHPCS/PHPUnit, JS/TS to ESLint/Jest, all files to Semgrep. Tools are auto-detected; missing tools are gracefully skipped. Always exits 0 — ground truth is additive, never blocking.
 - **Bootstrap ground truth injection:** `bootstrap-reviewer.py` accepts `--ground-truth` flag and injects tool findings (filtered to agent's domain files) into Section 2 of the bootstrap prompt. Each agent sees only findings relevant to its scope.
 - **Reconcile ground truth cross-referencing:** `reconcile-reviews.py` matches canonical findings against ground truth using file + line ±3 tolerance. Matched findings are tagged with `ground_truth_match=True` and `ground_truth_tool`.
-- **Ingest ground truth fast-track:** Findings with `ground_truth_match=True` receive `pre_classification="verified"` in `ingest-preprocess.py`, skipping LLM verification. Summary includes `verified_by_ground_truth` count.
+- **Ingest ground truth corroboration:** Findings matching ground truth are flagged with `ground_truth_corroborated=true` in `ingest-preprocess.py` for higher verification confidence. Summary includes `ground_truth_corroborated` count.
 - **Step 2.5 in all review commands:** `full-code-review.md`, `code-review.md`, and `pr-review.md` now include an optional ground truth collection step before agent dispatch.
 - **Comprehensive test coverage:** 46 tests for `run-ground-truth.py`, 10 tests for bootstrap integration, 11 tests for reconcile cross-referencing, 5 tests for ingest fast-track (72 new tests total).
 
