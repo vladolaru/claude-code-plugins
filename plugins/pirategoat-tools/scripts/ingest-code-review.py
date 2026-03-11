@@ -54,10 +54,14 @@ def get_step_guidance(step: int, total_steps: int, output_dir: Optional[str], th
     next_step = step + 1 if step < total_steps else None
     phase = get_phase_name(step, total_steps)
 
-    # Common state requirement for steps 2+ (3-step) or steps 2+ (6-step)
+    # State requirement — scope status vocabulary differs between modes
+    if total_steps == 3:
+        scope_vocab = "IN_HUNK/INTERACTS_WITH_CHANGE/FILE_LEVEL/OUT_OF_SCOPE"
+    else:
+        scope_vocab = "IN_SCOPE/OUT_OF_SCOPE"
     state_requirement = (
         "CONTEXT REQUIREMENT: Your --thoughts from this step must include ALL finding IDs (F1, F2...), "
-        "their scope status (IN_SCOPE/OUT_OF_SCOPE), verification questions, answers, rationale, and "
+        f"their scope status ({scope_vocab}), verification questions, answers, rationale, and "
         "status markers (VERIFIED/FAILED/UNCERTAIN) from previous steps. "
         "This accumulated state is essential for workflow continuity."
     )
@@ -366,15 +370,18 @@ def _get_preprocessed_step_guidance(
             "phase": phase,
             "step_title": "Generate Verification Questions",
             "actions": [
-                "You are a senior engineer generating falsification questions for each IN_SCOPE finding.",
+                "You are a senior engineer generating falsification questions for each in-scope finding.",
                 "",
                 "READ preprocessed findings from --output-dir:",
                 "  cat \"${OUTPUT_DIR}/ingest-preprocessed.json\"",
                 "",
                 "The preprocessor has already:",
                 "  - Assigned stable IDs (F1, F2, ...) sorted by severity",
-                "  - Checked scope: each finding has scope_status (IN_SCOPE / OUT_OF_SCOPE)",
-                "  - Pre-classified: IN_SCOPE findings are 'needs_verification'",
+                "  - Checked scope: each finding has scope_status:",
+                "      IN_HUNK (line inside changed code), INTERACTS_WITH_CHANGE (line near changed code),",
+                "      FILE_LEVEL (file changed but no specific line), OUT_OF_SCOPE (not in diff)",
+                "  - Pre-classified: in-scope findings (IN_HUNK, INTERACTS_WITH_CHANGE, FILE_LEVEL) are 'needs_verification'",
+                "      unless corroborated by ground truth tools ('verified' — skip these)",
                 "  - OUT_OF_SCOPE findings are already classified — skip them",
                 "",
                 "For each finding with pre_classification == 'needs_verification',",
@@ -391,16 +398,17 @@ def _get_preprocessed_step_guidance(
                 "  - Multi-part or complex finding: 2 questions maximum",
                 "",
                 "OUTPUT_FORMAT:",
-                "  F1 [IN_SCOPE]: <title>",
+                "  F1 [IN_HUNK]: <title>",
                 "    Q1: <can you find the actual code doing X at file:line?>",
-                "  F2 [IN_SCOPE]: <title>",
+                "  F2 [INTERACTS_WITH_CHANGE]: <title>",
                 "    Q1: <does the code at file:line actually do Y?>",
                 "    Q2: <does the codebase have protection Z already?>",
                 "",
                 "  SKIPPED (OUT_OF_SCOPE): F5, F8, F12",
+                "  SKIPPED (verified by ground truth): F3, F9",
                 "",
                 "EXAMPLE:",
-                "  F3 [IN_SCOPE]: Missing nonce verification in AJAX handler",
+                "  F3 [IN_HUNK]: Missing nonce verification in AJAX handler",
                 "    Q1: Does the handler at the referenced line call wp_verify_nonce() or check_ajax_referer()?",
                 "    Q2: Is any nonce verification present earlier in the request lifecycle for this action?",
                 "",
@@ -419,7 +427,7 @@ def _get_preprocessed_step_guidance(
             "phase": phase,
             "step_title": "Factored Verification",
             "actions": [
-                "You are a senior engineer performing factored verification of each IN_SCOPE finding.",
+                "You are a senior engineer performing factored verification of each in-scope finding.",
                 "This is the most important step. Your accuracy here directly determines which findings",
                 "are actionable. Take your time and be rigorous.",
                 "",
@@ -442,13 +450,13 @@ def _get_preprocessed_step_guidance(
                 "  ANSWER: What the code actually does at that location (evidence-based, from Read tool)",
                 "  IMPLICATION: What this means for the finding's accuracy",
                 "",
-                "Mark each IN_SCOPE finding:",
+                "Mark each in-scope finding:",
                 "  VERIFIED  — answers are consistent with the finding; issue exists as described",
                 "  FAILED    — answers reveal the finding is inaccurate, doesn't apply, or misunderstands code",
                 "  UNCERTAIN — insufficient evidence; state what would resolve it",
                 "",
                 "OUTPUT_FORMAT:",
-                "  F1 [IN_SCOPE] VERIFIED:",
+                "  F1 [IN_HUNK] VERIFIED:",
                 "    Q1: <question>",
                 "      Answer: <what the code actually does, based on Read tool>",
                 "      Implication: <what this means for the finding>",
@@ -477,11 +485,11 @@ def _get_preprocessed_step_guidance(
                 "",
                 "MAP scope + verification status to final categories:",
                 "",
-                "  CONFIRMED     = IN_SCOPE + VERIFIED",
-                "  LIKELY VALID  = IN_SCOPE + UNCERTAIN (plausible but unverified)",
-                "  FALSE POSITIVE = IN_SCOPE + FAILED (finding is inaccurate)",
+                "  CONFIRMED     = in-scope (IN_HUNK/INTERACTS_WITH_CHANGE/FILE_LEVEL) + VERIFIED",
+                "  LIKELY VALID  = in-scope + UNCERTAIN (plausible but unverified)",
+                "  FALSE POSITIVE = in-scope + FAILED (finding is inaccurate)",
                 "  OUT OF SCOPE  = OUT_OF_SCOPE (from ingest-preprocessed.json)",
-                "  STYLE/PREFERENCE = IN_SCOPE + VERIFIED but subjective/non-defect",
+                "  STYLE/PREFERENCE = in-scope + VERIFIED but subjective/non-defect",
                 "      STYLE/PREFERENCE applies ONLY to formatting, naming, or coding style with no",
                 "      correctness or security impact. When uncertain between CONFIRMED and STYLE, use CONFIRMED.",
                 "",
