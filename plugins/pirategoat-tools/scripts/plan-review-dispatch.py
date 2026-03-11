@@ -180,9 +180,12 @@ def decide_agent_dispatch(
     dispatch_class = config.get("dispatch_class", "conditional")
     domain = config.get("domain")
 
-    # Manual agents are always skipped
-    if dispatch_class == "manual":
-        return "SKIPPED", "manual only"
+    # Manual and special agents are always skipped by the planner.
+    # Manual agents require explicit user request.
+    # Special agents (e.g., decision-reviewer, review-reconciliator) are
+    # dispatched by orchestrator commands, not by the dispatch planner.
+    if dispatch_class in ("manual", "special"):
+        return "SKIPPED", f"{dispatch_class} only"
 
     # Check if the agent's domain has files
     has_domain_files = False

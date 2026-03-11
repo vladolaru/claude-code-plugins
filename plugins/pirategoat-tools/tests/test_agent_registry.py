@@ -33,10 +33,10 @@ DOMAIN_CATALOG = _scope_mod.DOMAIN_CATALOG
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VALID_DISPATCH_CLASSES = {"always", "conditional", "manual"}
+VALID_DISPATCH_CLASSES = {"always", "conditional", "manual", "special"}
 VALID_PROTOCOLS = {"reviewer", "tests-reviewer"}
 VALID_MODEL_TIERS = {"inherit", "sonnet", "haiku", "opus"}
-EXPECTED_AGENT_COUNT = 15  # agents from AGENT_CONFIG in bootstrap-reviewer.py
+EXPECTED_AGENT_COUNT = 16  # agents from AGENT_CONFIG in bootstrap-reviewer.py
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +147,10 @@ class TestProtocols:
 
     def test_protocols_non_empty(self, agents):
         for agent_name, config in agents.items():
+            # Special agents (e.g., decision-reviewer) don't use reviewer
+            # protocols — they have their own workflows
+            if config.get("dispatch_class") == "special":
+                continue
             assert len(config["protocols"]) > 0, (
                 f"Agent '{agent_name}': protocols list must not be empty"
             )
