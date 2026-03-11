@@ -47,6 +47,7 @@ Sanitize the branch name for filesystem use and create the output directory:
 ```bash
 BRANCH_SAFE=$(echo "<branch>" | tr '/' '-' | sed 's/^-//')
 OUTPUT_DIR="/tmp/branch-review-${BRANCH_SAFE}"
+rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 ```
 

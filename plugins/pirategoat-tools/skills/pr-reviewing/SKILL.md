@@ -581,8 +581,9 @@ Include size assessment in the context for the agent.
 **First, create the output directory for review files:**
 
 ```bash
-# Create output directory for this PR
+# Clean stale files from previous review and create fresh output directory
 export PR_REVIEW_DIR="/tmp/pr-review-<PR_NUMBER>"
+rm -rf "$PR_REVIEW_DIR"
 mkdir -p "$PR_REVIEW_DIR"
 ```
 
