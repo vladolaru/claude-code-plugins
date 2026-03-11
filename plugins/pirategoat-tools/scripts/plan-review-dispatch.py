@@ -143,6 +143,22 @@ def count_files_in_domain(files: List[str], domain: str) -> int:
     return len(matched)
 
 
+def get_domain_files(files: List[str], domain: str) -> List[str]:
+    """Return files matching a domain's patterns.
+
+    Args:
+        files: List of file paths.
+        domain: Domain name from DOMAIN_CATALOG.
+
+    Returns:
+        List of matched file paths.
+    """
+    if domain not in DOMAIN_CATALOG:
+        return []
+    matched, _ = filter_domain(files, domain)
+    return matched
+
+
 def build_domain_counts(files: List[str]) -> Dict[str, int]:
     """Count files matching each domain in DOMAIN_CATALOG.
 
@@ -158,6 +174,169 @@ def build_domain_counts(files: List[str]) -> Dict[str, int]:
     return counts
 
 
+# Test domain names — used to detect test-only file sets
+_TEST_DOMAINS = ("php-tests", "js-tests", "e2e-tests", "go-tests")
+
+
+def is_test_file(filepath: str) -> bool:
+    """Check if a file matches any test domain pattern."""
+    for td in _TEST_DOMAINS:
+        if td not in DOMAIN_CATALOG:
+            continue
+        spec = DOMAIN_CATALOG[td]
+        if re.search(spec["include"], filepath):
+            return True
+    return False
+
+
+# =============================================================================
+# Git context for triage
+# =============================================================================
+
+
+def get_commit_messages(git_range: str) -> str:
+    """Get combined commit messages from a git range.
+
+    Returns empty string on failure (fault-tolerant).
+    """
+    cmd = ["git", "log", "--format=%s%n%b", git_range]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip().lower()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+
+
+def get_diffstat(git_range: str) -> Dict:
+    """Get diffstat summary from a git range.
+
+    Returns dict with:
+        added: total lines added
+        removed: total lines removed
+        deleted_files: list of deleted file paths
+        renamed_files: list of renamed file paths
+
+    Returns zeros/empty on failure (fault-tolerant).
+    """
+    empty = {"added": 0, "removed": 0, "deleted_files": [], "renamed_files": []}
+
+    # Get numstat for add/remove counts
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--numstat", git_range],
+            capture_output=True, text=True, timeout=30,
+        )
+        added = 0
+        removed = 0
+        if result.returncode == 0 and result.stdout.strip():
+            for line in result.stdout.strip().splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    try:
+                        added += int(parts[0]) if parts[0] != "-" else 0
+                        removed += int(parts[1]) if parts[1] != "-" else 0
+                    except ValueError:
+                        pass
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return empty
+
+    # Get deleted/renamed files
+    deleted_files = []
+    renamed_files = []
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--diff-filter=D", "--name-only", git_range],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            deleted_files = result.stdout.strip().splitlines()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--diff-filter=R", "--name-only", git_range],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            renamed_files = result.stdout.strip().splitlines()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return {
+        "added": added,
+        "removed": removed,
+        "deleted_files": deleted_files,
+        "renamed_files": renamed_files,
+    }
+
+
+# =============================================================================
+# Deterministic triage for conditional agents
+# =============================================================================
+
+
+def triage_conditional_agent(
+    agent_name: str,
+    config: dict,
+    domain_files: List[str],
+    commit_messages: str,
+    diffstat: Dict,
+) -> Tuple[str, str]:
+    """Apply deterministic triage for a conditional agent.
+
+    Triage layers (first match wins):
+    1. Test-only filter: if ALL domain files are test files → SKIPPED_TRIAGE
+    2. Keyword match: if triage_keywords match commit messages → DISPATCH
+    3. Agent-specific checks (dead-code: deletions, net removal) → DISPATCH
+    4. Default: DISPATCH (conservative — when in doubt, dispatch)
+
+    Args:
+        agent_name: Name of the agent.
+        config: Agent configuration from registry.
+        domain_files: Files matching the agent's domain(s).
+        commit_messages: Lowercased combined commit messages.
+        diffstat: Diffstat summary dict.
+
+    Returns:
+        (status, reason) where status is DISPATCH or SKIPPED_TRIAGE.
+    """
+    # Layer 1: Test-only filter
+    # If every domain-matching file is a test file, skip the agent.
+    # Conditional agents target production-code concerns; test-only diffs
+    # don't need security/performance/architecture review.
+    if domain_files and all(is_test_file(f) for f in domain_files):
+        return "SKIPPED_TRIAGE", "all matching files are test files"
+
+    # Layer 2: Keyword match from triage_keywords
+    keywords = config.get("triage_keywords", [])
+    if keywords and commit_messages:
+        matched_kw = [kw for kw in keywords if kw in commit_messages]
+        if matched_kw:
+            return "DISPATCH", f"commit keywords matched: {', '.join(matched_kw[:3])}"
+
+    # Layer 3: Agent-specific checks
+    triage_checks = config.get("triage_checks", [])
+    for check in triage_checks:
+        if check == "file_deletions":
+            if diffstat.get("deleted_files") or diffstat.get("renamed_files"):
+                count = len(diffstat.get("deleted_files", [])) + len(diffstat.get("renamed_files", []))
+                return "DISPATCH", f"{count} file(s) deleted or renamed"
+        elif check == "net_removal":
+            if diffstat.get("removed", 0) > diffstat.get("added", 0):
+                return "DISPATCH", f"net removal ({diffstat['removed']} removed > {diffstat['added']} added)"
+        elif check == "large_pr":
+            if len(domain_files) >= 20:
+                return "DISPATCH", f"large change ({len(domain_files)} files in domain)"
+
+    # Layer 4: Default — DISPATCH when no triage signal skips the agent.
+    # If the agent has keywords but none matched AND no special checks triggered,
+    # it STILL dispatches by default. Keywords are an optimization, not a gate.
+    return "DISPATCH", "conditional (domain has files, no triage signal to skip)"
+
+
 # =============================================================================
 # Dispatch decision logic
 # =============================================================================
@@ -166,32 +345,38 @@ def decide_agent_dispatch(
     agent_name: str,
     config: dict,
     domain_counts: Dict[str, int],
+    clean_files: Optional[List[str]] = None,
+    commit_messages: str = "",
+    diffstat: Optional[Dict] = None,
 ) -> Tuple[str, str]:
     """Decide whether to dispatch a single agent.
+
+    For always-dispatch and manual/special agents, only domain file counts
+    matter. For conditional agents, deterministic triage is applied using
+    commit messages, diffstat, and test-file detection.
 
     Args:
         agent_name: Name of the agent.
         config: Agent configuration from registry.
         domain_counts: File counts per domain.
+        clean_files: Full list of reviewable files (for domain matching).
+        commit_messages: Lowercased combined commit messages.
+        diffstat: Diffstat summary dict.
 
     Returns:
-        (status, reason) tuple where status is "DISPATCH" or "SKIPPED".
+        (status, reason) tuple where status is "DISPATCH", "SKIPPED",
+        or "SKIPPED_TRIAGE".
     """
     dispatch_class = config.get("dispatch_class", "conditional")
     domain = config.get("domain")
 
     # Manual and special agents are always skipped by the planner.
-    # Manual agents require explicit user request.
-    # Special agents (e.g., decision-reviewer, review-reconciliator) are
-    # dispatched by orchestrator commands, not by the dispatch planner.
     if dispatch_class in ("manual", "special"):
         return "SKIPPED", f"{dispatch_class} only"
 
     # Check if the agent's domain has files
     has_domain_files = False
     if domain is None:
-        # Agents with no domain (e.g., tests-mutation-reviewer) are manual,
-        # but handle edge case gracefully
         has_domain_files = True
     else:
         has_domain_files = domain_counts.get(domain, 0) > 0
@@ -215,10 +400,21 @@ def decide_agent_dispatch(
     if dispatch_class == "always":
         return "DISPATCH", "always dispatch (domain has files)"
 
-    # Conditional agents: domain has files, so dispatch.
-    # The main value of the planner is skipping agents whose domain has
-    # ZERO files. For conditional agents with files, we dispatch and let
-    # the agent itself decide on relevance.
+    # Conditional agents: apply deterministic triage
+    if dispatch_class == "conditional" and clean_files is not None:
+        # Gather domain-matched files for triage
+        domain_files = get_domain_files(clean_files, domain) if domain else []
+        for sec_domain in config.get("secondary_domains", []):
+            domain_files.extend(get_domain_files(clean_files, sec_domain))
+        # Deduplicate
+        domain_files = sorted(set(domain_files))
+
+        return triage_conditional_agent(
+            agent_name, config, domain_files,
+            commit_messages, diffstat or {},
+        )
+
+    # Conditional agents without triage context: dispatch by default
     if dispatch_class == "conditional":
         return "DISPATCH", "conditional (domain has files)"
 
@@ -232,6 +428,8 @@ def build_dispatch_plan(
     output_dir: str,
     changed_files: List[str],
     registry: Optional[dict] = None,
+    commit_messages: Optional[str] = None,
+    diffstat: Optional[Dict] = None,
 ) -> dict:
     """Build the complete dispatch plan.
 
@@ -241,6 +439,8 @@ def build_dispatch_plan(
         output_dir: Output directory for review files.
         changed_files: List of changed file paths.
         registry: Agent registry dict. Loaded from default path if None.
+        commit_messages: Pre-fetched commit messages (fetched from git if None).
+        diffstat: Pre-fetched diffstat (fetched from git if None).
 
     Returns:
         Dispatch plan dict with mode, dispatch array, scope_summary, etc.
@@ -259,13 +459,24 @@ def build_dispatch_plan(
     # Build domain file counts
     domain_counts = build_domain_counts(clean_files)
 
+    # Fetch git context for triage (fault-tolerant)
+    if commit_messages is None:
+        commit_messages = get_commit_messages(git_range)
+    if diffstat is None:
+        diffstat = get_diffstat(git_range)
+
     # Build dispatch decisions
     dispatch_list = []
     agent_signals = []
 
     for agent_name in sorted(agents.keys()):
         config = agents[agent_name]
-        status, reason = decide_agent_dispatch(agent_name, config, domain_counts)
+        status, reason = decide_agent_dispatch(
+            agent_name, config, domain_counts,
+            clean_files=clean_files,
+            commit_messages=commit_messages,
+            diffstat=diffstat,
+        )
 
         entry = {
             "agent": agent_name,
@@ -280,6 +491,8 @@ def build_dispatch_plan(
             signal = f"{agent_name}: STATUS=DISPATCH"
             if reason != "always dispatch (domain has files)":
                 signal += f" ({reason})"
+        elif status == "SKIPPED_TRIAGE":
+            signal = f"{agent_name}: STATUS=SKIPPED_TRIAGE ({reason})"
         else:
             signal = f"{agent_name}: STATUS=SKIPPED ({reason})"
         agent_signals.append(signal)
@@ -296,6 +509,7 @@ def build_dispatch_plan(
         "mode": mode,
         "git_range": git_range,
         "output_dir": output_dir,
+        "changed_files": clean_files,
         "scope_summary": scope_summary,
         "dispatch": dispatch_list,
         "agent_signals": agent_signals,

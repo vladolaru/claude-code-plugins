@@ -28,6 +28,11 @@
         "CI/CD configuration changes (workflow files, pipeline configs)",
         "Infrastructure-as-code changes (Terraform, Helm, Docker)"
       ],
+      "triage_keywords": [
+        "auth", "security", "login", "password", "token", "secret",
+        "csrf", "xss", "sql", "inject", "sanitiz", "escap",
+        "permission", "privilege", "encrypt", "endpoint", "webhook"
+      ],
       "focus": "XSS, SQL injection, CSRF, sanitization",
       "model_tier": "sonnet"
     },
@@ -42,6 +47,10 @@
         "Asset loading, lazy loading, code splitting",
         "Caching logic (transients, object cache, memoization)",
         "Commits mentioning performance, optimize, cache, query, load time"
+      ],
+      "triage_keywords": [
+        "performance", "optimiz", "cache", "query", "load time",
+        "slow", "n+1", "lazy", "pagination", "bulk"
       ],
       "focus": "N+1 queries, caching, optimization",
       "model_tier": "sonnet"
@@ -60,6 +69,11 @@
         "New modules or packages introduced",
         "Deployment or infrastructure architecture changes (Dockerfiles, Terraform, CI pipelines, Helm charts)"
       ],
+      "triage_keywords": [
+        "architect", "refactor", "restructur", "decouple", "extract",
+        "module", "package"
+      ],
+      "triage_checks": ["large_pr"],
       "focus": "SOLID, design patterns, coupling",
       "model_tier": "sonnet"
     },
@@ -74,6 +88,10 @@
         "Admin menus, settings pages, or custom post types",
         "Commits mentioning hooks, filters, backwards compatibility, deprecation, i18n",
         "Plugin bootstrap or activation/deactivation files"
+      ],
+      "triage_keywords": [
+        "hook", "filter", "backward", "deprecat", "i18n",
+        "wordpress", "woocommerce", "wp_"
       ],
       "focus": "Hooks, WPCS, backwards compatibility",
       "model_tier": "sonnet"
@@ -149,6 +167,11 @@
         "Import/require statements added or removed",
         "New files replacing or superseding existing ones"
       ],
+      "triage_keywords": [
+        "remove", "delete", "refactor", "extract", "move",
+        "rename", "consolidate", "unused", "dead code"
+      ],
+      "triage_checks": ["file_deletions", "net_removal"],
       "focus": "Unused functions, orphaned imports, unreachable code",
       "model_tier": "sonnet"
     },
@@ -165,6 +188,10 @@
         "Screen reader announcements: speak() calls, aria-live regions, live region wiring",
         "Focus management in hooks or utilities (programmatic .focus(), focus restoration logic)",
         "Commits mentioning accessibility, a11y, keyboard, screen reader, ARIA"
+      ],
+      "triage_keywords": [
+        "accessib", "a11y", "keyboard", "screen reader",
+        "aria", "focus", "wcag"
       ],
       "focus": "ARIA correctness, keyboard access, focus management, WCAG 2.2 AA",
       "model_tier": "inherit"
@@ -183,6 +210,11 @@
         "Deployment configuration or infrastructure changes",
         "Background job or queue processing changes",
         "Caching layer modifications"
+      ],
+      "triage_keywords": [
+        "migration", "external", "retry", "error handling",
+        "feature flag", "kill-switch", "deploy", "background",
+        "queue", "caching"
       ],
       "focus": "Logging, error handling, rollback safety, feature flags, failure-mode resilience",
       "model_tier": "sonnet"

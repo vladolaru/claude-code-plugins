@@ -317,6 +317,7 @@ class TestBuildDispatchPlan:
         assert "mode" in plan
         assert "git_range" in plan
         assert "output_dir" in plan
+        assert "changed_files" in plan
         assert "scope_summary" in plan
         assert "dispatch" in plan
         assert "agent_signals" in plan
@@ -359,7 +360,7 @@ class TestBuildDispatchPlan:
             assert "agent" in entry
             assert "domain" in entry
             assert "status" in entry
-            assert entry["status"] in ("DISPATCH", "SKIPPED")
+            assert entry["status"] in ("DISPATCH", "SKIPPED", "SKIPPED_TRIAGE")
             assert "reason" in entry
 
     def test_agent_signals_format(self, registry):
@@ -414,8 +415,8 @@ class TestBuildDispatchPlan:
         )
         assert plan["scope_summary"]["total_files"] == 0
         for entry in plan["dispatch"]:
-            # All agents should be SKIPPED (no files) or SKIPPED (manual)
-            assert entry["status"] == "SKIPPED", (
+            # All agents should be SKIPPED (no files) or SKIPPED (manual/special)
+            assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE"), (
                 f"Agent '{entry['agent']}' should be SKIPPED with no files, "
                 f"got status='{entry['status']}'"
             )
@@ -432,7 +433,7 @@ class TestBuildDispatchPlan:
         assert plan["scope_summary"]["noise_filtered"] > 0
         assert plan["scope_summary"]["reviewable_files"] == 0
         for entry in plan["dispatch"]:
-            assert entry["status"] == "SKIPPED"
+            assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE")
 
 
 # =============================================================================
@@ -565,3 +566,257 @@ class TestRegistryConsistency:
             registry=registry,
         )
         assert len(plan["dispatch"]) == len(registry["agents"])
+
+
+# =============================================================================
+# New imports for triage tests
+# =============================================================================
+
+is_test_file = _mod.is_test_file
+get_domain_files = _mod.get_domain_files
+triage_conditional_agent = _mod.triage_conditional_agent
+
+
+# =============================================================================
+# Unit Tests — is_test_file
+# =============================================================================
+
+class TestIsTestFile:
+    """Test file detection using test domain patterns."""
+
+    def test_php_test_file(self):
+        assert is_test_file("tests/ControllerTest.php") is True
+
+    def test_js_test_file(self):
+        assert is_test_file("src/utils.test.ts") is True
+
+    def test_e2e_test_file(self):
+        assert is_test_file("e2e/checkout.spec.ts") is True
+
+    def test_go_test_file(self):
+        assert is_test_file("src/utils/auth_test.go") is True
+
+    def test_production_php_file(self):
+        assert is_test_file("src/Controller.php") is False
+
+    def test_production_ts_file(self):
+        assert is_test_file("src/hooks/useData.ts") is False
+
+    def test_config_file(self):
+        assert is_test_file(".github/workflows/ci.yml") is False
+
+
+# =============================================================================
+# Unit Tests — triage_conditional_agent
+# =============================================================================
+
+class TestTriageConditionalAgent:
+    """Deterministic triage for conditional agents."""
+
+    def _make_config(self, **overrides):
+        base = {
+            "dispatch_class": "conditional",
+            "domain": "security",
+        }
+        base.update(overrides)
+        return base
+
+    # --- Test-only filter ---
+
+    def test_test_only_files_skipped(self):
+        """All domain files are test files → SKIPPED_TRIAGE."""
+        config = self._make_config()
+        domain_files = ["tests/ControllerTest.php", "tests/ServiceTest.php"]
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config, domain_files, "", {},
+        )
+        assert status == "SKIPPED_TRIAGE"
+        assert "test files" in reason
+
+    def test_mixed_production_and_test_files_dispatches(self):
+        """Domain has both production and test files → DISPATCH."""
+        config = self._make_config()
+        domain_files = ["src/Controller.php", "tests/ControllerTest.php"]
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config, domain_files, "", {},
+        )
+        assert status == "DISPATCH"
+
+    def test_production_only_files_dispatches(self):
+        """Only production files → DISPATCH."""
+        config = self._make_config()
+        domain_files = ["src/Controller.php", "src/Service.php"]
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config, domain_files, "", {},
+        )
+        assert status == "DISPATCH"
+
+    # --- Keyword matching ---
+
+    def test_commit_keyword_match_dispatches(self):
+        """Commit message matches triage keyword → DISPATCH with reason."""
+        config = self._make_config(triage_keywords=["auth", "security"])
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config,
+            ["src/Login.php"],
+            "fix auth token validation",
+            {},
+        )
+        assert status == "DISPATCH"
+        assert "auth" in reason
+
+    def test_commit_keyword_partial_match(self):
+        """Partial keyword match (substring) → DISPATCH."""
+        config = self._make_config(triage_keywords=["sanitiz"])
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config,
+            ["src/Form.php"],
+            "add sanitization to user input",
+            {},
+        )
+        assert status == "DISPATCH"
+        assert "sanitiz" in reason
+
+    def test_no_keyword_match_still_dispatches_by_default(self):
+        """No keyword match → still DISPATCH (conservative default)."""
+        config = self._make_config(triage_keywords=["auth", "security"])
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config,
+            ["src/Report.php"],
+            "add CSV export feature",
+            {},
+        )
+        assert status == "DISPATCH"
+
+    # --- Agent-specific checks ---
+
+    def test_dead_code_file_deletions(self):
+        """File deletions trigger dead-code-reviewer."""
+        config = self._make_config(
+            domain="dead-code",
+            triage_checks=["file_deletions"],
+        )
+        diffstat = {"deleted_files": ["src/old.php"], "renamed_files": [], "added": 0, "removed": 50}
+        status, reason = triage_conditional_agent(
+            "dead-code-reviewer", config, ["src/new.php"], "", diffstat,
+        )
+        assert status == "DISPATCH"
+        assert "deleted or renamed" in reason
+
+    def test_dead_code_net_removal(self):
+        """Net code removal triggers dead-code-reviewer."""
+        config = self._make_config(
+            domain="dead-code",
+            triage_checks=["net_removal"],
+        )
+        diffstat = {"deleted_files": [], "renamed_files": [], "added": 10, "removed": 100}
+        status, reason = triage_conditional_agent(
+            "dead-code-reviewer", config, ["src/old.php"], "", diffstat,
+        )
+        assert status == "DISPATCH"
+        assert "net removal" in reason
+
+    def test_architecture_large_pr(self):
+        """Large PR (20+ files) triggers architecture-reviewer."""
+        config = self._make_config(
+            domain="architecture",
+            triage_checks=["large_pr"],
+        )
+        domain_files = [f"src/file{i}.php" for i in range(25)]
+        status, reason = triage_conditional_agent(
+            "architecture-reviewer", config, domain_files, "", {},
+        )
+        assert status == "DISPATCH"
+        assert "large change" in reason
+
+    # --- Empty domain files ---
+
+    def test_empty_domain_files_dispatches(self):
+        """Empty domain file list → DISPATCH (conservative)."""
+        config = self._make_config()
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config, [], "", {},
+        )
+        assert status == "DISPATCH"
+
+
+# =============================================================================
+# Integration Tests — Triage in full dispatch plan
+# =============================================================================
+
+SAMPLE_TEST_ONLY_PHP_FILES = [
+    "tests/ControllerTest.php",
+    "tests/ServiceTest.php",
+    "tests/HelperTest.php",
+]
+
+
+class TestTriageInDispatchPlan:
+    """Triage integration within build_dispatch_plan."""
+
+    def test_test_only_php_skips_conditional_agents(self, registry):
+        """PHP test-only changes skip conditional agents via triage."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=SAMPLE_TEST_ONLY_PHP_FILES,
+            registry=registry,
+            commit_messages="",
+            diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
+        )
+        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+
+        # security-reviewer domain matches .php, but all are test files → SKIPPED_TRIAGE
+        assert dispatch_map["security-reviewer"]["status"] == "SKIPPED_TRIAGE"
+        assert "test files" in dispatch_map["security-reviewer"]["reason"]
+
+        # php-tests-reviewer is always-dispatch and should still run
+        assert dispatch_map["php-tests-reviewer"]["status"] == "DISPATCH"
+
+    def test_commit_keywords_dispatch_conditional(self, registry):
+        """Commit keywords trigger dispatch for conditional agents."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["src/Controller.php"],
+            registry=registry,
+            commit_messages="fix auth token validation and csrf protection",
+            diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
+        )
+        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+
+        # security-reviewer should dispatch with keyword match
+        assert dispatch_map["security-reviewer"]["status"] == "DISPATCH"
+        assert "keyword" in dispatch_map["security-reviewer"]["reason"]
+
+    def test_plan_includes_changed_files(self, registry):
+        """Dispatch plan includes changed_files for downstream use."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=SAMPLE_MIXED_FILES,
+            registry=registry,
+        )
+        assert "changed_files" in plan
+        assert isinstance(plan["changed_files"], list)
+
+    def test_skipped_triage_signal_format(self, registry):
+        """SKIPPED_TRIAGE agents produce correct signal format."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=SAMPLE_TEST_ONLY_PHP_FILES,
+            registry=registry,
+            commit_messages="",
+            diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
+        )
+        triage_skipped = [
+            s for s in plan["agent_signals"] if "SKIPPED_TRIAGE" in s
+        ]
+        assert len(triage_skipped) > 0
+        for signal in triage_skipped:
+            assert "STATUS=SKIPPED_TRIAGE" in signal
