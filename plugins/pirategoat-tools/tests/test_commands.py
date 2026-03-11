@@ -410,6 +410,96 @@ class TestFullCodeReview:
 
 
 # =============================================================================
+# Decision Critic Pipeline Tests
+# =============================================================================
+
+
+# Commands that include the decision critic pipeline
+CRITIC_COMMANDS = [
+    "full-code-review.md",
+    "code-review.md",
+]
+
+
+class TestDecisionCritic:
+    """Decision critic phase is present and well-formed in review commands."""
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_has_decision_critic_dispatch(self, command):
+        """Must dispatch the decision-reviewer agent."""
+        content = _read_command(command)
+        assert "decision-reviewer" in content, (
+            f"{command}: missing decision-reviewer agent dispatch"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_has_verdict_fallback_chain(self, command):
+        """Should fall back to findings file if return message verdict parse fails."""
+        content = _read_command(command)
+        assert "decision-critic-findings.md" in content, (
+            f"{command}: missing fallback to decision-critic-findings.md"
+        )
+        content_lower = content.lower()
+        assert "unavailable" in content_lower, (
+            f"{command}: missing critic-unavailable graceful degradation"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_has_verdict_recalculation_on_revise(self, command):
+        """REVISE must trigger verdict recalculation from updated findings."""
+        content = _read_command(command)
+        content_lower = content.lower()
+        assert "recalculate" in content_lower and "verdict" in content_lower, (
+            f"{command}: REVISE missing verdict recalculation"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_has_verdict_override_on_escalate(self, command):
+        """ESCALATE must override the review verdict to COMMENT."""
+        content = _read_command(command)
+        content_lower = content.lower()
+        assert "override" in content_lower and "COMMENT" in content, (
+            f"{command}: ESCALATE missing verdict override to COMMENT"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_has_post_ingest_reconciled_update(self, command):
+        """Must update reconciled.md with ingest validation results before critic."""
+        content = _read_command(command)
+        assert "Update `reconciled.md`" in content or "update `reconciled.md`" in content, (
+            f"{command}: missing post-ingest reconciled.md update step"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_critic_dispatch_after_ingest(self, command):
+        """Decision critic must appear after ingest-code-review in the pipeline."""
+        content = _read_command(command)
+        ingest_pos = content.find("ingest-code-review")
+        critic_pos = content.find("decision-reviewer")
+        assert ingest_pos > 0 and critic_pos > 0, (
+            f"{command}: missing ingest or critic reference"
+        )
+        assert ingest_pos < critic_pos, (
+            f"{command}: decision-reviewer must appear after ingest-code-review "
+            f"(ingest at {ingest_pos}, critic at {critic_pos})"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_post_ingest_update_before_critic(self, command):
+        """Post-ingest reconciled.md update must appear between ingest and critic dispatch."""
+        content = _read_command(command)
+        ingest_pos = content.find("ingest-code-review")
+        update_pos = content.find("Update `reconciled.md`")
+        if update_pos == -1:
+            update_pos = content.find("update `reconciled.md`")
+        critic_pos = content.find("decision-reviewer")
+        assert ingest_pos < update_pos < critic_pos, (
+            f"{command}: post-ingest update must be between ingest and critic "
+            f"(ingest={ingest_pos}, update={update_pos}, critic={critic_pos})"
+        )
+
+
+# =============================================================================
 # Triage Block Tests (Step 3.6: Adaptive Agent Triage)
 # =============================================================================
 
