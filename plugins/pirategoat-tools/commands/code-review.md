@@ -137,9 +137,9 @@ Parse the `BRANCH_FRESHNESS:` section from the preflight output.
 
 ## Step 3.6: Adaptive Agent Triage
 
-The dispatch planner handles domain-level filtering (agents whose domain has zero files are SKIPPED). For **conditional agents** that the planner marked as DISPATCH, apply a second triage pass using the diffstat and commit messages you already have from Steps 1-3.
+The dispatch planner handles domain-level filtering and deterministic triage (keyword matching, test-file detection, diffstat checks). **Its DISPATCH decisions are preliminary — they confirm the agent has matching files and basic signal, not that it should definitely run.** Your judgment here is the quality gate.
 
-For each conditional agent with status "DISPATCH" in the plan:
+For **conditional agents** that the planner marked as DISPATCH, apply your own triage using the full context (diffstat, commit messages, file list, and the actual nature of the changes):
 
 1. Check its **triage_criteria** (from the agent registry) against the diffstat and commit messages
 2. Decide: keep **DISPATCH** or downgrade to **SKIP**
