@@ -506,6 +506,108 @@ class TestLoadToolConfig:
 
 
 # =============================================================================
+# Config-driven tool runner tests
+# =============================================================================
+
+
+class TestRunConfiguredTool:
+    """Tests for run_configured_tool — template substitution and execution."""
+
+    @patch("subprocess.run")
+    def test_substitutes_output_file(self, mock_run, tmp_output_dir):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        # Create the expected output file to simulate tool success
+        expected = os.path.join(tmp_output_dir, "eslint-results.json")
+        with open(expected, "w") as f:
+            f.write('{"results": []}')
+
+        ok, err = _mod.run_configured_tool(
+            "eslint",
+            "npx eslint --output-file {output_file} {files}",
+            tmp_output_dir,
+            ["src/app.js"],
+            timeout=30,
+        )
+        assert ok is True
+        assert err == ""
+        # Verify the command had the substituted path
+        cmd_str = mock_run.call_args[0][0]
+        assert expected in cmd_str
+
+    @patch("subprocess.run")
+    def test_substitutes_output_dir(self, mock_run, tmp_output_dir):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        expected = os.path.join(tmp_output_dir, "jest-coverage-summary.json")
+        with open(expected, "w") as f:
+            f.write('{"total": {}}')
+
+        ok, err = _mod.run_configured_tool(
+            "jest_coverage",
+            "npx jest --coverageDirectory={output_dir}",
+            tmp_output_dir,
+            [],
+            timeout=60,
+        )
+        assert ok is True
+        cmd_str = mock_run.call_args[0][0]
+        assert tmp_output_dir in cmd_str
+
+    @patch("subprocess.run")
+    def test_files_are_shell_quoted(self, mock_run, tmp_output_dir):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        expected = os.path.join(tmp_output_dir, "eslint-results.json")
+        with open(expected, "w") as f:
+            f.write("[]")
+
+        _mod.run_configured_tool(
+            "eslint",
+            "eslint {files}",
+            tmp_output_dir,
+            ["src/my file.js", "src/app.js"],
+            timeout=30,
+        )
+        cmd_str = mock_run.call_args[0][0]
+        # File with space should be quoted
+        assert "'src/my file.js'" in cmd_str or '"src/my file.js"' in cmd_str
+
+    @patch("subprocess.run")
+    def test_no_output_file_means_failure(self, mock_run, tmp_output_dir):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        # Don't create the output file
+
+        ok, err = _mod.run_configured_tool(
+            "eslint",
+            "eslint {files}",
+            tmp_output_dir,
+            ["src/app.js"],
+            timeout=30,
+        )
+        assert ok is False
+        assert "no output file" in err
+
+    @patch("subprocess.run")
+    def test_timeout_returns_failure(self, mock_run, tmp_output_dir):
+        import subprocess as sp
+        mock_run.side_effect = sp.TimeoutExpired(["cmd"], 30)
+
+        ok, err = _mod.run_configured_tool(
+            "eslint", "eslint {files}", tmp_output_dir, ["src/app.js"], timeout=30,
+        )
+        assert ok is False
+        assert "timed out" in err
+
+    @patch("subprocess.run")
+    def test_os_error_returns_failure(self, mock_run, tmp_output_dir):
+        mock_run.side_effect = OSError("No such file")
+
+        ok, err = _mod.run_configured_tool(
+            "eslint", "eslint {files}", tmp_output_dir, ["src/app.js"], timeout=30,
+        )
+        assert ok is False
+        assert "eslint" in err
+
+
+# =============================================================================
 # Output schema tests
 # =============================================================================
 

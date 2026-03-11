@@ -19,6 +19,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,44 @@ def load_tool_config(config_path: str) -> Dict[str, str]:
         config[tool_name] = cmd
 
     return config
+
+
+def run_configured_tool(
+    tool_name: str,
+    cmd_template: str,
+    output_dir: str,
+    changed_files: List[str],
+    timeout: int,
+) -> Tuple[bool, str]:
+    """Run a tool from its command template.
+
+    Substitutes placeholders:
+      {output_file} -> output_dir/TOOL_OUTPUT_FILES[tool_name]
+      {output_dir}  -> output_dir
+      {files}       -> shell-quoted space-separated changed files
+
+    Returns (success, error_message). Success means the expected output file exists.
+    """
+    output_file = os.path.join(output_dir, TOOL_OUTPUT_FILES[tool_name])
+    files_str = " ".join(shlex.quote(f) for f in changed_files)
+
+    cmd_str = cmd_template.replace("{output_file}", output_file)
+    cmd_str = cmd_str.replace("{output_dir}", output_dir)
+    cmd_str = cmd_str.replace("{files}", files_str)
+
+    try:
+        subprocess.run(
+            cmd_str, shell=True, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"{tool_name}: timed out after {timeout}s"
+    except OSError as e:
+        return False, f"{tool_name}: {e}"
+
+    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+        return True, ""
+
+    return False, f"{tool_name}: command ran but produced no output file"
 
 
 def is_test_file(filepath: str) -> bool:
