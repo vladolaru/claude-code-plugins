@@ -50,6 +50,22 @@ OUTPUT_DIR="/tmp/branch-review-${BRANCH_SAFE}"
 mkdir -p "$OUTPUT_DIR"
 ```
 
+## Step 2.5: Ground Truth Collection (optional)
+
+Run available static analysis tools to collect objective evidence before agent dispatch:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-ground-truth.py \
+  --output-dir "<OUTPUT_DIR>" \
+  --changed-files "<CHANGED_FILES_CSV>"
+```
+
+Where `CHANGED_FILES_CSV` is a comma-separated list of changed files from `git diff --name-only <GIT_RANGE>`.
+
+- If the script exits non-zero or produces no findings, continue without ground truth — it is additive, not required.
+- If it succeeds, `OUTPUT_DIR/ground-truth-summary.json` is available for the bootstrap dispatch phase.
+- Store: `GROUND_TRUTH_PATH` = `OUTPUT_DIR/ground-truth-summary.json` (or empty if unavailable).
+
 ## Step 3: Scope Summary
 
 Show the user what will be reviewed:
@@ -137,7 +153,7 @@ Git Range: <GIT_RANGE>
 Review Type: Branch review (pre-PR, no GitHub context available)
 
 When running bootstrap, include these flags:
-python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
+python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR> --ground-truth <GROUND_TRUTH_PATH>
 ```
 
 <!-- Agent dispatch reference table (sourced from agent-registry.json) -->
@@ -172,16 +188,20 @@ After ALL dispatched agents have returned their signals, run the deterministic r
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/reconcile-reviews.py \
   --output-dir <OUTPUT_DIR> \
-  --agent-signals "$AGENT_SIGNALS_TEXT"
+  --agent-signals "$AGENT_SIGNALS_TEXT" \
+  --changed-files "$(echo "$CHANGED_FILES_CSV")"
 ```
 
-Where `AGENT_SIGNALS_TEXT` is the exact `agent_signals_text` value from Step 3.5. It must remain a single quoted shell argument, even if it spans multiple lines. Never splat the list directly into the command, and never use an unquoted expansion such as `--agent-signals $AGENT_SIGNALS_TEXT`.
+Where:
+- `AGENT_SIGNALS_TEXT` is the exact `agent_signals_text` value from Step 3.5. It must remain a single quoted shell argument, even if it spans multiple lines. Never splat the list directly into the command, and never use an unquoted expansion such as `--agent-signals $AGENT_SIGNALS_TEXT`.
+- `CHANGED_FILES_CSV` is the `changed_files` list from the Step 3.5 dispatch plan output, joined with commas. This enables test-gap detection advisories.
 
 This script reads all `*-review.json` files, deduplicates findings across agents, and writes `reconciled-structured.json` to the output directory. It handles:
 - Exact and near deduplication (same file + overlapping lines + similar title)
 - Severity conflict resolution (highest wins)
 - Source agent aggregation per cluster
 - Schema validation (gracefully skips invalid outputs)
+- Test-gap advisory (production code changed without tests, when `--changed-files` is provided)
 
 ### Step 5b: Dispatch Reconciliator for Narrative Summary
 

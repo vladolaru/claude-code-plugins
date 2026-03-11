@@ -34,6 +34,10 @@ SEVERITY_ORDER = {
     "info": 4,
 }
 
+# Lines within this distance of a hunk boundary are classified as
+# INTERACTS_WITH_CHANGE rather than OUT_OF_SCOPE.
+HUNK_PROXIMITY = 5
+
 
 def parse_diff_hunks(diff_output: str) -> List[Tuple[int, int]]:
     """Parse @@ -a,b +c,d @@ headers into (start, end) line ranges for new file.
@@ -69,6 +73,20 @@ def line_in_hunks(line: int, hunks: List[Tuple[int, int]]) -> bool:
     return False
 
 
+def line_near_hunks(
+    line: int, hunks: List[Tuple[int, int]], proximity: int = HUNK_PROXIMITY
+) -> bool:
+    """Check if a line is within *proximity* lines of any hunk boundary.
+
+    Returns True when the line is NOT inside a hunk but IS close enough
+    that the change could affect or be affected by it.
+    """
+    for start, end in hunks:
+        if (start - proximity) <= line <= (end + proximity):
+            return True
+    return False
+
+
 def classify_finding(
     finding: dict,
     changed_files: List[str],
@@ -76,31 +94,55 @@ def classify_finding(
 ) -> Tuple[str, str, str]:
     """Classify a single finding's scope status and pre-classification.
 
+    Scope statuses (from most to least in-scope):
+        IN_HUNK                — line is inside a changed hunk
+        INTERACTS_WITH_CHANGE  — line is near a hunk boundary (within HUNK_PROXIMITY)
+        FILE_LEVEL             — file is in the diff but finding has no line number
+        OUT_OF_SCOPE           — file not in diff, or line far from all hunks
+
+    Pre-classification values:
+        verified           — corroborated by ground truth tools; skips LLM verification
+        needs_verification — in scope but needs LLM confirmation
+        out_of_scope       — outside changed code
+
     Returns:
         (scope_status, scope_reason, pre_classification)
     """
     file_path = finding.get("file", "")
     line = finding.get("line")
 
+    # Check 0: Ground truth match — fast-track to verified
+    is_gt_match = finding.get("ground_truth_match", False)
+
     # Check 1: Is the file in the diff?
     if file_path not in changed_files:
         return "OUT_OF_SCOPE", "file not in diff", "out_of_scope"
 
-    # Check 2: Is the line in a hunk?
+    # Determine classification: verified if ground truth matched, else needs_verification
+    in_scope_class = "verified" if is_gt_match else "needs_verification"
+
+    # Check 2: Does the finding have a line number?
     file_hunks = diff_hunks.get(file_path, [])
 
     if line is None:
-        # No line number — conservative: IN_SCOPE if file is in diff
-        return "IN_SCOPE", "file in diff, no line number (conservative)", "needs_verification"
+        # No line number — file-level finding. Still needs verification but
+        # flagged distinctly so downstream can be more skeptical.
+        return "FILE_LEVEL", "file in diff, no line number", in_scope_class
 
     if not file_hunks:
-        # File is in diff but we have no hunk data — conservative: IN_SCOPE
-        return "IN_SCOPE", "file in diff, no hunk data available", "needs_verification"
+        # File is in diff but we have no hunk data — conservative: treat as
+        # file-level since we can't confirm hunk membership.
+        return "FILE_LEVEL", "file in diff, no hunk data available", in_scope_class
 
+    # Check 3: Is the line in a hunk?
     if line_in_hunks(line, file_hunks):
-        return "IN_SCOPE", "file in diff, line in hunk", "needs_verification"
-    else:
-        return "OUT_OF_SCOPE", "file in diff, line outside hunks (pre-existing code)", "out_of_scope"
+        return "IN_HUNK", "line in changed hunk", in_scope_class
+
+    # Check 4: Is the line near a hunk? (interaction zone)
+    if line_near_hunks(line, file_hunks):
+        return "INTERACTS_WITH_CHANGE", f"line near changed hunk (within {HUNK_PROXIMITY} lines)", in_scope_class
+
+    return "OUT_OF_SCOPE", "file in diff, line outside hunks (pre-existing code)", "out_of_scope"
 
 
 def load_reconciled(output_dir: str) -> dict:
@@ -172,9 +214,9 @@ def preprocess_findings(
 
     # Process each finding
     processed_findings = []
-    in_scope_count = 0
-    out_of_scope_count = 0
+    scope_counts = {"IN_HUNK": 0, "INTERACTS_WITH_CHANGE": 0, "FILE_LEVEL": 0, "OUT_OF_SCOPE": 0}
     needs_verification_count = 0
+    verified_by_ground_truth_count = 0
     auto_classified_count = 0
 
     for idx, finding in enumerate(sorted_raw, start=1):
@@ -182,7 +224,9 @@ def preprocess_findings(
             finding, changed_files, diff_hunks
         )
 
-        source_agents = extract_source_agents(finding.get("title", ""))
+        # Prefer structured source_agents from reconciled output; fall back to
+        # bracket-title extraction for legacy reconciled.json files.
+        source_agents = finding.get("source_agents") or extract_source_agents(finding.get("title", ""))
 
         processed = {
             "id": f"F{idx}",
@@ -201,16 +245,19 @@ def preprocess_findings(
         }
 
         processed_findings.append(processed)
+        scope_counts[scope_status] = scope_counts.get(scope_status, 0) + 1
 
-        if scope_status == "IN_SCOPE":
-            in_scope_count += 1
-        else:
-            out_of_scope_count += 1
-
-        if pre_classification == "needs_verification":
+        if pre_classification == "verified":
+            verified_by_ground_truth_count += 1
+            auto_classified_count += 1
+        elif pre_classification == "needs_verification":
             needs_verification_count += 1
         else:
             auto_classified_count += 1
+
+    # in_scope = everything except OUT_OF_SCOPE (backward compatible)
+    in_scope_count = sum(v for k, v in scope_counts.items() if k != "OUT_OF_SCOPE")
+    out_of_scope_count = scope_counts["OUT_OF_SCOPE"]
 
     return {
         "git_range": git_range,
@@ -220,7 +267,9 @@ def preprocess_findings(
             "total": len(processed_findings),
             "in_scope": in_scope_count,
             "out_of_scope": out_of_scope_count,
+            "by_scope_status": scope_counts,
             "needs_verification": needs_verification_count,
+            "verified_by_ground_truth": verified_by_ground_truth_count,
             "auto_classified": auto_classified_count,
         },
     }
@@ -323,6 +372,8 @@ def main():
         print(f"  In scope:            {s['in_scope']}")
         print(f"  Out of scope:        {s['out_of_scope']}")
         print(f"  Needs verification:  {s['needs_verification']}")
+        if s.get("verified_by_ground_truth", 0) > 0:
+            print(f"  Verified (ground truth): {s['verified_by_ground_truth']}")
         print(f"  Auto-classified:     {s['auto_classified']}")
         print(f"  Output: {os.path.join(args.output_dir, 'ingest-preprocessed.json')}")
 

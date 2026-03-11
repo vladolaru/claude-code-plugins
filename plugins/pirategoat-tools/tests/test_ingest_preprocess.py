@@ -186,9 +186,9 @@ class TestParseDiffHunks:
 
 
 class TestScopeCheckFileInDiff:
-    """Finding references a file in changed_files -> IN_SCOPE."""
+    """Finding references a file in changed_files with line in hunk -> IN_HUNK."""
 
-    def test_file_in_diff_is_in_scope(self, tmp_output_dir):
+    def test_file_in_diff_line_in_hunk(self, tmp_output_dir):
         findings = [_make_finding(file="src/app.php", line=10)]
         reconciled = _make_reconciled_json(findings)
         reconciled_path = os.path.join(tmp_output_dir, "reconciled.json")
@@ -206,7 +206,7 @@ class TestScopeCheckFileInDiff:
         )
 
         assert len(result["findings"]) == 1
-        assert result["findings"][0]["scope_status"] == "IN_SCOPE"
+        assert result["findings"][0]["scope_status"] == "IN_HUNK"
 
 
 class TestScopeCheckFileNotInDiff:
@@ -235,9 +235,9 @@ class TestScopeCheckFileNotInDiff:
 
 
 class TestScopeCheckLineInHunk:
-    """Finding line falls within a diff hunk -> IN_SCOPE."""
+    """Finding line falls within a diff hunk -> IN_HUNK."""
 
-    def test_line_in_hunk_is_in_scope(self, tmp_output_dir):
+    def test_line_in_hunk(self, tmp_output_dir):
         findings = [_make_finding(file="src/app.php", line=25)]
         reconciled = _make_reconciled_json(findings)
         reconciled_path = os.path.join(tmp_output_dir, "reconciled.json")
@@ -254,8 +254,8 @@ class TestScopeCheckLineInHunk:
             git_range="main..HEAD",
         )
 
-        assert result["findings"][0]["scope_status"] == "IN_SCOPE"
-        assert "in hunk" in result["findings"][0]["scope_reason"]
+        assert result["findings"][0]["scope_status"] == "IN_HUNK"
+        assert "in changed hunk" in result["findings"][0]["scope_reason"]
 
 
 class TestScopeCheckLineOutsideHunk:
@@ -283,9 +283,9 @@ class TestScopeCheckLineOutsideHunk:
 
 
 class TestScopeCheckNoLineNumber:
-    """Finding has no line -> IN_SCOPE if file in diff (conservative)."""
+    """Finding has no line -> FILE_LEVEL if file in diff."""
 
-    def test_no_line_file_in_diff_is_in_scope(self, tmp_output_dir):
+    def test_no_line_file_in_diff_is_file_level(self, tmp_output_dir):
         findings = [_make_finding(file="src/app.php", line=None)]
         reconciled = _make_reconciled_json(findings)
         reconciled_path = os.path.join(tmp_output_dir, "reconciled.json")
@@ -302,7 +302,7 @@ class TestScopeCheckNoLineNumber:
             git_range="main..HEAD",
         )
 
-        assert result["findings"][0]["scope_status"] == "IN_SCOPE"
+        assert result["findings"][0]["scope_status"] == "FILE_LEVEL"
         assert "no line" in result["findings"][0]["scope_reason"].lower()
 
 
@@ -381,7 +381,7 @@ class TestStableIDs:
 
 
 class TestPreClassification:
-    """IN_SCOPE findings -> 'needs_verification'; OUT_OF_SCOPE -> 'out_of_scope'."""
+    """IN_HUNK findings -> 'needs_verification'; OUT_OF_SCOPE -> 'out_of_scope'."""
 
     def test_in_scope_needs_verification(self, tmp_output_dir):
         findings = [_make_finding(file="src/app.php", line=25)]
@@ -450,7 +450,7 @@ class TestEdgeCaseEmptyFindings:
 
 
 class TestEdgeCaseMultiHunkDiff:
-    """File with multiple hunks, finding in second hunk -> IN_SCOPE."""
+    """File with multiple hunks, finding in second hunk -> IN_HUNK."""
 
     def test_finding_in_second_hunk(self, tmp_output_dir):
         findings = [_make_finding(file="src/app.php", line=150)]
@@ -470,8 +470,8 @@ class TestEdgeCaseMultiHunkDiff:
             git_range="main..HEAD",
         )
 
-        assert result["findings"][0]["scope_status"] == "IN_SCOPE"
-        assert "in hunk" in result["findings"][0]["scope_reason"]
+        assert result["findings"][0]["scope_status"] == "IN_HUNK"
+        assert "in changed hunk" in result["findings"][0]["scope_reason"]
 
     def test_finding_between_hunks_is_out_of_scope(self, tmp_output_dir):
         findings = [_make_finding(file="src/app.php", line=80)]
@@ -706,7 +706,7 @@ class TestReconciledFileLoading:
 
         assert len(result["findings"]) == 1
         assert "[security] SQL injection" in result["findings"][0]["title"]
-        assert result["findings"][0]["scope_status"] == "IN_SCOPE"
+        assert result["findings"][0]["scope_status"] == "IN_HUNK"
 
 
 # =============================================================================
@@ -776,3 +776,375 @@ class TestCLISubprocess:
             text=True,
         )
         assert result.returncode != 0
+
+
+# =============================================================================
+# INTERACTS_WITH_CHANGE scope tests
+# =============================================================================
+
+
+class TestInteractsWithChange:
+    """Finding near a hunk boundary → INTERACTS_WITH_CHANGE."""
+
+    def test_line_just_outside_hunk_is_interacts(self, tmp_output_dir):
+        """Line 1 below hunk end → INTERACTS_WITH_CHANGE."""
+        findings = [_make_finding(file="src/app.php", line=31)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},  # hunk: 20-30
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["scope_status"] == "INTERACTS_WITH_CHANGE"
+        assert "near" in result["findings"][0]["scope_reason"]
+
+    def test_line_just_above_hunk_is_interacts(self, tmp_output_dir):
+        """Line 5 above hunk start → INTERACTS_WITH_CHANGE."""
+        findings = [_make_finding(file="src/app.php", line=15)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},  # hunk: 20-30
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["scope_status"] == "INTERACTS_WITH_CHANGE"
+
+    def test_line_at_proximity_boundary_is_interacts(self, tmp_output_dir):
+        """Line exactly HUNK_PROXIMITY lines away → still INTERACTS_WITH_CHANGE."""
+        proximity = _mod.HUNK_PROXIMITY  # 5
+        findings = [_make_finding(file="src/app.php", line=20 - proximity)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["scope_status"] == "INTERACTS_WITH_CHANGE"
+
+    def test_line_beyond_proximity_is_out_of_scope(self, tmp_output_dir):
+        """Line HUNK_PROXIMITY + 1 lines away → OUT_OF_SCOPE."""
+        proximity = _mod.HUNK_PROXIMITY  # 5
+        findings = [_make_finding(file="src/app.php", line=20 - proximity - 1)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["scope_status"] == "OUT_OF_SCOPE"
+
+    def test_interacts_gets_needs_verification(self, tmp_output_dir):
+        """INTERACTS_WITH_CHANGE findings get needs_verification pre-classification."""
+        findings = [_make_finding(file="src/app.php", line=31)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["pre_classification"] == "needs_verification"
+
+
+# =============================================================================
+# FILE_LEVEL scope tests
+# =============================================================================
+
+
+class TestFileLevelScope:
+    """No-line findings get FILE_LEVEL status."""
+
+    def test_no_line_is_file_level(self, tmp_output_dir):
+        findings = [_make_finding(file="src/app.php", line=None)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["scope_status"] == "FILE_LEVEL"
+        assert result["findings"][0]["pre_classification"] == "needs_verification"
+
+    def test_no_hunk_data_is_file_level(self, tmp_output_dir):
+        """File in diff but no hunk data → FILE_LEVEL."""
+        findings = [_make_finding(file="src/app.php", line=10)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={},  # no hunk data
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["scope_status"] == "FILE_LEVEL"
+
+    def test_file_level_counted_in_scope(self, tmp_output_dir):
+        """FILE_LEVEL findings count toward in_scope total."""
+        findings = [_make_finding(file="src/app.php", line=None)]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        assert result["summary"]["in_scope"] == 1
+        assert result["summary"]["out_of_scope"] == 0
+
+
+# =============================================================================
+# Granular scope summary tests
+# =============================================================================
+
+
+class TestGranularScopeSummary:
+    """Summary includes by_scope_status breakdown."""
+
+    def test_by_scope_status_present(self, tmp_output_dir):
+        findings = [
+            _make_finding(title="In hunk", file="src/app.php", line=25),
+            _make_finding(title="Near hunk", file="src/app.php", line=35),
+            _make_finding(title="File level", file="src/app.php", line=None),
+            _make_finding(title="Out of scope", file="src/other.php", line=10),
+        ]
+        reconciled = _make_reconciled_json(findings)
+        with open(os.path.join(tmp_output_dir, "reconciled.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+
+        by_status = result["summary"]["by_scope_status"]
+        assert by_status["IN_HUNK"] == 1
+        assert by_status["INTERACTS_WITH_CHANGE"] == 1
+        assert by_status["FILE_LEVEL"] == 1
+        assert by_status["OUT_OF_SCOPE"] == 1
+        # Backward compat: in_scope = IN_HUNK + INTERACTS + FILE_LEVEL
+        assert result["summary"]["in_scope"] == 3
+        assert result["summary"]["out_of_scope"] == 1
+
+
+# =============================================================================
+# Structured source_agents propagation tests
+# =============================================================================
+
+
+class TestStructuredSourceAgents:
+    """Ingest uses structured source_agents from reconciled output."""
+
+    def test_uses_structured_source_agents(self, tmp_output_dir):
+        """When source_agents field exists, use it directly."""
+        finding = {
+            "title": "SQL Injection",
+            "file": "src/db.php",
+            "line": 10,
+            "severity": "high",
+            "confidence": 0.9,
+            "source_agents": ["security", "pr"],
+            "description": "Test",
+            "recommendation": "Fix it",
+            "category": "sql",
+        }
+        reconciled = {
+            "issues": [finding],
+            "clusters": [],
+            "total_findings": 1,
+            "deduplicated_findings": 1,
+        }
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/db.php"],
+            diff_hunks={"src/db.php": [(1, 50)]},
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["source_agents"] == ["security", "pr"]
+
+    def test_falls_back_to_bracket_extraction(self, tmp_output_dir):
+        """Without source_agents field, falls back to bracket parsing."""
+        finding = {
+            "title": "[security] SQL Injection",
+            "file": "src/db.php",
+            "line": 10,
+            "severity": "high",
+            "confidence": 0.9,
+            "description": "Test",
+            "category": "sql",
+        }
+        reconciled = {
+            "issues": [finding],
+            "clusters": [],
+            "total_findings": 1,
+            "deduplicated_findings": 1,
+        }
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/db.php"],
+            diff_hunks={"src/db.php": [(1, 50)]},
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["source_agents"] == ["security"]
+
+    def test_recommendation_propagated(self, tmp_output_dir):
+        """Recommendation field is preserved from reconciled to preprocessed."""
+        finding = {
+            "title": "XSS",
+            "file": "src/view.php",
+            "line": 10,
+            "severity": "high",
+            "confidence": 0.9,
+            "source_agents": ["security"],
+            "description": "Unescaped output",
+            "recommendation": "Use esc_html()",
+            "category": "xss",
+        }
+        reconciled = {
+            "issues": [finding],
+            "clusters": [],
+            "total_findings": 1,
+            "deduplicated_findings": 1,
+        }
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/view.php"],
+            diff_hunks={"src/view.php": [(1, 50)]},
+            git_range="main..HEAD",
+        )
+        assert result["findings"][0]["recommendation"] == "Use esc_html()"
+
+
+# =============================================================================
+# Ground truth fast-track tests
+# =============================================================================
+
+
+class TestGroundTruthFastTrack:
+    """Tests for ground_truth_match -> verified pre-classification."""
+
+    def test_ground_truth_match_classified_as_verified(self, tmp_output_dir):
+        """Finding with ground_truth_match=True gets 'verified' classification."""
+        finding = _make_finding(title="Unused var", file="src/app.php", line=25)
+        finding["ground_truth_match"] = True
+        finding["ground_truth_tool"] = "phpcs"
+        reconciled = _make_reconciled_json([finding])
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        processed = result["findings"][0]
+        assert processed["pre_classification"] == "verified"
+        assert processed["scope_status"] == "IN_HUNK"
+
+    def test_no_ground_truth_match_classified_as_needs_verification(self, tmp_output_dir):
+        """Finding without ground_truth_match gets 'needs_verification'."""
+        finding = _make_finding(title="Bug", file="src/app.php", line=25)
+        reconciled = _make_reconciled_json([finding])
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        processed = result["findings"][0]
+        assert processed["pre_classification"] == "needs_verification"
+
+    def test_ground_truth_match_false_classified_as_needs_verification(self, tmp_output_dir):
+        """Finding with ground_truth_match=False gets 'needs_verification'."""
+        finding = _make_finding(title="Bug", file="src/app.php", line=25)
+        finding["ground_truth_match"] = False
+        reconciled = _make_reconciled_json([finding])
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        processed = result["findings"][0]
+        assert processed["pre_classification"] == "needs_verification"
+
+    def test_ground_truth_out_of_scope_stays_out(self, tmp_output_dir):
+        """Ground truth match doesn't override out-of-scope classification."""
+        finding = _make_finding(title="Bug", file="src/other.php", line=25)
+        finding["ground_truth_match"] = True
+        reconciled = _make_reconciled_json([finding])
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],  # other.php not in changed files
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        processed = result["findings"][0]
+        assert processed["pre_classification"] == "out_of_scope"
+        assert processed["scope_status"] == "OUT_OF_SCOPE"
+
+    def test_verified_count_in_summary(self, tmp_output_dir):
+        """Summary includes verified_by_ground_truth count."""
+        f1 = _make_finding(title="GT match", file="src/app.php", line=25)
+        f1["ground_truth_match"] = True
+        f2 = _make_finding(title="No match", file="src/app.php", line=26)
+        reconciled = _make_reconciled_json([f1, f2])
+        with open(os.path.join(tmp_output_dir, "reconciled-structured.json"), "w") as f:
+            json.dump(reconciled, f)
+
+        result = _mod.preprocess_findings(
+            output_dir=tmp_output_dir,
+            changed_files=["src/app.php"],
+            diff_hunks={"src/app.php": [(20, 30)]},
+            git_range="main..HEAD",
+        )
+        assert result["summary"]["verified_by_ground_truth"] == 1
+        assert result["summary"]["needs_verification"] == 1

@@ -5,6 +5,32 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.49.0] - 2026-03-11
+
+### Added
+
+- **Ground truth pre-dispatch evidence phase:** New `run-ground-truth.py` orchestrator collects objective tool findings (ESLint, PHPCS, Semgrep, Jest, PHPUnit) before agent dispatch. File-type routing sends PHP files to PHPCS/PHPUnit, JS/TS to ESLint/Jest, all files to Semgrep. Tools are auto-detected; missing tools are gracefully skipped. Always exits 0 — ground truth is additive, never blocking.
+- **Bootstrap ground truth injection:** `bootstrap-reviewer.py` accepts `--ground-truth` flag and injects tool findings (filtered to agent's domain files) into Section 2 of the bootstrap prompt. Each agent sees only findings relevant to its scope.
+- **Reconcile ground truth cross-referencing:** `reconcile-reviews.py` matches canonical findings against ground truth using file + line ±3 tolerance. Matched findings are tagged with `ground_truth_match=True` and `ground_truth_tool`.
+- **Ingest ground truth fast-track:** Findings with `ground_truth_match=True` receive `pre_classification="verified"` in `ingest-preprocess.py`, skipping LLM verification. Summary includes `verified_by_ground_truth` count.
+- **Step 2.5 in all review commands:** `full-code-review.md`, `code-review.md`, and `pr-review.md` now include an optional ground truth collection step before agent dispatch.
+- **Comprehensive test coverage:** 46 tests for `run-ground-truth.py`, 10 tests for bootstrap integration, 11 tests for reconcile cross-referencing, 5 tests for ingest fast-track (72 new tests total).
+
+## [1.48.0] - 2026-03-11
+
+### Added
+
+- **Deterministic dispatch triage:** Conditional agents now go through a 4-layer deterministic triage in `plan-review-dispatch.py` before LLM-based semantic triage: test-only filter → keyword matching → agent-specific checks (large_pr, file_deletions, net_removal) → conservative default (dispatch). New `SKIPPED_TRIAGE` status for agents filtered out deterministically.
+- **Triage configuration in agent registry:** All 7 conditional agents now have `triage_keywords` arrays in `agent-registry.json`. Architecture-reviewer and dead-code-reviewer also have `triage_checks` for diffstat-based decisions.
+- **Granular scope classification:** `ingest-preprocess.py` now classifies findings into 4 statuses: `IN_HUNK` (line in changed hunk), `INTERACTS_WITH_CHANGE` (within 5-line proximity), `FILE_LEVEL` (no line number), `OUT_OF_SCOPE`. Summary includes `by_scope_status` breakdown while preserving backward-compatible `in_scope`/`out_of_scope` aggregates.
+- **`changed_files` in dispatch plan output:** `plan-review-dispatch.py` now includes the clean file list in its output, enabling downstream tools (reconcile, ingest) to receive it without re-parsing.
+
+### Fixed
+
+- **Recommendation field lost during reconciliation:** `reconcile-reviews.py` now preserves the `recommendation` field in canonical findings — picks the longest non-empty recommendation across all clustered findings.
+- **`source_agents` field ignored in ingest:** `ingest-preprocess.py` now uses the structured `source_agents` field from reconciled data before falling back to title-based extraction.
+- **Test-gap advisories not firing:** All three review commands (`pr-review`, `full-code-review`, `code-review`) now pass `--changed-files` to the reconcile step, enabling test-gap detection.
+
 ## [1.47.0] - 2026-03-11
 
 ### Added

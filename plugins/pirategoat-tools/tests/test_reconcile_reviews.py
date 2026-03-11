@@ -37,6 +37,8 @@ _spec.loader.exec_module(_mod)
 title_similarity = _mod.title_similarity
 reconcile = _mod.reconcile
 detect_test_gap = _mod.detect_test_gap
+_match_ground_truth = _mod._match_ground_truth
+_load_ground_truth = _mod._load_ground_truth
 SEVERITY_ORDER = _mod.SEVERITY_ORDER
 CONFIDENCE_ORDER = _mod.CONFIDENCE_ORDER
 
@@ -993,3 +995,191 @@ class TestReconcileTestGapIntegration:
         )
         assert "advisories" in result
         assert len(result["advisories"]) == 0
+
+
+# =============================================================================
+# Recommendation Preservation Tests
+# =============================================================================
+
+
+class TestRecommendationPreservation:
+    """Canonical finding preserves recommendation field."""
+
+    def test_recommendation_in_canonical(self, tmp_dir):
+        """Single agent finding with recommendation -> canonical has it."""
+        _make_agent_output(tmp_dir, "security", [
+            {"title": "SQL Injection", "file": "src/db.php", "line": 42,
+             "severity": "critical", "confidence": 0.95, "category": "sql",
+             "description": "Direct input in query",
+             "recommendation": "Use parameterized queries"},
+        ])
+        result = reconcile(tmp_dir, agent_signals="")
+        canonical = result["clusters"][0]["canonical"]
+        assert "recommendation" in canonical
+        assert canonical["recommendation"] == "Use parameterized queries"
+
+    def test_best_recommendation_from_cluster(self, tmp_dir):
+        """Two agents, different recommendations -> longest wins."""
+        _make_agent_output(tmp_dir, "security", [
+            {"title": "SQL Injection", "file": "src/db.php", "line": 42,
+             "severity": "critical", "confidence": 0.95, "category": "sql",
+             "description": "Direct input in query",
+             "recommendation": "Use prepared statements"},
+        ])
+        _make_agent_output(tmp_dir, "pr", [
+            {"title": "SQL Injection", "file": "src/db.php", "line": 42,
+             "severity": "high", "confidence": 0.9, "category": "sql",
+             "description": "User input in query without sanitization",
+             "recommendation": "Use parameterized queries with PDO or wpdb::prepare()"},
+        ])
+        result = reconcile(tmp_dir, agent_signals="")
+        canonical = result["clusters"][0]["canonical"]
+        # Longer recommendation wins
+        assert "parameterized queries" in canonical["recommendation"]
+
+    def test_recommendation_in_issues_list(self, tmp_dir):
+        """The flat issues list also includes recommendation."""
+        _make_agent_output(tmp_dir, "security", [
+            {"title": "XSS", "file": "src/view.php", "line": 10,
+             "severity": "high", "confidence": 0.9, "category": "xss",
+             "description": "Unescaped output",
+             "recommendation": "Use esc_html()"},
+        ])
+        result = reconcile(tmp_dir, agent_signals="")
+        assert "issues" in result
+        assert result["issues"][0]["recommendation"] == "Use esc_html()"
+
+    def test_missing_recommendation_defaults_to_empty(self, tmp_dir):
+        """Finding without recommendation field -> empty string in canonical."""
+        _make_agent_output(tmp_dir, "pr", [
+            {"title": "Bug", "file": "src/a.php", "line": 1,
+             "severity": "high", "confidence": 0.9, "category": "bug",
+             "description": "Test", "recommendation": ""},
+        ])
+        result = reconcile(tmp_dir, agent_signals="")
+        canonical = result["clusters"][0]["canonical"]
+        assert canonical["recommendation"] == ""
+
+
+# =============================================================================
+# Ground Truth Cross-Referencing Tests
+# =============================================================================
+
+
+class TestMatchGroundTruth:
+    """Tests for _match_ground_truth matching logic."""
+
+    def test_exact_file_and_line_match(self):
+        canonical = {"file": "src/app.js", "line": 42}
+        gt = [{"file": "src/app.js", "line": 42, "tool": "eslint"}]
+        assert _match_ground_truth(canonical, gt) == "eslint"
+
+    def test_line_within_tolerance_matches(self):
+        canonical = {"file": "src/app.js", "line": 44}
+        gt = [{"file": "src/app.js", "line": 42, "tool": "eslint"}]
+        assert _match_ground_truth(canonical, gt) == "eslint"
+
+    def test_line_beyond_tolerance_no_match(self):
+        canonical = {"file": "src/app.js", "line": 50}
+        gt = [{"file": "src/app.js", "line": 42, "tool": "eslint"}]
+        assert _match_ground_truth(canonical, gt) is None
+
+    def test_different_file_no_match(self):
+        canonical = {"file": "src/other.js", "line": 42}
+        gt = [{"file": "src/app.js", "line": 42, "tool": "eslint"}]
+        assert _match_ground_truth(canonical, gt) is None
+
+    def test_no_line_no_match(self):
+        canonical = {"file": "src/app.js", "line": None}
+        gt = [{"file": "src/app.js", "line": 42, "tool": "eslint"}]
+        assert _match_ground_truth(canonical, gt) is None
+
+    def test_suffix_file_match(self):
+        canonical = {"file": "src/app.js", "line": 42}
+        gt = [{"file": "/project/src/app.js", "line": 42, "tool": "eslint"}]
+        assert _match_ground_truth(canonical, gt) == "eslint"
+
+    def test_empty_gt_no_match(self):
+        canonical = {"file": "src/app.js", "line": 42}
+        assert _match_ground_truth(canonical, []) is None
+
+
+class TestGroundTruthInReconcile:
+    """Integration tests for ground truth cross-referencing in reconcile()."""
+
+    def _write_gt_summary(self, tmp_dir, findings):
+        """Write a ground-truth-summary.json and return its path."""
+        data = {
+            "tools_run": ["eslint"],
+            "tools_skipped": [],
+            "tools_unavailable": [],
+            "findings": findings,
+        }
+        path = os.path.join(tmp_dir, "ground-truth-summary.json")
+        with open(path, "w") as f:
+            json.dump(data, f)
+        return path
+
+    def test_matching_finding_tagged(self, tmp_dir):
+        """Finding matching ground truth gets ground_truth_match=True."""
+        _make_agent_output(tmp_dir, "pr", [
+            {"title": "Unused var", "file": "src/app.js", "line": 42,
+             "severity": "medium", "confidence": 0.9, "category": "lint",
+             "description": "Unused variable"},
+        ])
+        gt_path = self._write_gt_summary(tmp_dir, [
+            {"tool": "eslint", "file": "src/app.js", "line": 42,
+             "rule": "no-unused-vars", "severity": "warning", "message": "Unused"},
+        ])
+        result = reconcile(tmp_dir, agent_signals="", ground_truth_path=gt_path)
+        canonical = result["clusters"][0]["canonical"]
+        assert canonical.get("ground_truth_match") is True
+        assert canonical.get("ground_truth_tool") == "eslint"
+
+    def test_non_matching_finding_not_tagged(self, tmp_dir):
+        """Finding not matching ground truth has no ground_truth_match field."""
+        _make_agent_output(tmp_dir, "pr", [
+            {"title": "Logic bug", "file": "src/app.js", "line": 100,
+             "severity": "high", "confidence": 0.9, "category": "bug",
+             "description": "Wrong condition"},
+        ])
+        gt_path = self._write_gt_summary(tmp_dir, [
+            {"tool": "eslint", "file": "src/app.js", "line": 42,
+             "rule": "no-unused-vars", "severity": "warning", "message": "Unused"},
+        ])
+        result = reconcile(tmp_dir, agent_signals="", ground_truth_path=gt_path)
+        canonical = result["clusters"][0]["canonical"]
+        assert "ground_truth_match" not in canonical
+
+    def test_no_ground_truth_no_tags(self, tmp_dir):
+        """Without ground truth, no findings are tagged."""
+        _make_agent_output(tmp_dir, "pr", [
+            {"title": "Bug", "file": "src/app.js", "line": 42,
+             "severity": "medium", "confidence": 0.9, "category": "bug",
+             "description": "Test"},
+        ])
+        result = reconcile(tmp_dir, agent_signals="")
+        canonical = result["clusters"][0]["canonical"]
+        assert "ground_truth_match" not in canonical
+
+    def test_multiple_findings_mixed_matches(self, tmp_dir):
+        """Only matching findings get tagged, others don't."""
+        _make_agent_output(tmp_dir, "pr", [
+            {"title": "Unused var", "file": "src/app.js", "line": 42,
+             "severity": "medium", "confidence": 0.9, "category": "lint",
+             "description": "Unused"},
+            {"title": "Logic bug", "file": "src/other.js", "line": 10,
+             "severity": "high", "confidence": 0.9, "category": "bug",
+             "description": "Wrong"},
+        ])
+        gt_path = self._write_gt_summary(tmp_dir, [
+            {"tool": "eslint", "file": "src/app.js", "line": 42,
+             "rule": "no-unused-vars", "severity": "warning", "message": "Unused"},
+        ])
+        result = reconcile(tmp_dir, agent_signals="", ground_truth_path=gt_path)
+        canonicals = [c["canonical"] for c in result["clusters"]]
+        tagged = [c for c in canonicals if c.get("ground_truth_match")]
+        untagged = [c for c in canonicals if "ground_truth_match" not in c]
+        assert len(tagged) == 1
+        assert len(untagged) == 1
+        assert tagged[0]["file"] == "src/app.js"
