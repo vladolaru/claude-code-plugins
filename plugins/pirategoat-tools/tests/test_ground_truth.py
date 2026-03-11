@@ -197,6 +197,27 @@ class TestParseSecurityFindings:
         findings = _mod.parse_security_findings(tmp_output_dir, changed)
         assert len(findings) == 0
 
+    def test_bandit_results_ignored(self, tmp_output_dir):
+        """Bandit results file should not be parsed even if present."""
+        bandit_data = {
+            "results": [
+                {
+                    "filename": "script.py",
+                    "line_number": 10,
+                    "issue_severity": "HIGH",
+                    "test_id": "B101",
+                    "issue_text": "Use of eval()",
+                    "issue_cwe": {"id": 95},
+                }
+            ]
+        }
+        with open(os.path.join(tmp_output_dir, "bandit-results.json"), "w") as f:
+            json.dump(bandit_data, f)
+        changed = frozenset(["script.py"])
+        findings = _mod.parse_security_findings(tmp_output_dir, changed)
+        # No findings because only Semgrep is parsed, not Bandit
+        assert len(findings) == 0
+
 
 class TestParseTestResults:
     """Tests for parse_test_results with real parser module."""

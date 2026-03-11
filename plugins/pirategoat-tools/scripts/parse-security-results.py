@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Parse Security Scanner Results from Multiple Tools
+Parse Security Scanner Results
 
-Unifies JSON output from Semgrep and Bandit into a standard format
+Unifies JSON output from Semgrep into a standard format
 that review agents can easily consume.
 
 Usage:
@@ -72,47 +72,6 @@ def parse_semgrep_results(directory: str) -> Optional[Dict[str, Any]]:
         'findings': findings
     }
 
-def parse_bandit_results(directory: str) -> Optional[Dict[str, Any]]:
-    """Parse Bandit JSON output."""
-    bandit_file = os.path.join(directory, 'bandit-results.json')
-
-    if not os.path.exists(bandit_file):
-        return None
-
-    with open(bandit_file) as f:
-        data = json.load(f)
-
-    findings = []
-    severity_count = {'high': 0, 'medium': 0, 'low': 0, 'info': 0}
-
-    for result in data.get('results', []):
-        # Bandit uses "HIGH", "MEDIUM", "LOW"
-        severity = result.get('issue_severity', 'LOW').lower()
-
-        if severity not in severity_count:
-            severity = 'info'
-
-        severity_count[severity] += 1
-
-        findings.append({
-            'file': result.get('filename', 'Unknown'),
-            'line': result.get('line_number', 0),
-            'column': 0,  # Bandit doesn't provide column
-            'severity': severity,
-            'rule': result.get('test_id', 'unknown'),
-            'message': result.get('issue_text', 'Security issue detected'),
-            'scanner': 'Bandit',
-            'cwe': result.get('issue_cwe', {}).get('id', None)
-        })
-
-    return {
-        'scanner': 'Bandit',
-        'pass': severity_count['high'] == 0,
-        'total_findings': len(findings),
-        'by_severity': severity_count,
-        'findings': findings
-    }
-
 def unify_results(results_list: List[Dict]) -> Dict[str, Any]:
     """Combine multiple scanner results into unified format."""
     unified = {
@@ -171,17 +130,10 @@ def main():
         results.append(semgrep_result)
         print(f"✅ Parsed Semgrep: {semgrep_result['total_findings']} findings ({semgrep_result['by_severity']['high']} high)", file=sys.stderr)
 
-    # Try to parse Bandit results
-    bandit_result = parse_bandit_results(results_dir)
-    if bandit_result:
-        results.append(bandit_result)
-        print(f"✅ Parsed Bandit: {bandit_result['total_findings']} findings ({bandit_result['by_severity']['high']} high)", file=sys.stderr)
-
     if not results:
         print("Error: No security scan results found", file=sys.stderr)
         print(f"Looked in: {results_dir}/", file=sys.stderr)
         print("  - semgrep-results.json (Semgrep)", file=sys.stderr)
-        print("  - bandit-results.json (Bandit)", file=sys.stderr)
         sys.exit(1)
 
     # Unify and output

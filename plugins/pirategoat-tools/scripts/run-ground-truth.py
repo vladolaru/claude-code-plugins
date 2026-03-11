@@ -197,10 +197,6 @@ def parse_security_findings(
     if semgrep_result:
         results.append(semgrep_result)
 
-    bandit_result = mod.parse_bandit_results(output_dir)
-    if bandit_result:
-        results.append(bandit_result)
-
     if not results:
         return []
 
