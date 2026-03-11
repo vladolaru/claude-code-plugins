@@ -5,6 +5,20 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.0] - 2026-03-11
+
+### Changed
+
+- **Config-driven ground truth:** Replaced auto-detection (`shutil.which`, config file scanning, `package.json` parsing) with LLM-extracted tool configuration. Review commands now read the project's CLAUDE.md/AGENTS.md, extract tool commands into a `tool-config.json`, and pass it to `run-ground-truth.py` via `--tool-config`. The script becomes a dumb executor — no guessing, no PATH scanning.
+- **Removed Bandit from security pipeline:** Our codebases are PHP/JS/TS; Bandit (Python-only) added no value. Semgrep with `--config=auto` covers Python if needed.
+- **New output schema fields:** `tools_skipped`/`tools_unavailable` replaced with `tools_failed`/`tools_not_configured`. Coverage results now included when configured (`jest_coverage`, `phpunit_coverage`).
+
+### Added
+
+- **Tool config loader:** `load_tool_config()` validates a JSON config against 7 known tools (eslint, phpcs, semgrep, jest, jest_coverage, phpunit, phpunit_coverage). Unknown tools, missing `cmd` keys, and empty commands are skipped with warnings.
+- **Config-driven tool runner:** `run_configured_tool()` executes command templates with `{output_file}`, `{output_dir}`, and `{files}` placeholder substitution. Files with spaces are shell-quoted.
+- **Coverage wired up:** `parse_coverage_results()` was implemented but never called — now invoked when `jest_coverage` or `phpunit_coverage` tools are configured and run.
+
 ## [1.49.1] - 2026-03-11
 
 ### Fixed
