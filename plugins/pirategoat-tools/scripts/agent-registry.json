@@ -186,6 +186,14 @@
       ],
       "focus": "Logging, error handling, rollback safety, feature flags, failure-mode resilience",
       "model_tier": "sonnet"
+    },
+    "decision-reviewer": {
+      "domain": null,
+      "protocols": [],
+      "scope_flags": [],
+      "dispatch_class": "special",
+      "focus": "Stress-test review conclusions via structured criticism",
+      "model_tier": "inherit"
     }
   }
 }
