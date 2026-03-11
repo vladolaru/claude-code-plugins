@@ -52,12 +52,44 @@ mkdir -p "$OUTPUT_DIR"
 
 ## Step 2.5: Ground Truth Collection (optional)
 
-Run available static analysis tools to collect objective evidence before agent dispatch:
+### 2.5a — Extract tool configuration
+
+Read the project's CLAUDE.md and AGENTS.md (if present). Extract the commands this project uses to run linters, test suites, security scanners, and coverage. Write a `tool-config.json` in OUTPUT_DIR:
+
+```bash
+cat > "${OUTPUT_DIR}/tool-config.json" << 'TOOLCFG'
+{
+  "<tool_name>": { "cmd": "<command template>" }
+}
+TOOLCFG
+```
+
+**Supported tools and their expected output files:**
+
+| Tool name | Purpose | Expected output |
+|-----------|---------|----------------|
+| `eslint` | JS/TS linting | `eslint-results.json` (ESLint JSON format) |
+| `phpcs` | PHP linting | `phpcs-results.json` (PHPCS JSON format) |
+| `semgrep` | Security scanning | `semgrep-results.json` (Semgrep JSON format) |
+| `jest` | JS/TS test results | `jest-results.json` (Jest JSON format) |
+| `jest_coverage` | JS/TS coverage | `jest-coverage-summary.json` (Jest coverage-summary) |
+| `phpunit` | PHP test results | `phpunit-results.json` (PHPUnit JSON/JUnit) |
+| `phpunit_coverage` | PHP coverage | `phpunit-coverage.xml` (Clover XML) |
+
+**Placeholders:** Use `{output_file}` for the tool's output path, `{output_dir}` for the output directory, `{files}` for changed files (shell-quoted by the script).
+
+**Rules:**
+- Only include tools the project actually uses and has instructions for
+- If you can't determine the exact command, omit the tool
+- If the project has no tool instructions at all, write an empty config `{}`
+
+### 2.5b — Run ground truth collection
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-ground-truth.py \
-  --output-dir "<OUTPUT_DIR>" \
-  --changed-files "<CHANGED_FILES_CSV>"
+  --output-dir "${OUTPUT_DIR}" \
+  --changed-files "${CHANGED_FILES_CSV}" \
+  --tool-config "${OUTPUT_DIR}/tool-config.json"
 ```
 
 Where `CHANGED_FILES_CSV` is a comma-separated list of changed files from `git diff --name-only <GIT_RANGE>`.
