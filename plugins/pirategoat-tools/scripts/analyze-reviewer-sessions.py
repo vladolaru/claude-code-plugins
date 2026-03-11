@@ -675,6 +675,31 @@ def format_quality_text_report(
                 f"agents={cluster['agents']}  severities={cluster['severities']}"
             )
 
+    # Survival rate (when ingest data is available)
+    all_ingest_texts = []
+    for meta, data in dispatches:
+        ingest_texts = data.get("ingest_texts", [])
+        all_ingest_texts.extend(ingest_texts)
+
+    lines.append("")
+    lines.append("SURVIVAL METRICS")
+    lines.append("-" * 60)
+
+    if all_ingest_texts:
+        ingest_outcomes = extract_ingest_outcomes(all_ingest_texts)
+        aggregate_findings = {
+            "total_findings": sum(s["total_findings"] for s in agent_totals.values()),
+        }
+        rate = compute_survival_rate(aggregate_findings, ingest_outcomes)
+        lines.append(f"  Survival rate: {rate:.0%}")
+        lines.append(f"    Confirmed: {ingest_outcomes['confirmed']}")
+        lines.append(f"    Likely valid: {ingest_outcomes['likely_valid']}")
+        lines.append(f"    False positive: {ingest_outcomes['false_positive']}")
+        lines.append(f"    Out of scope: {ingest_outcomes['out_of_scope']}")
+        lines.append(f"    Style/preference: {ingest_outcomes['style']}")
+    else:
+        lines.append("  Survival rate: N/A — run ingest for accuracy metrics")
+
     return "\n".join(lines)
 
 
@@ -729,6 +754,23 @@ def format_quality_json_report(
             "findings_by_severity": dict(rec["findings_by_severity"]),
         })
 
+    # Survival metrics
+    all_ingest_texts = []
+    for meta, data in dispatches:
+        all_ingest_texts.extend(data.get("ingest_texts", []))
+
+    if all_ingest_texts:
+        ingest_outcomes = extract_ingest_outcomes(all_ingest_texts)
+        aggregate_findings = {
+            "total_findings": sum(r["total_findings"] for r in agent_records.values()),
+        }
+        survival = {
+            "rate": compute_survival_rate(aggregate_findings, ingest_outcomes),
+            "outcomes": ingest_outcomes,
+        }
+    else:
+        survival = None
+
     report = {
         "agent_filter": agent_name,
         "dispatches_analyzed": len(dispatches),
@@ -736,6 +778,7 @@ def format_quality_json_report(
         "overlap_clusters": overlaps["overlap_clusters"],
         "severity_disagreements": overlaps["severity_disagreements"],
         "clusters": overlaps["clusters"],
+        "survival": survival,
     }
 
     return json.dumps(report, indent=2)

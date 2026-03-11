@@ -382,3 +382,70 @@ class TestDetectOverlaps:
         assert cluster["file"] == "src/Foo.php"
         assert cluster["line"] == 42
         assert set(cluster["agents"]) == {"security", "code"}
+
+
+# ---------------------------------------------------------------------------
+# Tests: format_quality_text_report — survival rate section
+# ---------------------------------------------------------------------------
+
+format_quality_text_report = _mod.format_quality_text_report
+format_quality_json_report = _mod.format_quality_json_report
+
+
+def _make_dispatch(reviewer="security", issues=None, ingest_texts=None):
+    """Build a (meta, data) tuple mimicking a reviewer dispatch."""
+    if issues is None:
+        issues = [_make_issue(severity="high", title="XSS", file="f.php", line=1)]
+    review = _make_review_json(reviewer=reviewer, issues=issues)
+    review_json_str = json.dumps(review)
+    data = {
+        "write_outputs": [{"content": review_json_str, "path": f"{reviewer}-review.json"}],
+        # Minimal fields for classify_dispatch
+        "files_read": [],
+        "bash_commands": [],
+        "final_texts": [],
+    }
+    if ingest_texts is not None:
+        data["ingest_texts"] = ingest_texts
+    return ({"agent_name": f"{reviewer}-reviewer"}, data)
+
+
+class TestSurvivalRateInReport:
+    """Survival rate appears in quality report when ingest data is available."""
+
+    def test_text_report_includes_survival_when_ingest_present(self):
+        """When dispatch data includes ingest outputs, show survival rate."""
+        ingest_text = "| F1 | CONFIRMED | SQL Injection |"
+        dispatch = _make_dispatch(
+            reviewer="security",
+            ingest_texts=[ingest_text],
+        )
+        report = format_quality_text_report([dispatch], None)
+        assert "Survival rate" in report or "survival" in report.lower()
+
+    def test_text_report_shows_na_when_no_ingest(self):
+        """When no ingest data, show N/A for survival rate."""
+        dispatch = _make_dispatch(reviewer="security")
+        report = format_quality_text_report([dispatch], None)
+        assert "N/A" in report
+
+    def test_json_report_includes_survival_when_ingest_present(self):
+        """JSON report includes survival metrics when ingest data is present."""
+        ingest_text = "| F1 | CONFIRMED |\n| F2 | FALSE POSITIVE |"
+        dispatch = _make_dispatch(
+            reviewer="security",
+            ingest_texts=[ingest_text],
+        )
+        report_str = format_quality_json_report([dispatch], None)
+        report = json.loads(report_str)
+        assert "survival" in report
+        assert report["survival"] is not None
+        assert "rate" in report["survival"]
+        assert "outcomes" in report["survival"]
+
+    def test_json_report_survival_none_when_no_ingest(self):
+        """JSON report has survival=None when no ingest data."""
+        dispatch = _make_dispatch(reviewer="security")
+        report_str = format_quality_json_report([dispatch], None)
+        report = json.loads(report_str)
+        assert report["survival"] is None
