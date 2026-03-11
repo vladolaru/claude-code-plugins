@@ -210,6 +210,17 @@ Skill tool:
 
 Do not present results to the user yet — the pipeline continues to the decision-critic step.
 
+## Step 6.5: Update Reconciled Summary with Validation Results
+
+Update `reconciled.md` using the ingest validation results from Step 6 to reflect the validated state of findings:
+
+1. **Annotate findings** with their validation verdict (CONFIRMED, LIKELY VALID, FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE)
+2. **Move dismissed findings** (FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE) from the Critical/Important sections into a "Dismissed by Validation" section at the bottom
+3. **Recalculate the verdict** from remaining confirmed + likely-valid findings: any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`
+4. **Add a validation summary line** after the verdict: "Validation: X confirmed, Y likely valid, Z dismissed"
+
+This ensures the decision critic in Step 7 reviews the post-validation state, not the raw reconciliation output.
+
 ## Step 7: Decision Critic
 
 Stress-test the review's conclusions by dispatching the decision-reviewer agent:
@@ -222,11 +233,17 @@ Agent tool:
     Output Directory: ${OUTPUT_DIR}
 ```
 
-The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Parse the agent's return message for the `Verdict:` line, then act on it:
+The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Extract the verdict using this priority chain:
+
+1. **Return message:** Parse the agent's return message for the `Verdict:` line (expected format: `Verdict: STAND|REVISE|ESCALATE`).
+2. **Findings file fallback:** If the return message doesn't contain a parseable verdict, read `${OUTPUT_DIR}/decision-critic-findings.md` and extract the `**Verdict:**` value from its header.
+3. **Critic unavailable:** If both sources fail (no file, no parseable verdict), note "Decision critic unavailable" in the final presentation and present the review as-is.
+
+Once you have a verdict, act on it:
 
 - **STAND:** The review conclusions are sound. No report updates needed.
-- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. Update `reconciled.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items).
-- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. Update `reconciled.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings.
+- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. Update `reconciled.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items). **Recalculate the review verdict** from the updated findings (any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`). In Step 8, include a brief note of what changed and why.
+- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. Update `reconciled.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings. **Override the review verdict to `COMMENT`** regardless of original verdict — the findings need human judgment before acting on any approve or request-changes signal. In Step 8, flag prominently that findings need human review before acting.
 
 Do not present results between Step 6 and Step 7 — run them back-to-back.
 
