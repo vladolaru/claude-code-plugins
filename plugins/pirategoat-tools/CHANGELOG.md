@@ -5,6 +5,18 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.47.0] - 2026-03-11
+
+### Added
+
+- **Decision critic pipeline for `/code-review`:** The incremental review command now includes post-ingest validation update, decision-critic stress-testing, and final presentation steps (Steps 7.5, 8, 9) — matching the `/full-code-review` and `/pr-review` pipelines.
+
+### Fixed
+
+- **full-code-review decision critic reviewed wrong artifact:** The critic was sent `reconciled.md` before ingest had validated findings, so dismissed false positives were still present. Added Step 6.5 to update `reconciled.md` with ingest validation results before the critic sees it.
+- **full-code-review verdict extraction was single-source:** Only parsed the agent's return message. Added 3-step fallback chain: return message → findings file → graceful "critic unavailable" degradation.
+- **full-code-review verdict-coherence on REVISE/ESCALATE:** REVISE now recalculates the review verdict from updated findings. ESCALATE overrides verdict to COMMENT — prevents contradictory output.
+
 ## [1.46.2] - 2026-03-11
 
 ### Fixed
