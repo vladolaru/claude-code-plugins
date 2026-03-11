@@ -158,7 +158,8 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
 ```
 
 **Core methods:**
-- `builder.add_issue(severity, title, file, description, recommendation, category="general", confidence=0.9, line=None)` - Add finding
+- `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required>, confidence=0.9)` - Add diff-anchored finding (line is required)
+- `builder.add_observation(file, note, category="general")` - Add file-level note (no line, doesn't affect verdict)
 - `builder.set_files_reviewed(N)` - Track files reviewed
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence

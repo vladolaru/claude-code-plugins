@@ -57,8 +57,8 @@ def _build_and_save(tmp_dir, reviewer, issues, pr_id="123"):
     """Create a ReviewOutputBuilder, add issues from spec dicts, and save.
 
     Each issue dict should have keys matching add_issue params:
-    severity, title, file, description, recommendation, and optionally
-    category, line, confidence.
+    severity, title, file, description, recommendation, line (required),
+    and optionally category, confidence.
     """
     builder = ReviewOutputBuilder(pr_id=pr_id, reviewer=reviewer)
     for spec in issues:
@@ -85,7 +85,7 @@ class TestProducerToReconcileContract:
         """Single agent ReviewOutputBuilder output is read by reconcile."""
         _build_and_save(tmp_dir, "security", [
             {"severity": "high", "title": "SQL Injection", "file": "src/db.php",
-             "description": "Direct input in query", "recommendation": "Use prepare()"},
+             "line": 10, "description": "Direct input in query", "recommendation": "Use prepare()"},
         ])
 
         result = reconcile(tmp_dir)
@@ -138,7 +138,7 @@ class TestProducerToReconcileContract:
         # Valid builder output
         _build_and_save(tmp_dir, "security", [
             {"severity": "high", "title": "Real Issue", "file": "f.py",
-             "description": "desc", "recommendation": "rec"},
+             "line": 1, "description": "desc", "recommendation": "rec"},
         ])
         # Non-builder JSON (no issues key)
         bad_path = os.path.join(tmp_dir, "broken-review.json")
@@ -153,7 +153,7 @@ class TestProducerToReconcileContract:
         """Extra kwargs from add_issue don't break reconcile."""
         _build_and_save(tmp_dir, "security", [
             {"severity": "high", "title": "Issue", "file": "f.py",
-             "description": "desc", "recommendation": "rec",
+             "line": 1, "description": "desc", "recommendation": "rec",
              "vulnerability_type": "sqli", "cwe_id": "CWE-89"},
         ])
 
@@ -205,7 +205,7 @@ class TestReconcileToIngestContract:
         """Reconcile output contains an 'issues' key for downstream consumers."""
         _build_and_save(tmp_dir, "security", [
             {"severity": "medium", "title": "Issue", "file": "f.py",
-             "description": "desc", "recommendation": "rec"},
+             "line": 1, "description": "desc", "recommendation": "rec"},
         ])
 
         result = reconcile(tmp_dir)

@@ -66,7 +66,7 @@ class TestAddIssue:
 
     def test_returns_8_char_id(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec")
+        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
         assert isinstance(issue_id, str)
         assert len(issue_id) == 8
 
@@ -94,32 +94,33 @@ class TestAddIssue:
 
     def test_severity_case_insensitive(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("HIGH", "Title", "f.py", "desc", "rec")
+        b.add_issue("HIGH", "Title", "f.py", "desc", "rec", line=1)
         assert b.issues[0]["severity"] == "high"
 
     def test_invalid_severity_raises(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="Invalid severity"):
-            b.add_issue("urgent", "Title", "f.py", "desc", "rec")
+            b.add_issue("urgent", "Title", "f.py", "desc", "rec", line=1)
 
     def test_confidence_boundaries_valid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "A", "f.py", "d", "r", confidence=0.0)
-        b.add_issue("high", "B", "f.py", "d", "r", confidence=1.0)
+        b.add_issue("high", "A", "f.py", "d", "r", line=1, confidence=0.0)
+        b.add_issue("high", "B", "f.py", "d", "r", line=2, confidence=1.0)
         assert b.issues[0]["confidence"] == 0.0
         assert b.issues[1]["confidence"] == 1.0
 
     def test_confidence_boundaries_invalid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError, match="Confidence"):
-            b.add_issue("high", "A", "f.py", "d", "r", confidence=-0.1)
+            b.add_issue("high", "A", "f.py", "d", "r", line=1, confidence=-0.1)
         with pytest.raises(ValueError, match="Confidence"):
-            b.add_issue("high", "B", "f.py", "d", "r", confidence=1.1)
+            b.add_issue("high", "B", "f.py", "d", "r", line=1, confidence=1.1)
 
     def test_extra_kwargs_preserved(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_issue(
             "high", "Title", "f.py", "desc", "rec",
+            line=1,
             vulnerability_type="xss",
             cwe_id="CWE-79",
         )
@@ -127,12 +128,11 @@ class TestAddIssue:
         assert issue["vulnerability_type"] == "xss"
         assert issue["cwe_id"] == "CWE-79"
 
-    def test_defaults_category_and_line(self):
+    def test_line_default_is_none_and_raises(self):
+        """Default line=None now raises ValueError (line is required)."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("medium", "Title", "f.py", "desc", "rec")
-        issue = b.issues[0]
-        assert issue["category"] == "general"
-        assert issue["line"] is None
+        with pytest.raises(ValueError, match="line.*required"):
+            b.add_issue("medium", "Title", "f.py", "desc", "rec")
 
 
 # =============================================================================
@@ -249,7 +249,7 @@ class TestCalculateVerdict:
         """Create a builder with issues at given severity levels."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
         for i, sev in enumerate(severities):
-            b.add_issue(sev, f"Issue {i}", f"f{i}.py", "desc", "rec")
+            b.add_issue(sev, f"Issue {i}", f"f{i}.py", "desc", "rec", line=i + 1)
         return b
 
     def test_no_issues_approve(self):
@@ -303,20 +303,21 @@ class TestToDict:
 
     def test_all_top_level_keys(self):
         b = ReviewOutputBuilder(pr_id="99", reviewer="arch")
-        b.add_issue("medium", "Title", "f.py", "desc", "rec")
+        b.add_issue("medium", "Title", "f.py", "desc", "rec", line=1)
         d = b.to_dict()
         expected_keys = {
             "pr_id", "reviewer", "timestamp", "version", "verdict",
-            "summary", "issues", "recommendations", "positive_observations", "meta",
+            "summary", "issues", "observations", "recommendations",
+            "positive_observations", "meta",
         }
         assert expected_keys == set(d.keys())
 
     def test_severity_counts_correct(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_issue("critical", "A", "a.py", "d", "r")
-        b.add_issue("high", "B", "b.py", "d", "r")
-        b.add_issue("high", "C", "c.py", "d", "r")
-        b.add_issue("medium", "D", "d.py", "d", "r")
+        b.add_issue("critical", "A", "a.py", "d", "r", line=1)
+        b.add_issue("high", "B", "b.py", "d", "r", line=2)
+        b.add_issue("high", "C", "c.py", "d", "r", line=3)
+        b.add_issue("medium", "D", "d.py", "d", "r", line=4)
         d = b.to_dict()
         counts = d["summary"]["by_severity"]
         assert counts["critical"] == 1
@@ -354,7 +355,7 @@ class TestToJson:
 
     def test_roundtrip(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "XSS", "f.php", "desc", "rec")
+        b.add_issue("high", "XSS", "f.php", "desc", "rec", line=1)
         b.add_positive("Good patterns")
         parsed = json.loads(b.to_json())
         assert parsed == b.to_dict()
@@ -375,9 +376,9 @@ class TestToMarkdown:
 
     def test_issues_grouped_by_severity(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_issue("low", "Low Issue", "a.py", "desc", "rec")
-        b.add_issue("critical", "Critical Issue", "b.py", "desc", "rec")
-        b.add_issue("high", "High Issue", "c.py", "desc", "rec")
+        b.add_issue("low", "Low Issue", "a.py", "desc", "rec", line=1)
+        b.add_issue("critical", "Critical Issue", "b.py", "desc", "rec", line=2)
+        b.add_issue("high", "High Issue", "c.py", "desc", "rec", line=3)
         md = b.to_markdown()
         # Critical section should appear before High, High before Low
         crit_pos = md.index("## Critical Issues")
@@ -404,7 +405,7 @@ class TestSave:
     def test_creates_both_files(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue("high", "Title", "f.py", "desc", "rec")
+            b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             b.save(d)
             assert os.path.isfile(os.path.join(d, "security-review.json"))
             assert os.path.isfile(os.path.join(d, "security-review.md"))
@@ -412,7 +413,7 @@ class TestSave:
     def test_json_content_matches_to_dict(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue("high", "Title", "f.py", "desc", "rec")
+            b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             b.save(d)
             with open(os.path.join(d, "security-review.json")) as f:
                 saved = json.load(f)
@@ -424,3 +425,85 @@ class TestSave:
             result = b.save(d)
             assert result["json"] == os.path.join(d, "arch-review.json")
             assert result["markdown"] == os.path.join(d, "arch-review.md")
+
+
+# =============================================================================
+# TestLineRequired
+# =============================================================================
+
+
+class TestLineRequired:
+    """add_issue requires line parameter (protocol enforcement)."""
+
+    def test_line_none_raises(self):
+        """add_issue with line=None raises ValueError."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="line.*required"):
+            b.add_issue("high", "Title", "f.py", "desc", "rec", line=None)
+
+    def test_line_zero_raises(self):
+        """Line 0 is invalid (lines are 1-indexed)."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="line.*positive"):
+            b.add_issue("high", "Title", "f.py", "desc", "rec", line=0)
+
+    def test_line_negative_raises(self):
+        """Negative line is invalid."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="line.*positive"):
+            b.add_issue("high", "Title", "f.py", "desc", "rec", line=-1)
+
+    def test_line_required_positional_still_works(self):
+        """Valid line number works as before."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=42)
+        assert b.issues[0]["line"] == 42
+        assert isinstance(issue_id, str)
+
+
+# =============================================================================
+# TestAddObservation
+# =============================================================================
+
+
+class TestAddObservation:
+    """add_observation stores file-level notes outside the finding pipeline."""
+
+    def test_stores_observation(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_observation("f.py", "File lacks CSRF protection", category="security")
+        assert len(b.observations) == 1
+        obs = b.observations[0]
+        assert obs["file"] == "f.py"
+        assert obs["note"] == "File lacks CSRF protection"
+        assert obs["category"] == "security"
+
+    def test_observation_default_category(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_observation("f.py", "Some note")
+        assert b.observations[0]["category"] == "general"
+
+    def test_observations_in_dict_output(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_observation("f.py", "Note")
+        d = b.to_dict()
+        assert "observations" in d
+        assert len(d["observations"]) == 1
+
+    def test_observations_none_when_empty(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        d = b.to_dict()
+        assert d["observations"] is None
+
+    def test_observations_do_not_affect_verdict(self):
+        """Observations don't count as issues — verdict unaffected."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_observation("f.py", "Looks risky", category="security")
+        assert b._calculate_verdict() == "approve"
+
+    def test_observations_in_markdown(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_observation("f.py", "File lacks CSRF protection")
+        md = b.to_markdown()
+        assert "Observations" in md
+        assert "File lacks CSRF protection" in md

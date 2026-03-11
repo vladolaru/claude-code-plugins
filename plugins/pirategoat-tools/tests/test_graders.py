@@ -45,6 +45,7 @@ def _make_valid_json(tmp_dir: str, reviewer: str = "security") -> str:
         file="src/User.php",
         description="Direct input in query",
         recommendation="Use prepared statements",
+        line=42,
     )
     builder.set_files_reviewed(3)
 
@@ -63,6 +64,7 @@ def _make_valid_markdown(tmp_dir: str, reviewer: str = "security") -> str:
         file="src/User.php",
         description="Direct input in query",
         recommendation="Use prepared statements",
+        line=42,
     )
 
     path = os.path.join(tmp_dir, f"{reviewer}-review.md")

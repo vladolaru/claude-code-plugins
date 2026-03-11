@@ -33,6 +33,7 @@ class ReviewOutputBuilder:
         self.reviewer = reviewer
         self.timestamp = datetime.now().isoformat()
         self.issues = []
+        self.observations = []
         self.recommendations = {'immediate': [], 'important': [], 'suggestions': []}
         self.positive_observations = []
         self.files_reviewed = 0
@@ -48,11 +49,15 @@ class ReviewOutputBuilder:
         description: str,
         recommendation: str,
         category: str = "general",
-        line: Optional[int] = None,
+        line: int = None,
         confidence: float = 0.95,
         **extra_fields
     ) -> str:
-        """Add an issue. Returns issue ID."""
+        """Add an issue. Returns issue ID.
+
+        Line is required — the reviewer protocol mandates diff-anchored findings.
+        Use add_observation() for file-level notes without a specific line.
+        """
         # Validate severity
         valid_severities = ['critical', 'high', 'medium', 'low', 'info']
         if severity.lower() not in valid_severities:
@@ -61,6 +66,18 @@ class ReviewOutputBuilder:
         # Validate confidence
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
+
+        # Validate line (required, positive integer)
+        if line is None:
+            raise ValueError(
+                "line is required for add_issue(). "
+                "Use add_observation() for file-level notes without a specific line."
+            )
+        if not isinstance(line, int) or line <= 0:
+            raise ValueError(
+                f"line must be a positive integer, got {line}. "
+                "Lines are 1-indexed."
+            )
 
         issue_id = str(uuid.uuid4())[:8]
 
@@ -79,6 +96,19 @@ class ReviewOutputBuilder:
 
         self.issues.append(issue)
         return issue_id
+
+    def add_observation(self, file: str, note: str, category: str = "general"):
+        """Add a file-level observation (not a finding).
+
+        Observations are informational notes about files that don't have a
+        specific line reference. They don't affect the verdict and are
+        displayed separately from issues.
+        """
+        self.observations.append({
+            "file": file,
+            "note": note,
+            "category": category,
+        })
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
@@ -143,6 +173,7 @@ class ReviewOutputBuilder:
                 'by_severity': severity_counts
             },
             'issues': self.issues,
+            'observations': self.observations if self.observations else None,
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,
             'meta': {
@@ -191,6 +222,12 @@ class ReviewOutputBuilder:
             md.append("## Positive Observations\n\n")
             for obs in data['positive_observations']:
                 md.append(f"- {obs}\n")
+
+        # Observations
+        if data.get('observations'):
+            md.append("\n## Observations\n\n")
+            for obs in data['observations']:
+                md.append(f"- **`{obs['file']}`** — {obs['note']}\n")
 
         return ''.join(md)
 
