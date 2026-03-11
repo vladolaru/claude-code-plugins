@@ -39,10 +39,6 @@ git rev-parse --verify main 2>/dev/null && echo "main" || (git rev-parse --verif
 ```bash
 BRANCH_SAFE=$(echo "<branch>" | tr '/' '-' | sed 's/^-//')
 OUTPUT_DIR="/tmp/branch-review-${BRANCH_SAFE}"
-# Clean stale review files but preserve .review-state.json for incremental tracking
-if [ -d "$OUTPUT_DIR" ]; then
-  find "$OUTPUT_DIR" -maxdepth 1 -type f ! -name '.review-state.json' -delete
-fi
 mkdir -p "$OUTPUT_DIR"
 ```
 
