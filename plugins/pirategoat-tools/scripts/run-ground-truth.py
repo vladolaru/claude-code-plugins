@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """
-Ground Truth Collection — run available static analysis tools and collect findings.
+Ground Truth Collection — run configured static analysis tools and collect findings.
 
-Orchestrates linters, security scanners, and test runners against changed files.
-Uses existing parser scripts (parse-linter-results.py, parse-security-results.py,
-parse-test-results.py, parse-coverage-results.py) for output normalization.
+Executes tool commands from a JSON config file (produced by the LLM from the
+project's CLAUDE.md) and parses their output using existing parser scripts
+(parse-linter-results.py, parse-security-results.py, parse-test-results.py,
+parse-coverage-results.py).
 
 Usage:
-    python3 run-ground-truth.py --output-dir /tmp/pr-review-42 --changed-files "src/app.php,src/utils.js"
-    python3 run-ground-truth.py --output-dir /tmp/pr-review-42 --changed-files-file /tmp/files.txt
+    python3 run-ground-truth.py --output-dir /tmp/pr-review-42 \
+        --changed-files "src/app.php,src/utils.js" \
+        --tool-config /tmp/pr-review-42/tool-config.json
+
+    python3 run-ground-truth.py --output-dir /tmp/pr-review-42 \
+        --changed-files-file /tmp/files.txt \
+        --tool-config /tmp/pr-review-42/tool-config.json
+
+Without --tool-config, all tools are marked as not_configured and an empty
+summary is written (exit 0).
 
 Exit code: always 0 (ground truth is additive, not a gate).
 
