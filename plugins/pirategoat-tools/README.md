@@ -79,16 +79,18 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 
 ### Ground Truth Integration
 
-Agents don't guess — they use actual tool outputs when available. Scripts for integrating linters, coverage, and security scanners:
+Agents don't guess — they use actual tool outputs when available. The review commands extract tool commands from the project's CLAUDE.md and pass them to the ground truth orchestrator.
 
-| Phase | Tools | Scripts |
-|-------|-------|---------|
-| Tests | Jest, PHPUnit, Playwright | `run-tests-for-review.sh` + `parse-test-results.py` |
-| Linters | ESLint, PHPCS | `run-linters-for-review.sh` + `parse-linter-results.py` |
-| Coverage | Jest, PHPUnit (Xdebug/PCOV) | `run-coverage-for-review.sh` + `parse-coverage-results.py` |
-| Security | Semgrep, Bandit | `run-security-scanners-for-review.sh` + `parse-security-results.py` |
+| Phase | Tools | Parser |
+|-------|-------|--------|
+| Linters | ESLint, PHPCS | `parse-linter-results.py` |
+| Security | Semgrep | `parse-security-results.py` |
+| Tests | Jest, PHPUnit | `parse-test-results.py` |
+| Coverage | Jest, PHPUnit (Xdebug/PCOV) | `parse-coverage-results.py` |
 
-All tools are optional — agents fall back to manual analysis when tools aren't available.
+**How it works:** Before running `run-ground-truth.py`, the orchestrating LLM reads the project's CLAUDE.md to find how each tool is invoked (e.g., `pnpm test:unit`, `vendor/bin/phpcs`, `wp-env run tests-cli phpunit`). It writes a `tool-config.json` with the extracted commands. The script executes those commands, parses the output, and writes `ground-truth-summary.json`.
+
+All tools are optional — if a tool isn't configured, the script marks it as `not_configured` and agents fall back to manual analysis.
 
 ### Pipeline Analytics
 
