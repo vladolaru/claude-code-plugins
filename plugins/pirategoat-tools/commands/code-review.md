@@ -248,18 +248,7 @@ Present the reconciliator's summary to the user:
 - Important issues (should address)
 - Pattern and history insights
 - Full review path: `<OUTPUT_DIR>/reconciled.md`
-- "Review state saved. Next `/code-review` will only review new commits."
-
-If the user wants to drill down on a specific topic, re-invoke the reconciliator in focused mode:
-
-```
-Task tool:
-  subagent_type: pirategoat-tools:review-reconciliator
-  prompt: |
-    Output Directory: <OUTPUT_DIR>
-    Mode: focused
-    Focus Topic: <topic>
-```
+- "Validating findings and running decision critic..."
 
 ## Step 7: Ingest Review Findings
 
@@ -272,3 +261,63 @@ Skill tool:
 ```
 
 Do not wait for user input between Step 6 and Step 7 — run them back-to-back.
+
+Do not present ingest results to the user separately — the pipeline continues to the post-ingest update and decision-critic steps.
+
+## Step 7.5: Update Reconciled Summary with Validation Results
+
+Update `reconciled.md` using the ingest validation results from Step 7 to reflect the validated state of findings:
+
+1. **Annotate findings** with their validation verdict (CONFIRMED, LIKELY VALID, FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE)
+2. **Move dismissed findings** (FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE) from the Critical/Important sections into a "Dismissed by Validation" section at the bottom
+3. **Recalculate the verdict** from remaining confirmed + likely-valid findings: any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`
+4. **Add a validation summary line** after the verdict: "Validation: X confirmed, Y likely valid, Z dismissed"
+
+This ensures the decision critic in Step 8 reviews the post-validation state, not the raw reconciliation output.
+
+## Step 8: Decision Critic
+
+Stress-test the review's conclusions by dispatching the decision-reviewer agent:
+
+```
+Agent tool:
+  subagent_type: pirategoat-tools:decision-reviewer
+  prompt: |
+    Document Path: ${OUTPUT_DIR}/reconciled.md
+    Output Directory: ${OUTPUT_DIR}
+```
+
+The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Extract the verdict using this priority chain:
+
+1. **Return message:** Parse the agent's return message for the `Verdict:` line (expected format: `Verdict: STAND|REVISE|ESCALATE`).
+2. **Findings file fallback:** If the return message doesn't contain a parseable verdict, read `${OUTPUT_DIR}/decision-critic-findings.md` and extract the `**Verdict:**` value from its header.
+3. **Critic unavailable:** If both sources fail (no file, no parseable verdict), note "Decision critic unavailable" in the final presentation and present the review as-is.
+
+Once you have a verdict, act on it:
+
+- **STAND:** The review conclusions are sound. No report updates needed.
+- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. Update `reconciled.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items). **Recalculate the review verdict** from the updated findings (any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`).
+- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. Update `reconciled.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings. **Override the review verdict to `COMMENT`** regardless of original verdict — the findings need human judgment before acting on any approve or request-changes signal.
+
+## Step 9: Present Final Results
+
+Present the final validated review to the user, building on the quick summary from Step 6:
+
+- Updated verdict (if changed by validation or critic)
+- Decision-critic verdict (STAND / REVISE / ESCALATE) with key insight
+- Validation summary: X confirmed, Y likely valid, Z dismissed
+- Any adjustments the decision-critic recommended (if REVISE)
+- Any validity concerns (if ESCALATE)
+- Full review files: `<OUTPUT_DIR>/`
+- "Review state saved. Next `/code-review` will only review new commits."
+
+If the user wants to drill down on a specific topic, re-invoke the reconciliator in focused mode:
+
+```
+Task tool:
+  subagent_type: pirategoat-tools:review-reconciliator
+  prompt: |
+    Output Directory: <OUTPUT_DIR>
+    Mode: focused
+    Focus Topic: <topic>
+```
