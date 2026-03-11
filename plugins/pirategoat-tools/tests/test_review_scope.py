@@ -574,3 +574,137 @@ class TestMergeBaseGatingIntegration:
             f"Range '{data['range']}' should start with merge-base '{expected_prefix}'"
         )
         assert data["range"].endswith("..HEAD")
+
+
+# =============================================================================
+# Semantic filtering tests — apply_semantic_filter() integration
+# =============================================================================
+
+
+class TestSemanticFiltering:
+    """Semantic filtering integration in diff output."""
+
+    def test_filter_diff_imported(self):
+        """filter_diff is importable from semantic-filter.py."""
+        from importlib.util import spec_from_file_location, module_from_spec
+        spec = spec_from_file_location(
+            "semantic_filter",
+            str(SCRIPTS_DIR / "semantic-filter.py"),
+        )
+        mod = module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert callable(mod.filter_diff)
+
+    def test_apply_semantic_filter_strips_docblocks(self):
+        """apply_semantic_filter removes docblock noise from diff text."""
+        diff_with_docblock = (
+            "--- a/src/Foo.php\n"
+            "+++ b/src/Foo.php\n"
+            "@@ -1,10 +1,15 @@\n"
+            " context line\n"
+            "+/**\n"
+            "+ * Added docblock\n"
+            "+ * @param string $name\n"
+            "+ */\n"
+            "+public function bar($name) {\n"
+            "+    return $name;\n"
+            "+}\n"
+        )
+        filtered = review_scope.apply_semantic_filter(diff_with_docblock)
+        # Docblock lines should be removed, code lines kept
+        assert "+public function bar" in filtered
+        assert "+    return $name;" in filtered
+        assert "* Added docblock" not in filtered
+        assert "@param string" not in filtered
+
+    def test_apply_semantic_filter_preserves_diff_headers(self):
+        """Diff headers (---, +++, @@) are never filtered."""
+        diff = (
+            "--- a/src/Foo.php\n"
+            "+++ b/src/Foo.php\n"
+            "@@ -1,5 +1,5 @@\n"
+            "+// just a comment\n"
+        )
+        filtered = review_scope.apply_semantic_filter(diff)
+        assert "--- a/src/Foo.php" in filtered
+        assert "+++ b/src/Foo.php" in filtered
+        assert "@@ -1,5 +1,5 @@" in filtered
+
+    def test_apply_semantic_filter_empty_input(self):
+        """Empty diff returns empty string."""
+        assert review_scope.apply_semantic_filter("") == ""
+
+    def test_count_diff_lines_after_filter(self):
+        """count_diff_lines counts only meaningful lines after filtering."""
+        diff_with_noise = (
+            "--- a/f.php\n+++ b/f.php\n@@ -1,5 +1,8 @@\n"
+            "+/**\n"
+            "+ * Docblock\n"
+            "+ */\n"
+            "+public function foo() {}\n"
+            "+\n"
+        )
+        # Raw count: 5 added lines
+        raw_count = review_scope.count_diff_lines(diff_with_noise)
+        assert raw_count == 5
+
+        # Filtered count: only the function line (docblock + blank removed)
+        filtered = review_scope.apply_semantic_filter(diff_with_noise)
+        filtered_count = review_scope.count_diff_lines(filtered)
+        assert filtered_count < raw_count
+        assert filtered_count == 1
+
+
+class TestSemanticFilterIntegration:
+    """Semantic filtering integrated into build_scope diff pipeline."""
+
+    def test_build_scope_calls_semantic_filter(self):
+        """build_scope applies semantic filter to diffs by default."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'apply_semantic_filter', wraps=review_scope.apply_semantic_filter) as mock_filter:
+            # Mock git commands
+            mock_run.side_effect = self._mock_git_commands
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=False,
+            )
+            scope = review_scope.build_scope(args)
+            # Semantic filter should have been called for each diff
+            assert mock_filter.call_count > 0
+
+    def test_build_scope_skips_filter_when_disabled(self):
+        """build_scope skips semantic filter when --no-semantic-filter is set."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'apply_semantic_filter') as mock_filter:
+            mock_run.side_effect = self._mock_git_commands
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            mock_filter.assert_not_called()
+
+    @staticmethod
+    def _mock_git_commands(cmd, check=True, capture_stderr=True):
+        """Mock git commands for build_scope testing."""
+        cmd_str = " ".join(cmd)
+        if "rev-parse --git-dir" in cmd_str:
+            return ".git"
+        if "rev-parse" in cmd_str:
+            return "abc123"
+        if "--name-only" in cmd_str:
+            return "src/Foo.php"
+        if "--numstat" in cmd_str:
+            return "10\t2\tsrc/Foo.php"
+        if "merge-base" in cmd_str:
+            return "abc123"
+        if "rev-list --count" in cmd_str:
+            return "0"
+        if "diff" in cmd_str and "--" in cmd_str:
+            return (
+                "--- a/src/Foo.php\n+++ b/src/Foo.php\n"
+                "@@ -1,3 +1,5 @@\n+/**\n+ * Doc\n+ */\n+code();\n"
+            )
+        return ""

@@ -31,6 +31,37 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 # =============================================================================
+# Semantic filter — content-level noise removal from diffs
+# =============================================================================
+
+def _load_semantic_filter():
+    """Lazy-load filter_diff from semantic-filter.py (sibling script)."""
+    import importlib.util as _ilu
+    _sf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "semantic-filter.py")
+    _sf_spec = _ilu.spec_from_file_location("semantic_filter", _sf_path)
+    _sf_mod = _ilu.module_from_spec(_sf_spec)
+    _sf_spec.loader.exec_module(_sf_mod)
+    return _sf_mod.filter_diff
+
+_filter_diff_fn = None
+
+def apply_semantic_filter(diff_text: str) -> str:
+    """Apply semantic filtering to remove noise from a diff.
+
+    Strips docblocks, blank lines, inline comments, and formatting-only
+    changes while preserving diff headers and meaningful code changes.
+
+    Returns filtered diff text. Returns empty string for empty input.
+    """
+    if not diff_text:
+        return ""
+    global _filter_diff_fn
+    if _filter_diff_fn is None:
+        _filter_diff_fn = _load_semantic_filter()
+    filtered, _stats = _filter_diff_fn(diff_text)
+    return filtered
+
+# =============================================================================
 # Domain Catalog — single source of truth for file filtering
 # =============================================================================
 
@@ -592,6 +623,9 @@ def build_scope(args: argparse.Namespace) -> dict:
     total_lines = 0
     budget_exceeded_files = []
 
+    # Determine if semantic filtering is enabled
+    use_semantic_filter = not getattr(args, "no_semantic_filter", False)
+
     if not args.base_ref_only and not args.summary:
         for filepath in domain_matched_sorted:
             if total_lines >= max_lines:
@@ -599,6 +633,11 @@ def build_scope(args: argparse.Namespace) -> dict:
                 continue
 
             diff_text = get_diff_for_file(range_spec, filepath)
+
+            # Apply semantic filtering to reduce noise (docblocks, comments, formatting)
+            if use_semantic_filter:
+                diff_text = apply_semantic_filter(diff_text)
+
             diff_lines = count_diff_lines(diff_text)
 
             if total_lines + diff_lines > max_lines and diffs:
@@ -979,6 +1018,11 @@ def main():
         "--no-merge-base",
         action="store_true",
         help="Disable automatic merge-base range adjustment (use raw two-dot range as-is).",
+    )
+    parser.add_argument(
+        "--no-semantic-filter",
+        action="store_true",
+        help="Disable semantic noise filtering on diffs (keep docblocks, comments, formatting).",
     )
 
     args = parser.parse_args()
