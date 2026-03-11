@@ -24,7 +24,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 | Plugin | What it does |
 |--------|-------------|
-| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 19 review agents, 19 skills (testing-patterns, software-architecture, WordPress, Figma), rich feedback loops |
+| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 20 review agents, 19 skills (testing-patterns, software-architecture, WordPress, Figma), rich feedback loops |
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
@@ -67,7 +67,7 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 19 agents, 19 skills, 7 commands
+│   ├── pirategoat-tools/         # 20 agents, 19 skills, 7 commands
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   ├── image-optimizer/          # 1 command, optimization scripts

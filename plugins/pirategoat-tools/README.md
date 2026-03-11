@@ -6,7 +6,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ## What's Inside
 
-### 19 Review Agents
+### 20 Review Agents
 
 These run in parallel by default — total review time equals the slowest agent, not the sum of all agents.
 
@@ -28,6 +28,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **gemini-reviewer** | Cross-validates via Google Gemini CLI for independent perspective | haiku |
 | **codex-reviewer** | Cross-validates via OpenAI Codex CLI for independent perspective | haiku |
 | **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | inherit |
+| **decision-reviewer** | Stress-tests review conclusions via 7-step structured criticism | inherit |
 | **a11y-reviewer** | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA | inherit |
 | **reliability-reviewer** | Logging, error handling, rollback safety, feature flags, failure-mode resilience | sonnet |
 | **technical-writer** | Creates documentation after feature completion | haiku |
@@ -36,7 +37,7 @@ These run in parallel by default — total review time equals the slowest agent,
 
 Not all review work requires the same level of reasoning. Agents are assigned to model tiers based on what their task actually demands:
 
-- **inherit** (3 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. The a11y-reviewer needs contextual reasoning about accessibility impact. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs.
+- **inherit** (4 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. The a11y-reviewer needs contextual reasoning about accessibility impact. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs. The decision-reviewer needs full reasoning depth for adversarial analysis of review conclusions.
 - **sonnet** (12 agents) — Structured analysis against well-defined checklists. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
 - **haiku** (4 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
 
@@ -136,7 +137,7 @@ Agents use ground truth results at confidence 1.0 and fall back to manual analys
 
 ```
 pirategoat-tools/
-├── agents/           # 19 review agent definitions
+├── agents/           # 20 review agent definitions
 ├── commands/         # 7 slash commands
 ├── skills/           # 19 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
