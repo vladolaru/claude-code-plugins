@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.46.1] - 2026-03-11
+
+### Improved
+
+- **decision-reviewer agent prompt optimization:** Applied 9 research-backed prompt engineering techniques (Identity Establishment, Emotional Stimuli, Affirmative Directives, Emphasis Hierarchy, Numbered Rule Priority, Hint-Based Guidance, Category-Based Generalization, Pre-Work Context Analysis, Error Normalization). Adds adversarial mindset priming ("Think like a skeptic"), RULE 0 for independence from input framing, explicit verdict decision criteria table, expanded Step 2 with phase descriptions and sequential constraint, error normalization for degenerate inputs, and restructured context section with constraint-first framing.
+
 ## [1.46.0] - 2026-03-11
 
 ### Added
