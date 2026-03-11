@@ -128,11 +128,13 @@ class TestAddIssue:
         assert issue["vulnerability_type"] == "xss"
         assert issue["cwe_id"] == "CWE-79"
 
-    def test_line_default_is_none_and_raises(self):
-        """Default line=None now raises ValueError (line is required)."""
+    def test_line_default_none_redirects_to_observation(self):
+        """Default line=None redirects to observation (soft enforcement)."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="line.*required"):
-            b.add_issue("medium", "Title", "f.py", "desc", "rec")
+        issue_id = b.add_issue("medium", "Title", "f.py", "desc", "rec")
+        assert len(b.issues) == 0
+        assert len(b.observations) == 1
+        assert issue_id is None
 
 
 # =============================================================================
@@ -435,11 +437,19 @@ class TestSave:
 class TestLineRequired:
     """add_issue requires line parameter (protocol enforcement)."""
 
-    def test_line_none_raises(self):
-        """add_issue with line=None raises ValueError."""
+    def test_line_none_redirects_to_observation(self):
+        """Line=None auto-redirects to add_observation() instead of crashing."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="line.*required"):
-            b.add_issue("high", "Title", "f.py", "desc", "rec", line=None)
+        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=None)
+        # No issue added
+        assert len(b.issues) == 0
+        # Redirected to observation
+        assert len(b.observations) == 1
+        assert b.observations[0]["file"] == "f.py"
+        assert "Title" in b.observations[0]["note"]
+        assert "desc" in b.observations[0]["note"]
+        # Returns None to signal it was not added as an issue
+        assert issue_id is None
 
     def test_line_zero_raises(self):
         """Line 0 is invalid (lines are 1-indexed)."""

@@ -52,7 +52,7 @@ class ReviewOutputBuilder:
         line: int = None,
         confidence: float = 0.95,
         **extra_fields
-    ) -> str:
+    ) -> Optional[str]:
         """Add an issue. Returns issue ID.
 
         Line is required — the reviewer protocol mandates diff-anchored findings.
@@ -67,12 +67,18 @@ class ReviewOutputBuilder:
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
 
-        # Validate line (required, positive integer)
+        # Validate line — soft enforcement for None (redirect to observation),
+        # hard enforcement for invalid values (0, negative, non-int)
         if line is None:
-            raise ValueError(
-                "line is required for add_issue(). "
-                "Use add_observation() for file-level notes without a specific line."
+            # Soft redirect: convert to observation instead of crashing.
+            # This preserves the agent's other findings while still
+            # enforcing the protocol's line requirement.
+            self.add_observation(
+                file=file,
+                note=f"[{severity.upper()}] {title}: {description}",
+                category=category,
             )
+            return None
         if not isinstance(line, int) or line <= 0:
             raise ValueError(
                 f"line must be a positive integer, got {line}. "
