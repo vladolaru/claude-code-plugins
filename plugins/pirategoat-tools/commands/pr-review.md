@@ -152,19 +152,21 @@ All agent review files are in: `<OUTPUT_DIR>/`
 
 ### Step 5: Decision Critic
 
-Stress-test the review's conclusions before presenting them.
+Stress-test the review's conclusions by dispatching the decision-reviewer agent:
 
 ```
-Skill tool:
-  skill: pirategoat-tools:decision-critic
-  args: <OUTPUT_DIR>/review-report.md
+Agent tool:
+  subagent_type: pirategoat-tools:decision-reviewer
+  prompt: |
+    Document Path: ${OUTPUT_DIR}/review-report.md
+    Output Directory: ${OUTPUT_DIR}
 ```
 
-Follow the skill's full 7-step workflow. After the SYNTHESIS step produces a verdict, update the report and note how to present it:
+The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Parse the agent's return message for the `Verdict:` line, then act on it:
 
 - **STAND:** No report changes. Present findings as-is in Step 6.
-- **REVISE:** Update `review-report.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items). In Step 6, include a brief note of what the critic changed and why.
-- **ESCALATE:** Update `review-report.md` — add a prominent warning that findings have significant validity concerns. In Step 6, flag prominently that findings need human review before acting.
+- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. Update `review-report.md` — adjust the action plan (upgrade/downgrade severities, recategorize findings, add or remove items). In Step 6, include a brief note of what changed and why.
+- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. Update `review-report.md` — add a prominent warning that findings have significant validity concerns. In Step 6, flag prominently that findings need human review before acting.
 
 ### Step 6: Present Results and Ask About Workspace Restore
 
