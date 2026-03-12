@@ -117,6 +117,8 @@ Each domain module exports an ordered `RULE_SPECS` list of `(rule_id, spec)` tup
 
 ## Testing
 
+**CWD matters:** Always run pytest from the **repo root**, not from inside `plugins/yoloing-safe/`. Integration and scenario tests spawn the hook as a subprocess that inherits CWD. If CWD is inside the plugin directory, relative paths in test commands (e.g., `chmod 777 file`) resolve under `_PLUGIN_ROOT` and self-protection blocks them — causing spurious failures. After running `make generate` (which `cd`s into `tests/e2e/`), return to the repo root before running pytest.
+
 Fast suites:
 
 ```bash
@@ -128,6 +130,7 @@ pytest plugins/yoloing-safe/tests/benchmark_hook.py -v
 E2E suite:
 
 ```bash
+# Note: return to repo root after this before running pytest
 cd plugins/yoloing-safe/tests/e2e
 make build
 make auth
