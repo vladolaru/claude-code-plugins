@@ -147,7 +147,7 @@
       "max_history_commits": 5,
       "dispatch_class": "always",
       "focus": "Git history precedents, lessons learned",
-      "model_tier": "sonnet"
+      "model_tier": "inherit"
     },
     "tests-mutation-reviewer": {
       "domain": null,

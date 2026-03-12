@@ -5,6 +5,16 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.51.0] - 2026-03-12
+
+### Changed
+
+- **history-insights-reviewer: scenario-budgeted exploration with analysis document.** Replaced the dead-letter "~35 git commands" budget (routinely exceeded 2-3x, never internalized) with a three-part quality-aware exploration workflow:
+  - Agent creates a running analysis document (`history-insights-analysis.md`) after scenario extraction, tracking planned scenarios, search results, and per-scenario status (INVESTIGATING → FOUND_LEAD / NO_LEADS → DONE).
+  - Phase 4 renamed to "Ground and Write" — agent must review its analysis document before writing output, only reporting findings grounded in documented evidence. APPROVE is explicitly validated as a legitimate outcome.
+  - Exploration budget ties to scenarios (~10-15 git commands each) with a soft ~40-call checkpoint rather than an arbitrary hard cap.
+- **history-insights-reviewer: model tier upgraded to `inherit`.** Restores Opus-level reasoning when available. Empirical data showed a significant finding quality regression (3-4 findings/run → 1-2) after the Opus → Sonnet switch.
+
 ## [1.50.4] - 2026-03-12
 
 ### Fixed

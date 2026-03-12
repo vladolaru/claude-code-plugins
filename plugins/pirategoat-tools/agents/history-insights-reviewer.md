@@ -75,6 +75,17 @@ From the PR changes, identify **scenarios** (not just patterns):
 - What **operations** are performed? (CRUD, API calls, state transitions, calculations)
 - What **edge cases** might exist? (empty states, concurrent access, large datasets, null values)
 
+After extracting scenarios, create `{OUTPUT_DIR}/history-insights-analysis.md`:
+
+```markdown
+# History Insights Analysis — PR #{pr_id}
+## Planned Scenarios (3-5 max)
+1. [scenario] — keywords: [...]
+## Investigation Log
+```
+
+This is your running investigation log. Update it per scenario: what you searched, commits found or dead ends, status (INVESTIGATING → FOUND_LEAD or NO_LEADS → DONE).
+
 ### Phase 1.5: Parallel Branch Detection (YOUR UNIQUE VALUE)
 
 Before mining commit history, check if other branches are working on the same files. This is something no other reviewer can surface.
@@ -174,6 +185,8 @@ ghe pr list --repo Automattic/<repo> --state merged --search "fix <scenario_keyw
 ghe pr view <pr_url> --json title,body,mergedAt
 ```
 
+**Update your analysis document** after each scenario investigation. If a scenario's last several searches yielded no new leads, mark it NO_LEADS and move on.
+
 ### Phase 3: Analyze and Classify Findings
 
 For each relevant historical change, classify:
@@ -184,7 +197,9 @@ For each relevant historical change, classify:
 | **CONSIDER_ENHANCEMENT** | Similar code was later enhanced for edge cases, performance, or UX | Report as MEDIUM — PR could benefit from same improvement |
 | **LEARN** | Historical context explains why current approach may be suboptimal | Report as INFO — educational, helps author understand tradeoffs |
 
-### Phase 4: Build the Insight Report
+### Phase 4: Ground and Write
+
+Before writing output, review your analysis document. Only report findings grounded in evidence documented there. If a scenario shows NO_LEADS after thorough investigation, don't force a finding — APPROVE is a valid outcome.
 
 For each finding, provide:
 
@@ -257,7 +272,7 @@ For each finding, provide:
 
 **Time-box your search:** Spend most effort on the last 12 months of history. Older history is less likely to be relevant due to codebase evolution.
 
-**Command budget:** Aim for ~35 git commands total. After finding 5 high-quality insights, stop searching and write your report. More commands rarely produce proportionally more value — depth on fewer findings beats breadth across many.
+**Exploration budget:** Plan to investigate 3-5 scenarios from Phase 1. Budget ~10-15 git commands per scenario. After ~40 total tool calls, check your analysis document — if recent searches aren't yielding new leads, transition to writing. This is a soft guide, not a hard cap: keep going if genuine leads remain, but stop recycling the same territory.
 
 **Dedup with patterns-reviewer:** Before starting keyword searches, check if `patterns-review.json` exists in OUTPUT_DIR. If it does, read its findings and avoid reporting the same pattern-level observations. Your value is in temporal insights (what the team learned over time), not in pattern detection (what exists now). Let patterns-reviewer handle "this pattern exists N times" — you handle "the team fixed this bug 6 months ago."
 
