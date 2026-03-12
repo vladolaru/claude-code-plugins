@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Phase 4 renamed to "Ground and Write" — agent must review its analysis document before writing output, only reporting findings grounded in documented evidence. APPROVE is explicitly validated as a legitimate outcome.
   - Exploration budget ties to scenarios (~10-15 git commands each) with a soft ~40-call checkpoint rather than an arbitrary hard cap.
 - **history-insights-reviewer: model tier upgraded to `inherit`.** Restores Opus-level reasoning when available. Empirical data showed a significant finding quality regression (3-4 findings/run → 1-2) after the Opus → Sonnet switch.
+- **history-insights-reviewer: prompt optimization with research-backed patterns.** Applied 6 prompt engineering techniques: consolidated identity (5 scattered paragraphs → 2 focused), removed triple redundancy (RULE 0 protocol + Core Mission + Phases described the same 4 steps), promoted exploration budget from buried 7th constraint to pre-process "Before You Begin" section, added contrastive CORRECT/INCORRECT finding examples in Phase 4, reframed setup instruction from negative to affirmative.
 
 ## [1.50.4] - 2026-03-12
 
