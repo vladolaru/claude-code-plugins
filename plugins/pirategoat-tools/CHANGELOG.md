@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.4] - 2026-03-12
+
+### Fixed
+
+- **Large-diff chunked reading guidance:** When a scoped diff exceeds ~20,000 estimated tokens (which will hit the Read tool's 25,000 token limit), the bootstrap output now explicitly warns and instructs agents to read in chunks with interleaved source file reads. Previously, agents attempted a full-file read, hit the token limit error, and recovered with 4–5 extra chunked reads — causing a 53% efficiency drop in the worst case (session `bdd8fb62`, PR #3450 with a 27,515-token diff).
+
 ## [1.50.3] - 2026-03-12
 
 ### Fixed

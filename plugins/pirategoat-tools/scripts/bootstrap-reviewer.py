@@ -414,9 +414,23 @@ def build_output(
             char_count += len(sl) + 1  # +1 for newline
         lines.append("\n".join(truncated_lines))
         lines.append("")
-        lines.append(f"... SCOPE TRUNCATED ({len(scope_lines)} total lines) ...")
+        # Estimate tokens (~4 chars/token) for Read tool limit guidance
+        total_lines = len(scope_lines)
+        estimated_tokens = len(scope_output) // 4
+        lines.append(f"... SCOPE TRUNCATED ({total_lines} total lines, ~{estimated_tokens:,} tokens) ...")
         lines.append(f"Full scope written to: {scope_file}")
-        lines.append("Read it with offset/limit parameters (e.g., offset=200, limit=200) to avoid re-truncation.")
+        if estimated_tokens > 20000:
+            lines.append(
+                f"WARNING: This file (~{estimated_tokens:,} tokens) will EXCEED the Read tool's 25,000 token limit."
+            )
+            lines.append(
+                f"You MUST read it in chunks: use offset/limit (e.g., offset=0 limit=300, then offset=300 limit=300)."
+            )
+            lines.append(
+                "Interleave diff chunks with source file reads to keep context adjacent."
+            )
+        else:
+            lines.append("Read it with offset/limit parameters (e.g., offset=200, limit=200) to avoid re-truncation.")
     else:
         lines.append(scope_output)
 
