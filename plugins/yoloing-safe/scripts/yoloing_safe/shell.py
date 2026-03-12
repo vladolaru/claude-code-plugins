@@ -49,6 +49,15 @@ _RE_WRITER_HEREDOC = re.compile(
     re.DOTALL,
 )
 
+# Matches $(cat <<'MARKER'\n...body...\nMARKER\n) — command substitution heredocs
+# where cat produces text output (not executable). Used by Claude Code for commit messages.
+_RE_SUBSHELL_CAT_HEREDOC = re.compile(
+    r"(\$\(cat\s+<<\s*['\"]?(\w+)['\"]?\n)"
+    r".*?"
+    r"(\n\2\s*\))",
+    re.DOTALL,
+)
+
 
 def _merge_clobber_redirect_tokens(tokens):
     """Merge `>|` forms that shlex splits into redirect + pipe tokens."""
@@ -264,10 +273,12 @@ def _split_bash_segments(command):
 
 
 def strip_writer_heredocs(command: str) -> str:
-    """Strip heredoc bodies when the consumer is `cat >` or `tee`."""
+    """Strip heredoc bodies when the consumer is `cat >`, `tee`, or `$(cat ...)`."""
     if "<<" not in command:
         return command
-    return _RE_WRITER_HEREDOC.sub(r"\1\3", command)
+    result = _RE_WRITER_HEREDOC.sub(r"\1\3", command)
+    result = _RE_SUBSHELL_CAT_HEREDOC.sub(r"\1\3", result)
+    return result
 
 
 def _whole_bash_command(command, tool_input):

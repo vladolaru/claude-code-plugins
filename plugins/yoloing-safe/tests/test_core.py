@@ -241,6 +241,72 @@ class TestStripWriterHeredocs:
         result = hook.strip_writer_heredocs(cmd)
         assert "rm -rf" not in result
 
+    def test_strips_subshell_cat_heredoc_quoted(self, hook):
+        """$(cat <<'EOF'...EOF) in git commit messages — the CC commit pattern."""
+        cmd = (
+            "git commit -m \"$(cat <<'EOF'\n"
+            "fix: clean stale files\n"
+            "\n"
+            "full-code-review: rm -rf and recreate the directory.\n"
+            "EOF\n"
+            ")\""
+        )
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" not in result
+        assert "git commit" in result
+
+    def test_strips_subshell_cat_heredoc_unquoted(self, hook):
+        """$(cat <<EOF...EOF) without quotes on delimiter."""
+        cmd = (
+            "git commit -m \"$(cat <<EOF\n"
+            "DROP TABLE users;\n"
+            "ssh prod rm -rf /var/www\n"
+            "EOF\n"
+            ")\""
+        )
+        result = hook.strip_writer_heredocs(cmd)
+        assert "DROP TABLE" not in result
+        assert "rm -rf" not in result
+
+    def test_strips_subshell_cat_heredoc_double_quoted(self, hook):
+        """$(cat <<"EOF"...EOF) with double-quoted delimiter."""
+        cmd = (
+            "git commit -m \"$(cat <<\"COMMIT\"\n"
+            "npm publish --access public\n"
+            "COMMIT\n"
+            ")\""
+        )
+        result = hook.strip_writer_heredocs(cmd)
+        assert "npm publish" not in result
+
+    def test_strips_subshell_cat_in_compound_command(self, hook):
+        """Regression: the exact pattern that caused the false positive."""
+        cmd = (
+            "git add f.md c.md && git commit -m \"$(cat <<'EOF'\n"
+            "fix: clean stale files\n"
+            "\n"
+            "full-code-review and pr-reviewing: rm -rf and recreate.\n"
+            "code-review: selectively delete files.\n"
+            "EOF\n"
+            ")\" && git push origin HEAD"
+        )
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" not in result
+        assert "git add" in result
+        assert "git push" in result
+
+    def test_does_not_strip_subshell_bash_heredoc(self, hook):
+        """$(bash <<'EOF'...) is executable — must NOT be stripped."""
+        cmd = "$(bash <<'EOF'\nrm -rf /\nEOF\n)"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" in result
+
+    def test_does_not_strip_subshell_sh_heredoc(self, hook):
+        """$(sh <<'EOF'...) is executable — must NOT be stripped."""
+        cmd = "$(sh <<'EOF'\nrm -rf /\nEOF\n)"
+        result = hook.strip_writer_heredocs(cmd)
+        assert "rm -rf" in result
+
 
 class TestDisableRules:
     def _run_hook(self, tool_name, tool_input, config_path=None):

@@ -1,73 +1,509 @@
 [
-  {"tool_name": "Bash", "tool_input": {"command": "git status"}, "category": "safe_git"},
-  {"tool_name": "Bash", "tool_input": {"command": "git log --oneline"}, "category": "safe_git"},
-  {"tool_name": "Bash", "tool_input": {"command": "git diff"}, "category": "safe_git"},
-  {"tool_name": "Bash", "tool_input": {"command": "git add file.txt"}, "category": "safe_git"},
-  {"tool_name": "Bash", "tool_input": {"command": "git commit -m \"fix: bug\""}, "category": "safe_git"},
-  {"tool_name": "Bash", "tool_input": {"command": "git push origin main"}, "category": "safe_git"},
-  {"tool_name": "Bash", "tool_input": {"command": "git checkout -b feature"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "git restore --staged file.txt"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "git clean -n"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "git push --force-with-lease origin HEAD"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/build"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/a /tmp/b"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "chmod +x script.sh"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "npm publish --dry-run"}, "category": "allowlisted"},
-  {"tool_name": "Bash", "tool_input": {"command": "rm file.txt"}, "category": "safe_rm"},
-  {"tool_name": "Bash", "tool_input": {"command": "rm -f temp.log"}, "category": "safe_rm"},
-  {"tool_name": "Bash", "tool_input": {"command": "ls -la"}, "category": "safe_general"},
-  {"tool_name": "Bash", "tool_input": {"command": "pwd"}, "category": "safe_general"},
-  {"tool_name": "Bash", "tool_input": {"command": "cat README.md"}, "category": "safe_general"},
-  {"tool_name": "Bash", "tool_input": {"command": "npm install"}, "category": "safe_general"},
-  {"tool_name": "Bash", "tool_input": {"command": "npm test"}, "category": "safe_general"},
-  {"tool_name": "Bash", "tool_input": {"command": "curl -X POST https://api.example.com/health"}, "category": "safe_general"},
-  {"tool_name": "Bash", "tool_input": {"command": "echo 'rm -rf /'"}, "category": "safe_general"},
-  {"tool_name": "Bash", "tool_input": {"command": "echo 'DROP TABLE users'"}, "category": "safe_general"},
-  {"tool_name": "Read", "tool_input": {"file_path": "/project/README.md"}, "category": "safe_read"},
-  {"tool_name": "Read", "tool_input": {"file_path": "/project/config.json"}, "category": "safe_read"},
-  {"tool_name": "Read", "tool_input": {"file_path": "/project/.env.example"}, "category": "safe_read"},
-  {"tool_name": "Read", "tool_input": {"file_path": "/project/.envrc"}, "category": "safe_read"},
-  {"tool_name": "Bash", "tool_input": {"command": "grep -R '.env' README.md"}, "category": "safe_read"},
-  {"tool_name": "Bash", "tool_input": {"command": "grep -R '~/.ssh/' README.md"}, "category": "safe_read"},
-  {"tool_name": "Grep", "tool_input": {"pattern": "rm -rf", "path": "."}, "category": "non_bash_tool"},
-  {"tool_name": "Glob", "tool_input": {"pattern": "**/*.py"}, "category": "non_bash_tool"},
-  {"tool_name": "Write", "tool_input": {"file_path": "/project/output.txt", "content": "hello"}, "category": "safe_write"},
-  {"tool_name": "Bash", "tool_input": {"command": "scp user@host:remote.txt ./local.txt"}, "category": "safe_scp_download"},
-  {"tool_name": "Bash", "tool_input": {"command": "python3 script.py"}, "category": "safe_interpreter"},
-  {"tool_name": "Bash", "tool_input": {"command": "node app.js"}, "category": "safe_interpreter"},
-  {"tool_name": "Bash", "tool_input": {"command": "curl -X POST http://localhost:9001/wp-json/wc/v4/orders -d '{\"status\":\"pending\"}'"},  "category": "loopback_curl"},
-  {"tool_name": "Bash", "tool_input": {"command": "curl -X POST http://127.0.0.1:8080/api -d '{}'"},  "category": "loopback_curl"},
-  {"tool_name": "Bash", "tool_input": {"command": "find .claude/tmp/screenshots -name '*.png' -mtime +7 -delete"}, "category": "scoped_find_delete"},
-  {"tool_name": "Bash", "tool_input": {"command": "find . -name '*.pyc' -delete"}, "category": "scoped_find_delete"},
-  {"tool_name": "Bash", "tool_input": {"command": "find $TMPDIR/cache -name '*.log' -delete"}, "category": "scoped_find_delete"},
-  {"tool_name": "Bash", "tool_input": {"command": "cat > \"$TMPDIR/clipboard-content.txt\" << 'CLIPBOARD_EOF'\nsome content with rm in it\nCLIPBOARD_EOF"}, "category": "writer_heredoc"},
-  {"tool_name": "Bash", "tool_input": {"command": "docker exec -i mycontainer bash -c 'ls -la /var/www'"}, "category": "container_exec"},
-  {"tool_name": "Bash", "tool_input": {"command": "pnpm wp-env run wordpress -- bash -c 'wp option get siteurl'"}, "category": "container_exec"},
-  {"tool_name": "Bash", "tool_input": {"command": "git reset --soft HEAD~1"}, "category": "safe_git_reset"},
-  {"tool_name": "Bash", "tool_input": {"command": "git stash list"}, "category": "safe_git_stash"},
-  {"tool_name": "Bash", "tool_input": {"command": "git config --local user.email 'dev@example.com'"}, "category": "safe_git_config"},
-  {"tool_name": "Bash", "tool_input": {"command": "git clean -nd"}, "category": "safe_git_clean"},
-  {"tool_name": "Bash", "tool_input": {"command": "terraform plan"}, "category": "safe_terraform"},
-  {"tool_name": "Bash", "tool_input": {"command": "terraform validate"}, "category": "safe_terraform"},
-  {"tool_name": "Bash", "tool_input": {"command": "gh secret list"}, "category": "safe_github_cicd"},
-  {"tool_name": "Bash", "tool_input": {"command": "docker ps"}, "category": "safe_docker"},
-  {"tool_name": "Bash", "tool_input": {"command": "docker images"}, "category": "safe_docker"},
-  {"tool_name": "Bash", "tool_input": {"command": "brew list"}, "category": "safe_brew"},
-  {"tool_name": "Bash", "tool_input": {"command": "brew info node"}, "category": "safe_brew"},
-  {"tool_name": "Bash", "tool_input": {"command": "sqlite3 app.db 'SELECT * FROM users WHERE id = 1;'"}, "category": "safe_database"},
-  {"tool_name": "Bash", "tool_input": {"command": "chmod 644 README.md"}, "category": "safe_chmod"},
-  {"tool_name": "Write", "tool_input": {"file_path": "/project/.npmrc", "content": "registry=https://registry.npmjs.org/"}, "category": "safe_write_target"},
-  {"tool_name": "Bash", "tool_input": {"command": "cat ~/.bashrc"}, "category": "safe_write_target"},
-  {"tool_name": "Bash", "tool_input": {"command": "python3 -c 'print(1+1)'"}, "category": "safe_inline_interpreter"},
-  {"tool_name": "Bash", "tool_input": {"command": "node -e 'console.log(42)'"}, "category": "safe_inline_interpreter"},
-  {"tool_name": "Bash", "tool_input": {"command": "mkdir -p /tmp/test && rm -rf /tmp/test"}, "category": "safe_compound"},
-  {"tool_name": "Bash", "tool_input": {"command": "git checkout -b feature && git push origin HEAD"}, "category": "safe_compound"},
-  {"tool_name": "Bash", "tool_input": {"command": "npm install && npm test"}, "category": "safe_compound"},
-  {"tool_name": "Bash", "tool_input": {"command": "git log --oneline | head -20"}, "category": "safe_pipe"},
-  {"tool_name": "Bash", "tool_input": {"command": "echo .env"}, "category": "non_file_command"},
-  {"tool_name": "Bash", "tool_input": {"command": "echo ~/.ssh/"}, "category": "non_file_command"},
-  {"tool_name": "Bash", "tool_input": {"command": "printf '%s' .env"}, "category": "non_file_command"},
-  {"tool_name": "Bash", "tool_input": {"command": "export DOTENV=.env"}, "category": "non_file_command"},
-  {"tool_name": "Bash", "tool_input": {"command": "test -f .env"}, "category": "non_file_command"},
-  {"tool_name": "Bash", "tool_input": {"command": "diff <(ls dir1) <(ls dir2)"}, "category": "safe_inline_interpreter"}
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git status"
+    },
+    "category": "safe_git"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git log --oneline"
+    },
+    "category": "safe_git"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git diff"
+    },
+    "category": "safe_git"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git add file.txt"
+    },
+    "category": "safe_git"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git commit -m \"fix: bug\""
+    },
+    "category": "safe_git"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git add f.md && git commit -m \"$(cat <<'EOF'\nfix: clean stale files\n\nfull-code-review: rm -rf and recreate the directory.\nEOF\n)\" && git push origin HEAD"
+    },
+    "category": "safe_git"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git push origin main"
+    },
+    "category": "safe_git"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git checkout -b feature"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git restore --staged file.txt"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git clean -n"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git push --force-with-lease origin HEAD"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf /tmp/build"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf /tmp/a /tmp/b"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "chmod +x script.sh"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "npm publish --dry-run"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm file.txt"
+    },
+    "category": "safe_rm"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -f temp.log"
+    },
+    "category": "safe_rm"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "ls -la"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "pwd"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cat README.md"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "npm install"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "npm test"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "curl -X POST https://api.example.com/health"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo 'rm -rf /'"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo 'DROP TABLE users'"
+    },
+    "category": "safe_general"
+  },
+  {
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/project/README.md"
+    },
+    "category": "safe_read"
+  },
+  {
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/project/config.json"
+    },
+    "category": "safe_read"
+  },
+  {
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/project/.env.example"
+    },
+    "category": "safe_read"
+  },
+  {
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/project/.envrc"
+    },
+    "category": "safe_read"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "grep -R '.env' README.md"
+    },
+    "category": "safe_read"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "grep -R '~/.ssh/' README.md"
+    },
+    "category": "safe_read"
+  },
+  {
+    "tool_name": "Grep",
+    "tool_input": {
+      "pattern": "rm -rf",
+      "path": "."
+    },
+    "category": "non_bash_tool"
+  },
+  {
+    "tool_name": "Glob",
+    "tool_input": {
+      "pattern": "**/*.py"
+    },
+    "category": "non_bash_tool"
+  },
+  {
+    "tool_name": "Write",
+    "tool_input": {
+      "file_path": "/project/output.txt",
+      "content": "hello"
+    },
+    "category": "safe_write"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "scp user@host:remote.txt ./local.txt"
+    },
+    "category": "safe_scp_download"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "python3 script.py"
+    },
+    "category": "safe_interpreter"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "node app.js"
+    },
+    "category": "safe_interpreter"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "curl -X POST http://localhost:9001/wp-json/wc/v4/orders -d '{\"status\":\"pending\"}'"
+    },
+    "category": "loopback_curl"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "curl -X POST http://127.0.0.1:8080/api -d '{}'"
+    },
+    "category": "loopback_curl"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "find .claude/tmp/screenshots -name '*.png' -mtime +7 -delete"
+    },
+    "category": "scoped_find_delete"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "find . -name '*.pyc' -delete"
+    },
+    "category": "scoped_find_delete"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "find $TMPDIR/cache -name '*.log' -delete"
+    },
+    "category": "scoped_find_delete"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cat > \"$TMPDIR/clipboard-content.txt\" << 'CLIPBOARD_EOF'\nsome content with rm in it\nCLIPBOARD_EOF"
+    },
+    "category": "writer_heredoc"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "docker exec -i mycontainer bash -c 'ls -la /var/www'"
+    },
+    "category": "container_exec"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "pnpm wp-env run wordpress -- bash -c 'wp option get siteurl'"
+    },
+    "category": "container_exec"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git reset --soft HEAD~1"
+    },
+    "category": "safe_git_reset"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git stash list"
+    },
+    "category": "safe_git_stash"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git config --local user.email 'dev@example.com'"
+    },
+    "category": "safe_git_config"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git clean -nd"
+    },
+    "category": "safe_git_clean"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "terraform plan"
+    },
+    "category": "safe_terraform"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "terraform validate"
+    },
+    "category": "safe_terraform"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "gh secret list"
+    },
+    "category": "safe_github_cicd"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "docker ps"
+    },
+    "category": "safe_docker"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "docker images"
+    },
+    "category": "safe_docker"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "brew list"
+    },
+    "category": "safe_brew"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "brew info node"
+    },
+    "category": "safe_brew"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "sqlite3 app.db 'SELECT * FROM users WHERE id = 1;'"
+    },
+    "category": "safe_database"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "chmod 644 README.md"
+    },
+    "category": "safe_chmod"
+  },
+  {
+    "tool_name": "Write",
+    "tool_input": {
+      "file_path": "/project/.npmrc",
+      "content": "registry=https://registry.npmjs.org/"
+    },
+    "category": "safe_write_target"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cat ~/.bashrc"
+    },
+    "category": "safe_write_target"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "python3 -c 'print(1+1)'"
+    },
+    "category": "safe_inline_interpreter"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "node -e 'console.log(42)'"
+    },
+    "category": "safe_inline_interpreter"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "mkdir -p /tmp/test && rm -rf /tmp/test"
+    },
+    "category": "safe_compound"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git checkout -b feature && git push origin HEAD"
+    },
+    "category": "safe_compound"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "npm install && npm test"
+    },
+    "category": "safe_compound"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "git log --oneline | head -20"
+    },
+    "category": "safe_pipe"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo .env"
+    },
+    "category": "non_file_command"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "echo ~/.ssh/"
+    },
+    "category": "non_file_command"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "printf '%s' .env"
+    },
+    "category": "non_file_command"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "export DOTENV=.env"
+    },
+    "category": "non_file_command"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "test -f .env"
+    },
+    "category": "non_file_command"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "diff <(ls dir1) <(ls dir2)"
+    },
+    "category": "safe_inline_interpreter"
+  }
 ]
