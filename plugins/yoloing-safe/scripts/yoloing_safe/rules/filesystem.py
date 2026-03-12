@@ -243,7 +243,9 @@ RULE_SPECS = [
     )),
 ]
 
+_TEMP_DIR_PREFIX = r"(?:/tmp/|/var/tmp/|\$TMPDIR/|\.claude/tmp/)"
+
 ALLOWLIST_PATTERNS = [
-    ("destructive_deletion", re.compile(r"^rm\s+-[rfRF]*\s+(?:(?:/tmp/|/var/tmp/|\$TMPDIR/)\S*\s*)+$")),
-    ("alternative_deletion", re.compile(r"^find\s+(?:/tmp/|/var/tmp/|\$TMPDIR/)\S*\s+")),
+    ("destructive_deletion", re.compile(rf"^rm\s+-[rfRF]*\s+(?:{_TEMP_DIR_PREFIX}\S*\s*)+$")),
+    ("alternative_deletion", re.compile(rf"^find\s+{_TEMP_DIR_PREFIX}\S*\s+")),
 ]

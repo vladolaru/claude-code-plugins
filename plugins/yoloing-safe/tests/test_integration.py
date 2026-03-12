@@ -524,6 +524,7 @@ class TestMultiTargetAllowlistBypass:
         "rm -rf /tmp/build /home/user",
         "rm -rf /var/tmp/x /etc",
         "rm -rf /tmp/a /tmp/b /home",
+        "rm -rf .claude/tmp/x /home",
     ])
     def test_mixed_targets_blocked(self, command):
         """rm with temp prefix followed by non-temp path must be blocked."""
@@ -535,6 +536,9 @@ class TestMultiTargetAllowlistBypass:
         "rm -rf /tmp/a /tmp/b",
         "rm -rf /var/tmp/x /var/tmp/y",
         "rm -rf /tmp/build/dist",
+        "rm -rf .claude/tmp/screenshots",
+        "rm -rf .claude/tmp/pr-review-123",
+        "rm -Rf .claude/tmp/cache .claude/tmp/old",
     ])
     def test_all_temp_targets_allowed(self, command):
         """rm targeting only temp directories should be allowed."""
@@ -638,6 +642,12 @@ class TestTmpCleanupPatterns:
             '&& find /tmp/pr-review-3756 -type d -empty -delete; '
             'fi && mkdir -p /tmp/pr-review-3756'
         )
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 0, f"Expected allow, got rc={rc}. stderr: {stderr}"
+
+    def test_find_delete_claude_tmp_allowed(self):
+        """find .claude/tmp/... -delete should be allowed."""
+        cmd = 'find .claude/tmp/pr-review-42 -type f -delete'
         rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
         assert rc == 0, f"Expected allow, got rc={rc}. stderr: {stderr}"
 

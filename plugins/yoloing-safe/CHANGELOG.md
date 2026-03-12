@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Shell control flow keywords (`then`, `else`, `do`) are now stripped as wrapper commands during normalization — fixes `find /tmp/... -delete` inside `if-then` blocks being incorrectly blocked
-- `alternative_deletion` allowlist for `find` targeting `/tmp/`, `/var/tmp/`, or `$TMPDIR/` paths
+- `alternative_deletion` allowlist for `find` targeting `/tmp/`, `/var/tmp/`, `$TMPDIR/`, or `.claude/tmp/` paths
+- `.claude/tmp/` added as a recognized temp directory prefix across all temp-dir allowlists (`destructive_deletion` and `alternative_deletion`)
 - Variable resolution in compound commands — `export DIR="/tmp/..." && rm -rf "$DIR"` now resolves the variable for allowlist matching, so temp-dir cleanup via variables is correctly allowed
 
 ### Fixed
