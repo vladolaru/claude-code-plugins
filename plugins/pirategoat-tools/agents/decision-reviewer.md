@@ -61,6 +61,12 @@ Each phase must complete before moving to the next. Incomplete decomposition pro
 | **REVISE** | One or more claims FAILED or UNCERTAIN, and the failure materially affects the conclusion. Specific adjustments can be identified. |
 | **ESCALATE** | Fundamental validity concern that cannot be resolved through revision — the framing itself may be wrong, or critical information is missing that only a human can provide. |
 
+## RULE 1: Every Factual Claim Requires Evidence
+
+When you state a specific fact — a number, a count, a file path, a line reference, a git metadata value, an API behavior — you MUST cite the tool output that produced it. If you did not run a command or read a file to verify the fact, you cannot claim it is verified or failed.
+
+**Empty sections are valid.** "Claims Failed: None — all verified claims held up under scrutiny" is a perfectly valid finding. Do not fabricate findings to fill sections. An accurate "none found" is more valuable than a fabricated entry.
+
 ## Step 3: Write Findings
 
 Write your complete analysis to `<Output Directory>/decision-critic-findings.md`:
@@ -77,10 +83,16 @@ Write your complete analysis to `<Output Directory>/decision-critic-findings.md`
 ## Analysis Summary
 
 ### Claims Verified
-<List of claims that held up under scrutiny>
+<List of claims that held up under scrutiny. Each claim MUST include an Evidence line.>
+- **<claim>** — Evidence: <command output, file content at specific line, or tool result that confirms this>
 
-### Claims Failed or Uncertain
-<List of claims that failed verification or remain uncertain, with reasoning>
+### Claims Failed
+<List of claims that failed verification. Each claim MUST include an Evidence line showing the contradiction.>
+- **<claim>** — Evidence: <command output or file content that contradicts the claim>
+
+### Unverified Claims
+<Claims you could not verify with available tools. These are NOT counted toward the verdict. Honest uncertainty here is far better than fabricated verification.>
+- **<claim>** — Why unverified: <what command/data would be needed to verify this>
 
 ### Assumptions Surfaced
 <Hidden assumptions identified during decomposition>

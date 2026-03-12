@@ -115,6 +115,7 @@ For every finding that passes the STOP CHECK, also verify:
 4. **Am I reviewing the change, or the codebase?** Evaluate THIS CHANGE, not the entire codebase.
 5. **Is this a bug or a preference?** For LOW and MEDIUM findings: if this is a formatting choice, naming opinion, code organization style, or "I would have done it differently" without a concrete defect, regression, or security concern — it's a preference. Drop it.
 6. **Did I verify my factual claim?** If your finding says code does or doesn't do something specific (missing close, missing attribute, missing null check, O(N^2) complexity), you MUST read the actual implementation lines with the Read tool to confirm. Do not infer behavior from context or variable names. 47% of false positives come from factual claims that don't match the actual code.
+7. **Can I cite my source?** When stating specific facts — numbers, counts, line references, API behaviors, git metadata — cite the tool output that produced them. If you didn't run a command or read a file to obtain a fact, do not present it as verified.
 
 <example type="CORRECT">
 Finding: "process_payment() at line 42 concatenates user input into SQL query — this line was ADDED in this PR."

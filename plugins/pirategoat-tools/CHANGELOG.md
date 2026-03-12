@@ -5,6 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.2] - 2026-03-12
+
+### Fixed
+
+- **Decision critic hallucination prevention:** After an incident where the decision critic fabricated a branch freshness claim (stated "41 behind" without running any verification command — actual count was 54), added multi-level safeguards:
+  - **Evidence-citation requirement** in decision-reviewer agent: every claim in "Claims Verified" and "Claims Failed" now requires an `Evidence:` line citing the specific tool output. Claims without evidence go to a new "Unverified Claims" section that does not count toward the verdict.
+  - **"Empty sections are fine" rule** in decision-reviewer agent: explicitly states that "Claims Failed: None" is valid, removing section-filling pressure.
+  - **Tool-use mandate** in decision-critic skill Step 4 (Factored Verification): added "Do NOT claim to have verified a factual assertion without running a command" and "Do NOT state specific numbers without citing the tool output" to the epistemic boundary. Added `Tool used:` field to the output format.
+  - **Orchestrator spot-checking** in code-review and pr-review commands: on REVISE/ESCALATE verdicts, the orchestrator now verifies 2-3 factual claims from the critic's findings with direct commands before applying revisions. Failed claims are stripped individually, preserving valid adjustments.
+  - **Pipeline-wide cite norm** in shared reviewer-protocol: added verification rule #7 requiring agents to cite tool output for specific facts.
+
 ## [1.50.1] - 2026-03-11
 
 ### Fixed
