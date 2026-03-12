@@ -15,7 +15,13 @@ from .context import EvalContext
 from .paths import _bash_targets_protected_path
 from .registry import is_allowlisted
 from .rules import ALLOWLIST_PATTERNS, RULES_BY_TOOL
-from .shell import _split_bash_segments, normalize_command, strip_writer_heredocs
+from .shell import (
+    _split_bash_segments,
+    collect_shell_assignments,
+    normalize_command,
+    strip_writer_heredocs,
+    substitute_shell_variables,
+)
 
 
 def block(message, mark=None):
@@ -99,8 +105,10 @@ def main(mark=None):
     ctx = EvalContext(tool_name, tool_input, config, command)
     first_ask = None
     if is_compound:
+        var_map = collect_shell_assignments(bash_segments)
         for segment in bash_segments:
-            if is_allowlisted(segment, ALLOWLIST_PATTERNS, disabled):
+            resolved = substitute_shell_variables(segment, var_map) if var_map else segment
+            if is_allowlisted(resolved, ALLOWLIST_PATTERNS, disabled):
                 continue
             seg_ctx = ctx.for_segment(segment)
             for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):

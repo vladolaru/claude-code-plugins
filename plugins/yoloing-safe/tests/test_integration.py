@@ -595,6 +595,62 @@ class TestHeredocStrippingIntegration:
         assert rc == 2, "rm -rf /home in chain should still be blocked"
 
 
+class TestTmpCleanupPatterns:
+    """Integration: common /tmp cleanup patterns should be allowed."""
+
+    def _run_hook(self, tool_name, tool_input):
+        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+        r = subprocess.run(
+            ["python3", SCRIPT],
+            input=payload, capture_output=True, text=True, timeout=5,
+            env={**os.environ, "YOLOING_SAFE_CONFIG_PATH": "/dev/null"},
+        )
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+    def test_export_var_rm_rf_tmp_allowed(self):
+        """export DIR=/tmp/... && rm -rf $DIR — variable resolves to temp path."""
+        cmd = (
+            'export PR_REVIEW_DIR="/tmp/pr-review-3756" '
+            '&& rm -rf "$PR_REVIEW_DIR" '
+            '&& mkdir -p "$PR_REVIEW_DIR" '
+            '&& echo "Created $PR_REVIEW_DIR"'
+        )
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 0, f"Expected allow, got rc={rc}. stderr: {stderr}"
+
+    def test_assignment_var_rm_rf_tmp_allowed(self):
+        """DIR=/tmp/... && rm -rf $DIR (no export) — same pattern."""
+        cmd = 'DIR="/tmp/build-out" && rm -rf "$DIR" && mkdir -p "$DIR"'
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 0, f"Expected allow, got rc={rc}. stderr: {stderr}"
+
+    def test_var_pointing_to_non_tmp_still_blocked(self):
+        """export DIR=/home/... && rm -rf $DIR — non-temp target stays blocked."""
+        cmd = 'export DIR="/home/user/data" && rm -rf "$DIR"'
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 2, f"Expected block, got rc={rc}"
+
+    def test_find_delete_in_tmp_via_if_then_allowed(self):
+        """if-then-find pattern for /tmp cleanup."""
+        cmd = (
+            'if [ -d /tmp/pr-review-3756 ]; then '
+            'find /tmp/pr-review-3756 -type f -delete '
+            '&& find /tmp/pr-review-3756 -type d -empty -delete; '
+            'fi && mkdir -p /tmp/pr-review-3756'
+        )
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 0, f"Expected allow, got rc={rc}. stderr: {stderr}"
+
+    def test_find_delete_non_tmp_still_blocked(self):
+        """find /home/... -delete stays blocked even with if-then."""
+        cmd = (
+            'if [ -d /home/user ]; then '
+            'find /home/user -type f -delete; fi'
+        )
+        rc, stdout, stderr = self._run_hook("Bash", {"command": cmd})
+        assert rc == 2, f"Expected block, got rc={rc}"
+
+
 class TestPipeAndBackgroundSplitting:
     """Verify pipe and background operators are treated as compound separators."""
 

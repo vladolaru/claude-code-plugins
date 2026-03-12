@@ -9,7 +9,8 @@ import shlex
 
 _SHELL_SEPARATORS = {"&&", "||", ";", "|", "&", "\n"}
 _WRAPPER_COMMANDS = {
-    "command", "env", "sudo", "nice", "nohup", "time", "exec", "strace", "ionice", "taskset"
+    "command", "env", "sudo", "nice", "nohup", "time", "exec", "strace", "ionice", "taskset",
+    "then", "else", "do",
 }
 _REDIRECT_TOKENS = {">", ">>", ">|", "1>", "1>>", "1>|", "2>", "2>>", "2>|"}
 _RE_INLINE_REDIRECT = re.compile(r"^(?:[12]?>{1,2}\|?|>{1,2}\|?)(.+)$")
@@ -20,7 +21,7 @@ _RE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 RE_CHAIN_OPS = re.compile(r"(&&|\|\||[|;&]|\n)")
 _RE_WHITESPACE = re.compile(r"[^\S\n]+")
 _WRAPPER_RE = re.compile(
-    r"^(command|env|sudo|nice|nohup|time|exec|strace|ionice|taskset)\s+"
+    r"^(command|env|sudo|nice|nohup|time|exec|strace|ionice|taskset|then|else|do)\s+"
 )
 
 _GIT_GLOBAL_OPTS_WITH_ARG = frozenset({
@@ -288,3 +289,38 @@ def _whole_bash_command(command, tool_input):
         if isinstance(raw_command, str) and raw_command:
             return normalize_command(strip_writer_heredocs(raw_command))
     return command or ""
+
+
+_RE_SHELL_ASSIGNMENT = re.compile(
+    r"^(?:export\s+)?([A-Za-z_]\w*)=(.+)$"
+)
+
+
+def collect_shell_assignments(segments):
+    """Extract VAR=value assignments from normalized segments.
+
+    Handles ``export VAR="value"``, ``export VAR=value``, and ``VAR="value"``.
+    Quotes around the value are stripped.
+    """
+    var_map = {}
+    for seg in segments:
+        m = _RE_SHELL_ASSIGNMENT.match(seg.strip())
+        if m:
+            name = m.group(1)
+            value = m.group(2).strip()
+            # Strip surrounding quotes
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            var_map[name] = value
+    return var_map
+
+
+def substitute_shell_variables(command, var_map):
+    """Replace $VAR and "$VAR" references with their assigned values."""
+    result = command
+    for name, value in var_map.items():
+        result = result.replace(f'"${name}"', value)
+        result = result.replace(f"'${name}'", value)
+        result = result.replace(f"${{{name}}}", value)
+        result = result.replace(f"${name}", value)
+    return result

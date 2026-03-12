@@ -245,4 +245,5 @@ RULE_SPECS = [
 
 ALLOWLIST_PATTERNS = [
     ("destructive_deletion", re.compile(r"^rm\s+-[rfRF]*\s+(?:(?:/tmp/|/var/tmp/|\$TMPDIR/)\S*\s*)+$")),
+    ("alternative_deletion", re.compile(r"^find\s+(?:/tmp/|/var/tmp/|\$TMPDIR/)\S*\s+")),
 ]

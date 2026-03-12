@@ -5,7 +5,12 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.11.1] - 2026-03-12
+## [1.12.0] - 2026-03-12
+
+### Added
+- Shell control flow keywords (`then`, `else`, `do`) are now stripped as wrapper commands during normalization — fixes `find /tmp/... -delete` inside `if-then` blocks being incorrectly blocked
+- `alternative_deletion` allowlist for `find` targeting `/tmp/`, `/var/tmp/`, or `$TMPDIR/` paths
+- Variable resolution in compound commands — `export DIR="/tmp/..." && rm -rf "$DIR"` now resolves the variable for allowlist matching, so temp-dir cleanup via variables is correctly allowed
 
 ### Fixed
 - `strip_writer_heredocs()` now strips `$(cat <<MARKER...MARKER)` subshell heredoc bodies — fixes false positives where commit message prose containing keywords like `rm -rf` triggered block rules

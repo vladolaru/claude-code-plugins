@@ -34,6 +34,10 @@ class TestNormalizeCommand:
         ("nohup rm -rf /", "rm -rf /"),
         ("time git status", "git status"),
         ("exec rm -rf /", "rm -rf /"),
+        # Shell control flow keywords as wrappers
+        ("then find /tmp/dir -delete", "find /tmp/dir -delete"),
+        ("else rm -rf /tmp/build", "rm -rf /tmp/build"),
+        ("do echo hello", "echo hello"),
         # Nested wrappers
         ("sudo env rm -rf /", "rm -rf /"),
         ("env sudo nice git push --force", "git push --force"),
