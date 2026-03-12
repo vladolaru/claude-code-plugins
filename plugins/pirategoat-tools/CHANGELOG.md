@@ -5,6 +5,15 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.3] - 2026-03-12
+
+### Fixed
+
+- **Patch-line-number confusion in reviewer agents:** Agents reading `scoped-diff.patch` via the Read tool sometimes used the tool's display line numbers (position within the patch file) instead of source file line numbers in `add_issue(line=...)`. This caused valid findings to be classified OUT_OF_SCOPE by the ingestion pipeline. Root cause traced in session `7f5ee0a7` where patterns-reviewer reported `line=227` for a 116-line file (actual source line was 12). Three complementary fixes:
+  - **reviewer-protocol.md:** Added CRITICAL rule in STOP CHECK explaining the difference between Read tool display line numbers and source file line numbers, with instructions on deriving correct lines from `@@ ... @@` hunk headers.
+  - **bootstrap-reviewer.py:** Added warning header to `scoped-diff.patch` files that agents will see when reading the file. Added line number guidance in the OUTPUT INSTRUCTIONS section.
+  - **review_output_simple.py:** Added defensive stderr warning when `line > 5000` to catch the most egregious cases at write time.
+
 ## [1.50.2] - 2026-03-12
 
 ### Fixed

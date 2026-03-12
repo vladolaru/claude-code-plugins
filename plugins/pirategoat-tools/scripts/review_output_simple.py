@@ -21,6 +21,7 @@ Usage:
 """
 
 import json
+import sys
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -83,6 +84,18 @@ class ReviewOutputBuilder:
             raise ValueError(
                 f"line must be a positive integer, got {line}. "
                 "Lines are 1-indexed."
+            )
+
+        # Warn on implausibly large line numbers — likely patch-file line confusion.
+        # When agents read a diff/patch file, the Read tool displays line numbers
+        # within the patch (e.g., "227→+class Foo"). Agents sometimes use these
+        # patch-file positions instead of the actual source file line numbers.
+        if line > 5000:
+            print(
+                f"WARNING: line={line} for '{file}' is unusually large. "
+                f"Verify this is a source file line number, not a patch file "
+                f"display line number from the Read tool.",
+                file=sys.stderr,
             )
 
         issue_id = str(uuid.uuid4())[:8]

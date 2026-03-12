@@ -108,6 +108,17 @@ State the file path and line number for this finding. Then answer two questions:
 
 If either answer is NO, this is exploration context, not a finding. Do NOT call `add_issue()`. This check is mandatory — findings on unchanged code are false positives.
 
+**CRITICAL — line numbers must be SOURCE FILE line numbers:**
+
+When you read a diff file (like `scoped-diff.patch`) with the Read tool, the tool adds its own display line numbers (e.g., `227→+class Foo`). These are the line numbers **within the patch file**, NOT the source file line numbers. Do NOT use them in `add_issue(line=...)`.
+
+To find the correct source file line number, use the `@@ ... @@` hunk headers in the diff:
+- `@@ -0,0 +1,116 @@` means the new file starts at source line 1
+- `@@ -20,6 +20,11 @@` means the changed section starts at source line 20
+- Count forward from the hunk header's `+N` value through `+` and ` ` (context) lines to find the source line for any specific change
+
+If you are unsure of the source line number, read the actual file with the Read tool to confirm.
+
 For every finding that passes the STOP CHECK, also verify:
 1. **Is this in the changed code?** Issues in unchanged code are NOT findings.
 2. **Is this new or pre-existing?** Only report issues INTRODUCED by this change.

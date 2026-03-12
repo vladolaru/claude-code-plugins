@@ -395,6 +395,13 @@ def build_output(
         os.makedirs(output_dir, exist_ok=True)
         scope_file = os.path.join(output_dir, "scoped-diff.patch")
         with open(scope_file, 'w') as f:
+            f.write(
+                "# WARNING: When you read this file, the Read tool adds display line numbers\n"
+                "# (e.g., 227→...). These are line numbers WITHIN THIS PATCH FILE, NOT source\n"
+                "# file line numbers. For add_issue(line=...), use the source file line numbers\n"
+                "# from the @@ hunk headers (e.g., @@ -0,0 +1,116 @@ means source starts at line 1).\n"
+                "#\n"
+            )
             f.write(scope_output)
         # Show first ~200 lines inline, capped at SCOPE_INLINE_CAP characters
         scope_lines = scope_output.splitlines()
@@ -461,6 +468,10 @@ def build_output(
     lines.append(f'  builder.add_issue(severity="high", title="Issue title", file="path/to/file.py",')
     lines.append(f'      description="What is wrong", recommendation="How to fix",')
     lines.append(f'      category="category-name", line=42, confidence=0.9)')
+    lines.append(f"")
+    lines.append(f"  IMPORTANT: line= must be the SOURCE FILE line number, not the patch file line number.")
+    lines.append(f"  If you read a diff/patch file, the Read tool's display line numbers (e.g., 227→) are")
+    lines.append(f"  positions within the patch, not the source. Use @@ hunk headers to find source lines.")
     lines.append(f'  builder.add_positive("Positive observation text")')
     lines.append(f'  builder.set_files_reviewed(N)')
     lines.append(f'  builder.set_confidence(0.85)')
