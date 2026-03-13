@@ -328,6 +328,13 @@ class TestCodeReviewIterative:
         # Stale check should be conditional on history-insights-reviewer
         assert "history-insights" in content.lower()
 
+    def test_has_ingest_verification_write(self):
+        """Should write ingest-verification.json before decision critic dispatch."""
+        content = _read_command("code-review.md")
+        assert "ingest-verification.json" in content, (
+            "code-review.md: missing ingest-verification.json write step"
+        )
+
 
 class TestIngestCodeReview:
     """ingest-code-review.md has validation-specific content."""
@@ -408,6 +415,13 @@ class TestFullCodeReview:
         content = _read_command("full-code-review.md")
         assert "merge-base" in content.lower() or "RANGE_REBASED" in content
 
+    def test_has_ingest_verification_write(self):
+        """Should write ingest-verification.json before decision critic dispatch."""
+        content = _read_command("full-code-review.md")
+        assert "ingest-verification.json" in content, (
+            "full-code-review.md: missing ingest-verification.json write step"
+        )
+
 
 # =============================================================================
 # Decision Critic Pipeline Tests
@@ -418,6 +432,7 @@ class TestFullCodeReview:
 CRITIC_COMMANDS = [
     "full-code-review.md",
     "code-review.md",
+    "pr-review.md",
 ]
 
 
@@ -464,10 +479,19 @@ class TestDecisionCritic:
 
     @pytest.mark.parametrize("command", CRITIC_COMMANDS)
     def test_has_post_ingest_reconciled_update(self, command):
-        """Must update reconciled.md with ingest validation results before critic."""
+        """Must update reconciled.md with ingest validation results before critic.
+
+        pr-review.md generates review-report.md fresh after ingestion (Phase 3)
+        instead of updating reconciled.md, so it satisfies this differently.
+        """
         content = _read_command(command)
-        assert "Update `reconciled.md`" in content or "update `reconciled.md`" in content, (
-            f"{command}: missing post-ingest reconciled.md update step"
+        has_reconciled_update = (
+            "Update `reconciled.md`" in content or "update `reconciled.md`" in content
+        )
+        has_report_generation = "review-report.md" in content
+        assert has_reconciled_update or has_report_generation, (
+            f"{command}: missing post-ingest update step "
+            f"(expected 'Update reconciled.md' or review-report.md generation)"
         )
 
     @pytest.mark.parametrize("command", CRITIC_COMMANDS)
@@ -486,16 +510,45 @@ class TestDecisionCritic:
 
     @pytest.mark.parametrize("command", CRITIC_COMMANDS)
     def test_post_ingest_update_before_critic(self, command):
-        """Post-ingest reconciled.md update must appear between ingest and critic dispatch."""
+        """Post-ingest update must appear between ingest and critic dispatch.
+
+        For dispatch commands (full-code-review, code-review): checks that
+        'Update reconciled.md' appears between ingest and critic.
+        For pr-review: checks that review-report.md generation (Write the
+        comprehensive review document) appears between ingest and critic.
+
+        Uses the dispatch-specific marker 'dispatching the decision-reviewer'
+        rather than just 'decision-reviewer' to avoid matching mention-only
+        references that appear earlier in the document.
+        """
         content = _read_command(command)
         ingest_pos = content.find("ingest-code-review")
+        # Use the dispatch-specific marker to find where the critic is actually invoked
+        critic_pos = content.find("dispatching the decision-reviewer")
+
+        # Try reconciled.md update (dispatch commands)
         update_pos = content.find("Update `reconciled.md`")
         if update_pos == -1:
             update_pos = content.find("update `reconciled.md`")
-        critic_pos = content.find("decision-reviewer")
+        # Fall back to review-report.md generation (pr-review)
+        if update_pos == -1:
+            update_pos = content.find("Write the comprehensive review document")
+
+        assert ingest_pos > 0 and update_pos > 0 and critic_pos > 0, (
+            f"{command}: missing ingest, update, or critic reference "
+            f"(ingest={ingest_pos}, update={update_pos}, critic={critic_pos})"
+        )
         assert ingest_pos < update_pos < critic_pos, (
             f"{command}: post-ingest update must be between ingest and critic "
             f"(ingest={ingest_pos}, update={update_pos}, critic={critic_pos})"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_critic_receives_ingestion_verification(self, command):
+        """Decision-reviewer dispatch should include Ingestion Verification."""
+        content = _read_command(command)
+        assert "Ingestion Verification" in content, (
+            f"{command}: decision-reviewer dispatch missing Ingestion Verification parameter"
         )
 
 
@@ -865,6 +918,25 @@ class TestPrReview:
         phases = [m for m in re.finditer(r"^## Phase \d", content, re.MULTILINE)]
         assert len(phases) == 3, (
             f"{self.COMMAND}: expected 3 phases, found {len(phases)}"
+        )
+
+    def test_has_ingest_verification_write(self):
+        """Phase 2 should write ingest-verification.json after ingestion."""
+        content = _read_command(self.COMMAND)
+        assert "ingest-verification.json" in content, (
+            f"{self.COMMAND}: missing ingest-verification.json write step"
+        )
+
+    def test_ingest_verification_before_report(self):
+        """ingest-verification.json write must appear before review-report.md generation."""
+        content = _read_command(self.COMMAND)
+        verif_pos = content.find("ingest-verification.json")
+        report_pos = content.find("Write the comprehensive review document")
+        assert verif_pos > 0 and report_pos > 0, (
+            f"{self.COMMAND}: missing verification or report reference"
+        )
+        assert verif_pos < report_pos, (
+            f"{self.COMMAND}: ingest-verification.json must be written before review-report.md"
         )
 
 
