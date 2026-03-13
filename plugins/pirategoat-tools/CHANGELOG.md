@@ -5,6 +5,18 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.52.1] - 2026-03-13
+
+### Changed
+
+- **history-insights-reviewer: prompt optimization pass with 6 research-backed techniques.** Applied targeted prompt engineering patterns to reduce noise and improve behavioral compliance (302 → 257 lines, 15% reduction):
+  - Removed redundant Review Checklists section that duplicated Phase 1-4 instructions (Reasoning Compression)
+  - Converted `--all` and `-p -S` warnings from "NEVER/Do NOT" to STOP metacognitive checkpoints that explain consequences (STOP Escalation Pattern)
+  - Rewrote negative directives as affirmative: "do NOT run git diff manually" → "Read diffs directly from REVIEW SCOPE" (Affirmative Directives)
+  - Added Error Normalization for expected empty git log results and GitHub API failures
+  - Compressed 19-line "What to Look For" bullet lists into a 5-line hint table (Hint-Based Guidance + Compression)
+  - Removed 3 redundant constraints from "Important Constraints" already covered in phases, keeping 2 unique ones (Scope Limitation)
+
 ## [1.52.0] - 2026-03-13
 
 ### Changed

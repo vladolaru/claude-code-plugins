@@ -51,13 +51,15 @@ Every fix, enhancement, and refactor in git history is a lesson. Before approvin
 
 **Exploration budget:** Investigate 3-5 scenarios from Phase 1. Budget ~10-15 git commands per scenario (~40 total). After that threshold, check your analysis document — if recent searches yield no new leads, transition to writing. Keep going if genuine leads remain, but stop recycling the same territory.
 
+**Expected empty results:** Git log searches returning zero results is normal — it means the scenario has no relevant history in that scope. Mark the scenario NO_LEADS in your analysis document and move on. Similarly, `gh pr list` returning empty results or GitHub API errors are expected — fall back to commit-level analysis.
+
 **Dedup check:** Before starting keyword searches, check if `patterns-review.json` exists in OUTPUT_DIR. If it does, read its findings and skip pattern-level observations already reported.
 
 ## History Mining Process
 
 ### Phase 1: Scenario Extraction
 
-The PR diffs are provided in your REVIEW SCOPE section from bootstrap. Read them to extract scenarios — do NOT run git diff commands manually.
+The PR diffs are provided in your REVIEW SCOPE section from bootstrap. Read the diffs directly from that section to extract scenarios.
 
 From the PR changes, identify **scenarios** (not just patterns):
 
@@ -113,7 +115,7 @@ Report parallel branch findings as HIGH confidence CONSIDER_ENHANCEMENT — they
 - `--since="12 months ago"` — enforces the time-box (older history is rarely relevant)
 - `--first-parent` — follows only merge commits on the default branch (10-100x faster than `--all` on repos with many branches)
 
-**Exception:** Parallel branch detection (Phase 1.5) uses `--all` because it must see all branches. Do NOT use `--all` on keyword or pickaxe searches.
+**Exception:** Parallel branch detection (Phase 1.5) uses `--all` because it must see all branches. If you are about to add `--all` to a keyword or pickaxe search, STOP. Use `--first-parent` instead — `--all` on keyword searches scans every branch and can return thousands of irrelevant results or hang indefinitely on large repos.
 
 **Search in concentric circles — start narrow, widen only if needed.**
 
@@ -150,7 +152,7 @@ git show <commit_hash> --stat                       # overview first (cheap)
 git show <commit_hash> -p -- "specific_file.php"    # targeted diff for relevant file only
 ```
 
-**NEVER** use `-p` with `-S` on `git log` — it generates full diffs for all matches before `head` truncates.
+If you are about to combine `-p` with `-S` on `git log`, STOP. This generates full diffs for every match before `head` truncates — use the two-phase approach below instead (find SHAs first, then inspect individually).
 
 **Supplementary:**
 ```bash
@@ -220,64 +222,17 @@ Consider adding null checks to payment-related code. The team has fixed similar 
 
 ## What to Look For
 
-### Fix Patterns (bugs the team already solved)
-- Null/undefined checks added after production issues
-- Race condition guards introduced in similar async flows
-- Off-by-one errors fixed in similar iterations
-- Error handling added after failures in similar API calls
-- Validation added after data integrity issues
-- Security patches applied to similar input handling
-
-### Enhancement Patterns (improvements the team already made)
-- Caching added to similar expensive operations
-- Batch processing introduced for similar bulk operations
-- Debouncing/throttling applied to similar event handlers
-- Pagination added to similar list operations
-- Logging/monitoring added to similar critical paths
-- User feedback improvements for similar flows
-
-### Cautionary Patterns (attempts that were reverted or reworked)
-- Approaches that were later reverted (check for `revert` in commit messages)
-- Multiple attempts at the same problem (indicates complexity)
-- Commits with "fix fix" or "actually fix" (indicates initial fix was incomplete)
-
-## Review Checklists
-
-### Scenario Mining
-```
-[] Extracted key scenarios from PR changes?
-[] Identified domain concepts and operations?
-[] Listed potential edge cases?
-```
-
-### Git History Search
-```
-[] Searched commit messages for similar fixes?
-[] Used pickaxe search for similar code changes?
-[] Investigated relevant commits in detail?
-[] Searched for related PRs on GitHub?
-[] Checked for reverted approaches?
-```
-
-### Insight Quality
-```
-[] Each finding references a specific commit/PR?
-[] The connection between history and PR code is explicit?
-[] Recommendations are actionable (not just "be careful")?
-[] Classified as APPLY_FIX vs CONSIDER_ENHANCEMENT vs LEARN?
-```
+| Category | Hint: search for commits involving... |
+|----------|---------------------------------------|
+| **Fix patterns** | Null/undefined guards, race condition fixes, off-by-one corrections, error handling additions, validation after data integrity issues, security patches on similar input handling |
+| **Enhancement patterns** | Caching on expensive operations, batch processing, debouncing/throttling, pagination on list operations, logging/monitoring additions, UX feedback improvements |
+| **Cautionary patterns** | Reverted approaches (`revert` in commit messages), multiple fix attempts on the same problem, "fix fix" or "actually fix" commits (incomplete initial fixes) |
 
 ## Important Constraints
 
-**Stay scenario-focused:** Don't search for every keyword in the diff. Focus on the 3-5 most important scenarios the PR introduces or modifies.
+**Tie insights to changed code:** Every insight must connect to code being CHANGED in this PR. Before reporting, ask: "Would the PR author need this specific precedent to avoid a concrete mistake in THIS code?" If the answer is "it's just good to know" — classify as LEARN (INFO severity) or drop it entirely.
 
-**Tie insights to changed code:** Every insight must connect to code being CHANGED in this PR. An insight about how the team handled caching in module X is not relevant to a PR changing authentication in module Y, even if both are interesting. Before reporting, ask: "Would the PR author need this specific precedent to avoid a concrete mistake in THIS code?" If the answer is "it's just good to know" — classify as LEARN (INFO severity) or drop it entirely.
-
-**Depth over breadth:** A single well-researched historical insight with full context is worth more than ten shallow "this commit mentions a similar word" matches.
-
-**Respect the team's evolution:** If the team moved away from an approach, recommend the newer approach, not the old one. Always check if a historical fix was later superseded.
-
-**Time-box your search:** Spend most effort on the last 12 months of history. Older history is less likely to be relevant due to codebase evolution.
+**Respect the team's evolution:** If the team moved away from an approach, recommend the newer approach. Always check if a historical fix was later superseded before recommending it.
 
 ## Finding Confidence
 
