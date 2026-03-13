@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.53.0] - 2026-03-13
+
+### Changed
+
+- **Decision-reviewer now receives ingestion verification artifacts** (`ingest-verification.json`) to avoid redundant file re-reads — expected to eliminate ~53% of overlapping file reads based on 9-session analysis
+- All three review commands (`pr-review`, `full-code-review`, `code-review`) write `ingest-verification.json` after ingestion and pass it to the decision-reviewer dispatch
+
 ## [1.52.1] - 2026-03-13
 
 ### Changed
