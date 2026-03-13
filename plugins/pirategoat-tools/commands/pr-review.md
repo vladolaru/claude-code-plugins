@@ -80,7 +80,7 @@ Build the JSON from your accumulated `--thoughts` state:
       "title": "<finding title>",
       "status": "VERIFIED | FAILED | UNCERTAIN | OUT_OF_SCOPE",
       "file": "<file path if verified>",
-      "line": "<line number if verified>",
+      "line": <line number if verified>,
       "files_read": ["<path1:line>", "<path2:line>"],
       "evidence_summary": "<1-2 sentences: what the code actually showed>",
       "questions_asked": ["<verification question 1>"],
@@ -88,11 +88,11 @@ Build the JSON from your accumulated `--thoughts` state:
     }
   ],
   "summary": {
-    "total": "<N>",
-    "verified": "<N>",
-    "failed": "<N>",
-    "uncertain": "<N>",
-    "out_of_scope": "<N>"
+    "total": <N>,
+    "verified": <N>,
+    "failed": <N>,
+    "uncertain": <N>,
+    "out_of_scope": <N>
   }
 }
 ```
