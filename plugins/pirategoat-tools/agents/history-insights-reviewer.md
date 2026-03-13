@@ -66,6 +66,14 @@ From the PR changes, identify **scenarios** (not just patterns):
 - What **operations** are performed? (CRUD, API calls, state transitions, calculations)
 - What **edge cases** might exist? (empty states, concurrent access, large datasets, null values)
 
+For each scenario, extract **concrete search keywords** from the diff — these ground your Phase 2 searches:
+- Function/method names being changed (e.g., `process_payment`, `validate_order`)
+- Class names, module identifiers, constants
+- Domain-specific terms (e.g., `refund`, `webhook`, `cache_invalidation`)
+- Error strings or variable names central to the logic
+
+Generic terms like "fix" or "error" alone are too broad for commit message searches. Use specific terms from the diff, or combine generic + specific with `--all-match`.
+
 After extracting scenarios, create `{OUTPUT_DIR}/history-insights-analysis.md`:
 
 ```markdown
@@ -84,7 +92,7 @@ Before mining commit history, check if other branches are working on the same fi
 ```bash
 # Find commits on ANY branch that touch the same files as this PR (last 3 months)
 # This is the ONE place where --all is correct — you need to see all branches
-git log --oneline --all --since="3 months ago" -- <changed-file-1> <changed-file-2> | head -30
+git log -n 30 --oneline --all --since="3 months ago" -- <changed-file-1> <changed-file-2>
 
 # Filter out commits already on the default branch to find branch-only work
 # (commits on feature branches not yet merged)
@@ -107,53 +115,50 @@ Report parallel branch findings as HIGH confidence CONSIDER_ENHANCEMENT — they
 
 **Exception:** Parallel branch detection (Phase 1.5) uses `--all` because it must see all branches. Do NOT use `--all` on keyword or pickaxe searches.
 
-**Search commit messages for similar scenarios:**
+**Search in concentric circles — start narrow, widen only if needed.**
+
+Extract parent directories from your FILES list (e.g., `src/payments/processor.php` → `src/payments/`). Use these plus FILE HISTORY commits as launch points.
+
+**Tier 1 — Changed files (start here).** Path scoping does the narrowing — use OR-mode `--grep` to search multiple keywords in one call:
 ```bash
-# Search for fixes in similar problem domains
-git log --oneline --first-parent --since="12 months ago" --grep="fix" --grep="<scenario_keyword>" --all-match | head -30
-
-# Search for enhancements to similar operations
-git log --oneline --first-parent --since="12 months ago" --grep="improve\|enhance\|handle\|edge case" --grep="<domain_keyword>" --all-match | head -30
-
-# Search for bug fixes related to similar patterns
-git log --oneline --first-parent --since="12 months ago" --grep="bug\|issue\|crash\|error\|undefined\|null" --grep="<operation_keyword>" --all-match | head -30
+git log -n 10 -i --oneline --first-parent --since="12 months ago" --grep="<keyword1>" --grep="<keyword2>" -- <file1> <file2>
+git log -n 10 -i --oneline --first-parent --since="12 months ago" -S "<function_or_pattern>" -- <file1> <file2>
 ```
 
-**Search code changes (two-phase pickaxe — never use -p with -S):**
-
-Pickaxe note: `-S` is **literal string matching**. For regex patterns (e.g., `pattern_a\|pattern_b`), use `-G` instead.
-
+**Tier 2 — Sibling directories (same module).** Same OR-mode — broader keyword net, scoped by directory:
 ```bash
-# Phase 1: Find commit SHAs only (fast — no diff computation)
-git log --oneline --first-parent --since="12 months ago" -S "<literal_pattern>" -- "*.php" | head -15
+git log -n 15 -i --oneline --first-parent --since="12 months ago" --grep="<keyword1>" --grep="<keyword2>" -- "src/payments/"
+git log -n 15 -i --oneline --first-parent --since="12 months ago" -S "<function_or_pattern>" -- "src/payments/"
+```
 
-# For regex patterns, use -G instead of -S:
-git log --oneline --first-parent --since="12 months ago" -G "<regex_pattern>" -- "*.php" | head -15
+**Tier 3 — Repo-wide (only when tiers 1-2 don't surface enough leads).** No path scoping, so require ALL keywords to match (`--all-match`) to prevent drift:
+```bash
+git log -n 10 -i --oneline --first-parent --since="12 months ago" --grep="<keyword1>" --grep="<keyword2>" --all-match
+git log -n 10 -i --oneline --first-parent --since="12 months ago" -S "<specific_pattern>" -- "*.php"
+```
 
-# Phase 2: Investigate ONLY the 2-3 most relevant commits from Phase 1
-git show <commit_hash> --stat                       # quick overview first
+**Keyword combining rules:**
+- Multiple `--grep` without `--all-match` = **OR** (any match). Multiple `--grep` with `--all-match` = **AND** (all must match).
+- Use **single keyword** when the term is already specific (function name, class name, constant).
+- Use **OR** (no `--all-match`) to cover synonyms for the same concept (e.g., `"refund"` OR `"chargeback"` OR `"reverse"`).
+- Use **AND** (`--all-match`) when each keyword alone is too broad (e.g., `"fix"` AND `"payment"` — neither useful alone, together they narrow).
+- Tiers 1-2 can afford broader keyword strategies because path scoping narrows results. Tier 3 needs AND or very specific single terms.
+
+**Pickaxe rules:** `-S` is literal, `-G` is regex. Always two-phase — find SHAs first, then inspect the 2-3 most relevant:
+```bash
+git show <commit_hash> --stat                       # overview first (cheap)
 git show <commit_hash> -p -- "specific_file.php"    # targeted diff for relevant file only
 ```
 
-**NEVER do this** (generates full diffs for all matching commits, then discards most):
-```bash
-# WRONG — -p with -S scans all history and generates all diffs before head truncates
-git log -p --all -S "<pattern>" -- "*.php" | head -200
-```
+**NEVER** use `-p` with `-S` on `git log` — it generates full diffs for all matches before `head` truncates.
 
-**Supplementary: git blame on changed hunks**
+**Supplementary:**
 ```bash
-# Pinpoint who last changed the lines being modified (finds recent fix commits)
+# Who last changed the lines being modified (finds recent fix commits)
 git blame -L <start>,<end> -- <changed-file>
 
-# Follow file history including renames
-git log --oneline --follow --since="12 months ago" -- <changed-file> | head -20
-```
-
-**For each potentially relevant commit, investigate:**
-```bash
-git show <commit_hash> --stat                       # overview first (cheap)
-git show <commit_hash> -p -- "relevant_file.php"    # targeted diff (only if needed)
+# File history including renames
+git log -n 20 --oneline --follow --since="12 months ago" -- <changed-file>
 ```
 
 **Search for related PRs on GitHub (only for high-confidence findings):**

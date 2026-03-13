@@ -5,6 +5,18 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.52.0] - 2026-03-13
+
+### Changed
+
+- **history-insights-reviewer: tiered search scoping to prevent exploration drift.** Replaced unscoped repo-wide `--grep` searches (returning noise from the entire commit history) with concentric-circle search strategy:
+  - Tier 1: changed files — path-scoped, OR-mode keywords, `head -10`
+  - Tier 2: sibling directories — same module, `head -15`
+  - Tier 3: repo-wide — AND-mode (`--all-match`) required, `head -10`
+- **history-insights-reviewer: diff-grounded keyword extraction.** Phase 1 now explicitly instructs the agent to extract concrete search keywords from the diff (function names, class names, domain terms) before searching. Removes canned broad terms like `--grep="fix"` that matched too many unrelated commits.
+- **history-insights-reviewer: git-native result limiting.** Replaced all `| head -N` pipes with git's `-n N` flag. Added `-i` (case-insensitive) to all `--grep` and pickaxe searches.
+- **history-insights-reviewer: keyword combining decision guide.** Inline rules for when to use single keywords, OR-mode (synonyms), or AND-mode (narrowing broad terms), tied to the tier strategy.
+
 ## [1.51.0] - 2026-03-12
 
 ### Changed
