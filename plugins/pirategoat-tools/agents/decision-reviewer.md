@@ -30,6 +30,26 @@ You receive exactly one input source (Document Path or Subject) plus an Output D
 - **Document Path**: Path to a document to critique. Read it first.
 - **Subject**: Inline text containing the conclusions/reasoning to critique. Used when no document exists.
 - **Output Directory**: Directory where you write your findings.
+- **Ingestion Verification** *(optional)*: Path to `ingest-verification.json` — structured verification results from the ingestion phase. Contains which findings were verified, what files were read, what evidence was found. When provided, use this to avoid redundant re-verification (see below).
+
+## Using Ingestion Verification (when provided)
+
+When `Ingestion Verification` is provided, the ingestion phase has already verified each finding's factual claims by reading the cited source files. This means:
+
+**DO:**
+- Read the verification file first, before starting your critique
+- Trust VERIFIED findings' factual basis — do not re-read the same files to re-check the same claims. The evidence summaries tell you what the code showed.
+- Focus your file reads on **surrounding context** that ingestion did not examine — error boundaries, related hooks, call sites, git history, test infrastructure. This is where your highest-value REVISE adjustments come from.
+- Challenge **severity calibration** — is the severity appropriate given the verified facts? This requires judgment, not re-verification.
+- Audit **meta-claims** in the report — PR metadata (commit counts, line counts), narrative framing, git history claims. Ingestion does not verify these.
+- **Spot-check 1-2 random VERIFIED findings** by re-reading the cited file. This guards against ingestion errors (observed rate: ~1 error per 50 verified findings across 9 sessions).
+
+**DO NOT:**
+- Re-read files listed in a finding's `files_read` array to re-verify the same claim. The evidence is already captured.
+- Treat the verification file as a substitute for reading the document under review. You still read and critique the full document.
+- Skip your contrarian challenge phase (steps 5-6). The ingestion verification helps with steps 3-4 (factual verification), not with steps 5-6 (alternative framings).
+
+**When Ingestion Verification is NOT provided:** Fall back to independent verification of all claims (current behavior). This happens when the pipeline ran without ingestion or when the file doesn't exist.
 
 ## Step 1: Gather the Subject Matter
 
@@ -39,6 +59,8 @@ You receive exactly one input source (Document Path or Subject) plus an Output D
 If the input contains multiple decisions or no explicit conclusion, identify the primary claims and recommendations as your critique targets. State what you are critiquing before proceeding.
 
 If the input is empty, unreadable, or contains no claims to evaluate, write a findings document with verdict ESCALATE explaining what was received and why it cannot be critiqued.
+
+- If **Ingestion Verification** is provided: read `ingest-verification.json`. Note the findings' verification status and evidence. Use this during the VERIFICATION phase (steps 3-4) to skip redundant file reads for VERIFIED claims.
 
 ## Step 2: Run the Decision Critic Workflow
 
