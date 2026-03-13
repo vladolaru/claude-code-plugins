@@ -64,7 +64,42 @@ Skill tool:
   args: ${OUTPUT_DIR}
 ```
 
-Follow the ingest command's full workflow (preprocessing + 3-step verification). Proceed directly to Phase 3 after completion — present results to the user only in Step 6.
+Follow the ingest command's full workflow (preprocessing + 3-step verification).
+
+### Step 3b: Write Ingestion Verification Artifact
+
+After the ingest workflow completes (Step 3 of the 3-step verification produces the categorized action plan), write the accumulated verification state to `${OUTPUT_DIR}/ingest-verification.json`. This artifact is passed to the decision-reviewer to avoid redundant re-verification.
+
+Build the JSON from your accumulated `--thoughts` state:
+
+```json
+{
+  "findings": [
+    {
+      "id": "F1",
+      "title": "<finding title>",
+      "status": "VERIFIED | FAILED | UNCERTAIN | OUT_OF_SCOPE",
+      "file": "<file path if verified>",
+      "line": "<line number if verified>",
+      "files_read": ["<path1:line>", "<path2:line>"],
+      "evidence_summary": "<1-2 sentences: what the code actually showed>",
+      "questions_asked": ["<verification question 1>"],
+      "answers": ["<factual answer from code>"]
+    }
+  ],
+  "summary": {
+    "total": "<N>",
+    "verified": "<N>",
+    "failed": "<N>",
+    "uncertain": "<N>",
+    "out_of_scope": "<N>"
+  }
+}
+```
+
+Write this using the Write tool to `${OUTPUT_DIR}/ingest-verification.json`. Include ONLY findings that went through the verification pipeline (skip pre-classified OUT_OF_SCOPE findings that were never verified — list them with `status: "OUT_OF_SCOPE"` and empty `files_read`/`evidence_summary`).
+
+Proceed to Phase 3 — present results to the user only in Step 6.
 
 ## Phase 3: Output
 
