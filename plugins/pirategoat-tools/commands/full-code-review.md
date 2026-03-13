@@ -274,6 +274,10 @@ Update `reconciled.md` using the ingest validation results from Step 6 to reflec
 
 This ensures the decision critic in Step 7 reviews the post-validation state, not the raw reconciliation output.
 
+## Step 6b: Write Ingestion Verification Artifact
+
+Write the accumulated verification state to `${OUTPUT_DIR}/ingest-verification.json` using the same schema as `/pr-review` Step 3b. Build the JSON from your verification results (finding IDs, status, files_read, evidence_summary, questions, answers). This artifact is passed to the decision-reviewer to avoid redundant re-verification of already-confirmed claims.
+
 ## Step 7: Decision Critic
 
 Stress-test the review's conclusions by dispatching the decision-reviewer agent:
@@ -284,6 +288,7 @@ Agent tool:
   prompt: |
     Document Path: ${OUTPUT_DIR}/reconciled.md
     Output Directory: ${OUTPUT_DIR}
+    Ingestion Verification: ${OUTPUT_DIR}/ingest-verification.json
 ```
 
 The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Extract the verdict using this priority chain:

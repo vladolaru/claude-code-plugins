@@ -201,6 +201,7 @@ Agent tool:
   prompt: |
     Document Path: ${OUTPUT_DIR}/review-report.md
     Output Directory: ${OUTPUT_DIR}
+    Ingestion Verification: ${OUTPUT_DIR}/ingest-verification.json
 ```
 
 The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Extract the verdict using this priority chain:
