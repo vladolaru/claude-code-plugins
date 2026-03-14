@@ -26,7 +26,9 @@ The preprocessor reduces the pipeline from 6 LLM steps to 3 by handling the mech
 ## Starting the Workflow
 
 **Parse arguments:** `$ARGUMENTS`
+- Format: `<OUTPUT_DIR> [--git-range <RANGE>]`
 - If a path is provided: use it as OUTPUT_DIR
+- If `--git-range` is provided: use it as GIT_RANGE (skip range detection below)
 - If empty: detect from current branch:
   ```bash
   BRANCH=$(git branch --show-current)
@@ -36,9 +38,9 @@ The preprocessor reduces the pipeline from 6 LLM steps to 3 by handling the mech
 
 ### Step 0: Run the Preprocessor
 
-Determine the git range:
+Determine the git range (skip if `--git-range` was provided):
 ```bash
-# Try reading from review state file
+# Try reading from review state file (created by /code-review, not present in /pr-review flow)
 GIT_RANGE=$(cat "${OUTPUT_DIR}/.review-state.json" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('git_range_used',''))" 2>/dev/null)
 
 # Fallback: compute from branch

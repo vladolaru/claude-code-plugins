@@ -56,12 +56,12 @@ All other skill steps execute as documented.
 
 ### Step 3: Validate Findings and Build Action Plan
 
-Invoke `/ingest-code-review` with `OUTPUT_DIR` as the argument:
+Invoke `/ingest-code-review` with `OUTPUT_DIR` and the git range (already computed in Phase 1):
 
 ```
 Skill tool:
   skill: pirategoat-tools:ingest-code-review
-  args: ${OUTPUT_DIR}
+  args: ${OUTPUT_DIR} --git-range ${GIT_RANGE}
 ```
 
 Follow the ingest command's full workflow (preprocessing + 3-step verification).

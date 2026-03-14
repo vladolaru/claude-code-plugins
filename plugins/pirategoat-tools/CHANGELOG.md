@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Use PR number instead of URL for `gh pr view`** — the reviewing-pr skill now extracts the PR number and uses `gh pr view <number>` which resolves against the CWD's git remote, avoiding failures when the URL points to a fork
 - **Use Linear MCP server directly instead of context-a8c** — Linear is not a context-a8c provider; both reviewing-pr and dig-into-linear-issue now reference `mcp__linear-server__get_issue` directly, eliminating 2-3 wasted tool calls per session
 - **Linear MCP is now a hard requirement for dig-into-linear-issue** — skill stops with a user prompt if the Linear MCP server is not available, instead of silently falling back
+- **Pass GIT_RANGE to ingest from pr-review** — the ingest command now accepts `--git-range` so pr-review passes the already-computed range, skipping the `.review-state.json` lookup that always fails in the pr-review flow
 
 ## [1.53.2] - 2026-03-14
 
