@@ -74,6 +74,12 @@ The script provides diffs. If a finding needs surrounding context:
 # Use the Read tool with offset+limit, not cat/head/tail
 ```
 
+### Tool Selection for Search
+
+When searching file contents on the working tree, use the **Grep tool** instead of `grep`/`rg` via Bash. The Grep tool supports glob filtering (`glob: "!{node_modules,build,dist}/**"` for exclusions), `head_limit`, context lines (`-A`/`-B`/`-C`), and multiple output modes (`content`, `files_with_matches`, `count`).
+
+Use Bash `grep`/`rg` only when piping from another command (e.g., `git show ref:file | grep`), using `git grep` at a specific ref, or filtering non-file output.
+
 ### If the Script Is Not Available
 
 Fall back to manual commands:

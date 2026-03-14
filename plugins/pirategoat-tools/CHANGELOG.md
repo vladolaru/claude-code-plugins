@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.53.3] - 2026-03-14
 
+### Added
+
+- **Tool selection guidance in reviewer-protocol** — new "Tool Selection for Search" section instructs agents to use the Grep tool instead of Bash grep/rg for working-tree searches, with glob exclusion examples for node_modules/build filtering
+
 ### Fixed
 
 - **Added Grep tool to decision-reviewer and review-reconciliator toolsets** — session analysis found the decision-reviewer used Bash grep for all 35 working-tree searches because Grep was not available to it
+- **Use PR number instead of URL for `gh pr view`** — the reviewing-pr skill now extracts the PR number and uses `gh pr view <number>` which resolves against the CWD's git remote, avoiding failures when the URL points to a fork
 
 ## [1.53.2] - 2026-03-14
 
