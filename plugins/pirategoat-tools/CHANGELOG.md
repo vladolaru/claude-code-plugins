@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Decision-reviewer now receives ingestion verification artifacts** (`ingest-verification.json`) to avoid redundant file re-reads — expected to eliminate ~53% of overlapping file reads based on 9-session analysis
 - All three review commands (`pr-review`, `full-code-review`, `code-review`) write `ingest-verification.json` after ingestion and pass it to the decision-reviewer dispatch
 - Renamed `pr-reviewing` skill to `reviewing-pr` for naming consistency
+- Removed legacy `ai-memory` integration from `reviewing-pr` skill (Claude Code has its own memory system)
 
 ## [1.52.1] - 2026-03-13
 
