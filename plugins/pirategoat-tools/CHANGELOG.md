@@ -5,6 +5,21 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.53.2] - 2026-03-14
+
+### Changed
+
+- **reviewing-pr: prompt optimization pass with 5 research-backed techniques.** Applied targeted prompt engineering patterns to reduce redundancy and improve behavioral clarity (1038 → 958 lines, ~8% reduction):
+  - Consolidated 3 overlapping guardrail sections (Common Mistakes, Red Flags, Correct/Incorrect) into a single Guardrails section with STOP metacognitive triggers and contrastive examples (STOP Escalation + Contrastive Examples)
+  - Compressed 52-line parallel dispatch anti-pattern into a 12-line contrastive example, eliminating Everything-Is-Critical emphasis dilution (Emphasis Hierarchy)
+  - Compressed 39-line verbose reasoning section to 10 lines by removing self-evident bullets (Scope Limitation)
+  - Simplified review strategy table: stated defaults once (`pr-reviewer` + `patterns-reviewer`), table shows only additional specialists per PR type (Category-Based Generalization)
+  - Converted 3 negative instructions ("Do NOT assume", "Do NOT just list", "no apology needed") to affirmative directives (Affirmative Directives)
+
+### Fixed
+
+- Fixed 2 pre-existing step-reference bugs: cleanup step referenced as "step 8" instead of "step 9"
+
 ## [1.53.1] - 2026-03-14
 
 ### Changed

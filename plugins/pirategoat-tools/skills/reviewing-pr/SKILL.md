@@ -41,7 +41,7 @@ Core principle: **context before code** - understanding what problem is being so
 | gh CLI unavailable | Ask user for PR details or use GitHub web |
 | Linear issue not found | Note issue ID and proceed with PR body context |
 
-These are expected scenarios. Adapt and continue - no apology needed.
+These are expected scenarios. Adapt and continue.
 
 ## Handoff from dig-into-linear-issue
 
@@ -388,7 +388,7 @@ AskUserQuestion:
       description: "I have enough context, no need to continue"
 ```
 
-**If user chooses "Stop here"** → Run cleanup (step 8) and end.
+**If user chooses "Stop here"** → Run cleanup (step 9) and end.
 
 **If user chooses "Full review"** → Continue to step 4.
 
@@ -396,7 +396,7 @@ AskUserQuestion:
 
 ### 3b. Build Follow-up Review Context
 
-**Do NOT assume the reviewer remembers their previous review.** Rebuild full context.
+**Always rebuild full follow-up context from scratch.** The reviewer may not remember details from their previous review.
 
 **Get timestamp of user's last review:**
 ```bash
@@ -424,7 +424,7 @@ gh pr view <PR_URL> --json commits --jq '.commits[] | select(.committedDate > "<
 
 ### 3c. Present Follow-up Review Report
 
-**Do NOT just list data.** Synthesize it into a coherent narrative that helps the reviewer regain context quickly.
+**Synthesize into a coherent narrative** that helps the reviewer regain context quickly. Lead with key focus areas, not raw data.
 
 ```markdown
 ## Follow-up Review Context
@@ -472,7 +472,7 @@ AskUserQuestion:
       description: "I have enough context from this report"
 ```
 
-**If user chooses "Stop here"** → Run cleanup (step 8) and end.
+**If user chooses "Stop here"** → Run cleanup (step 9) and end.
 
 **If user chooses "Continue review"** → Continue to step 4.
 
@@ -591,18 +591,18 @@ All review agents write detailed reviews to files in this directory. Only signal
 
 #### Review Strategy
 
-**The generalist `pr-reviewer` ALWAYS runs first.** It provides the anchor for the review.
+**Defaults (every PR):** `pr-reviewer` (always first — provides the review anchor) + `patterns-reviewer`.
 
-For larger or sensitive PRs, specialists run in parallel and their findings are reconciled against the generalist's review.
+For larger or sensitive PRs, add specialists in parallel. Their findings are reconciled against the generalist's review.
 
-| PR Type | Agents | Notes |
-|---------|--------|-------|
-| Small (< 200 lines) | `pr-reviewer` + `patterns-reviewer` | Always check for existing patterns |
-| Medium (200-500 lines) | `pr-reviewer` + `patterns-reviewer` | Check for existing patterns |
-| Large (500+ lines) | `pr-reviewer` + all specialists | Parallel deep analysis |
-| Security-sensitive | `pr-reviewer` + `security-reviewer` + `patterns-reviewer` | Auth, payments, user data |
-| Database-heavy | `pr-reviewer` + `performance-reviewer` + `patterns-reviewer` | Queries, migrations |
-| API/hooks changes | `pr-reviewer` + `wp-architecture-reviewer` + `patterns-reviewer` | Public interfaces |
+**Additional specialists by PR type:**
+
+| PR Type | Add Specialists | Trigger |
+|---------|-----------------|---------|
+| Large (500+ lines) | All specialists | Broad changes requiring parallel deep analysis |
+| Security-sensitive | `security-reviewer` | Auth, payments, user data |
+| Database-heavy | `performance-reviewer` | Queries, migrations |
+| API/hooks changes | `wp-architecture-reviewer` | Public interfaces |
 
 #### Specialist Agents
 
@@ -616,44 +616,13 @@ For larger or sensitive PRs, specialists run in parallel and their findings are 
 
 #### Verbose Reasoning Mode (Optional)
 
-**Environment variable:** `VERBOSE`
+Set `VERBOSE=true` to include detailed reasoning blocks (`<details>` format) in all agent findings — detection process, confidence scores, severity rationale. Output ~30% longer.
 
-**When to enable verbose mode:**
-- Learning (understand agent decision-making)
-- Debugging false positives (see why agent flagged something)
-- Low confidence findings (investigate uncertainty)
-- Critical findings (verify reasoning)
-- Building trust (first time using agents)
-- Audit trails (compliance documentation)
+**Use when:** debugging false positives, verifying critical findings, building initial trust with agents, audit trails.
 
-**How to enable:**
-```bash
-# Enable verbose reasoning for all agents
-export VERBOSE=true
-
-# Then run pr review as normal
-# All agents will include detailed reasoning blocks
+**Pass to agents:** When VERBOSE is set, include in each agent's context:
 ```
-
-**When verbose mode is enabled:**
-- All review agents include expandable `<details>` blocks with reasoning
-- Reasoning shows: detection process, checks performed, confidence scores, severity rationale
-- Output is ~30% longer but much more transparent
-- Builds trust and enables learning
-
-**When to skip verbose mode:**
-- Routine reviews with trusted agents
-- High-volume review days
-- High-confidence findings that are obvious
-- Time-sensitive approvals
-
-**Pass VERBOSE to all agents:**
-
-When spawning agents, check if VERBOSE environment variable is set and include it in context if present.
-
-```markdown
-# If VERBOSE is set, mention it in agent context:
-Optional: VERBOSE mode enabled - include detailed reasoning for all findings
+VERBOSE mode enabled — include detailed reasoning for all findings.
 ```
 
 #### Dispatch Order
@@ -755,57 +724,18 @@ Task tool (parallel with other specialists):
 
 ---
 
-**❌ ANTI-PATTERN: Sequential Spawning (DO NOT DO THIS)**
+<example type="INCORRECT" label="Sequential dispatch — agents wait for each other">
+Message 1: Task: security-reviewer → wait 25s
+Message 2: Task: performance-reviewer → wait 22s
+Message 3: Task: architecture-reviewer → wait 28s
+Total: 75s (sequential)
+</example>
 
-```
-# WRONG - This spawns agents sequentially (slow):
-
-# Message 1
-Task: security-reviewer
-# Wait for completion (25s)...
-
-# Message 2
-Task: performance-reviewer
-# Wait for completion (22s)...
-
-# Message 3
-Task: architecture-reviewer
-# Wait for completion (28s)...
-
-# Total time: 25 + 22 + 28 = 75 seconds (sequential)
-```
-
-**This is WRONG because:**
-- Agents run one at a time (waste of resources)
-- Total time = sum of all agents (slow)
-- Poor developer experience (long wait)
-
-**✅ CORRECT: Parallel Spawning (DO THIS)**
-
-```
-# CORRECT - Single message with multiple Task calls (fast):
-
-# ONE Message with ALL Task calls
-I'm spawning all reviewers in parallel now.
-
-Task: security-reviewer (starts immediately)
-Task: performance-reviewer (starts immediately)
-Task: architecture-reviewer (starts immediately)
-Task: php-tests-reviewer (starts immediately)
-Task: js-tests-reviewer (starts immediately)
-Task: e2e-tests-reviewer (starts immediately)
-Task: history-insights-reviewer (starts immediately)
-
-# All start simultaneously
-# Total time: max(25, 22, 28, 18) = 28 seconds (parallel)
-```
-
-**This is CORRECT because:**
-- All agents run simultaneously (efficient)
-- Total time = longest single agent (fast)
-- Better developer experience (3x faster)
-
-**Remember:** ONE message, MULTIPLE Task calls = parallel execution
+<example type="CORRECT" label="Parallel dispatch — all agents start simultaneously">
+ONE message with ALL Task tool calls:
+security + performance + architecture + patterns + history
+Total: max(25, 22, 28) = 28s (parallel)
+</example>
 
 ---
 
@@ -984,54 +914,45 @@ git stash pop
 
 Always restore the repo to its pre-review state. The user should find their repo exactly as they left it.
 
-## Common Mistakes
+## Guardrails
 
-| Mistake | Prevention |
-|---------|------------|
-| Jump straight to code | ALWAYS fetch issue context first |
-| Re-fetch issue after handoff | If context came from `dig-into-linear-issue`, use it directly |
-| Review draft PR | Check `isDraft` before starting |
-| Duplicate existing feedback | Review previous comments first |
-| Not knowing you already reviewed | Check reviews for your username |
+### STOP Before Proceeding
+
+If you catch yourself thinking any of these, **STOP**:
+
+| Thought | STOP and... |
+|---------|-------------|
+| "Let me look at the code changes" | Fetch the linked issue first — do you know WHY this change exists? |
+| "The PR description is enough" | Issues have full context, edge cases, decisions the PR body omits |
+| "I can see what this does from the diff" | Same as above — understand the problem before evaluating the solution |
+| "I'll just start reviewing" | Check: Is it a draft? Have you already reviewed this PR? |
+| "Someone asked me to review" | Check: Did you already review this before? |
+| "I'll give my perspective" | Check: What did other reviewers already say? |
+| "I found an issue" | Check: Was this already raised in previous reviews? |
+
+### Common Mistakes
+
+| Mistake | Correct Approach |
+|---------|------------------|
+| Re-fetch issue after handoff | Use context provided from `dig-into-linear-issue` directly |
 | Ignore issue context | Issue has acceptance criteria the PR body may omit |
 | Miss pending review requests | Check who else should review |
-| Forget to restore stashed changes | Run cleanup step 9 after review |
-| Leave repo on PR branch | Checkout original branch in cleanup |
-| Skip build verification | Check for build instructions and run build |
-| Stop on build failure | Note failure in review, don't stop |
-| Assume reviewer remembers last review | Always rebuild full follow-up context |
+| Stop on build failure | Note failure in review feedback, continue reviewing |
+| Assume reviewer remembers last review | Rebuild full follow-up context every time |
 | Include merge commits in "changes since" | Filter out merges with base branch |
 | List data without synthesis | Present coherent narrative with clear focus areas |
-
-## Red Flags - STOP Before Proceeding
-
-If you catch yourself thinking any of these, **STOP** and gather context:
-
-### Rushing to Code (STOP → fetch issue first)
-- "Let me look at the code changes" → Did you fetch the linked issue?
-- "The PR description is enough" → Issues have full context, edge cases, decisions
-- "I can see what this does from the diff" → Do you know WHY it's being done?
-
-### Skipping State Checks (STOP → check status)
-- "I'll just start reviewing" → Is it a draft? Are you already a reviewer?
-- "Someone asked me to review" → Did you already review this before?
-
-### Ignoring Previous Work (STOP → check reviews)
-- "I'll give my perspective" → What did other reviewers already say?
-- "I found an issue" → Was this already raised in previous reviews?
-
-## Correct vs Incorrect Approaches
+| Forget to restore stashed changes | Run cleanup step after review |
+| Leave repo on PR branch | Checkout original branch in cleanup |
 
 <example type="INCORRECT">
 User: "Review PR #62747"
 Agent: "Let me check the code changes and test coverage..."
 → Skipped: PR state check, issue context, previous reviews
-→ Risk: Reviewing draft, duplicating feedback, missing context
 </example>
 
 <example type="CORRECT">
 User: "Review PR #62747"
 Agent: "Let me first gather context before reviewing the code."
-→ Checks PR state → Checks if user reviewed before → Fetches linked issue → Reviews existing feedback → THEN proceeds to code
+→ PR state → Prior reviews → Linked issue → Existing feedback → Code
 </example>
 
