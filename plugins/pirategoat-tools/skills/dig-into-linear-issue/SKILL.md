@@ -28,7 +28,7 @@ Core principle: **verify before you code** - issues are frequently invalid, alre
 
 | Tool | Purpose |
 |------|---------|
-| context-a8c | Fetch Linear issue details, search issues, find PRs |
+| Linear MCP server | Fetch Linear issue details, search issues, find PRs |
 | chrome-devtools MCP | Browser-based investigation (for UI bugs) |
 | Relevant build tools | Build assets before localhost testing |
 
@@ -42,7 +42,7 @@ Assume tools are available and proceed with investigation. If a tool fails:
 
 | Situation | Response |
 |-----------|----------|
-| context-a8c unavailable | Use Linear web UI or ask user for issue details |
+| Linear MCP unavailable | Use Linear web UI or ask user for issue details |
 | Browser MCP unavailable | Use code analysis path (4c) instead |
 | Issue not found | Verify issue ID format; confirm with user |
 
@@ -161,10 +161,11 @@ digraph workflow {
 
 ### 1. Fetch Issue Details
 
-Use context-a8c to fetch the issue **with comments**:
+Use the Linear MCP server to fetch the issue **with comments** (Linear is NOT a context-a8c provider):
 
 ```
-context-a8c → linear provider → get issue (include comments!)
+mcp__linear-server__get_issue with the issue ID
+mcp__linear-server__list_comments for the issue's comments
 ```
 
 <extraction_checklist>

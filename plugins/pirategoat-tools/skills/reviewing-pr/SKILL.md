@@ -30,14 +30,14 @@ Core principle: **context before code** - understanding what problem is being so
 | Tool | Purpose |
 |------|---------|
 | gh CLI | Fetch PR details, reviews, review requests |
-| context-a8c | Fetch Linear issue details (if issue is linked) |
+| Linear MCP server | Fetch Linear issue details (if issue is linked) |
 | Git username | Determine if user has already reviewed |
 
 ## Handling Tool Unavailability
 
 | Situation | Response |
 |-----------|----------|
-| context-a8c unavailable | Use Linear web UI or note limited context |
+| Linear MCP unavailable | Use Linear web UI or note limited context |
 | gh CLI unavailable | Ask user for PR details or use GitHub web |
 | Linear issue not found | Note issue ID and proceed with PR body context |
 
@@ -490,10 +490,10 @@ Parse the PR body for issue references:
 
 **If handoff context was provided from `dig-into-linear-issue`:** Skip this step. Use the provided issue context directly in step 6. The issue has already been thoroughly investigated.
 
-**Otherwise**, use context-a8c directly:
+**Otherwise**, use the Linear MCP server directly (Linear is NOT a context-a8c provider):
 
 ```
-context-a8c → linear provider → get issue (include comments!)
+mcp__linear-server__get_issue with the issue ID
 ```
 
 **Extract from issue:**
