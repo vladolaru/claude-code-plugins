@@ -151,7 +151,7 @@ def marketplace_agents():
 
 @pytest.fixture(scope="module")
 def marketplace_skills():
-    """Skill names from marketplace.json (e.g., 'decision-critic', 'pr-reviewing')."""
+    """Skill names from marketplace.json (e.g., 'decision-critic', 'reviewing-pr')."""
     return _load_marketplace_skills()
 
 
@@ -819,10 +819,10 @@ class TestPrReview:
     # --- Composition: references existing skill + commands ---
 
     def test_references_pr_reviewing_skill(self):
-        """Phase 1 should delegate to the pr-reviewing skill for context + dispatch."""
+        """Phase 1 should delegate to the reviewing-pr skill for context + dispatch."""
         content = _read_command(self.COMMAND)
-        assert "pr-reviewing" in content, (
-            f"{self.COMMAND}: missing reference to pr-reviewing skill"
+        assert "reviewing-pr" in content, (
+            f"{self.COMMAND}: missing reference to reviewing-pr skill"
         )
 
     def test_references_ingest_code_review(self):
@@ -847,11 +847,11 @@ class TestPrReview:
         reviewer_refs = [r for r in agent_refs if r in marketplace_agents]
         assert len(reviewer_refs) == 0, (
             f"{self.COMMAND}: found inline agent references {reviewer_refs} — "
-            f"pr-reviewing skill handles dispatch, no need to duplicate"
+            f"reviewing-pr skill handles dispatch, no need to duplicate"
         )
 
     # --- Phase 1: PR-specific inline content ---
-    # Note: PR state guards (draft/merged/closed) are owned by the pr-reviewing
+    # Note: PR state guards (draft/merged/closed) are owned by the reviewing-pr
     # skill, not this orchestrator command.  test_references_pr_reviewing_skill
     # verifies the delegation.
 

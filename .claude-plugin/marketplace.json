@@ -42,7 +42,7 @@
         "./skills/browser-interaction",
         "./skills/dig-into-linear-issue",
         "./skills/woocommerce-browser-interaction",
-        "./skills/pr-reviewing",
+        "./skills/reviewing-pr",
         "./skills/testing-patterns",
         "./skills/php-testing-patterns",
         "./skills/js-testing-patterns",

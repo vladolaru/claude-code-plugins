@@ -52,7 +52,7 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | **go-testing-patterns** | Standard testing package, table-driven tests, httptest, benchmarks, fuzz testing |
 | **software-architecture** | GoF patterns, SOLID, hexagonal architecture with an 87KB pattern library |
 | **wordpress-backend-dev** | WPCS coding standards, security patterns, i18n, hooks API, REST API |
-| **pr-reviewing** | Structured PR review workflow with parallel agent spawning |
+| **reviewing-pr** | Structured PR review workflow with parallel agent spawning |
 | **browser-interaction** | Browser automation via MCP servers (chrome-devtools, playwright) |
 | **woocommerce-browser-interaction** | WooCommerce-specific browser workflows — login, admin, checkout |
 | **dig-into-linear-issue** | Linear issue investigation with RCA templates |

@@ -289,7 +289,7 @@ class TestStripWriterHeredocs:
             "git add f.md c.md && git commit -m \"$(cat <<'EOF'\n"
             "fix: clean stale files\n"
             "\n"
-            "full-code-review and pr-reviewing: rm -rf and recreate.\n"
+            "full-code-review and reviewing-pr: rm -rf and recreate.\n"
             "code-review: selectively delete files.\n"
             "EOF\n"
             ")\" && git push origin HEAD"

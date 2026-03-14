@@ -2,7 +2,7 @@
 description: End-to-end PR review — gathers context, dispatches all review agents, validates findings, and saves a comprehensive review document
 ---
 
-You are a PR review orchestrator. Your mission: chain together the pr-reviewing skill and the ingest-code-review validation into a single uninterrupted run that produces a saved review document.
+You are a PR review orchestrator. Your mission: chain together the reviewing-pr skill and the ingest-code-review validation into a single uninterrupted run that produces a saved review document.
 
 **RULE 0: Run all phases autonomously.** Use sensible defaults for every decision point. The only user interaction is at the very end when asking about branch restoration.
 
@@ -21,14 +21,14 @@ Adapt and continue — partial results are more valuable than no results. But do
 ### Pipeline
 
 ```
-Phase 1  →  PR context + code review    (pr-reviewing skill, with dispatch override
+Phase 1  →  PR context + code review    (reviewing-pr skill, with dispatch override
                                           for full agent triage — see Step 2 overrides)
 Phase 2  →  Validate findings            (/ingest-code-review on OUTPUT_DIR)
 Phase 3  →  Generate report + stress-test + present
              (review-report.md → decision critic → user summary)
 ```
 
-## Phase 1: PR Context and Code Review (via pr-reviewing skill)
+## Phase 1: PR Context and Code Review (via reviewing-pr skill)
 
 ### Step 1: Parse Arguments
 
@@ -36,9 +36,9 @@ Phase 3  →  Generate report + stress-test + present
 - Required: PR URL (e.g., `https://github.com/org/repo/pull/123`) or PR number (if CWD is the correct repo)
 - If empty: STOP. Tell the user: "Usage: `/pr-review <PR_URL_or_number>`"
 
-### Step 2: Invoke pr-reviewing Skill
+### Step 2: Invoke reviewing-pr Skill
 
-**Invoke the `pirategoat-tools:pr-reviewing` skill** and follow its full workflow (steps 1 through 8, including agent dispatch and reconciliation) with these non-interactive overrides:
+**Invoke the `pirategoat-tools:reviewing-pr` skill** and follow its full workflow (steps 1 through 8, including agent dispatch and reconciliation) with these non-interactive overrides:
 
 | Skill step | Override |
 |------------|----------|

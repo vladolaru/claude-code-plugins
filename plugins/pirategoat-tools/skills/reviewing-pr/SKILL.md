@@ -1,5 +1,5 @@
 ---
-name: pr-reviewing
+name: reviewing-pr
 description: Use when asked to review a GitHub PR, help with a PR review, or given a PR URL to review. Ensures context gathering before code review.
 ---
 
@@ -1056,7 +1056,7 @@ try:
     from lib import load_knowledge, has_memory_system
 
     if has_memory_system():
-        knowledge = load_knowledge("pr-reviewing")
+        knowledge = load_knowledge("reviewing-pr")
         if knowledge:
             print("📚 Loaded accumulated knowledge")
             # Review knowledge for:
@@ -1111,7 +1111,7 @@ try:
     from lib import log_experience, has_memory_system
 
     if has_memory_system():
-        log_experience("pr-reviewing", experience)
+        log_experience("reviewing-pr", experience)
     else:
         print("ℹ️  Memory system not available")
 except ImportError:
