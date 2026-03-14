@@ -5,6 +5,7 @@ model: inherit
 color: orange
 tools:
   - Read
+  - Grep
   - Bash
   - Write
 ---

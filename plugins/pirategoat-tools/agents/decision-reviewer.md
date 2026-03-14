@@ -7,6 +7,7 @@ skills:
   - pirategoat-tools:decision-critic
 tools:
   - Read
+  - Grep
   - Bash
   - Write
 ---
