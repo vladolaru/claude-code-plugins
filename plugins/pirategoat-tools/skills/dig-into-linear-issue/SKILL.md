@@ -38,15 +38,22 @@ Core principle: **verify before you code** - issues are frequently invalid, alre
 
 ## Handling Tool Unavailability
 
-Assume tools are available and proceed with investigation. If a tool fails:
+**Linear MCP server is required.** Before starting, verify it is available by checking your tool list for `mcp__linear-server__get_issue`. If it is not available, STOP and ask the user:
+
+```
+AskUserQuestion:
+  question: "The Linear MCP server is not available. This skill requires it to fetch issue details and comments. Please configure it and retry."
+  header: "Linear MCP required"
+```
+
+For other tools, assume available and adapt if they fail:
 
 | Situation | Response |
 |-----------|----------|
-| Linear MCP unavailable | Use Linear web UI or ask user for issue details |
 | Browser MCP unavailable | Use code analysis path (4c) instead |
 | Issue not found | Verify issue ID format; confirm with user |
 
-These are expected scenarios. Adapt your approach and continue - no apology needed.
+These are expected scenarios. Adapt your approach and continue.
 
 ## Handling Access Barriers
 
