@@ -614,17 +614,6 @@ For larger or sensitive PRs, add specialists in parallel. Their findings are rec
 | `patterns-reviewer` | Existing patterns, git history precedents, naming consistency, consolidation |
 | `history-insights-reviewer` | Git history mining for similar fixes, enhancements, and lessons learned elsewhere |
 
-#### Verbose Reasoning Mode (Optional)
-
-Set `VERBOSE=true` to include detailed reasoning blocks (`<details>` format) in all agent findings — detection process, confidence scores, severity rationale. Output ~30% longer.
-
-**Use when:** debugging false positives, verifying critical findings, building initial trust with agents, audit trails.
-
-**Pass to agents:** When VERBOSE is set, include in each agent's context:
-```
-VERBOSE mode enabled — include detailed reasoning for all findings.
-```
-
 #### Dispatch Order
 
 **Step 1: Always dispatch generalist first**
@@ -833,21 +822,6 @@ The reconciliator returns expanded details from the security review file.
 
 ### Review Mode
 <"Full PR review" OR "Focused review of commits: abc123, def456">
-
-### Verbose Reasoning
-<Check if VERBOSE environment variable is set>
-
-**If VERBOSE=true:**
-Include detailed reasoning blocks for all findings using `<details>` expandable format. Show:
-- Detection process (grep commands, pattern matches)
-- Analysis steps (checks performed, evidence gathered)
-- Confidence scores (0-100% with rationale)
-- Severity rationale (why CRITICAL vs HIGH vs MEDIUM)
-- Cross-references (skills, patterns, documentation)
-- Alternative interpretations (false positive consideration)
-
-**If VERBOSE not set or false:**
-Standard concise output without reasoning blocks.
 
 ### Previous Review Context (if follow-up)
 <What was discussed in previous review>

@@ -231,13 +231,3 @@ if os.path.exists(results_file):
 ```
 
 Available result types: `lint-results`, `security-results`, `test-results`, `coverage-results`. Treat tool findings as **definitive**. Use them as supporting evidence, not duplicating them unless they have domain significance.
-
-## Verbose Reasoning Mode
-
-When VERBOSE=true, include `<details>` blocks for each finding with:
-- Detection process (grep/search commands)
-- Analysis specific to your domain
-- Confidence score rationale (what you verified vs didn't)
-- Alternative interpretations
-
-Be factual: reference actual code lines, show actual commands. Admit what you didn't check.
