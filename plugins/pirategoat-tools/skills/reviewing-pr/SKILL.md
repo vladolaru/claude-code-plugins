@@ -194,10 +194,12 @@ AskUserQuestion:
 
 ### 1. Get PR Details and Verify Repo
 
-Use gh CLI to fetch PR state, author, and repo info:
+**Extract the PR number first.** If you received a bare number, use it directly. If you received a URL, parse the number from it (the last path segment: `.../pull/3817` → `3817`).
+
+**Always use the PR number with `gh pr view`, not the full URL.** The number form resolves against the CWD's git remote, which avoids failures when the URL points to a fork or uses a hostname that `gh` can't resolve:
 
 ```bash
-gh pr view <PR_URL> --json state,isDraft,author,title,body,labels,url,number,headRepository,headRepositoryOwner,headRefName,baseRefName
+gh pr view <PR_NUMBER> --json state,isDraft,author,title,body,labels,url,number,headRepository,headRepositoryOwner,headRefName,baseRefName
 ```
 
 Extract from response:
@@ -320,7 +322,7 @@ Get the reviewer's GitHub username and all review activity:
 gh api user --jq .login
 
 # Get all reviews, comments, and review requests
-gh pr view <PR_URL> --json reviews,reviewRequests,comments
+gh pr view <PR_NUMBER> --json reviews,reviewRequests,comments
 ```
 
 **Categorize reviewers:**
@@ -400,7 +402,7 @@ AskUserQuestion:
 
 **Get timestamp of user's last review:**
 ```bash
-gh pr view <PR_URL> --json reviews --jq '.reviews[] | select(.author.login == "<username>") | .submittedAt' | sort | tail -1
+gh pr view <PR_NUMBER> --json reviews --jq '.reviews[] | select(.author.login == "<username>") | .submittedAt' | sort | tail -1
 ```
 
 **Get user's previous review comments:**
@@ -414,7 +416,7 @@ For each comment thread the user participated in, fetch replies that came after 
 
 **Get commits since last review (excluding merges):**
 ```bash
-gh pr view <PR_URL> --json commits --jq '.commits[] | select(.committedDate > "<last_review_timestamp>") | select(.messageHeadline | startswith("Merge") | not)'
+gh pr view <PR_NUMBER> --json commits --jq '.commits[] | select(.committedDate > "<last_review_timestamp>") | select(.messageHeadline | startswith("Merge") | not)'
 ```
 
 **Identify decisions made by PR owner:**
