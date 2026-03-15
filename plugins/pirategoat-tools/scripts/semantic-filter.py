@@ -6,16 +6,17 @@ Filters noise from diffs while preserving semantic changes:
 - Multi-line docblocks (/** ... */)
 - Inline docblock tags (@param, @return, @var, etc.)
 - Blank lines and whitespace
-- Inline comments (// and #)
 - Formatting changes (braces, semicolons)
+
+Inline comments (// and #) are preserved — they carry developer intent
+(translators directives, API contracts, ordering constraints) that is
+review-relevant, especially in WordPress/WooCommerce codebases.
 
 Usage:
     ./semantic-filter.py < input.diff > filtered.diff
     git diff main feature | ./semantic-filter.py
 
-Typical reduction: 15-30% (validated on 27 WooCommerce PRs, avg 22.7%)
-Large PRs (500+ lines): 25-35%
-Comment-heavy PRs: 35-45%
+Typical reduction: 10-20% (docblocks, annotations, formatting, blanks)
 """
 
 import sys
@@ -225,9 +226,8 @@ def should_filter(line, context=None):
     if is_phpdoc_annotation_line(line):
         return True
 
-    # Filter inline comments
-    if is_inline_comment_only(line):
-        return True
+    # Inline comments are preserved — they carry developer intent
+    # (translators directives, API contracts, ordering constraints).
 
     # Filter pure formatting
     if is_formatting_only(line):

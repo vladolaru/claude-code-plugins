@@ -73,18 +73,21 @@ class TestSuppressionDirectiveExemptions:
         assert semantic_filter.should_filter(line) is False
 
 
-class TestRegularCommentsStillFiltered:
-    """Regular comments should still be filtered as before."""
+class TestInlineCommentsPreserved:
+    """Inline comments are preserved — they carry developer intent
+    (translators directives, API contracts, ordering constraints)."""
 
     @pytest.mark.parametrize("comment", [
         "// Set the name",
         "// Initialize the variable",
         "# This is a helper function",
         "// Returns the value",
+        "// translators: %s: formatted currency amount",
+        "// Must run before wcpay_init (plugins_loaded priority 11)",
     ])
-    def test_regular_comments_filtered(self, comment):
+    def test_inline_comments_not_filtered(self, comment):
         line = f"+{comment}"
-        assert semantic_filter.should_filter(line) is True
+        assert semantic_filter.should_filter(line) is False
 
 
 class TestFilterDiffIntegration:
@@ -103,7 +106,7 @@ class TestFilterDiffIntegration:
         filtered, stats = semantic_filter.filter_diff(diff)
         assert "eslint-disable" in filtered
         assert "const data" in filtered
-        assert "regular comment" not in filtered
+        assert "regular comment" in filtered  # inline comments are preserved
 
     def test_preserves_phpcs_ignore_in_diff(self):
         diff = (

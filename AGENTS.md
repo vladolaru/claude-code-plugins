@@ -161,6 +161,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/bootstrap-reviewer.py` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
 | `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
 | `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
+| `scripts/semantic-filter.py` | `pytest plugins/pirategoat-tools/tests/test_semantic_filter.py -v` |
 | `scripts/review_output_simple.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | `tests/graders.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (verifies agent config still works) |
@@ -168,7 +169,9 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | Any review command `.md` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` (validates structure, agent refs, script refs) |
 | `.claude-plugin/marketplace.json` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` (validates command registration, agent cross-refs) |
 
-**Run all tests:** `pytest plugins/pirategoat-tools/tests/ -v`
+**Run all deterministic tests:** `pytest plugins/pirategoat-tools/tests/ -v --ignore=plugins/pirategoat-tools/tests/e2e`
+
+**IMPORTANT:** Always exclude the `tests/e2e/` directory when running the full suite. E2e tests make model calls, are slow, and require manual triggering. The `--ignore` flag is required — without it, pytest will attempt to run e2e tests and hang.
 
 **Test principles:**
 - Code-based graders only (fast, deterministic, no model calls)
