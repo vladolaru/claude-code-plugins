@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.55.0] - 2026-03-15
+
+### Changed
+
+- **Scope budget sort order reversed to largest-first** — large files now get budget priority instead of being systematically excluded when the diff-line budget is tight
+
+### Fixed
+
+- **Semantic filter no longer strips suppression directives from diffs** — `eslint-disable`, `phpcs:ignore`, `@ts-ignore`, `noqa`, `nosec`, `@deprecated`, `TODO`, `FIXME`, and other intent-bearing comments are preserved
+- **NOT_DISPATCHED agents no longer block pipeline completion** — status check proceeds to reconciliation instead of stalling with ACTION REQUIRED; reconciliation reports these agents as NOT_RUN instead of FAILED
+- **Incremental review state validated with ancestry check** — `last_reviewed_sha` from `.review-state.json` is now verified as an ancestor of HEAD before use, preventing incorrect review ranges after rebases or force-pushes
+
 ## [1.54.1] - 2026-03-15
 
 ### Fixed
