@@ -772,6 +772,68 @@ class TestCliAgentSignals:
 
 
 # =============================================================================
+# Discover Agent Signals from Dispatch Plan
+# =============================================================================
+
+discover_agent_signals = _mod.discover_agent_signals
+
+
+class TestDiscoverAgentSignals:
+    """discover_agent_signals reads dispatch plan + review files."""
+
+    def test_discovers_finished_agents(self, tmp_dir):
+        plan = {"agents": [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ]}
+        with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
+            json.dump(plan, f)
+
+        # Write a review file for pr-reviewer only
+        with open(os.path.join(tmp_dir, "pr-reviewer-review.json"), "w") as f:
+            json.dump({
+                "findings": [{"severity": "critical"}, {"severity": "medium"}],
+                "verdict": "REQUEST_CHANGES",
+            }, f)
+
+        signals = discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
+        assert "pr-reviewer: STATUS=FINISHED" in signals
+        assert "critical=1" in signals
+        assert "security-reviewer: STATUS=FAILED" in signals
+
+    def test_includes_skipped_agents(self, tmp_dir):
+        plan = {"agents": [
+            {"name": "a11y-reviewer", "status": "SKIP", "reason": "no frontend files"},
+        ]}
+        with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
+            json.dump(plan, f)
+
+        signals = discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
+        assert "a11y-reviewer: STATUS=SKIP" in signals
+        assert "no frontend files" in signals
+
+    def test_writes_agent_signals_txt(self, tmp_dir):
+        plan = {"agents": [{"name": "pr-reviewer", "status": "DISPATCH"}]}
+        with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
+            json.dump(plan, f)
+        with open(os.path.join(tmp_dir, "pr-reviewer-review.json"), "w") as f:
+            json.dump({"findings": [], "verdict": "APPROVE"}, f)
+
+        discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
+        assert os.path.isfile(os.path.join(tmp_dir, "agent-signals.txt"))
+
+    def test_handles_skipped_triage(self, tmp_dir):
+        plan = {"agents": [
+            {"name": "perf-reviewer", "status": "SKIPPED_TRIAGE", "reason": "no perf files"},
+        ]}
+        with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
+            json.dump(plan, f)
+
+        signals = discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
+        assert "perf-reviewer: STATUS=SKIPPED_TRIAGE" in signals
+
+
+# =============================================================================
 # Finding References in Clusters
 # =============================================================================
 

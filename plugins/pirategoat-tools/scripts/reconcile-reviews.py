@@ -149,6 +149,51 @@ def _parse_skipped_agents(agent_signals: str) -> List[str]:
     return skipped
 
 
+def discover_agent_signals(output_dir: str, dispatch_plan_path: str) -> str:
+    """Build agent signal text from dispatch plan + review files on disk."""
+    with open(dispatch_plan_path) as f:
+        plan = json.load(f)
+
+    signals = []
+    for agent in plan.get("agents", []):
+        name = agent["name"]
+        status = agent.get("status", "SKIP")
+
+        if status == "SKIP" or status == "SKIPPED" or status == "SKIPPED_TRIAGE":
+            reason = agent.get("reason", "not in scope")
+            signals.append(f"{name}: STATUS={status} ({reason})")
+            continue
+
+        # Check if the agent wrote a review file
+        review_json = os.path.join(output_dir, f"{name}-review.json")
+        if os.path.isfile(review_json):
+            try:
+                with open(review_json) as f:
+                    review = json.load(f)
+                # Extract severity counts from the review JSON
+                findings = review.get("findings", [])
+                counts = {}
+                for finding in findings:
+                    sev = finding.get("severity", "medium").lower()
+                    counts[sev] = counts.get(sev, 0) + 1
+                count_str = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+                verdict = review.get("verdict", "UNKNOWN")
+                signals.append(f"{name}: STATUS=FINISHED, {count_str}, VERDICT={verdict}")
+            except (json.JSONDecodeError, KeyError):
+                signals.append(f"{name}: STATUS=FINISHED (output malformed)")
+        else:
+            signals.append(f"{name}: STATUS=FAILED (no review file)")
+
+    signal_text = "\n".join(signals)
+
+    # Write to file for the reconciliator agent prompt
+    signal_path = os.path.join(output_dir, "agent-signals.txt")
+    with open(signal_path, "w") as f:
+        f.write(signal_text)
+
+    return signal_text
+
+
 # =============================================================================
 # Test gap detection
 # =============================================================================
@@ -595,6 +640,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--dispatch-plan",
+        default=None,
+        help=(
+            "Path to dispatch-plan.json. When provided, agent signals are "
+            "discovered from the dispatch plan + review files in --output-dir. "
+            "Replaces --agent-signals."
+        ),
+    )
+    parser.add_argument(
         "--changed-files",
         default=None,
         help="Comma-separated list of changed file paths for test gap detection.",
@@ -616,9 +670,15 @@ def main():
     if args.changed_files:
         changed_files = [f.strip() for f in args.changed_files.split(",") if f.strip()]
 
+    # Determine agent signals: --dispatch-plan takes precedence over --agent-signals
+    if args.dispatch_plan:
+        agent_signals = discover_agent_signals(args.output_dir, args.dispatch_plan)
+    else:
+        agent_signals = args.agent_signals
+
     result = reconcile(
         output_dir=args.output_dir,
-        agent_signals=args.agent_signals,
+        agent_signals=agent_signals,
         write_output=True,
         changed_files=changed_files,
         ground_truth_path=args.ground_truth,
