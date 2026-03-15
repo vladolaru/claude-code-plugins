@@ -80,7 +80,7 @@ digraph workflow {
     has_open_pr [shape=diamond, label="Open PR\nlinked?"];
     present_pr [label="1b. Present PR\noptions"];
     pr_choice [shape=diamond, label="User\nchoice?"];
-    branch_pr [label="Branch to\nreviewing-pr", style=filled, fillcolor=lightblue];
+    branch_pr [label="Invoke\n/pr-review", style=filled, fillcolor=lightblue];
     identify [shape=diamond, label="Type?"];
 
     split [label="Split into\nseparate issues"];
@@ -210,7 +210,7 @@ AskUserQuestion:
   header: "Open PR"
   options:
     - label: "Review the PR (Recommended)"
-      description: "Branch to reviewing-pr skill to review the existing PR"
+      description: "Run /pr-review to review the existing PR"
     - label: "Continue investigation"
       description: "Investigate the issue independently (useful if PR may be incomplete)"
     - label: "Stop here"
@@ -219,17 +219,24 @@ AskUserQuestion:
 
 | User Choice | Action |
 |-------------|--------|
-| Review the PR | **Branch to `reviewing-pr` skill** with the PR URL. Include issue context gathered so far. |
+| Review the PR | **Invoke `/pr-review`** with the PR number. Include issue context. |
 | Continue investigation | Proceed to step 2 (identify issue type). Note the open PR in your report. |
 | Stop here | End investigation. Provide summary of what you found. |
 
 **Why review is recommended:** If there's already an open PR, reviewing it is usually more valuable than starting a parallel investigation. The PR author has likely already done much of the investigation work.
 
-**Context handoff to reviewing-pr:** When branching, include:
+**Context handoff to /pr-review:** When invoking, include:
 - Issue summary (what problem is being solved)
-- Issue ID for the PR to reference
+- Issue ID for reference
 - Any acceptance criteria from the issue
 - Relevant context from issue comments
+
+Invoke using:
+```
+Skill tool:
+  skill: pirategoat-tools:pr-review
+  args: <PR_NUMBER>
+```
 
 ### 2. Identify Issue Type
 
