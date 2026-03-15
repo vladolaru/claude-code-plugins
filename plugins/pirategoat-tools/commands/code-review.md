@@ -53,9 +53,9 @@ The context script in Step 1 handles incremental range detection. Check the resu
 - If the range starts from a previous SHA: incremental review of new commits only
 - Tell the user what range is being reviewed and how many commits
 
-## Step 2.5: Ground Truth Collection (optional)
+## Step 3: Ground Truth Collection (optional)
 
-### 2.5a — Extract tool configuration
+### 3a — Extract tool configuration
 
 Read the project's CLAUDE.md and AGENTS.md (if present). Extract the commands this project uses to run linters, test suites, security scanners, and coverage. Write a `tool-config.json` in OUTPUT_DIR:
 
@@ -86,7 +86,7 @@ TOOLCFG
 - If you can't determine the exact command, omit the tool
 - If the project has no tool instructions at all, write an empty config `{}`
 
-### 2.5b — Run ground truth collection
+### 3b — Run ground truth collection
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-ground-truth.py \
@@ -101,7 +101,7 @@ Where `CHANGED_FILES_CSV` is a comma-separated list of changed files from `git d
 - If it succeeds, `OUTPUT_DIR/ground-truth-summary.json` is available for the bootstrap dispatch phase.
 - Store: `GROUND_TRUTH_PATH` = `OUTPUT_DIR/ground-truth-summary.json` (or empty if unavailable).
 
-## Step 3: Scope Summary
+## Step 4: Scope Summary
 
 Show the user what will be reviewed:
 
@@ -111,7 +111,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --domain code --summary --
 
 Present a brief summary: number of files changed, lines added/removed in the incremental range.
 
-## Step 3.5: Generate Dispatch Plan
+## Step 5: Generate Dispatch Plan
 
 Run the dispatch planner to determine which agents to dispatch:
 
@@ -128,7 +128,7 @@ Persist two representations from the planner output:
 - `agent_signals` — the JSON array of per-agent status lines
 - `agent_signals_text` — the planner-provided newline-joined text block
 
-Use `agent_signals` when you want to inspect or summarize individual entries. Use `agent_signals_text` whenever you invoke `reconcile-reviews.py` or paste the signals into the reconciliator prompt. Do not rebuild this text yourself and do not expand it unquoted in the shell.
+Use `agent_signals` when you want to inspect or summarize individual entries. Do not rebuild this text yourself and do not expand it unquoted in the shell.
 
 If agents are skipped, note it briefly: "Skipping N agents with no files in scope: [list]"
 
@@ -142,7 +142,7 @@ Parse the `BRANCH_FRESHNESS:` section from the preflight output.
 - If `IS_STALE: true` and `RANGE_REBASED: true`: Tell the user: "Branch is N commits behind base. Review scope adjusted to merge-base to exclude unrelated trunk files. Consider rebasing before your next review iteration."
 - If `IS_STALE: false`: proceed normally, no message needed.
 
-## Step 3.6: Adaptive Agent Triage
+## Step 6: Adaptive Agent Triage
 
 The dispatch planner handles domain-level filtering and deterministic triage (keyword matching, test-file detection, diffstat checks). **Its DISPATCH decisions are preliminary — they confirm the agent has matching files and basic signal, not that it should definitely run.** Your judgment here is the quality gate.
 
@@ -175,11 +175,11 @@ TRIAGE: reliability-reviewer: DISPATCH — new external API client without timeo
 
 Agents skipped by triage are recorded as `STATUS=SKIPPED_TRIAGE` in the agent signals for the reconciliator.
 
-## Step 4: Execute Dispatch Plan
+## Step 7: Execute Dispatch Plan
 
 **CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**
 
-For each agent with status "DISPATCH" in the plan (after triage adjustments in Step 3.6), dispatch using the Agent tool.
+For each agent with status "DISPATCH" in the plan (after triage adjustments in Step 6), dispatch using the Agent tool.
 
 Each agent receives this context in its prompt:
 ```
@@ -212,11 +212,11 @@ python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range 
 
 Agents not dispatched are recorded in agent signals for the reconciliator:
 - Domain skip: `<agent>: STATUS=SKIPPED (no files in <domain> domain)`
-- Triage skip: `<agent>: STATUS=SKIPPED_TRIAGE (<one-line reason from Step 3.6>)`
+- Triage skip: `<agent>: STATUS=SKIPPED_TRIAGE (<one-line reason from Step 6>)`
 
-## Step 5: Save Review State
+## Step 8: Save Review State
 
-After all agents have returned their signals, save the review state **before** running the reconciliator:
+After all agents have returned their signals, save the review state **before** dispatching the reconciliator:
 
 ```bash
 cat > "${OUTPUT_DIR}/.review-state.json" << 'STATEEOF'
@@ -232,81 +232,35 @@ STATEEOF
 
 This ensures state is persisted even if reconciliation encounters an issue.
 
-## Step 6: Reconcile and Present Results
+## Step 9: Reconcile + Verify Findings
 
-### Step 6a: Run Deterministic Reconciliation
+After ALL dispatched agents have returned their signals, dispatch the reconciliator to deduplicate, verify, and produce the review findings.
 
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/reconcile-reviews.py \
-  --output-dir <OUTPUT_DIR> \
-  --dispatch-plan <OUTPUT_DIR>/dispatch-plan.json \
-  --changed-files "<CHANGED_FILES_CSV from review-context.json>"
-```
-
-Where:
-- `--dispatch-plan` points to the dispatch plan file written by Step 3.5. The script discovers agent status from the plan + review files on disk — no LLM-composed signal text needed.
-- `CHANGED_FILES_CSV` is `git.changed_files_csv` from `review-context.json`. This enables test-gap detection advisories.
-
-This script reads all `*-review.json` files, deduplicates findings across agents, and writes `reconciled-structured.json` to the output directory. It handles:
-- Exact and near deduplication (same file + overlapping lines + similar title)
-- Severity conflict resolution (highest wins)
-- Source agent aggregation per cluster
-- Schema validation (gracefully skips invalid outputs)
-- Test-gap advisory (production code changed without tests, when `--changed-files` is provided)
-
-### Step 6b: Dispatch Reconciliator for Narrative Summary
+Build the list of completed agent review files from the dispatch results:
+- For each agent that returned `STATUS=COMPLETE`, add `<OUTPUT_DIR>/<agent>-review.json` to the list
+- Skip agents with `STATUS=SKIPPED`, `STATUS=SKIPPED_TRIAGE`, or `STATUS=FAILED`
 
 ```
-Task tool:
+Agent tool:
   subagent_type: pirategoat-tools:review-reconciliator
   prompt: |
+    Review Files:
+    - <OUTPUT_DIR>/pr-review.json
+    - <OUTPUT_DIR>/security-review.json
+    ... (one per completed agent)
+
     Output Directory: <OUTPUT_DIR>
-    Mode: summary
-
-    Agent Signals:
-    <paste the exact agent_signals_text block from Step 4 verbatim, one signal per line>
+    Git Range: <GIT_RANGE>
+    PR Context: Incremental branch review in <REPO>
+    Changed Files: <CHANGED_FILES_CSV>
+    Ground Truth: <GROUND_TRUTH_PATH>  (if available)
 ```
 
-The reconciliator reads the pre-processed `reconciled-structured.json` and agent review files, then produces a narrative executive summary (`reconciled.md` and `reconciled.json`).
+The reconciliator reads all agent findings, groups by underlying concern, verifies each against actual code, and writes:
+- `review-findings.json` — structured output (ReviewOutputBuilder format)
+- `review-findings.md` — narrative review summary
 
-Present the reconciliator's summary to the user:
-- Overall verdict and confidence
-- Critical issues (must fix)
-- Important issues (should address)
-- Pattern and history insights
-- Full review path: `<OUTPUT_DIR>/reconciled.md`
-- "Validating findings and running decision critic..."
-
-## Step 7: Ingest Review Findings
-
-After presenting the reconciled summary, automatically invoke the ingest skill to validate findings, filter false positives, and produce an action plan:
-
-```
-Skill tool:
-  skill: pirategoat-tools:ingest-code-review
-  args: <OUTPUT_DIR>
-```
-
-Do not wait for user input between Step 6 and Step 7 — run them back-to-back.
-
-Do not present ingest results to the user separately — the pipeline continues to the post-ingest update and decision-critic steps.
-
-## Step 7.5: Update Reconciled Summary with Validation Results
-
-Update `reconciled.md` using the ingest validation results from Step 7 to reflect the validated state of findings:
-
-1. **Annotate findings** with their validation verdict (CONFIRMED, LIKELY VALID, FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE)
-2. **Move dismissed findings** (FALSE POSITIVE, OUT OF SCOPE, STYLE/PREFERENCE) from the Critical/Important sections into a "Dismissed by Validation" section at the bottom
-3. **Recalculate the verdict** from remaining confirmed + likely-valid findings: any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`
-4. **Add a validation summary line** after the verdict: "Validation: X confirmed, Y likely valid, Z dismissed"
-
-This ensures the decision critic in Step 8 reviews the post-validation state, not the raw reconciliation output.
-
-## Step 7b: Write Ingestion Verification Artifact
-
-Write the accumulated verification state to `${OUTPUT_DIR}/ingest-verification.json` using the same schema as `/pr-review` Step 3b. Build the JSON from your verification results (finding IDs, status, files_read, evidence_summary, questions, answers). This artifact is passed to the decision-reviewer to avoid redundant re-verification of already-confirmed claims.
-
-## Step 8: Decision Critic
+## Step 10: Decision Critic
 
 Stress-test the review's conclusions by dispatching the decision-reviewer agent:
 
@@ -314,9 +268,8 @@ Stress-test the review's conclusions by dispatching the decision-reviewer agent:
 Agent tool:
   subagent_type: pirategoat-tools:decision-reviewer
   prompt: |
-    Document Path: ${OUTPUT_DIR}/reconciled.md
+    Document Path: ${OUTPUT_DIR}/review-findings.md
     Output Directory: ${OUTPUT_DIR}
-    Ingestion Verification: ${OUTPUT_DIR}/ingest-verification.json
 ```
 
 The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a verdict. Extract the verdict using this priority chain:
@@ -328,25 +281,25 @@ The agent produces `decision-critic-findings.md` in OUTPUT_DIR and returns a ver
 Once you have a verdict, act on it:
 
 - **STAND:** The review conclusions are sound. No report updates needed.
-- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. **Before applying revisions, spot-check the critic's factual claims:** extract 2-3 claims that contain specific numbers, file paths, line references, or git metadata, and verify each with a single command (e.g., `git rev-list --count`, `grep -n`, `wc -l`). If any claim fails spot-check, strip it from the adjustments and note: "Critic claim X was not reproducible — excluded." Apply the remaining valid adjustments individually to `reconciled.md` — upgrade/downgrade severities, recategorize findings, add or remove items. **Recalculate the review verdict** from the updated findings (any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`).
-- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. **Spot-check any factual claims as described above for REVISE.** Update `reconciled.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings. **Override the review verdict to `COMMENT`** regardless of original verdict — the findings need human judgment before acting on any approve or request-changes signal.
+- **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. **Before applying revisions, spot-check the critic's factual claims:** extract 2-3 claims that contain specific numbers, file paths, line references, or git metadata, and verify each with a single command. If any claim fails spot-check, strip it from the adjustments. Apply remaining valid adjustments to `review-findings.md` — upgrade/downgrade severities, recategorize findings, add or remove items. **Recalculate the review verdict** from the updated findings (any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`).
+- **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. **Spot-check any factual claims as described above for REVISE.** Update `review-findings.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings. **Override the review verdict to `COMMENT`** regardless of original verdict.
 
-## Step 9: Present Final Results
+## Step 11: Present Final Results
 
-Present the final validated review to the user, building on the quick summary from Step 6:
+Present the final validated review to the user:
 
-- Updated verdict (if changed by validation or critic)
+- Overall verdict and confidence
 - Decision-critic verdict (STAND / REVISE / ESCALATE) with key insight
-- Validation summary: X confirmed, Y likely valid, Z dismissed
+- Critical issues (must fix)
+- Important issues (should address)
 - Any adjustments the decision-critic recommended (if REVISE)
-- Any validity concerns (if ESCALATE)
 - Full review files: `<OUTPUT_DIR>/`
 - "Review state saved. Next `/code-review` will only review new commits."
 
 If the user wants to drill down on a specific topic, re-invoke the reconciliator in focused mode:
 
 ```
-Task tool:
+Agent tool:
   subagent_type: pirategoat-tools:review-reconciliator
   prompt: |
     Output Directory: <OUTPUT_DIR>
