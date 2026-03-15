@@ -22,6 +22,7 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -33,6 +34,17 @@ import sys
 
 # Absolute path to the scripts/ directory (derived from this file's location).
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Import telemetry (sibling script, best-effort)
+try:
+    _telemetry_spec = importlib.util.spec_from_file_location(
+        "review_telemetry", os.path.join(SCRIPTS_DIR, "review-telemetry.py")
+    )
+    _telemetry_mod = importlib.util.module_from_spec(_telemetry_spec)
+    _telemetry_spec.loader.exec_module(_telemetry_mod)
+    ReviewTelemetry = _telemetry_mod.ReviewTelemetry
+except Exception:
+    ReviewTelemetry = None
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +674,37 @@ def main():
     if guidance is None:
         print(f"ERROR: No guidance for step {args.step_number}", file=sys.stderr)
         sys.exit(1)
+
+    # --- Telemetry (best-effort) ---
+    if ReviewTelemetry is not None and guidance is not None:
+        try:
+            log_dir = os.environ.get("PIRATEGOAT_TELEMETRY_LOG_DIR")
+            kwargs = {"log_dir": log_dir} if log_dir else {}
+            telemetry = ReviewTelemetry(args.output_dir, **kwargs)
+
+            step_kwargs = dict(
+                step=args.step_number,
+                phase=guidance["phase"],
+                title=guidance["title"],
+                headless=args.headless,
+                bot_mode=vals["bot_mode"],
+                thoughts_length=len(args.thoughts),
+            )
+
+            if args.step_number == 0:
+                telemetry.start(
+                    pr_number=args.pr_number or "",
+                    total_steps=args.total_steps,
+                    headless=args.headless,
+                    bot_mode=vals["bot_mode"],
+                )
+            elif args.step_number == args.total_steps:
+                telemetry.finalize(**step_kwargs)
+            else:
+                telemetry.log_step(**step_kwargs)
+        except Exception:
+            pass  # Telemetry is non-critical
+    # --- End Telemetry ---
 
     print(format_output(args.step_number, args.total_steps, guidance))
 
