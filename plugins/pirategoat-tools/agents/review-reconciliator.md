@@ -130,6 +130,15 @@ for cluster in reconciled_data["clusters"]:
     )
 ```
 
+### Advisories
+
+If `reconciled-structured.json` contains a non-empty `advisories` array, add an "Advisories" section after the findings. These are deterministic signals from the reconciliation script (e.g., "production code changed without tests") — surface them as-is without re-analysis. Use `add_recommendation("suggestions", advisory["title"])` for each advisory so it appears in the final output.
+
+```python
+for advisory in reconciled_data.get("advisories", []):
+    builder.add_recommendation("suggestions", advisory["title"])
+```
+
 ### Calculate Metadata
 
 ```python
