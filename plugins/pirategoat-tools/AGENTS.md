@@ -116,6 +116,19 @@ output = builder.build()  # Returns dict with verdict, summary, issues, etc.
 
 Verdict is auto-calculated from issue severities: any critical → `block`, any high → `request_changes`, any medium → `comment`, otherwise → `approve`.
 
+### Cross-Repo Dependency: pirategoat-bot
+
+The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugin's review pipeline. The two repos share integration contracts that must stay in sync:
+
+- **`review-context.json`** — The bot writes this file (orchestrator.js) before spawning the `claude` CLI. This plugin reads and enriches it (gather-review-context.py). Field names, nesting, and required paths must match across both repos.
+- **Outer-pipeline verdict values** — The bot's `pr-review.py` defines outer-pipeline verdicts (`APPROVE`/`COMMENT`/`REQUEST_CHANGES`) and `github.js` maps them to GitHub actions. This plugin has its own per-agent verdict system (`block`/`request_changes`/`comment`/`approve` in `review_output_simple.py`). These are distinct layers — changes to one may need corresponding changes in the other.
+- **Prompt template variables** — The bot's `prompts/pr-review.md` injects variables (`{{MERGE_BASE}}`, `{{GIT_RANGE}}`, etc.) that this plugin's scripts consume via the review context.
+
+**Rule: Before changing any integration surface in this plugin, read the corresponding code in pirategoat-bot first.** Do not assume the bot's expectations from this plugin's code alone — check the bot's actual implementation. When in doubt, read:
+- `pirategoat-bot/src/orchestrator.js` (writes review-context.json, reads review output)
+- `pirategoat-bot/src/github.js` (maps verdicts to GitHub actions)
+- `pirategoat-bot/scripts/pr-review.py` (outer-pipeline prompt and verdict logic)
+
 ## Development Workflows
 
 ### Adding a Reviewer Agent
