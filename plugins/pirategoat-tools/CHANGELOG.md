@@ -11,11 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
-## [1.58.0] - 2026-03-15
+## [1.58.0] - 2026-03-16
 
 ### Added
 
 - **Review telemetry** — PR review pipeline now logs JSONL telemetry to `~/.claude/logs/pirategoat-tools/pr-reviews/`. Each step captures timing; the final step captures a full snapshot of output directory state (context, dispatch, agent results, findings) plus aggregate metrics. Re-reviews produce separate log files. Telemetry is best-effort and never breaks the pipeline
+
+### Changed
+
+- **CC-style output directory naming** — Review output directories now derive from the repo's absolute path (`git rev-parse --show-toplevel` with slashes replaced by dashes) instead of parsing `git remote` for owner/repo. Makes output dirs unique per clone/worktree, enabling parallel reviews of the same repo from different checkouts. Affects `/pr-review`, `/full-code-review`, and `/code-review`
 
 ## [1.57.2] - 2026-03-15
 
