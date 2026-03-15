@@ -237,7 +237,7 @@ This ensures state is persisted even if reconciliation encounters an issue.
 After ALL dispatched agents have returned their signals, dispatch the reconciliator to deduplicate, verify, and produce the review findings.
 
 Build the list of completed agent review files from the dispatch results:
-- For each agent that returned `STATUS=COMPLETE`, add `<OUTPUT_DIR>/<agent>-review.json` to the list
+- For each agent that returned `STATUS=FINISHED`, add `<OUTPUT_DIR>/<agent>-review.json` to the list
 - Skip agents with `STATUS=SKIPPED`, `STATUS=SKIPPED_TRIAGE`, or `STATUS=FAILED`
 
 ```

@@ -96,8 +96,8 @@ For medium and large PRs, check these locations:
 
 | Location | What | Relevance Check |
 |----------|------|-----------------|
-| `/tmp/branch-review-<branch>/reconciled.md` | Review findings | Matches this branch? |
-| `/tmp/pr-review-<PR#>/reconciled.md` | PR review findings | PR number matches? |
+| `/tmp/branch-review-<branch>/review-findings.md` | Review findings | Matches this branch? |
+| `/tmp/pr-review-<PR#>/review-findings.md` | PR review findings | PR number matches? |
 | `~/.claude/plans/*.md` | Implementation plans | References this branch's files? |
 | `.claude/docs/plans/*.md` | Project-level plans | Date and content match? |
 | `.claude/reviews/*.md` | Code review output | References this branch? |

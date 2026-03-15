@@ -23,9 +23,10 @@ by the script — follow whatever instructions it provides.
 | SETUP | 0-2 | Parse PR number, repo setup (skipped in bot mode), context discovery |
 | AWARENESS | 3-4 | Analyze PR review state, decide approach (auto in headless) |
 | CONTEXT | 5-7 | Linked issue, summarize context, write enrichment |
-| EXECUTION | 8-11 | Size assessment, ground truth, dispatch plan + triage, parallel agents |
-| VALIDATION | 12 | Ingest code review (finding validation) |
-| OUTPUT | 13-14 | Review report, decision critic, present results, cleanup |
+| EXECUTION | 8-12 | Size assessment, ground truth, dispatch plan + triage, parallel agents, reconcile + verify |
+| REVIEW | 13 | Generate review report |
+| VALIDATION | 14 | Decision critic |
+| OUTPUT | 15 | Present results, cleanup |
 
 ## Failure Recovery
 
@@ -34,15 +35,15 @@ by the script — follow whatever instructions it provides.
 | Before PR details (Steps 0-1) | STOP. Restore branch/stash if touched. |
 | After PR details, before dispatch (Steps 2-8) | Write partial report, skip to Step 13. |
 | During dispatch (Step 11) | Continue with available agents. Note failures. |
-| Validation failure (Step 12) | Note "No findings" and proceed to Step 13. |
-| Decision critic error (Step 13) | Skip critic, present as-is. |
+| Reconciliation failure (Step 12) | Note "No findings" and proceed to Step 13. |
+| Decision critic error (Step 14) | Skip critic, present as-is. |
 
 ## Invocation
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
-  --step-number <0-14> \
-  --total-steps 14 \
+  --step-number <0-15> \
+  --total-steps 15 \
   --pr-number "<PR number>" \
   --output-dir "/tmp/pr-review-<OWNER>-<REPO>-<PR_NUMBER>" \
   --headless \
@@ -51,9 +52,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `--step-number` | Yes | Current step (0-14) |
-| `--total-steps` | Yes | Always 14 |
-| `--pr-number` | Step 0 | PR number. Steps 1-14 read from `--thoughts`. |
+| `--step-number` | Yes | Current step (0-15) |
+| `--total-steps` | Yes | Always 15 |
+| `--pr-number` | Step 0 | PR number. Steps 1-15 read from `--thoughts`. |
 | `--output-dir` | Step 1 | Output directory. Bot mode detected from `review-context.json` here. |
 | `--headless` | Yes | Always pass for /pr-review (autonomous operation). |
 | `--thoughts` | Yes | All accumulated state. Pass `""` on step 0. |
@@ -81,7 +82,7 @@ mkdir -p "$OUTPUT_DIR"
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
   --step-number 0 \
-  --total-steps 14 \
+  --total-steps 15 \
   --pr-number "<PR_NUMBER>" \
   --output-dir "$OUTPUT_DIR" \
   --headless \
@@ -90,4 +91,4 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 
 Execute the instructions printed by the script. After completing each
 step, call the script with `--step-number N+1` and pass ALL accumulated
-state in `--thoughts`. Continue until Step 14 completes.
+state in `--thoughts`. Continue until Step 15 completes.

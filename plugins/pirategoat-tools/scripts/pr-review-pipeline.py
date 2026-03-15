@@ -460,9 +460,9 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
             "actions": [
                 "You are a thorough PR reviewer. Dispatch the reconciliator.",
                 "",
-                "Build the list of completed agent review file paths from the dispatch plan",
-                f"(read {vals['dispatch_plan']}). For each agent with status COMPLETE,",
-                f"add: {od}/<agent-name>-review.json",
+                "Build the list of completed agent review file paths from the status check",
+                "(use the check-reviewer-agent-status.py output from Step 11). For each agent",
+                f"with status FINISHED, add: {od}/<agent-name>-review.json",
                 "",
                 "Dispatch the reconciliator with the explicit file list:",
                 "",

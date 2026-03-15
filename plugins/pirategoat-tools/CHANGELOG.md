@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.57.1] - 2026-03-15
+
+### Fixed
+
+- **Agent status mismatch in reconciliation** — `full-code-review.md`, `code-review.md`, and `pr-review-pipeline.py` referenced `STATUS=COMPLETE` when selecting agent outputs for reconciliation, but all agents return `STATUS=FINISHED`. Reconciliator received empty file lists on every run
+- **Wrong data source for completed agents** — `pr-review-pipeline.py` step 12 read `dispatch-plan.json` (pre-dispatch decisions only) instead of `check-reviewer-agent-status.py` output to find completed agents
+- **`/pr-review` step count mismatch** — `pr-review.md` invoked the pipeline with `--total-steps 14` but the script defines 16 steps (0-15). Step 14 returned `next = Step 15` which failed the range check, preventing pipeline completion. Also updated stale Phase Overview and Failure Recovery tables
+- **`/pr-update` artifact lookup** — Step 4 still searched for `reconciled.md` instead of the new `review-findings.md` filenames, causing silent loss of review context
+
 ## [1.57.0] - 2026-03-15
 
 ### Changed
