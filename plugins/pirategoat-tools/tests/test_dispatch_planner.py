@@ -319,7 +319,7 @@ class TestBuildDispatchPlan:
         assert "output_dir" in plan
         assert "changed_files" in plan
         assert "scope_summary" in plan
-        assert "dispatch" in plan
+        assert "agents" in plan
         assert "agent_signals" in plan
         assert "agent_signals_text" in plan
 
@@ -343,7 +343,7 @@ class TestBuildDispatchPlan:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        agent_names_in_plan = {d["agent"] for d in plan["dispatch"]}
+        agent_names_in_plan = {d["name"] for d in plan["agents"]}
         registry_agents = set(registry["agents"].keys())
         assert agent_names_in_plan == registry_agents
 
@@ -356,8 +356,8 @@ class TestBuildDispatchPlan:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        for entry in plan["dispatch"]:
-            assert "agent" in entry
+        for entry in plan["agents"]:
+            assert "name" in entry
             assert "domain" in entry
             assert "status" in entry
             assert entry["status"] in ("DISPATCH", "SKIPPED", "SKIPPED_TRIAGE")
@@ -414,7 +414,7 @@ class TestBuildDispatchPlan:
             registry=registry,
         )
         assert plan["scope_summary"]["total_files"] == 0
-        for entry in plan["dispatch"]:
+        for entry in plan["agents"]:
             # All agents should be SKIPPED (no files) or SKIPPED (manual/special)
             assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE"), (
                 f"Agent '{entry['agent']}' should be SKIPPED with no files, "
@@ -432,7 +432,7 @@ class TestBuildDispatchPlan:
         )
         assert plan["scope_summary"]["noise_filtered"] > 0
         assert plan["scope_summary"]["reviewable_files"] == 0
-        for entry in plan["dispatch"]:
+        for entry in plan["agents"]:
             assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE")
 
 
@@ -454,7 +454,7 @@ class TestAlwaysDispatchAgents:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
         for agent in self.ALWAYS_AGENTS_WITH_CODE_DOMAIN:
             assert dispatch_map[agent]["status"] == "DISPATCH", (
                 f"Always-dispatch agent '{agent}' should be DISPATCH with code files"
@@ -476,7 +476,7 @@ class TestManualAgents:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
         entry = dispatch_map["tests-mutation-reviewer"]
         assert entry["status"] == "SKIPPED"
         assert "manual" in entry["reason"]
@@ -490,7 +490,7 @@ class TestManualAgents:
             changed_files=SAMPLE_MIXED_FILES * 10,
             registry=registry,
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
         assert dispatch_map["tests-mutation-reviewer"]["status"] == "SKIPPED"
 
 
@@ -510,7 +510,7 @@ class TestConditionalAgentsDomainGating:
             changed_files=SAMPLE_PHP_FILES,
             registry=registry,
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
         # a11y domain requires JS/TS/JSX/TSX/CSS/SCSS — PHP-only should skip
         # But PHP files match the "code" and "security" domains
         assert dispatch_map["a11y-reviewer"]["status"] == "SKIPPED"
@@ -524,7 +524,7 @@ class TestConditionalAgentsDomainGating:
             changed_files=SAMPLE_CONFIG_ONLY_FILES,
             registry=registry,
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
         assert dispatch_map["security-reviewer"]["status"] == "DISPATCH"
 
     def test_architecture_reviewer_dispatches_for_config_ops(self, registry):
@@ -536,7 +536,7 @@ class TestConditionalAgentsDomainGating:
             changed_files=SAMPLE_CONFIG_ONLY_FILES,
             registry=registry,
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
         assert dispatch_map["architecture-reviewer"]["status"] == "DISPATCH"
 
 
@@ -565,7 +565,7 @@ class TestRegistryConsistency:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        assert len(plan["dispatch"]) == len(registry["agents"])
+        assert len(plan["agents"]) == len(registry["agents"])
 
 
 # =============================================================================
@@ -765,7 +765,7 @@ class TestTriageInDispatchPlan:
             commit_messages="",
             diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
 
         # security-reviewer domain matches .php, but all are test files → SKIPPED_TRIAGE
         assert dispatch_map["security-reviewer"]["status"] == "SKIPPED_TRIAGE"
@@ -785,7 +785,7 @@ class TestTriageInDispatchPlan:
             commit_messages="fix auth token validation and csrf protection",
             diffstat={"added": 50, "removed": 10, "deleted_files": [], "renamed_files": []},
         )
-        dispatch_map = {d["agent"]: d for d in plan["dispatch"]}
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
 
         # security-reviewer should dispatch with keyword match
         assert dispatch_map["security-reviewer"]["status"] == "DISPATCH"

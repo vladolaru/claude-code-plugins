@@ -479,7 +479,7 @@ def build_dispatch_plan(
         )
 
         entry = {
-            "agent": agent_name,
+            "name": agent_name,
             "domain": config.get("domain"),
             "status": status,
             "reason": reason,
@@ -511,7 +511,7 @@ def build_dispatch_plan(
         "output_dir": output_dir,
         "changed_files": clean_files,
         "scope_summary": scope_summary,
-        "dispatch": dispatch_list,
+        "agents": dispatch_list,
         "agent_signals": agent_signals,
         "agent_signals_text": render_agent_signals_text(agent_signals),
     }
@@ -563,8 +563,14 @@ def main():
         changed_files=changed_files,
     )
 
-    # Output JSON
+    # Output JSON to stdout (for inline parsing by commands)
     print(json.dumps(plan, indent=2))
+
+    # Write to disk (for downstream scripts: check-reviewer-agent-status.py, reconcile-reviews.py)
+    plan_path = os.path.join(args.output_dir, "dispatch-plan.json")
+    os.makedirs(args.output_dir, exist_ok=True)
+    with open(plan_path, "w") as f:
+        json.dump(plan, f, indent=2)
 
 
 if __name__ == "__main__":
