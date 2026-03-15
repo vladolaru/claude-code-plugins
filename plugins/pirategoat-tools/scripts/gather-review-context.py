@@ -142,8 +142,24 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
                     state = json.load(f)
                 last_sha = state.get("last_reviewed_sha")
                 if last_sha:
-                    git.setdefault("merge_base", last_sha)
-                    git.setdefault("git_range", f"{last_sha}..HEAD")
+                    # Validate the SHA is a valid ancestor of HEAD.
+                    # After rebases or force-pushes, the persisted SHA may
+                    # no longer exist in the current history.
+                    is_ancestor = _run_cmd(
+                        ["git", "merge-base", "--is-ancestor", last_sha, "HEAD"]
+                    )
+                    if is_ancestor is not None:  # exit code 0 = is ancestor
+                        git.setdefault("merge_base", last_sha)
+                        git.setdefault("git_range", f"{last_sha}..HEAD")
+                    else:
+                        # SHA is not an ancestor — history was rewritten.
+                        # Fall through to full-branch range detection below.
+                        print(
+                            f"WARNING: last_reviewed_sha {last_sha[:12]} is not an "
+                            f"ancestor of HEAD (history rewritten?). "
+                            f"Falling back to full-branch review.",
+                            file=sys.stderr,
+                        )
 
         if "merge_base" not in git:
             # Detect default branch

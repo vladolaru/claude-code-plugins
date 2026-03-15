@@ -97,6 +97,76 @@ class TestHelpers:
         assert mod.bucket_pr_size(10000) == "vlad-sized"
 
 
+class TestIncrementalAncestryValidation:
+    """Incremental review must validate that last_reviewed_sha is an ancestor of HEAD."""
+
+    def test_valid_ancestor_used_directly(self, mod, tmp_path):
+        """When last_reviewed_sha IS an ancestor, use it as merge_base."""
+        state = {"last_reviewed_sha": "abc123valid"}
+        (tmp_path / ".review-state.json").write_text(json.dumps(state))
+
+        def mock_run_cmd(cmd, cwd=None):
+            cmd_str = " ".join(cmd)
+            if "merge-base" in cmd_str and "--is-ancestor" in cmd_str:
+                return ""  # exit 0 = is ancestor
+            if "branch --show-current" in cmd_str:
+                return "feature-branch"
+            return None
+
+        ctx = {"output": {"directory": str(tmp_path)}}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, branch=True, incremental=True)
+
+        assert ctx["git"]["merge_base"] == "abc123valid"
+
+    def test_invalid_ancestor_falls_back_to_full_range(self, mod, tmp_path):
+        """When last_reviewed_sha is NOT an ancestor (e.g., after rebase), fall back."""
+        state = {"last_reviewed_sha": "deadbeefdeadbeef"}
+        (tmp_path / ".review-state.json").write_text(json.dumps(state))
+
+        def mock_run_cmd(cmd, cwd=None):
+            cmd_str = " ".join(cmd)
+            if "merge-base" in cmd_str and "--is-ancestor" in cmd_str:
+                return None  # exit 1 = not ancestor
+            if "branch --show-current" in cmd_str:
+                return "feature-branch"
+            if "symbolic-ref" in cmd_str:
+                return "refs/remotes/origin/main"
+            if "merge-base" in cmd_str:
+                return "fallback123"  # full-branch merge base
+            return None
+
+        ctx = {"output": {"directory": str(tmp_path)}}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, branch=True, incremental=True)
+
+        assert ctx["git"]["merge_base"] != "deadbeefdeadbeef", (
+            "Invalid ancestor SHA should NOT be used as merge_base"
+        )
+        assert ctx["git"]["merge_base"] == "fallback123"
+
+    def test_no_state_file_falls_through(self, mod, tmp_path):
+        """No .review-state.json → falls through to full-branch detection."""
+        def mock_run_cmd(cmd, cwd=None):
+            cmd_str = " ".join(cmd)
+            if "branch --show-current" in cmd_str:
+                return "feature-branch"
+            if "symbolic-ref" in cmd_str:
+                return "refs/remotes/origin/main"
+            if "merge-base" in cmd_str:
+                return "fullrange123"
+            return None
+
+        ctx = {"output": {"directory": str(tmp_path)}}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, branch=True, incremental=True)
+
+        assert ctx["git"]["merge_base"] == "fullrange123"
+
+
 class TestCLI:
     def _run(self, *args):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
