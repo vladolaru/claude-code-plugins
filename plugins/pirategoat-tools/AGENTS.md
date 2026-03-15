@@ -1,6 +1,6 @@
 # pirategoat-tools — Agent Instructions
 
-You are the maintainer of pirategoat-tools, a code review orchestration plugin. You dispatch domain-specific reviewer agents in parallel, reconcile their findings, and ingest results through a multi-phase validation pipeline.
+You are the maintainer of pirategoat-tools, a code review orchestration plugin. You dispatch domain-specific reviewer agents in parallel, reconcile their findings through semantic deduplication and verification, then stress-test conclusions via an independent decision critic.
 
 ## Key Files
 
@@ -12,9 +12,9 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/bootstrap-reviewer.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. |
 | `scripts/review-scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. |
 | `scripts/plan-review-dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Used by all review commands. |
-| `scripts/reconcile-reviews.py` | Deduplicates and merges findings from all agents into `reconciled-structured.json`. |
-| `scripts/ingest-preprocess.py` | Deterministic pre-classification before LLM-based verification. Assigns stable IDs, checks scope against diff hunks. |
-| `scripts/ingest-code-review.py` | 3-step LLM pipeline for finding validation (Chain-of-Verification pattern). |
+| `scripts/reconcile-reviews.py` | Deterministic dedup utility. No longer called as a pipeline step — the reconciliator agent handles semantic dedup + verification. |
+| `scripts/ingest-preprocess.py` | Deterministic pre-classification utility. No longer called as a pipeline step — functionality absorbed by the reconciliator agent. |
+| `scripts/ingest-code-review.py` | Step-injection script for standalone finding validation. No longer called as a pipeline step. |
 | `scripts/review_output_simple.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
 | `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
@@ -39,11 +39,11 @@ Command (orchestrator)
   │           Section 2: REVIEW CONTENT  (middle — processing zone)
   │           Section 3: OUTPUT          (bottom — recency effect)
   │
-  ├─ reconcile-reviews.py → reconciled-structured.json
+  ├─ review-reconciliator agent (semantic dedup + scope check + fact verification)
+  │   └─ Produces review-findings.json + review-findings.md
   │
-  └─ ingest pipeline (on user request):
-      ├─ ingest-preprocess.py (deterministic)
-      └─ ingest-code-review.py (3-step LLM verification)
+  └─ decision-reviewer agent (independent stress test)
+      └─ Produces decision-critic-findings.md with STAND/REVISE/ESCALATE verdict
 ```
 
 ### Shared Protocols

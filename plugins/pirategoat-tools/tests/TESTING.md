@@ -77,7 +77,7 @@ Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parame
 
 ### Level 1: Command Structure Evals (`test_commands.py`)
 
-Deterministic pytest suite that validates structural properties of review command files (`full-code-review.md`, `code-review.md`, `ingest-code-review.md`). No network or model calls.
+Deterministic pytest suite that validates structural properties of review command files (`full-code-review.md`, `code-review.md`). No network or model calls.
 
 | Class | What it verifies |
 |---|---|
@@ -86,7 +86,6 @@ Deterministic pytest suite that validates structural properties of review comman
 | `TestScriptReferences` | Scripts referenced in commands (`bootstrap-reviewer.py`, `review-scope.py`) exist on disk |
 | `TestMarketplaceRegistration` | All review commands are registered in `marketplace.json` |
 | `TestCodeReviewIterative` | `code-review.md` has state file reference, incremental mode, full/reset option, rebase detection, no-new-commits guard |
-| `TestIngestCodeReview` | `ingest-code-review.md` has scope validation, false positive handling, CHANGED_FILES reference, action plan, finding categories |
 | `TestFullCodeReview` | `full-code-review.md` has default branch guard, reconciliator dispatch, no state file reference |
 | `TestStateFileGrading` | `.review-state.json` round-trip: valid state files pass, incremented counts pass, explicit ranges pass |
 

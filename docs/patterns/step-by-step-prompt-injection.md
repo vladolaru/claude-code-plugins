@@ -181,8 +181,8 @@ if __name__ == "__main__":
 
 | Element | Convention | Example |
 |---|---|---|
-| Script filename | `scripts/<skill-name>.py` | `scripts/ingest-code-review.py` |
-| Header prefix | `<SKILL NAME> - Step N/M:` | `INGEST CODE REVIEW - Step 3/6:` |
+| Script filename | `scripts/<skill-name>.py` | `scripts/decision-critic.py` |
+| Header prefix | `<SKILL NAME> - Step N/M:` | `DECISION CRITIC - Step 3/7:` |
 | Primary input arg | Named for the domain | `--decision`, `--output-dir`, `--issue-id` |
 | Step count | Always `--total-steps` | `--total-steps 6` |
 | State arg | Always `--thoughts` | `--thoughts "<accumulated state>"` |
@@ -332,34 +332,7 @@ Not every step needs a citation. Use only where the technique is directly applie
 
 **What makes it work:** The separation of step 3 (generate questions) and step 4 (answer them) prevents Claude from generating easy questions for findings it has already decided to confirm.
 
-### ingest-code-review (6 steps)
-
-**Domain:** Code review finding validation
-**Primary input:** `--output-dir "<path to review output directory>"`
-**Phases:** SETUP (1-2) → SCOPE (3) → VERIFICATION (4-5) → SYNTHESIS (6)
-
-| Step | Title | Key mechanism |
-|---|---|---|
-| 1 | Locate & Initialize | Runs bash commands, establishes OUTPUT_DIR/GIT_RANGE/CHANGED_FILES in --thoughts |
-| 2 | Parse Findings & Assign IDs | Reads reconciled review, assigns F1/F2/... IDs with file/line/severity/agents |
-| 3 | Classify Scope | Compares each finding against CHANGED_FILES + diff hunks; marks IN_SCOPE/OUT_OF_SCOPE |
-| 4 | Generate Verification Questions | 1-2 falsification questions per IN_SCOPE finding |
-| 5 | Factored Verification | **Epistemic boundary step** — reads actual code via Read tool before judging finding accuracy |
-| 6 | Categorize & Plan | Maps scope+verification to CONFIRMED/LIKELY VALID/FALSE POSITIVE/OUT OF SCOPE/STYLE; produces Action Plan |
-
-**What makes it work:** Step 5's epistemic boundary requires Claude to read the code *before* knowing whether the finding is confirmed. Without the boundary, Claude reads the code *looking for* the issue and finds it even when it's not there.
-
-### Side-by-side comparison
-
-| Aspect | decision-critic | ingest-code-review |
-|---|---|---|
-| ID scheme | C1/A1/K1/J1 (typed) | F1/F2/F3 (flat) |
-| Primary input arg | `--decision` | `--output-dir` |
-| Step 1 purpose | Parse decision text | Run bash commands |
-| Epistemic boundary | Step 4 | Step 5 |
-| Evidence source | Established domain knowledge | Actual code via Read tool |
-| Final output | STAND/REVISE/ESCALATE | Action plan with priority tiers |
-| Step count | 7 | 6 |
+> **Note:** `ingest-code-review` was a second reference implementation but has been superseded by the reconciliator agent (v1.57.0). The script (`scripts/ingest-code-review.py`) remains for standalone use but is no longer part of the review pipeline. The decision-critic remains the canonical reference implementation.
 
 ## Testing Pattern
 
