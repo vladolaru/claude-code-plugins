@@ -133,8 +133,7 @@ def get_step_guidance(step: int, total_steps: int, primary_input: Optional[str],
 
 def format_output(step: int, total_steps: int, guidance: dict) -> str:
     lines = []
-    lines.append(f"<SKILL NAME> - Step {step}/{total_steps}: {guidance['step_title']}")
-    lines.append(f"Phase: {guidance['phase']}")
+    lines.append(f"═══ <SKILL NAME> Step {step}/{total_steps}: {guidance['step_title']} ({guidance['phase']}) ═══")
     lines.append("")
     for action in guidance["actions"]:
         lines.append(action)
@@ -143,9 +142,9 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
         lines.append(f"[{guidance['academic_note']}]")
         lines.append("")
     if guidance["next"]:
-        lines.append(f"NEXT: {guidance['next']}")
+        lines.append(f"NEXT (MANDATORY): {guidance['next']} Do NOT stop — call <script>.py with --step-number {step + 1} immediately.")
     else:
-        lines.append("WORKFLOW COMPLETE - Present <verdict/plan/output> to user.")
+        lines.append("PIPELINE COMPLETE — Present <verdict/plan/output> to user.")
     return "\n".join(lines)
 
 
@@ -300,7 +299,7 @@ Key: specify *what* Claude is allowed to use as evidence, not just what it shoul
 
 ### 4. The `next` pointer
 
-Each step ends with `NEXT: Step N+1: <brief description of what N+1 does>`. This nudges Claude to continue the loop rather than treating step N as the end of the workflow. Step `total_steps` has `next=None`, which prints `WORKFLOW COMPLETE` and signals termination.
+Each step ends with `NEXT (MANDATORY): Step N+1: <brief description>. Do NOT stop — call <script>.py with --step-number N+1 immediately.` This nudges Claude to continue the loop rather than treating step N as the end of the workflow. Step `total_steps` has `next=None`, which prints `PIPELINE COMPLETE` and signals termination.
 
 ### 5. Academic notes
 
@@ -388,10 +387,10 @@ class TestGetStepGuidance:
     def test_final_step_mentions_all_output_categories(self): ...
 
 class TestFormatOutput:
-    """Header format, academic note, next pointer, WORKFLOW COMPLETE."""
+    """Header format (═══ separators), academic note, MANDATORY next pointer, PIPELINE COMPLETE."""
 
 class TestCLIIntegration:
-    """Subprocess tests — exit codes, required args, all steps produce Phase header."""
+    """Subprocess tests — exit codes, required args, all steps produce ═══ header."""
 ```
 
 ### Key assertions to make (not just structure)
