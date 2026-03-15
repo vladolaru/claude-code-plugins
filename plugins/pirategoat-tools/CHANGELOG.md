@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.56.0] - 2026-03-15
+
+### Added
+
+- **E2E `verdict_in` assertion** — computes the verdict from reconciled cluster severities using the same threshold logic as `ReviewOutputBuilder` and checks it against the expected verdict list
+- **E2E `must_skip_triage` assertion** — checks `dispatch-plan.json` agent statuses for `SKIPPED_TRIAGE`, matching `plan-review-dispatch.py`'s actual output shape
+
+### Fixed
+
+- **E2E severity assertion reads `canonical.severity`** — the severity assertion previously read `c.get('severity')` which doesn't exist on reconciled clusters; all findings silently fell back to `'medium'`, making critical and high findings invisible to E2E assertions
+- **Reliability domain excludes `_test.go` and `_test.php` files** — the reliability exclude pattern was missing Go and PHP test file conventions, causing test-only diffs to be reviewed for operational resilience
+- **Architecture domain no longer false-positives on `contest`** — the exclude pattern used a bare `test` match that caught words like `contest_handler.go`; now uses the shared `_TEST_EXCLUDE` constant
+
+### Changed
+
+- **Shared `_TEST_EXCLUDE` constant for production-code domains** — dead-code, architecture, and reliability domains now share a single exclude pattern, preventing future drift
+- **Verdict threshold docs updated** — `AGENTS.md` now documents the full escalation thresholds (3+ highs → block, 5+ mediums → request_changes) instead of the simplified version
+
 ## [1.55.0] - 2026-03-15
 
 ### Changed
