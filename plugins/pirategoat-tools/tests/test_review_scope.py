@@ -708,3 +708,79 @@ class TestSemanticFilterIntegration:
                 "@@ -1,3 +1,5 @@\n+/**\n+ * Doc\n+ */\n+code();\n"
             )
         return ""
+
+
+# =============================================================================
+# Budget sort order tests — largest files first
+# =============================================================================
+
+
+def _mock_git_for_budget_test(cmd, check=True, capture_stderr=True):
+    """Mock git commands for budget sort order testing."""
+    cmd_str = " ".join(cmd)
+    if "rev-parse --git-dir" in cmd_str:
+        return ".git"
+    if "rev-parse" in cmd_str:
+        return "abc123"
+    if "--name-only" in cmd_str:
+        return "small.php\nmedium.php\nlarge.php"
+    if "--numstat" in cmd_str:
+        return "50\t50\tsmall.php\n150\t150\tmedium.php\n250\t250\tlarge.php"
+    if "merge-base" in cmd_str:
+        return "abc123"
+    if "rev-list --count" in cmd_str:
+        return "0"
+    if "diff" in cmd_str and "-- small.php" in cmd_str:
+        return "\n".join([f"+line{i}" for i in range(100)])
+    if "diff" in cmd_str and "-- medium.php" in cmd_str:
+        return "\n".join([f"+line{i}" for i in range(300)])
+    if "diff" in cmd_str and "-- large.php" in cmd_str:
+        return "\n".join([f"+line{i}" for i in range(500)])
+    if "diff" in cmd_str and "--" in cmd_str:
+        return "+changed line"
+    return ""
+
+
+class TestBudgetSortOrder:
+    """Scope budgeting should sort files largest-first so large files get budget priority."""
+
+    def test_files_sorted_largest_first(self):
+        """Files should be sorted by total change size descending."""
+        files = ["small.php", "medium.php", "large.php"]
+        diffstat = {
+            "small.php": (50, 50),     # 100 total
+            "medium.php": (150, 150),  # 300 total
+            "large.php": (250, 250),   # 500 total
+        }
+
+        # Simulate build_scope sorting
+        sorted_files = sorted(
+            files,
+            key=lambda f: sum(diffstat.get(f, (0, 0))),
+            reverse=True,
+        )
+        assert sorted_files[0] == "large.php", "Largest file should be first"
+        assert sorted_files[-1] == "small.php", "Smallest file should be last"
+
+    def test_budget_includes_large_file_over_small(self):
+        """When budget is tight, large files should be included, small files excluded."""
+        # With descending sort and 600-line budget:
+        #   large(500) fits → 500 used
+        #   medium(300) exceeds → skipped
+        #   small(100) would fit but budget is at 500
+        # With ascending sort (old behavior):
+        #   small(100) fits → 100 used
+        #   medium(300) fits → 400 used
+        #   large(500) exceeds → skipped  ← large file lost!
+        with patch.object(review_scope, 'run_cmd') as mock_run:
+            mock_run.side_effect = _mock_git_for_budget_test
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=600,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            # large.php (500 lines) should be in the included files
+            assert "large.php" in scope["files"], (
+                "Large file should be included when budget prioritizes largest first"
+            )

@@ -611,10 +611,11 @@ def build_scope(args: argparse.Namespace) -> dict:
     # Step 5: Get diffstat for all matched files (cheap — single git command)
     diffstat = get_diffstat(range_spec, domain_matched)
 
-    # Sort files by total change size (ascending = smaller focused changes first)
+    # Largest files first — ensures big changes get budget priority
     domain_matched_sorted = sorted(
         domain_matched,
         key=lambda f: sum(diffstat.get(f, (0, 0))),
+        reverse=True,
     )
 
     # Step 6: Get diffs with budget control (skip if --base-ref-only or --summary)
