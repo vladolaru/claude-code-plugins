@@ -25,10 +25,15 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 
 def _clone_test_repo(tmp_dir: str) -> str:
-    """Clone the test repo into a temp directory. Returns the repo path."""
+    """Clone the test repo into a temp directory. Returns the repo path.
+
+    Fetches all branches so gather-review-context.py can resolve
+    merge-bases and head refs without needing `gh pr checkout`.
+    The test repo is small, so a full clone is fast.
+    """
     repo_path = os.path.join(tmp_dir, "test-repo")
     result = subprocess.run(
-        ["git", "clone", "--depth=50", TEST_REPO_URL, repo_path],
+        ["git", "clone", TEST_REPO_URL, repo_path],
         capture_output=True,
         text=True,
         timeout=60,
@@ -41,6 +46,30 @@ def _clone_test_repo(tmp_dir: str) -> str:
         cwd=repo_path,
         capture_output=True,
     )
+    # Fetch all remote branches as local refs so git merge-base can
+    # resolve branch names (e.g., feat/currency-conversion) directly.
+    subprocess.run(
+        ["git", "fetch", "--all"],
+        cwd=repo_path,
+        capture_output=True,
+        timeout=30,
+    )
+    # Create local tracking branches for all remote branches.
+    remote_refs = subprocess.run(
+        ["git", "branch", "-r", "--format=%(refname:short)"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    for ref in remote_refs.stdout.strip().split("\n"):
+        if ref and not ref.endswith("/HEAD"):
+            local = ref.replace("origin/", "", 1)
+            if local != "main":  # main already exists from clone
+                subprocess.run(
+                    ["git", "branch", "--track", local, ref],
+                    cwd=repo_path,
+                    capture_output=True,
+                )
     return repo_path
 
 

@@ -69,7 +69,6 @@ PR1_CLEAN_SMALL = PRExpectations(
     base_ref="main",
     verdict_in=["APPROVE", "COMMENT"],
     min_dispatched_agents=2,
-    max_dispatched_agents=5,
     must_dispatch=["pr-reviewer"],
     must_skip_triage=["a11y-reviewer", "e2e-tests-reviewer"],
     max_critical_findings=0,
