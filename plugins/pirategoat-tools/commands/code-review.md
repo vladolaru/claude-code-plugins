@@ -17,13 +17,11 @@ This is an **incremental branch review** — it tracks what was previously revie
 **Construct output directory** (sanitize all fragments for filesystem safety):
 
 ```bash
-OWNER=$(git remote get-url origin | sed -E 's#.*/([^/]+)/[^/]+(\.git)?$#\1#')
-REPO=$(git remote get-url origin | sed -E 's#.*/([^/]+?)(\.git)?$#\1#')
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | sed 's/^-//')
 BRANCH=$(git branch --show-current)
-SAFE_OWNER=$(echo "$OWNER" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
-SAFE_REPO=$(echo "$REPO" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
 SAFE_BRANCH=$(echo "$BRANCH" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
-OUTPUT_DIR="/tmp/branch-review-${SAFE_OWNER}-${SAFE_REPO}-${SAFE_BRANCH}"
+OUTPUT_DIR="/tmp/branch-review-${REPO_PATH}-${SAFE_BRANCH}"
 mkdir -p "$OUTPUT_DIR"
 CURRENT_HEAD=$(git rev-parse HEAD)
 ```
