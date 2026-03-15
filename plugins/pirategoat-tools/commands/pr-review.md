@@ -45,7 +45,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
   --step-number <0-15> \
   --total-steps 15 \
   --pr-number "<PR number>" \
-  --output-dir "/tmp/pr-review-<OWNER>-<REPO>-<PR_NUMBER>" \
+  --output-dir "/tmp/pr-review-<REPO_PATH>-<PR_NUMBER>" \
   --headless \
   --thoughts "<accumulated state from all previous steps>"
 ```
@@ -69,11 +69,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 **Construct output directory** (sanitize all fragments):
 
 ```bash
-OWNER=$(git remote get-url origin | sed -E 's#.*/([^/]+)/[^/]+(\.git)?$#\1#')
-REPO=$(git remote get-url origin | sed -E 's#.*/([^/]+?)(\.git)?$#\1#')
-SAFE_OWNER=$(echo "$OWNER" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
-SAFE_REPO=$(echo "$REPO" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
-OUTPUT_DIR="/tmp/pr-review-${SAFE_OWNER}-${SAFE_REPO}-<PR_NUMBER>"
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | sed 's/^-//')
+OUTPUT_DIR="/tmp/pr-review-${REPO_PATH}-<PR_NUMBER>"
 mkdir -p "$OUTPUT_DIR"
 ```
 
