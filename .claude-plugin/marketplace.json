@@ -60,7 +60,6 @@
       "commands": [
         "./commands/full-code-review.md",
         "./commands/code-review.md",
-        "./commands/ingest-code-review.md",
         "./commands/pr-update.md",
         "./commands/pr-review.md",
         "./commands/copy-as.md",

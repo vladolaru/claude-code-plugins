@@ -38,7 +38,6 @@ from graders import grade_review_state
 REVIEW_COMMANDS = [
     "full-code-review.md",
     "code-review.md",
-    "ingest-code-review.md",
 ]
 
 # Commands that dispatch agents directly (have agent tables)
@@ -334,55 +333,6 @@ class TestCodeReviewIterative:
         content = _read_command("code-review.md")
         assert "review-reconciliator" in content, (
             "code-review.md: missing reconciliator dispatch"
-        )
-
-
-class TestIngestCodeReview:
-    """ingest-code-review.md has validation-specific content."""
-
-    def test_has_scope_validation(self):
-        content = _read_command("ingest-code-review.md")
-        assert "OUT_OF_SCOPE" in content or "out of scope" in content.lower(), (
-            "ingest-code-review.md: missing scope validation"
-        )
-
-    def test_has_false_positive_handling(self):
-        content = _read_command("ingest-code-review.md")
-        assert "FALSE_POSITIVE" in content or "false positive" in content.lower(), (
-            "ingest-code-review.md: missing false positive handling"
-        )
-
-    def test_has_validation_checks(self):
-        """Should reference checking files against CHANGED_FILES."""
-        content = _read_command("ingest-code-review.md")
-        assert "CHANGED_FILES" in content, (
-            "ingest-code-review.md: missing CHANGED_FILES reference"
-        )
-
-    def test_has_action_plan(self):
-        content = _read_command("ingest-code-review.md")
-        assert "Action Plan" in content, (
-            "ingest-code-review.md: missing 'Action Plan' section"
-        )
-
-    def test_has_categorization(self):
-        """Should categorize findings into buckets."""
-        content = _read_command("ingest-code-review.md")
-        categories = ["CONFIRMED", "LIKELY VALID", "FALSE POSITIVE", "OUT OF SCOPE", "STYLE"]
-        found = [c for c in categories if c in content]
-        assert len(found) >= 4, (
-            f"ingest-code-review.md: expected 4+ categories, found {len(found)}: {found}"
-        )
-
-    def test_references_step_injector_script(self):
-        """ingest-code-review.md should reference the step injector script."""
-        content = _read_command("ingest-code-review.md")
-        assert "ingest-code-review.py" in content, (
-            "ingest-code-review.md: missing reference to ingest-code-review.py script"
-        )
-        script_path = SCRIPTS_DIR / "ingest-code-review.py"
-        assert script_path.is_file(), (
-            f"ingest-code-review.py not found at {script_path}"
         )
 
 

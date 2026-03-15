@@ -57,13 +57,13 @@ All skills must have a `SKILL.md` file with YAML frontmatter:
 
 ### pirategoat-tools
 
-Code review orchestration with 19 parallel review agents, 18 skills, and 7 commands covering security, architecture, testing, WordPress, accessibility, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
+Code review orchestration with 19 parallel review agents, 18 skills, and 6 commands covering security, architecture, testing, WordPress, accessibility, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
 
 | Directory | Contents |
 |---|---|
 | `agents/` | 19 review agent definitions + 2 shared protocols in `agents/shared/` |
 | `skills/` | 18 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, etc.) |
-| `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/ingest-code-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
+| `commands/` | 6 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
 | `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, reconciliation, ingestion, ground truth integrators, review output |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |

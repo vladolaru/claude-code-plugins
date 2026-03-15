@@ -67,7 +67,7 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 20 agents, 18 skills, 7 commands
+│   ├── pirategoat-tools/         # 20 agents, 18 skills, 6 commands
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   ├── image-optimizer/          # 1 command, optimization scripts
@@ -81,7 +81,7 @@ vladolaru-claude-code-plugins/
 
 Reusable patterns for building new skills and commands are documented in [`docs/patterns/`](docs/patterns/).
 
-- **[Step-by-step prompt injection](docs/patterns/step-by-step-prompt-injection.md)** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic` and `ingest-code-review`.
+- **[Step-by-step prompt injection](docs/patterns/step-by-step-prompt-injection.md)** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic`.
 
 ## Development
 
