@@ -541,8 +541,7 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
     lines = []
 
     # Header
-    lines.append(f"INGEST CODE REVIEW - Step {step}/{total_steps}: {guidance['step_title']}")
-    lines.append(f"Phase: {guidance['phase']}")
+    lines.append(f"═══ INGEST CODE REVIEW Step {step}/{total_steps}: {guidance['step_title']} ({guidance['phase']}) ═══")
     lines.append("")
 
     # Actions
@@ -557,9 +556,9 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
 
     # Next step or completion
     if guidance["next"]:
-        lines.append(f"NEXT: {guidance['next']}")
+        lines.append(f"NEXT (MANDATORY): {guidance['next']} Do NOT stop — call ingest-code-review.py with --step-number {step + 1} immediately.")
     else:
-        lines.append("WORKFLOW COMPLETE - Present action plan to user.")
+        lines.append("PIPELINE COMPLETE — Present action plan to user.")
 
     return "\n".join(lines)
 

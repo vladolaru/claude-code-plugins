@@ -115,8 +115,8 @@ class TestFormatOutput:
     def test_header_format(self):
         g = _mod.get_step_guidance(1, 6, "/tmp/r", "")
         output = _mod.format_output(1, 6, g)
-        assert "INGEST CODE REVIEW - Step 1/6:" in output
-        assert "Phase: SETUP" in output
+        assert "═══ INGEST CODE REVIEW Step 1/" in output
+        assert "SETUP" in output
 
     def test_academic_note_included_when_present(self):
         g = _mod.get_step_guidance(5, 6, None, "")
@@ -126,12 +126,12 @@ class TestFormatOutput:
     def test_next_step_shown(self):
         g = _mod.get_step_guidance(1, 6, "/tmp/r", "")
         output = _mod.format_output(1, 6, g)
-        assert "NEXT:" in output
+        assert "NEXT (MANDATORY):" in output
 
     def test_workflow_complete_on_step_6(self):
         g = _mod.get_step_guidance(6, 6, None, "")
         output = _mod.format_output(6, 6, g)
-        assert "WORKFLOW COMPLETE" in output
+        assert "PIPELINE COMPLETE" in output
 
 
 class TestCLIIntegration:
@@ -190,4 +190,4 @@ class TestCLIIntegration:
                 args += ["--output-dir", "/tmp/r"]
             result = self._run(*args)
             assert result.returncode == 0, f"Step {step} failed: {result.stderr}"
-            assert "Phase:" in result.stdout, f"Step {step} missing Phase header"
+            assert "═══" in result.stdout, f"Step {step} missing formatted header"
