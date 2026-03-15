@@ -27,6 +27,14 @@ import sys
 
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Absolute path to the scripts/ directory (derived from this file's location).
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# ---------------------------------------------------------------------------
 # Context loading
 # ---------------------------------------------------------------------------
 
@@ -44,6 +52,7 @@ def load_context_values(output_dir, pr_number=None):
     return {
         "output_dir": output_dir,
         "ctx_path": ctx_path,
+        "scripts_dir": SCRIPTS_DIR,
         "pr_number": pr_number or str(pr.get("number", "")),
         "gh_cmd": ctx.get("github_cli_command", "gh"),
         "git_range": git.get("git_range", ""),
@@ -90,6 +99,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
     pr = vals["pr_number"]
     gh = vals["gh_cmd"]
     gr = vals["git_range"]
+    sd = vals["scripts_dir"]
 
     # Step 0: Parse PR Number
     if step == 0:
@@ -119,15 +129,15 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
 
     # Step 1: Repo Setup
     if step == 1:
-        if vals["has_context"]:
+        if vals["bot_mode"]:
             return {
                 "phase": "SETUP",
                 "title": "Repo Setup",
                 "actions": [
                     "You are a thorough PR reviewer. Running the full review pipeline.",
                     "",
-                    "review-context.json exists with pre-computed git context.",
-                    "Skip repo setup — context was pre-computed (bot mode or re-run).",
+                    "review-context.json exists with pre-computed git context (bot mode).",
+                    "Skip repo setup — context was pre-computed by the bot.",
                     "",
                     STATE_REQ,
                 ],
@@ -143,8 +153,8 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                     "Headless mode — auto-stash any uncommitted changes.",
                     "",
                     "1. Run `git status` to check for uncommitted changes",
-                    "2. If dirty: `git stash push -m 'pr-review-auto-stash'`",
-                    "   Record STASHED=true and STASH_REF in --thoughts",
+                    "2. If dirty: `git stash push -u -m 'pr-review-auto-stash'`",
+                    "   Record STASHED=true and STASH_REF (from `git stash list -1 --format=%H`) in --thoughts",
                     "3. Record ORIGINAL_BRANCH from `git branch --show-current`",
                     f"4. Checkout the PR branch: `{gh} pr checkout {pr}`",
                     "",
@@ -162,8 +172,8 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                     "1. Run `git status` to check for uncommitted changes",
                     "2. If dirty: Ask user whether to stash or abort",
                     "   Use AskUserQuestion: 'You have uncommitted changes. Stash them?'",
-                    "   If yes: `git stash push -m 'pr-review-stash'`",
-                    "   Record STASHED=true and STASH_REF in --thoughts",
+                    "   If yes: `git stash push -u -m 'pr-review-stash'`",
+                    "   Record STASHED=true and STASH_REF (from `git stash list -1 --format=%H`) in --thoughts",
                     "3. Record ORIGINAL_BRANCH from `git branch --show-current`",
                     f"4. Checkout the PR branch: `{gh} pr checkout {pr}`",
                     "",
@@ -174,15 +184,15 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
 
     # Step 2: Context Discovery
     if step == 2:
-        if vals["has_context"]:
+        if vals["bot_mode"]:
             return {
                 "phase": "SETUP",
                 "title": "Context Discovery",
                 "actions": [
                     "You are a thorough PR reviewer.",
                     "",
-                    f"review-context.json already exists at {vals['ctx_path']}.",
-                    "Context was pre-computed. Read values from the file:",
+                    f"review-context.json already exists at {vals['ctx_path']} (bot mode).",
+                    "Context was pre-computed by the bot. Read values from the file:",
                     f"  GIT_RANGE: {gr}",
                     f"  PR_NUMBER: {pr}",
                     f"  GH_CMD: {gh}",
@@ -198,9 +208,12 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 "actions": [
                     "You are a thorough PR reviewer.",
                     "",
+                    "Delete any existing review-context.json to ensure fresh context:",
+                    f"    rm -f \"{vals['ctx_path']}\"",
+                    "",
                     "Run gather-review-context.py to compute git context and PR metadata:",
                     "",
-                    f"    python3 $PLUGIN_ROOT/scripts/gather-review-context.py \\",
+                    f"    python3 {sd}/gather-review-context.py \\",
                     f"      --pr-number \"{pr}\" \\",
                     f"      --output-dir \"{od}\"",
                     "",
@@ -380,7 +393,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 "",
                 "Run this command exactly:",
                 "",
-                f"    python3 $PLUGIN_ROOT/scripts/plan-review-dispatch.py \\",
+                f"    python3 {sd}/plan-review-dispatch.py \\",
                 f"      --mode pr \\",
                 f"      --git-range \"{gr}\" \\",
                 f"      --output-dir \"{od}\"",
@@ -417,19 +430,19 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 "      subagent_type: pirategoat-tools:<agent-name>",
                 "      run_in_background: true",
                 "      prompt: |",
-                f"        python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py \\",
+                f"        python3 {sd}/bootstrap-reviewer.py \\",
                 f"          --agent <agent-name> \\",
-                f"          --git-range \"{gr}\" \\",
+                f"          --range \"{gr}\" \\",
                 f"          --output-dir \"{od}\"{gt_arg}",
                 "",
                 "After ALL agents complete, check status:",
                 "",
-                f"    python3 $PLUGIN_ROOT/scripts/check-reviewer-agent-status.py \\",
+                f"    python3 {sd}/check-reviewer-agent-status.py \\",
                 f"      --output-dir \"{od}\"",
                 "",
                 "When ALL_DONE=true, reconcile:",
                 "",
-                f"    python3 $PLUGIN_ROOT/scripts/reconcile-reviews.py \\",
+                f"    python3 {sd}/reconcile-reviews.py \\",
                 f"      --output-dir \"{od}\" \\",
                 f"      --dispatch-plan \"{vals['dispatch_plan']}\" \\",
                 f"      --changed-files \"{vals['changed_files_csv']}\"",
@@ -481,6 +494,15 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 f"        Output Directory: {od}",
                 f"        Ingestion Verification: {od}/ingest-verification.json",
                 "",
+                "Wait for the critic to finish. Read its findings:",
+                f"    Read {od}/decision-critic-findings.md",
+                "",
+                "Check the critic's verdict (STAND / REVISE / ESCALATE):",
+                "- STAND: No changes needed. Proceed to Step 14.",
+                "- REVISE: Update the review report to address the critic's concerns,",
+                f"  then rewrite {vals['review_report']} with the revisions.",
+                "- ESCALATE: Flag for human review in Step 14.",
+                "",
                 STATE_REQ,
             ],
             "next": "Step 14: Present Results + Cleanup",
@@ -526,7 +548,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                     "",
                     "Cleanup:",
                     "- If ORIGINAL_BRANCH in --thoughts: `git checkout <ORIGINAL_BRANCH>`",
-                    "- If STASHED=true: `git stash pop`",
+                    "- If STASHED=true: `git stash apply <STASH_REF> && git stash drop <STASH_REF>`",
                     "",
                     STATE_REQ,
                 ],

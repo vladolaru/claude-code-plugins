@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.54.1] - 2026-03-15
+
+### Fixed
+
+- **Emit absolute script paths in pipeline steps** — `pr-review-pipeline.py` now computes `SCRIPTS_DIR` from its own location and emits absolute paths instead of unresolved `$PLUGIN_ROOT/scripts/...` references
+- **Fix `--git-range` → `--range` in bootstrap-reviewer invocation** — Step 11 emitted `--git-range` but `bootstrap-reviewer.py` expects `--range`, causing every agent bootstrap to fail with unrecognized arguments
+- **Recompute context on reruns instead of reusing stale data** — Steps 1-2 now only skip repo setup and context discovery in bot mode (`source: "pirategoat-bot"`), not whenever `review-context.json` exists from a prior run. Non-bot reruns delete the stale context file and recompute fresh git context
+- **Always recompute git context in `gather-review-context.py`** — `load_and_fill()` no longer skips `_fill_git_context()` when `merge_base` already exists in the context file. Only bot-pre-computed context (with no explicit overrides) is preserved. Fixes incremental branch reviews, explicit `--git-range` inputs, and reruns after new commits
+- **Include untracked files in stash and use STASH_REF for restore** — `git stash push` now passes `-u` to capture untracked files, and cleanup uses `git stash apply/drop <STASH_REF>` instead of blind `git stash pop`
+- **Act on decision critic verdict before presenting results** — Step 13 now instructs the agent to wait for the critic, read `decision-critic-findings.md`, and revise the report on REVISE or flag for human review on ESCALATE, instead of silently ignoring the critic's output
+- **E2E tests monitor the actual pipeline output directory** — `test_pipeline.py` now watches `/tmp/pr-review-<owner>-<repo>-<PR>` (where the real pipeline writes) instead of a pytest-managed temp path, and cleans stale artifacts before each run
+
 ## [1.54.0] - 2026-03-15
 
 ### Added

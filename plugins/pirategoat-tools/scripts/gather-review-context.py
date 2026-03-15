@@ -298,9 +298,19 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     if "github_cli_command" not in ctx:
         ctx["github_cli_command"] = gh_cmd or resolve_gh_cmd()
 
-    # Git context — skip if already present (bot pre-computed)
+    # Git context — recompute when explicit inputs are provided.
+    # Only skip for bot-pre-computed context (source == "pirategoat-bot"
+    # with merge_base already present and no explicit overrides).
     git = ctx.setdefault("git", {})
-    if "merge_base" not in git:
+    bot_precomputed = (
+        ctx.get("source") == "pirategoat-bot"
+        and "merge_base" in git
+        and not git_range  # explicit range overrides even bot context
+    )
+    if not bot_precomputed:
+        # Clear stale git context so _fill_git_context recomputes
+        if "merge_base" in git:
+            git.clear()
         _fill_git_context(ctx, pr_number=pr_number, branch=branch,
                          incremental=incremental, git_range=git_range)
 

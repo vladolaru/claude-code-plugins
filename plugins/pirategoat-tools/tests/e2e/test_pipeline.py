@@ -61,13 +61,18 @@ def _skip_if_not_ready():
 
 def _run_pr_review(test_repo: str, output_dir: str, pr_number: int, expectations):
     """Run the full /pr-review pipeline and return StreamResult."""
-    checkpoints = build_checkpoints(expectations, output_dir)
-
-    # Construct output dir with repo-scoped name.
+    # The /pr-review command writes to /tmp/pr-review-<owner>-<repo>-<PR>.
+    # Monitor that actual directory, not a pytest-managed temp path.
     owner = "vladolaru"
     repo = "pirategoat-pr-review-pipeline-test-repo"
-    scoped_dir = os.path.join(output_dir, f"pr-review-{owner}-{repo}-{pr_number}")
+    scoped_dir = f"/tmp/pr-review-{owner}-{repo}-{pr_number}"
+
+    # Clean stale artifacts from previous runs to avoid false positives.
+    if os.path.isdir(scoped_dir):
+        shutil.rmtree(scoped_dir)
     os.makedirs(scoped_dir, exist_ok=True)
+
+    checkpoints = build_checkpoints(expectations, scoped_dir)
 
     monitor = StreamMonitor(scoped_dir, checkpoints)
     result = monitor.run(
