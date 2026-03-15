@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`pr-review-pipeline.py`** — 15-step mode-aware step-injection script that replaces both the `reviewing-pr` skill and the `/pr-review` override table. Bot mode detected from `review-context.json`, headless mode from `--headless` flag
 - **`check-reviewer-agent-status.py`** — deterministic agent status check with four states: FINISHED, RUNNING, TIMED_OUT, NOT_DISPATCHED. Reads dispatch plan + `.started` markers + review files
 - **`.started` markers in `bootstrap-reviewer.py`** — each agent writes a timestamped marker on entry for status tracking
+- **E2E test harness (`tests/e2e/`)** — two-layer e2e test suite for the `/pr-review` pipeline against a permanent test repo (`vladolaru/pirategoat-pr-review-pipeline-test-repo`). Layer 1: script-level subprocess tests (fast, free). Layer 2: full pipeline via Claude CLI with real-time JSONL stream monitoring and step-level checkpoint assertions. Includes `StreamMonitor`, `PRExpectations` dataclass, assertion helpers, and checkpoint builders
 
 ### Changed
 
