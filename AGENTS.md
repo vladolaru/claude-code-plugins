@@ -6,7 +6,15 @@ You maintain a Claude Code plugin marketplace. This file is your operating manua
 
 This is **vladolaru-claude-code-plugins** - Vlad Olaru's personal Claude Code plugin marketplace featuring specialized plugins for development workflows, WordPress backend development, and AI-powered tools.
 
-**Development model:** This project is AI-written and AI-maintained with human guidance and decisions. The human (Vlad) sets direction, makes architectural decisions, and reviews work. Claude Code agents do the implementation, testing, analysis, and maintenance. "Single maintainer" does not mean capacity-constrained — it means single human decision-maker with AI execution capacity. Do not assume limited implementation bandwidth when reasoning about priorities or feasibility.
+## Development Model
+
+This project is AI-written and AI-maintained. The human (Vlad) sets direction, makes architectural decisions, and reviews work. Claude Code agents do the implementation, testing, analysis, and maintenance. "Single maintainer" does not mean capacity-constrained — it means single human decision-maker with AI execution capacity. Do not assume limited implementation bandwidth when reasoning about priorities or feasibility.
+
+No agent carries context between sessions — every agent reads the code cold. This has practical implications:
+
+- **Prefer single canonical implementations** over duplicated patterns. An agent will copy whichever pattern it encounters first; if two conventions exist for the same thing, drift is inevitable.
+- **Constants, types, and named helpers are discovery mechanisms.** They are more valuable here than in a human-authored codebase — they are the primary way agents find the "right" way to do something.
+- **Consolidating duplicated logic is drift prevention**, not polish. Treat it accordingly when prioritizing work.
 
 ## Architecture
 
