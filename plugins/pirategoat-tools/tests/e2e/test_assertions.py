@@ -156,3 +156,19 @@ class TestFindingsSeverity:
         path.write_text(json.dumps(reconciled))
         result = assert_findings_severity(str(path), min_critical=1)
         assert not result.passed
+
+    def test_severity_reads_from_canonical_path(self, tmp_path):
+        """Regression: severity must read from canonical.severity, not top-level."""
+        data = {
+            "clusters": [
+                {"canonical": {"severity": "critical", "title": "XSS", "file": "a.php"}},
+                {"canonical": {"severity": "high", "title": "SQLi", "file": "b.php"}},
+            ]
+        }
+        path = tmp_path / "reconciled-structured.json"
+        path.write_text(json.dumps(data))
+
+        result = assert_findings_severity(
+            str(path), min_critical=1, min_important=1
+        )
+        assert result.passed, f"Should find 1 critical + 1 high but got: {result.reason}"

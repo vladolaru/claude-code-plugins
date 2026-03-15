@@ -181,7 +181,9 @@ def assert_findings_severity(
     clusters = data.get("clusters", data.get("issues", []))
     counts = {}
     for c in clusters:
-        sev = c.get("severity", "medium").lower()
+        # Reconciled clusters store severity under canonical; raw issues at top level.
+        canonical = c.get("canonical", {})
+        sev = canonical.get("severity", c.get("severity", "medium")).lower()
         counts[sev] = counts.get(sev, 0) + 1
 
     critical = counts.get("critical", 0)
