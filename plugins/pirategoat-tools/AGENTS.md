@@ -114,7 +114,12 @@ builder.add_recommendation("immediate", "Fix the XSS vulnerability")
 output = builder.build()  # Returns dict with verdict, summary, issues, etc.
 ```
 
-Verdict is auto-calculated from issue severities: any critical → `block`, any high → `request_changes`, any medium → `comment`, otherwise → `approve`.
+Verdict is auto-calculated from issue severities:
+- Any critical → `block`
+- 3+ highs → `block`
+- Any high (or 5+ mediums) → `request_changes`
+- Any medium → `comment`
+- Otherwise → `approve`
 
 ### Cross-Repo Dependency: pirategoat-bot
 
