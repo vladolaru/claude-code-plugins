@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context_fixtures import COMPLETE_CONTEXT
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "pr-review-pipeline.py"
-TOTAL_STEPS = 14
+TOTAL_STEPS = 15
 
 
 def _load_module():
@@ -148,12 +148,13 @@ class TestExecutionPhase:
         actions = "\n".join(g["actions"])
         assert "parallel" in actions.lower() or "SINGLE message" in actions
 
-    def test_step_12_interpolates_actual_output_dir(self, mod, tmp_path):
-        """Ingest command should have the actual output dir path."""
+    def test_step_12_dispatches_reconciliator(self, mod, tmp_path):
+        """Reconcile step should dispatch the reconciliator agent."""
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(12, TOTAL_STEPS, vals, False, "state")
         actions = "\n".join(g["actions"])
+        assert "review-reconciliator" in actions
         assert str(tmp_path) in actions
         assert "${OUTPUT_DIR}" not in actions
 
@@ -166,38 +167,72 @@ class TestExecutionPhase:
         assert str(tmp_path / "review-report.md") in actions
 
 
-class TestValidationPhase:
-    """Step 12: Ingest."""
+class TestReconcilePhase:
+    """Step 12: Reconcile + Verify."""
 
-    def test_step_12_references_ingest(self, mod, tmp_path):
+    def test_step_12_dispatches_reconciliator(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(12, TOTAL_STEPS, vals, False, "state")
         actions = "\n".join(g["actions"])
-        assert "ingest-code-review" in actions
+        assert "review-reconciliator" in actions
+        assert "review-findings.json" in actions
+
+    def test_step_12_has_git_range(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "abc123..fix/thing" in actions
 
 
-class TestOutputPhase:
-    """Steps 13-14: Report, critic, present, cleanup."""
+class TestReviewPhase:
+    """Step 13: Generate review report."""
 
-    def test_step_13_has_decision_critic(self, mod, tmp_path):
+    def test_step_13_writes_report(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(13, TOTAL_STEPS, vals, False, "state")
         actions = "\n".join(g["actions"])
-        assert "decision" in actions.lower()
         assert "review-report.md" in actions
+        assert "review-findings" in actions
 
-    def test_step_14_skips_cleanup_in_bot_mode(self, mod, tmp_path):
+
+class TestValidationPhase:
+    """Step 14: Decision critic."""
+
+    def test_step_14_has_decision_critic(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(14, TOTAL_STEPS, vals, False, "state")
         actions = "\n".join(g["actions"])
-        assert "skip" in actions.lower() or "bot" in actions.lower()
+        assert "decision" in actions.lower()
+        assert "review-report.md" in actions
 
-    def test_step_14_restores_branch_when_interactive(self, mod, tmp_path):
+    def test_step_14_no_ingest_verification(self, mod, tmp_path):
+        """Decision critic should NOT reference ingestion verification."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(14, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "ingest-verification" not in actions
+        assert "Ingestion Verification" not in actions
+        assert "ingest-code-review" not in actions
+
+
+class TestOutputPhase:
+    """Step 15: Present results + cleanup."""
+
+    def test_step_15_skips_cleanup_in_bot_mode(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(15, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "skip" in actions.lower() or "bot" in actions.lower()
+
+    def test_step_15_restores_branch_when_interactive(self, mod, tmp_path):
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(15, TOTAL_STEPS, vals, False, "state")
         actions = "\n".join(g["actions"])
         assert "checkout" in actions.lower() or "restore" in actions.lower()
 

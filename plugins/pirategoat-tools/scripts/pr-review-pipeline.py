@@ -6,16 +6,17 @@ Provides step-by-step guidance for the full PR review pipeline.
 Mode-aware: detects bot mode from review-context.json, headless mode
 from --headless flag.
 
-15 steps (0-14) covering:
-  SETUP      (0-2): Parse PR, repo setup, context discovery
-  AWARENESS  (3-4): PR review state, decide approach
-  CONTEXT    (5-7): Linked issue, fetch context, summarize
-  EXECUTION  (8-11): Size assessment, ground truth, dispatch, agents
-  VALIDATION (12): Ingest code review
-  OUTPUT     (13-14): Report, critic, present, cleanup
+16 steps (0-15) covering:
+  SETUP      (0-2):  Parse PR, repo setup, context discovery
+  AWARENESS  (3-4):  PR review state, decide approach
+  CONTEXT    (5-7):  Linked issue, fetch context, summarize
+  EXECUTION  (8-12): Size assessment, ground truth, dispatch, agents, reconcile+verify
+  REVIEW     (13):   Generate review report
+  VALIDATION (14):   Decision critic
+  OUTPUT     (15):   Present results, cleanup
 
 Usage:
-    python3 pr-review-pipeline.py --step-number 0 --total-steps 14 \
+    python3 pr-review-pipeline.py --step-number 0 --total-steps 15 \
         --pr-number 42 --output-dir /tmp/pr-review-org-repo-42 \
         --headless --thoughts ""
 """
@@ -89,8 +90,8 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
     """Return guidance dict for a given step.
 
     Args:
-        step: Current step number (0-14).
-        total_steps: Total step count (14).
+        step: Current step number (0-15).
+        total_steps: Total step count (15).
         vals: Dict from load_context_values().
         headless: Bool — auto-select decision points.
         thoughts: Accumulated --thoughts string.
@@ -411,7 +412,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
             "next": "Step 11: Dispatch Agents + Reconcile",
         }
 
-    # Step 11: Dispatch Agents + Reconcile
+    # Step 11: Dispatch Agents
     if step == 11:
         gt_arg = ""
         if os.path.isfile(vals["ground_truth"]):
@@ -419,7 +420,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
 
         return {
             "phase": "EXECUTION",
-            "title": "Dispatch Agents + Reconcile",
+            "title": "Dispatch Agents",
             "actions": [
                 "You are a thorough PR reviewer. Dispatch all agents in parallel.",
                 "",
@@ -442,59 +443,94 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 f"    python3 {sd}/check-reviewer-agent-status.py \\",
                 f"      --output-dir \"{od}\"",
                 "",
-                "When ALL_DONE=true, reconcile:",
-                "",
-                f"    python3 {sd}/reconcile-reviews.py \\",
-                f"      --output-dir \"{od}\" \\",
-                f"      --dispatch-plan \"{vals['dispatch_plan']}\" \\",
-                f"      --changed-files \"{vals['changed_files_csv']}\"",
-                "",
                 STATE_REQ,
             ],
-            "next": "Step 12: Ingest Code Review",
+            "next": "Step 12: Reconcile + Verify",
         }
 
-    # Step 12: Ingest Code Review
+    # Step 12: Reconcile + Verify
     if step == 12:
+        gt_line = ""
+        if os.path.isfile(vals["ground_truth"]):
+            gt_line = f"\n        Ground Truth: {vals['ground_truth']}"
+
         return {
-            "phase": "VALIDATION",
-            "title": "Ingest Code Review",
+            "phase": "EXECUTION",
+            "title": "Reconcile + Verify",
             "actions": [
-                "You are a thorough PR reviewer. Validate review findings against actual code.",
+                "You are a thorough PR reviewer. Dispatch the reconciliator.",
                 "",
-                "    Skill tool:",
-                "      skill: pirategoat-tools:ingest-code-review",
-                f"      args: {od} --git-range {gr}",
+                "Build the list of completed agent review file paths from the dispatch plan",
+                f"(read {vals['dispatch_plan']}). For each agent with status COMPLETE,",
+                f"add: {od}/<agent-name>-review.json",
+                "",
+                "Dispatch the reconciliator with the explicit file list:",
+                "",
+                "    Agent tool:",
+                "      subagent_type: pirategoat-tools:review-reconciliator",
+                "      prompt: |",
+                "        Review Files:",
+                f"        (one line per completed agent: {od}/<agent>-review.json)",
+                "",
+                f"        Output Directory: {od}",
+                f"        Git Range: {gr}",
+                f"        PR Context: PR #{pr} in this repo",
+                f"        Changed Files: {vals['changed_files_csv']}" + gt_line,
+                "",
+                "The reconciliator reads all agent findings, groups by underlying concern,",
+                "verifies each against actual code, and writes:",
+                f"- {od}/review-findings.json — structured output",
+                f"- {od}/review-findings.md — narrative review summary",
                 "",
                 STATE_REQ,
             ],
             "next": "Step 13: Generate Review Report",
         }
 
-    # Step 13: Generate Review Report + Decision Critic
+    # Step 13: Generate Review Report
     if step == 13:
         return {
-            "phase": "OUTPUT",
-            "title": "Generate Review Report + Decision Critic",
+            "phase": "REVIEW",
+            "title": "Generate Review Report",
             "actions": [
                 "You are a thorough PR reviewer. Write the review report.",
+                "",
+                "Read the reconciled output:",
+                f"- {od}/review-findings.json — structured findings (severity, file, line, confidence)",
+                f"- {od}/review-findings.md — the reconciliator's narrative framing",
+                "",
+                "Combine with PR context accumulated from Steps 0-7:",
+                "- PR purpose (title, body, linked issue details)",
+                "- Size assessment",
+                "- Review focus areas",
+                "",
+                "Connect findings to what the developer was trying to accomplish.",
                 "",
                 f"Write the review report to: {vals['review_report']}",
                 "",
                 "The report should include:",
-                "- Executive summary (1-3 sentences)",
-                "- Findings by severity (critical → low)",
-                "- Recommendations",
+                "- Executive summary (1-3 sentences connecting findings to PR intent)",
+                "- Findings by severity (critical → low) with file:line and actionable recommendations",
                 "- Overall verdict (APPROVE / REQUEST_CHANGES / COMMENT)",
                 "",
-                "After writing, dispatch the decision critic:",
+                STATE_REQ,
+            ],
+            "next": "Step 14: Decision Critic",
+        }
+
+    # Step 14: Decision Critic
+    if step == 14:
+        return {
+            "phase": "VALIDATION",
+            "title": "Decision Critic",
+            "actions": [
+                "You are a thorough PR reviewer. Dispatch the decision critic.",
                 "",
                 "    Agent tool:",
                 "      subagent_type: pirategoat-tools:decision-reviewer",
                 "      prompt: |",
                 f"        Document Path: {vals['review_report']}",
                 f"        Output Directory: {od}",
-                f"        Ingestion Verification: {od}/ingest-verification.json",
                 "",
                 "Wait for the critic to finish. Read its findings:",
                 f"    Read {od}/decision-critic-findings.md",
@@ -505,7 +541,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 "3. If both fail: note 'Decision critic unavailable' and present as-is.",
                 "",
                 "Act on the verdict:",
-                "- STAND: No changes needed. Proceed to Step 14.",
+                "- STAND: No changes needed. Proceed to Step 15.",
                 "- REVISE: Spot-check 2-3 of the critic's factual claims (file paths, line refs,",
                 "  counts) with a single command each. Strip any claim that fails spot-check.",
                 "  Apply valid adjustments to the review report (upgrade/downgrade severities,",
@@ -519,11 +555,11 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 14: Present Results + Cleanup",
+            "next": "Step 15: Present Results + Cleanup",
         }
 
-    # Step 14: Present Results + Cleanup
-    if step == 14:
+    # Step 15: Present Results + Cleanup
+    if step == 15:
         if vals["bot_mode"]:
             return {
                 "phase": "OUTPUT",
