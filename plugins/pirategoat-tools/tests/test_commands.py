@@ -260,13 +260,14 @@ class TestScriptReferences:
 
 
 class TestAgentSignalsContract:
-    """Review commands document the shell-safe agent-signals contract."""
+    """Review commands use --dispatch-plan for deterministic signal discovery."""
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_documents_agent_signals_text(self, command):
+    def test_uses_dispatch_plan(self, command):
         content = _read_command(command)
-        assert "agent_signals_text" in content
-        assert '--agent-signals "$AGENT_SIGNALS_TEXT"' in content
+        assert "--dispatch-plan" in content, (
+            f"{command}: should use --dispatch-plan for reconciliation"
+        )
 
 
 # =============================================================================

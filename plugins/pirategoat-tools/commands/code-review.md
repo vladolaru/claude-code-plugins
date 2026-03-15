@@ -42,7 +42,7 @@ The script handles state file detection, rebase detection, and fallback automati
 
 Read `review-context.json` for `git_range`, `merge_base`, `github_cli_command`, changed files.
 
-Guard rails: on default branch → stop; no commits in range → stop.
+Guard rails: on default branch → stop; no new commits in range → stop.
 
 Store: Read `BRANCH_NAME`, `GIT_RANGE`, `BASE_REF`, `OUTPUT_DIR`, `CURRENT_HEAD` from `review-context.json`.
 
