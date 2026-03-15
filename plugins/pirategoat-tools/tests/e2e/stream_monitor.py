@@ -60,6 +60,11 @@ class Checkpoint:
     trigger_step: Optional[int] = None  # fires when this step number starts
     trigger_agent: Optional[str] = None  # fires when this agent is dispatched
 
+    # Stream-content assertion (optional, checked alongside file assertion).
+    # Called with the StreamMonitor instance when the checkpoint fires,
+    # allowing access to step_text for stream-content checks.
+    stream_assertion: Optional[Callable] = None
+
     # Internal state.
     _fired: bool = False
 
@@ -167,6 +172,10 @@ class StreamMonitor:
         self.current_step: Optional[int] = None
         self.dispatched_agents: set[str] = set()
         self._start_time: float = 0.0
+        # Text accumulated per step — keyed by step number.
+        # Used by stream-content checkpoints to verify the pipeline
+        # mentioned expected strings (e.g., "CHANGES_REQUESTED" in Step 3).
+        self.step_text: dict[int, str] = {}
 
     def run(
         self,
@@ -251,6 +260,11 @@ class StreamMonitor:
                 self.current_step = step
                 self._fire_step_checkpoints(step, elapsed)
 
+        # Accumulate text per step (for stream-content checkpoints).
+        if event["type"] == "text" and self.current_step is not None:
+            self.step_text.setdefault(self.current_step, "")
+            self.step_text[self.current_step] += event["text"] + "\n"
+
         # Detect agent dispatches.
         agent = detect_agent_dispatch(event)
         if agent:
@@ -284,7 +298,7 @@ class StreamMonitor:
                 result.timestamp = timestamp
                 result.trigger_event = trigger_desc
                 self.checkpoint_results.append(result)
-                return
+                break
 
             if time.monotonic() >= deadline:
                 result.timestamp = timestamp
@@ -294,6 +308,13 @@ class StreamMonitor:
                     f"{result.reason}"
                 )
                 self.checkpoint_results.append(result)
-                return
+                break
 
             time.sleep(0.5)  # Poll every 500ms.
+
+        # Run stream-content assertion if present (instant — no polling).
+        if cp.stream_assertion:
+            stream_result = cp.stream_assertion(self)
+            stream_result.timestamp = timestamp
+            stream_result.trigger_event = trigger_desc
+            self.checkpoint_results.append(stream_result)

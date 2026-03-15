@@ -58,6 +58,19 @@ def build_checkpoints(
             ),
         ))
 
+    # Step 3 completes -> Step 4 starts: review state mentioned in stream.
+    if expectations.expect_review_state_mentions:
+        mentions = list(expectations.expect_review_state_mentions)
+        cps.append(Checkpoint(
+            name="step_3_review_state",
+            trigger_step=4,  # fires when Step 4 starts (Step 3 completed)
+            timeout_seconds=5,
+            assertion=lambda od: CheckpointResult(
+                name="step_3_review_state_file", passed=True,
+            ),  # no file check — stream content only
+            stream_assertion=_make_review_state_check(mentions),
+        ))
+
     # Step 10 completes -> Step 11 starts: dispatch-plan.json exists.
     cps.append(Checkpoint(
         name="step_10_dispatch_plan",
@@ -140,6 +153,21 @@ def _make_started_check(agent: str):
             passed=False,
             reason=f"{agent}.started not found in {output_dir}",
         )
+    return check
+
+
+def _make_review_state_check(expected_mentions: list[str]):
+    """Return a stream assertion that checks Step 3 text for review state strings."""
+    def check(monitor) -> CheckpointResult:
+        text = monitor.step_text.get(3, "")
+        missing = [m for m in expected_mentions if m not in text]
+        if missing:
+            return CheckpointResult(
+                name="step_3_review_state",
+                passed=False,
+                reason=f"Step 3 stream text missing: {', '.join(missing)}",
+            )
+        return CheckpointResult(name="step_3_review_state", passed=True)
     return check
 
 

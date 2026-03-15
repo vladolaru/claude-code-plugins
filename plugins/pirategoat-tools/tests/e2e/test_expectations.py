@@ -37,6 +37,15 @@ class TestPRExpectations:
         for e in ALL_PR_EXPECTATIONS:
             assert len(e.verdict_in) >= 1
 
+    def test_pr2_expects_changes_requested_in_stream(self):
+        assert "CHANGES_REQUESTED" in PR2_BUGGY_MEDIUM.expect_review_state_mentions
+
+    def test_pr3_expects_approved_in_stream(self):
+        assert "APPROVED" in PR3_LARGE.expect_review_state_mentions
+
+    def test_pr1_no_review_state_mentions(self):
+        assert len(PR1_CLEAN_SMALL.expect_review_state_mentions) == 0
+
     def test_must_dispatch_is_subset_of_known_agents(self):
         known = {
             "pr-reviewer", "security-reviewer", "performance-reviewer",

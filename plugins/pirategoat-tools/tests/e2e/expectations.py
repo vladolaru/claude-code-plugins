@@ -52,6 +52,12 @@ class PRExpectations:
     expect_changes_requested: bool = False
     expect_prior_approval: bool = False
 
+    # Stream content assertions for Step 3 (review state analysis).
+    # The pipeline's Step 3 output should mention these strings when
+    # describing prior reviews. Checked against text accumulated in
+    # the stream between Step 3 starting and Step 4 starting.
+    expect_review_state_mentions: list[str] = field(default_factory=list)
+
     # Ground truth.
     must_have_ground_truth: bool = False
 
@@ -99,6 +105,7 @@ PR2_BUGGY_MEDIUM = PRExpectations(
     history_should_reference=["escape output", "nonce check", "prepare()"],
     expect_existing_reviews=True,
     expect_changes_requested=True,
+    expect_review_state_mentions=["CHANGES_REQUESTED"],
 )
 
 PR3_LARGE = PRExpectations(
@@ -112,6 +119,7 @@ PR3_LARGE = PRExpectations(
     min_agent_review_files=8,
     expect_existing_reviews=True,
     expect_prior_approval=True,
+    expect_review_state_mentions=["APPROVED"],
 )
 
 PR4_NON_DEFAULT_BRANCH = PRExpectations(

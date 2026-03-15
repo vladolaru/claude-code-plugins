@@ -196,3 +196,90 @@ class TestStreamMonitorWithSyntheticEvents:
         assert len(fired) == 1
         assert len(monitor.checkpoint_results) == 1
         assert monitor.checkpoint_results[0].passed
+
+    def test_accumulates_step_text(self, tmp_path):
+        events = [
+            self._make_text_event("═══ PR REVIEW Step 3/14: Review State (AWARENESS) ═══"),
+            self._make_text_event("Found 1 review: CHANGES_REQUESTED from user1"),
+            self._make_text_event("Pending reviewers: user2"),
+            self._make_text_event("═══ PR REVIEW Step 4/14: Decide Approach (AWARENESS) ═══"),
+            self._make_result_event(),
+        ]
+        monitor = StreamMonitor(str(tmp_path), checkpoints=[])
+        for line in events:
+            monitor._process_line(line)
+
+        assert 3 in monitor.step_text
+        assert "CHANGES_REQUESTED" in monitor.step_text[3]
+        assert "user1" in monitor.step_text[3]
+
+    def test_stream_assertion_fires_on_step_transition(self, tmp_path):
+        stream_fired = []
+
+        def check_stream(monitor):
+            text = monitor.step_text.get(3, "")
+            found = "APPROVED" in text
+            stream_fired.append(True)
+            return CheckpointResult(
+                name="review_state_stream",
+                passed=found,
+                reason="" if found else "APPROVED not in step 3 text",
+            )
+
+        checkpoint = Checkpoint(
+            name="step_3_review_state",
+            trigger_step=4,
+            timeout_seconds=1,
+            assertion=lambda od: CheckpointResult(
+                name="noop", passed=True,
+            ),
+            stream_assertion=check_stream,
+        )
+
+        events = [
+            self._make_text_event("═══ PR REVIEW Step 3/14: Review State (AWARENESS) ═══"),
+            self._make_text_event("Review state: APPROVED by maria"),
+            self._make_text_event("═══ PR REVIEW Step 4/14: Decide Approach (AWARENESS) ═══"),
+            self._make_result_event(),
+        ]
+
+        monitor = StreamMonitor(str(tmp_path), checkpoints=[checkpoint])
+        for line in events:
+            monitor._process_line(line)
+
+        assert len(stream_fired) == 1
+        # File assertion + stream assertion = 2 results.
+        assert len(monitor.checkpoint_results) == 2
+        assert all(r.passed for r in monitor.checkpoint_results)
+
+    def test_stream_assertion_fails_when_text_missing(self, tmp_path):
+        def check_stream(monitor):
+            text = monitor.step_text.get(3, "")
+            found = "CHANGES_REQUESTED" in text
+            return CheckpointResult(
+                name="review_state_stream",
+                passed=found,
+                reason="" if found else "CHANGES_REQUESTED not found",
+            )
+
+        checkpoint = Checkpoint(
+            name="step_3_review_state",
+            trigger_step=4,
+            timeout_seconds=1,
+            assertion=lambda od: CheckpointResult(name="noop", passed=True),
+            stream_assertion=check_stream,
+        )
+
+        events = [
+            self._make_text_event("═══ PR REVIEW Step 3/14: Review State (AWARENESS) ═══"),
+            self._make_text_event("No prior reviews found"),
+            self._make_text_event("═══ PR REVIEW Step 4/14: Decide Approach (AWARENESS) ═══"),
+        ]
+
+        monitor = StreamMonitor(str(tmp_path), checkpoints=[checkpoint])
+        for line in events:
+            monitor._process_line(line)
+
+        stream_results = [r for r in monitor.checkpoint_results if r.name == "review_state_stream"]
+        assert len(stream_results) == 1
+        assert not stream_results[0].passed

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from checkpoints import build_checkpoints
-from expectations import PR1_CLEAN_SMALL, PR2_BUGGY_MEDIUM, PR4_NON_DEFAULT_BRANCH
+from expectations import PR1_CLEAN_SMALL, PR2_BUGGY_MEDIUM, PR3_LARGE, PR4_NON_DEFAULT_BRANCH
 
 
 class TestBuildCheckpoints:
@@ -21,6 +21,21 @@ class TestBuildCheckpoints:
         cps = build_checkpoints(PR4_NON_DEFAULT_BRANCH, str(tmp_path))
         names = [cp.name for cp in cps]
         assert "step_2_context_git_base_ref" in names
+
+    def test_pr2_has_review_state_checkpoint(self, tmp_path):
+        cps = build_checkpoints(PR2_BUGGY_MEDIUM, str(tmp_path))
+        names = [cp.name for cp in cps]
+        assert "step_3_review_state" in names
+
+    def test_pr3_has_review_state_checkpoint(self, tmp_path):
+        cps = build_checkpoints(PR3_LARGE, str(tmp_path))
+        names = [cp.name for cp in cps]
+        assert "step_3_review_state" in names
+
+    def test_pr1_no_review_state_checkpoint(self, tmp_path):
+        cps = build_checkpoints(PR1_CLEAN_SMALL, str(tmp_path))
+        names = [cp.name for cp in cps]
+        assert "step_3_review_state" not in names
 
     def test_pr2_has_agent_started_checkpoints(self, tmp_path):
         cps = build_checkpoints(PR2_BUGGY_MEDIUM, str(tmp_path))
