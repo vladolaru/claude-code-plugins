@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.57.0] - 2026-03-15
+
+### Changed
+
+- **Reconciliator agent redesign** — The reconciliator now owns full post-agent processing: semantic deduplication, scope checking, fact verification, and clean output production in a single pass. Replaces the broken deterministic dedup (Jaccard title-similarity threshold failed to merge any cross-agent findings across 13 real sessions) and separate ingest verification phase
+- **Decision critic independence** — The decision critic no longer receives ingestion verification artifacts. It operates fully independently, verifying claims against actual code
+- **Pipeline step renumbering** — All review commands now use sequential integer step numbering (no more 2.5/3.5/3.6/5a/5b/6.5/6b). PR review pipeline is 16 steps (0-15) with dedicated REVIEW (13) and VALIDATION (14) phases
+- **Clean output format** — Review output reads like one expert reviewer wrote it: no agent names, no cluster metadata, no source_agents fields. Multi-agent convergence is a confidence signal, not user-facing information
+
+### Removed
+
+- `/ingest-code-review` command — functionality absorbed by the reconciliator
+- `reconcile-reviews.py` as a pipeline step (script remains for standalone utility use)
+- Ingestion verification pass-through to the decision critic
+- `reconciled.json`, `reconciled.md`, `reconciled-structured.json` output artifacts (replaced by `review-findings.json` and `review-findings.md`)
+
 ## [1.56.0] - 2026-03-15
 
 ### Added
