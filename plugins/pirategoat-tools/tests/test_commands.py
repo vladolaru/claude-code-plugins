@@ -432,7 +432,7 @@ class TestFullCodeReview:
 CRITIC_COMMANDS = [
     "full-code-review.md",
     "code-review.md",
-    "pr-review.md",
+    # pr-review.md is now a thin wrapper — decision critic is in pr-review-pipeline.py
 ]
 
 
@@ -794,7 +794,7 @@ class TestPrUpdate:
 
 
 class TestPrReview:
-    """pr-review.md orchestrates existing skill + commands without duplication."""
+    """pr-review.md is a thin wrapper delegating to pr-review-pipeline.py."""
 
     COMMAND = "pr-review.md"
 
@@ -816,127 +816,43 @@ class TestPrReview:
             f"{self.COMMAND}: not registered in marketplace.json: {marketplace_commands}"
         )
 
-    # --- Composition: references existing skill + commands ---
+    # --- Pipeline script reference ---
 
-    def test_references_pr_reviewing_skill(self):
-        """Phase 1 should delegate to the reviewing-pr skill for context + dispatch."""
+    def test_references_pipeline_script(self):
+        """Should delegate to pr-review-pipeline.py."""
         content = _read_command(self.COMMAND)
-        assert "reviewing-pr" in content, (
-            f"{self.COMMAND}: missing reference to reviewing-pr skill"
+        assert "pr-review-pipeline.py" in content, (
+            f"{self.COMMAND}: missing reference to pr-review-pipeline.py"
         )
 
-    def test_references_ingest_code_review(self):
-        """Phase 2 should delegate to ingest-code-review command for validation."""
+    def test_has_headless_flag(self):
+        """Should always pass --headless for autonomous operation."""
         content = _read_command(self.COMMAND)
-        assert "ingest-code-review" in content, (
-            f"{self.COMMAND}: missing reference to ingest-code-review command"
+        assert "--headless" in content, (
+            f"{self.COMMAND}: missing --headless flag"
         )
 
-    def test_references_full_code_review(self):
-        """Should reference /full-code-review for comprehensive agent dispatch."""
+    def test_has_phase_overview(self):
+        """Should have a phase overview table."""
         content = _read_command(self.COMMAND)
-        assert "full-code-review" in content, (
-            f"{self.COMMAND}: missing reference to full-code-review command"
-        )
+        assert "SETUP" in content
+        assert "EXECUTION" in content
+        assert "VALIDATION" in content
+        assert "OUTPUT" in content
 
-    def test_does_not_duplicate_agent_table(self, marketplace_agents):
-        """Should NOT inline the agent dispatch table (skill handles dispatch)."""
-        content = _read_command(self.COMMAND)
-        agent_refs = AGENT_REF_PATTERN.findall(content)
-        # Filter out skill references — only check for reviewer agent refs
-        reviewer_refs = [r for r in agent_refs if r in marketplace_agents]
-        assert len(reviewer_refs) == 0, (
-            f"{self.COMMAND}: found inline agent references {reviewer_refs} — "
-            f"reviewing-pr skill handles dispatch, no need to duplicate"
-        )
-
-    # --- Phase 1: PR-specific inline content ---
-    # Note: PR state guards (draft/merged/closed) are owned by the reviewing-pr
-    # skill, not this orchestrator command.  test_references_pr_reviewing_skill
-    # verifies the delegation.
-
-    def test_has_non_interactive_overrides(self):
-        """Should document overrides that make the skill non-interactive."""
+    def test_has_failure_recovery(self):
+        """Should document failure recovery paths."""
         content = _read_command(self.COMMAND)
         content_lower = content.lower()
-        assert "auto-stash" in content_lower, f"{self.COMMAND}: missing auto-stash override"
-        assert "always" in content_lower and "full review" in content_lower, (
-            f"{self.COMMAND}: missing 'always full review' override"
+        assert "failure" in content_lower or "recovery" in content_lower, (
+            f"{self.COMMAND}: missing failure recovery documentation"
         )
 
-    def test_has_merge_base(self):
-        """Should reference MERGE_BASE for accurate diffs."""
+    def test_does_not_reference_reviewing_pr(self):
+        """Should NOT reference the deleted reviewing-pr skill."""
         content = _read_command(self.COMMAND)
-        assert "MERGE_BASE" in content, (
-            f"{self.COMMAND}: missing MERGE_BASE reference"
-        )
-
-    def test_has_changed_files(self):
-        """Should carry CHANGED_FILES through the pipeline."""
-        content = _read_command(self.COMMAND)
-        assert "CHANGED_FILES" in content, (
-            f"{self.COMMAND}: missing CHANGED_FILES reference"
-        )
-
-    # --- Phase 3: unique output ---
-
-    def test_has_document_generation(self):
-        """Should save a review document to file."""
-        content = _read_command(self.COMMAND)
-        assert "review-report.md" in content, (
-            f"{self.COMMAND}: missing review-report.md output file reference"
-        )
-
-    def test_has_branch_restore_question(self):
-        """Should ask user about restoring previous branch at the end."""
-        content = _read_command(self.COMMAND)
-        content_lower = content.lower()
-        assert "restore" in content_lower, (
-            f"{self.COMMAND}: missing branch restore step"
-        )
-
-    def test_non_interactive_during_review(self):
-        """AskUserQuestion should only appear in the final phase, not during review."""
-        content = _read_command(self.COMMAND)
-        # Find the last phase marker
-        phase_markers = list(re.finditer(r"^## Phase \d", content, re.MULTILINE))
-        assert len(phase_markers) >= 2, f"{self.COMMAND}: too few phases"
-        last_phase_start = phase_markers[-1].start()
-        before_last = content[:last_phase_start]
-        assert "AskUserQuestion" not in before_last, (
-            f"{self.COMMAND}: AskUserQuestion found before final phase"
-        )
-        last_phase_content = content[last_phase_start:]
-        ask_count = last_phase_content.count("AskUserQuestion")
-        assert ask_count == 1, (
-            f"{self.COMMAND}: expected 1 AskUserQuestion in final phase, found {ask_count}"
-        )
-
-    def test_has_three_phases(self):
-        """Should have exactly 3 phases."""
-        content = _read_command(self.COMMAND)
-        phases = [m for m in re.finditer(r"^## Phase \d", content, re.MULTILINE)]
-        assert len(phases) == 3, (
-            f"{self.COMMAND}: expected 3 phases, found {len(phases)}"
-        )
-
-    def test_has_ingest_verification_write(self):
-        """Phase 2 should write ingest-verification.json after ingestion."""
-        content = _read_command(self.COMMAND)
-        assert "ingest-verification.json" in content, (
-            f"{self.COMMAND}: missing ingest-verification.json write step"
-        )
-
-    def test_ingest_verification_before_report(self):
-        """ingest-verification.json write must appear before review-report.md generation."""
-        content = _read_command(self.COMMAND)
-        verif_pos = content.find("ingest-verification.json")
-        report_pos = content.find("Write the comprehensive review document")
-        assert verif_pos > 0 and report_pos > 0, (
-            f"{self.COMMAND}: missing verification or report reference"
-        )
-        assert verif_pos < report_pos, (
-            f"{self.COMMAND}: ingest-verification.json must be written before review-report.md"
+        assert "reviewing-pr" not in content, (
+            f"{self.COMMAND}: still references deleted reviewing-pr skill"
         )
 
 
