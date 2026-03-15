@@ -6,77 +6,52 @@ You are a code review orchestrator. Your mission: dispatch specialized reviewer 
 
 This is an **incremental branch review** — it tracks what was previously reviewed and only covers new work. On first run, it reviews all changes (same as `/full-code-review`). Use `/full-code-review` when you want a comprehensive review of all branch changes regardless of prior reviews.
 
-## Step 1: Parse Arguments and Detect Branch
+## Step 1: Gather Context
 
 **Parse arguments:** `$ARGUMENTS`
 - If empty: incremental mode (auto-detect from state)
 - If `full` or `reset`: force a full review from base branch, delete any existing state
 - If a branch name (no `..`): review `<argument>..HEAD`
-- If a git range (contains `..`): use it directly
+- If a git range (contains `..`): use directly
 
-**Determine current state:**
-
-```bash
-# Current branch and HEAD SHA
-git branch --show-current
-CURRENT_HEAD=$(git rev-parse HEAD)
-
-# Default branch (if needed)
-git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
-```
-
-If default branch detection fails, try `main`, then `master`, then `trunk`:
-```bash
-git rev-parse --verify main 2>/dev/null && echo "main" || (git rev-parse --verify master 2>/dev/null && echo "master" || echo "trunk")
-```
-
-**Guard rails:**
-
-- **On default branch with no explicit range:** STOP. Tell the user: "You are on the default branch. Switch to a feature branch or provide a range: `/code-review HEAD~5..HEAD`"
-
-**Create output directory:**
+**Construct output directory** (sanitize all fragments for filesystem safety):
 
 ```bash
-BRANCH_SAFE=$(echo "<branch>" | tr '/' '-' | sed 's/^-//')
-OUTPUT_DIR="/tmp/branch-review-${BRANCH_SAFE}"
+OWNER=$(git remote get-url origin | sed -E 's#.*/([^/]+)/[^/]+(\.git)?$#\1#')
+REPO=$(git remote get-url origin | sed -E 's#.*/([^/]+?)(\.git)?$#\1#')
+BRANCH=$(git branch --show-current)
+SAFE_OWNER=$(echo "$OWNER" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
+SAFE_REPO=$(echo "$REPO" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
+SAFE_BRANCH=$(echo "$BRANCH" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
+OUTPUT_DIR="/tmp/branch-review-${SAFE_OWNER}-${SAFE_REPO}-${SAFE_BRANCH}"
 mkdir -p "$OUTPUT_DIR"
+CURRENT_HEAD=$(git rev-parse HEAD)
 ```
 
-Store: `BRANCH_NAME`, `BASE_REF`, `CURRENT_HEAD`, `OUTPUT_DIR`.
+**If `full` or `reset`:** delete `${OUTPUT_DIR}/.review-state.json` if it exists.
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gather-review-context.py \
+  --branch \
+  --incremental \
+  --git-range "<explicit range if provided>" \
+  --output-dir "$OUTPUT_DIR"
+```
+
+The script handles state file detection, rebase detection, and fallback automatically.
+
+Read `review-context.json` for `git_range`, `merge_base`, `github_cli_command`, changed files.
+
+Guard rails: on default branch → stop; no commits in range → stop.
+
+Store: Read `BRANCH_NAME`, `GIT_RANGE`, `BASE_REF`, `OUTPUT_DIR`, `CURRENT_HEAD` from `review-context.json`.
 
 ## Step 2: Determine Review Range
 
-This is the iterative core. The range depends on whether prior review state exists.
-
-**If `full`, `reset`, or explicit range was given in Step 1:**
-- If `full` or `reset`: delete `${OUTPUT_DIR}/.review-state.json` if it exists. Set `GIT_RANGE` to `<BASE_REF>..HEAD`.
-- If explicit range or branch name: use it directly as `GIT_RANGE`.
-
-**If no arguments (incremental mode):**
-
-Check for state file:
-```bash
-cat "${OUTPUT_DIR}/.review-state.json" 2>/dev/null
-```
-
-**Case A — No state file (first run):**
-Set `GIT_RANGE` to `<BASE_REF>..HEAD`. Tell the user: "First review on this branch. Reviewing all commits from `<BASE_REF>`."
-
-**Case B — State file exists:**
-1. Read `last_reviewed_sha` from the JSON.
-2. Validate the SHA is still an ancestor of HEAD (handles rebases/force-pushes):
-   ```bash
-   git merge-base --is-ancestor <last_reviewed_sha> HEAD
-   ```
-3. **If validation fails** (exit code non-zero): The branch was rebased. Tell the user: "Branch history has changed since last review (rebase or force-push). Falling back to full review." Delete the state file. Set `GIT_RANGE` to `<BASE_REF>..HEAD`.
-4. **If `CURRENT_HEAD` equals `last_reviewed_sha`:** STOP. Tell the user: "No new commits since last review at `<sha_short>` (`<last_reviewed_at>`). Nothing to review."
-5. **Otherwise:** Set `GIT_RANGE` to `<last_reviewed_sha>..HEAD`. Tell the user: "Previous review covered commits up to `<sha_short>` (`<last_reviewed_at>`). Reviewing `<N>` new commits since then."
-
-**Verify changes exist:**
-```bash
-git rev-list --count <GIT_RANGE>
-```
-If 0 commits: STOP. "No commits found in range. Nothing to review."
+The context script in Step 1 handles incremental range detection. Check the resulting `review-context.json`:
+- If the range is the same as the full branch range: first review or rebase fallback
+- If the range starts from a previous SHA: incremental review of new commits only
+- Tell the user what range is being reviewed and how many commits
 
 ## Step 2.5: Ground Truth Collection (optional)
 
@@ -264,13 +239,13 @@ This ensures state is persisted even if reconciliation encounters an issue.
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/reconcile-reviews.py \
   --output-dir <OUTPUT_DIR> \
-  --agent-signals "$AGENT_SIGNALS_TEXT" \
-  --changed-files "$(echo "$CHANGED_FILES_CSV")"
+  --dispatch-plan <OUTPUT_DIR>/dispatch-plan.json \
+  --changed-files "<CHANGED_FILES_CSV from review-context.json>"
 ```
 
 Where:
-- `AGENT_SIGNALS_TEXT` is the exact `agent_signals_text` value from Step 3.5. It must remain a single quoted shell argument, even if it spans multiple lines. Never splat the list directly into the command, and never use an unquoted expansion such as `--agent-signals $AGENT_SIGNALS_TEXT`.
-- `CHANGED_FILES_CSV` is the `changed_files` list from the Step 3.5 dispatch plan output, joined with commas. This enables test-gap detection advisories.
+- `--dispatch-plan` points to the dispatch plan file written by Step 3.5. The script discovers agent status from the plan + review files on disk — no LLM-composed signal text needed.
+- `CHANGED_FILES_CSV` is `git.changed_files_csv` from `review-context.json`. This enables test-gap detection advisories.
 
 This script reads all `*-review.json` files, deduplicates findings across agents, and writes `reconciled-structured.json` to the output directory. It handles:
 - Exact and near deduplication (same file + overlapping lines + similar title)
