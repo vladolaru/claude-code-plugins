@@ -260,13 +260,13 @@ class TestScriptReferences:
 
 
 class TestAgentSignalsContract:
-    """Review commands use --dispatch-plan for deterministic signal discovery."""
+    """Review commands dispatch the reconciliator with explicit file paths."""
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_uses_dispatch_plan(self, command):
+    def test_uses_reconciliator(self, command):
         content = _read_command(command)
-        assert "--dispatch-plan" in content, (
-            f"{command}: should use --dispatch-plan for reconciliation"
+        assert "review-reconciliator" in content, (
+            f"{command}: should dispatch review-reconciliator for reconciliation"
         )
 
 
@@ -329,11 +329,11 @@ class TestCodeReviewIterative:
         # Stale check should be conditional on history-insights-reviewer
         assert "history-insights" in content.lower()
 
-    def test_has_ingest_verification_write(self):
-        """Should write ingest-verification.json before decision critic dispatch."""
+    def test_has_reconciliator_dispatch(self):
+        """Should dispatch the reconciliator for semantic dedup + verification."""
         content = _read_command("code-review.md")
-        assert "ingest-verification.json" in content, (
-            "code-review.md: missing ingest-verification.json write step"
+        assert "review-reconciliator" in content, (
+            "code-review.md: missing reconciliator dispatch"
         )
 
 
@@ -416,11 +416,11 @@ class TestFullCodeReview:
         content = _read_command("full-code-review.md")
         assert "merge-base" in content.lower() or "RANGE_REBASED" in content
 
-    def test_has_ingest_verification_write(self):
-        """Should write ingest-verification.json before decision critic dispatch."""
+    def test_has_review_findings_output(self):
+        """Should produce review-findings.json and review-findings.md."""
         content = _read_command("full-code-review.md")
-        assert "ingest-verification.json" in content, (
-            "full-code-review.md: missing ingest-verification.json write step"
+        assert "review-findings.json" in content, (
+            "full-code-review.md: missing review-findings.json output reference"
         )
 
 
@@ -479,82 +479,38 @@ class TestDecisionCritic:
         )
 
     @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_has_post_ingest_reconciled_update(self, command):
-        """Must update reconciled.md with ingest validation results before critic.
-
-        pr-review.md generates review-report.md fresh after ingestion (Phase 3)
-        instead of updating reconciled.md, so it satisfies this differently.
-        """
+    def test_critic_dispatch_after_reconciliator(self, command):
+        """Decision critic must appear after reconciliator in the pipeline."""
         content = _read_command(command)
-        has_reconciled_update = (
-            "Update `reconciled.md`" in content or "update `reconciled.md`" in content
-        )
-        has_report_generation = "review-report.md" in content
-        assert has_reconciled_update or has_report_generation, (
-            f"{command}: missing post-ingest update step "
-            f"(expected 'Update reconciled.md' or review-report.md generation)"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_critic_dispatch_after_ingest(self, command):
-        """Decision critic must appear after ingest-code-review in the pipeline."""
-        content = _read_command(command)
-        ingest_pos = content.find("ingest-code-review")
+        reconciliator_pos = content.find("review-reconciliator")
         critic_pos = content.find("decision-reviewer")
-        assert ingest_pos > 0 and critic_pos > 0, (
-            f"{command}: missing ingest or critic reference"
+        assert reconciliator_pos > 0 and critic_pos > 0, (
+            f"{command}: missing reconciliator or critic reference"
         )
-        assert ingest_pos < critic_pos, (
-            f"{command}: decision-reviewer must appear after ingest-code-review "
-            f"(ingest at {ingest_pos}, critic at {critic_pos})"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_post_ingest_update_before_critic(self, command):
-        """Post-ingest update must appear between ingest and critic dispatch.
-
-        For dispatch commands (full-code-review, code-review): checks that
-        'Update reconciled.md' appears between ingest and critic.
-        For pr-review: checks that review-report.md generation (Write the
-        comprehensive review document) appears between ingest and critic.
-
-        Uses the dispatch-specific marker 'dispatching the decision-reviewer'
-        rather than just 'decision-reviewer' to avoid matching mention-only
-        references that appear earlier in the document.
-        """
-        content = _read_command(command)
-        ingest_pos = content.find("ingest-code-review")
-        # Use the dispatch-specific marker to find where the critic is actually invoked
-        critic_pos = content.find("dispatching the decision-reviewer")
-
-        # Try reconciled.md update (dispatch commands)
-        update_pos = content.find("Update `reconciled.md`")
-        if update_pos == -1:
-            update_pos = content.find("update `reconciled.md`")
-        # Fall back to review-report.md generation (pr-review)
-        if update_pos == -1:
-            update_pos = content.find("Write the comprehensive review document")
-
-        assert ingest_pos > 0 and update_pos > 0 and critic_pos > 0, (
-            f"{command}: missing ingest, update, or critic reference "
-            f"(ingest={ingest_pos}, update={update_pos}, critic={critic_pos})"
-        )
-        assert ingest_pos < update_pos < critic_pos, (
-            f"{command}: post-ingest update must be between ingest and critic "
-            f"(ingest={ingest_pos}, update={update_pos}, critic={critic_pos})"
+        assert reconciliator_pos < critic_pos, (
+            f"{command}: decision-reviewer must appear after review-reconciliator "
+            f"(reconciliator at {reconciliator_pos}, critic at {critic_pos})"
         )
 
     @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_critic_receives_ingestion_verification(self, command):
-        """Decision-reviewer dispatch should include Ingestion Verification."""
+    def test_critic_reviews_findings(self, command):
+        """Decision critic should review the review-findings output."""
         content = _read_command(command)
-        assert "Ingestion Verification" in content, (
-            f"{command}: decision-reviewer dispatch missing Ingestion Verification parameter"
+        assert "review-findings.md" in content, (
+            f"{command}: decision-reviewer should reference review-findings.md"
+        )
+
+    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
+    def test_critic_no_ingestion_verification(self, command):
+        """Decision critic should NOT receive ingestion verification (independent)."""
+        content = _read_command(command)
+        assert "Ingestion Verification" not in content, (
+            f"{command}: decision-reviewer should not receive Ingestion Verification"
         )
 
 
 # =============================================================================
-# Triage Block Tests (Step 3.6: Adaptive Agent Triage)
+# Triage Block Tests (Step 6: Adaptive Agent Triage)
 # =============================================================================
 
 
@@ -570,14 +526,14 @@ TRIAGED_AGENTS = [
 
 
 class TestTriageBlock:
-    """Step 3.6 adaptive agent triage is present and well-formed in dispatch commands."""
+    """Step 6 adaptive agent triage is present and well-formed in dispatch commands."""
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
     def test_has_triage_step(self, command):
-        """Dispatch commands must contain Step 3.6 triage block."""
+        """Dispatch commands must contain Step 6 triage block."""
         content = _read_command(command)
-        assert "Step 3.6" in content or "Adaptive Agent Triage" in content, (
-            f"{command}: missing Step 3.6 (Adaptive Agent Triage)"
+        assert "Step 6" in content or "Adaptive Agent Triage" in content, (
+            f"{command}: missing Step 6 (Adaptive Agent Triage)"
         )
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
@@ -613,14 +569,14 @@ class TestTriageBlock:
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
     def test_triage_between_preflight_and_dispatch(self, command):
-        """Step 3.6 must appear between Step 3.5 (preflight) and Step 4 (dispatch)."""
+        """Step 6 must appear between Step 5 (dispatch plan) and Step 7 (dispatch)."""
         content = _read_command(command)
-        pos_35 = content.find("Step 3.5")
-        pos_36 = content.find("Step 3.6")
-        pos_4 = content.find("Step 4")
-        assert pos_35 < pos_36 < pos_4, (
-            f"{command}: Step 3.6 must be between Step 3.5 and Step 4 "
-            f"(positions: 3.5={pos_35}, 3.6={pos_36}, 4={pos_4})"
+        pos_5 = content.find("Step 5")
+        pos_6 = content.find("Step 6")
+        pos_7 = content.find("Step 7")
+        assert pos_5 < pos_6 < pos_7, (
+            f"{command}: Step 6 must be between Step 5 and Step 7 "
+            f"(positions: 5={pos_5}, 6={pos_6}, 7={pos_7})"
         )
 
     @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
