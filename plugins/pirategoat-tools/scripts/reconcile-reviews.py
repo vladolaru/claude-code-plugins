@@ -165,15 +165,16 @@ def discover_agent_signals(output_dir: str, dispatch_plan_path: str) -> str:
             continue
 
         # Check if the agent wrote a review file
-        review_json = os.path.join(output_dir, f"{name}-review.json")
+        reviewer_base = name[: -len("-reviewer")] if name.endswith("-reviewer") else name
+        review_json = os.path.join(output_dir, f"{reviewer_base}-review.json")
         if os.path.isfile(review_json):
             try:
                 with open(review_json) as f:
                     review = json.load(f)
                 # Extract severity counts from the review JSON
-                findings = review.get("findings", [])
+                issues = review.get("issues", [])
                 counts = {}
-                for finding in findings:
+                for finding in issues:
                     sev = finding.get("severity", "medium").lower()
                     counts[sev] = counts.get(sev, 0) + 1
                 count_str = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))

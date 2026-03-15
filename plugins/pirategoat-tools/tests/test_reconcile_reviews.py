@@ -789,10 +789,10 @@ class TestDiscoverAgentSignals:
         with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
             json.dump(plan, f)
 
-        # Write a review file for pr-reviewer only
-        with open(os.path.join(tmp_dir, "pr-reviewer-review.json"), "w") as f:
+        # Write a review file for pr-reviewer only (reviewer name = "pr")
+        with open(os.path.join(tmp_dir, "pr-review.json"), "w") as f:
             json.dump({
-                "findings": [{"severity": "critical"}, {"severity": "medium"}],
+                "issues": [{"severity": "critical"}, {"severity": "medium"}],
                 "verdict": "REQUEST_CHANGES",
             }, f)
 
@@ -816,8 +816,8 @@ class TestDiscoverAgentSignals:
         plan = {"agents": [{"name": "pr-reviewer", "status": "DISPATCH"}]}
         with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
             json.dump(plan, f)
-        with open(os.path.join(tmp_dir, "pr-reviewer-review.json"), "w") as f:
-            json.dump({"findings": [], "verdict": "APPROVE"}, f)
+        with open(os.path.join(tmp_dir, "pr-review.json"), "w") as f:
+            json.dump({"issues": [], "verdict": "APPROVE"}, f)
 
         discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
         assert os.path.isfile(os.path.join(tmp_dir, "agent-signals.txt"))
@@ -831,6 +831,36 @@ class TestDiscoverAgentSignals:
 
         signals = discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
         assert "perf-reviewer: STATUS=SKIPPED_TRIAGE" in signals
+
+    def test_finds_review_file_with_reviewer_name(self, tmp_dir):
+        """security-reviewer writes security-review.json — signal should be FINISHED."""
+        plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
+        with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
+            json.dump(plan, f)
+
+        review = {"issues": [{"title": "XSS", "file": "a.php", "severity": "high"}], "verdict": "request_changes"}
+        with open(os.path.join(tmp_dir, "security-review.json"), "w") as f:
+            json.dump(review, f)
+
+        signals = discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
+        assert "security-reviewer: STATUS=FINISHED" in signals
+        assert "FAILED" not in signals
+
+    def test_reads_issues_key_not_findings(self, tmp_dir):
+        """Signal discovery must read 'issues', not 'findings'."""
+        plan = {"agents": [{"name": "pr-reviewer", "status": "DISPATCH"}]}
+        with open(os.path.join(tmp_dir, "dispatch-plan.json"), "w") as f:
+            json.dump(plan, f)
+
+        review = {
+            "issues": [{"title": "Bug", "file": "a.py", "severity": "critical"}],
+            "verdict": "block",
+        }
+        with open(os.path.join(tmp_dir, "pr-review.json"), "w") as f:
+            json.dump(review, f)
+
+        signals = discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
+        assert "critical=1" in signals
 
 
 # =============================================================================

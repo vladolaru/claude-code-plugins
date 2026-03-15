@@ -26,6 +26,20 @@ from datetime import datetime, timezone
 DEFAULT_TIMEOUT = 1200  # 20 minutes
 
 
+def _reviewer_filename(agent_name: str) -> str:
+    """Derive the review filename from the agent name.
+
+    Matches bootstrap-reviewer.py's derive_reviewer_name():
+    'security-reviewer' -> 'security-review.json'
+    'pr-reviewer' -> 'pr-review.json'
+    """
+    if agent_name.endswith("-reviewer"):
+        base = agent_name[: -len("-reviewer")]
+    else:
+        base = agent_name
+    return f"{base}-review.json"
+
+
 def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     """Check status of all agents in the dispatch plan."""
     plan_path = os.path.join(output_dir, "dispatch-plan.json")
@@ -67,7 +81,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
             continue
 
         dispatched += 1
-        review_path = os.path.join(output_dir, f"{name}-review.json")
+        review_path = os.path.join(output_dir, _reviewer_filename(name))
         started_path = os.path.join(output_dir, f"{name}.started")
 
         if os.path.isfile(review_path):
@@ -75,9 +89,9 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
             try:
                 with open(review_path) as f:
                     review = json.load(f)
-                findings = review.get("findings", [])
+                issues = review.get("issues", [])
                 counts = dict(Counter(
-                    f.get("severity", "medium").lower() for f in findings
+                    f.get("severity", "medium").lower() for f in issues
                 ))
                 verdict = review.get("verdict", "UNKNOWN")
                 agents.append({

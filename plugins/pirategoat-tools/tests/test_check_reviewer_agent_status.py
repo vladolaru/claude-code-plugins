@@ -33,9 +33,18 @@ def _start_agent(tmp_path, name, minutes_ago=0):
     (tmp_path / f"{name}.started").write_text(ts.isoformat())
 
 
-def _finish_agent(tmp_path, name, findings=None, verdict="APPROVE"):
-    (tmp_path / f"{name}-review.json").write_text(json.dumps({
-        "findings": findings or [], "verdict": verdict,
+def _reviewer_filename(agent_name: str) -> str:
+    """Mirror the production derive_reviewer_name convention."""
+    if agent_name.endswith("-reviewer"):
+        base = agent_name[: -len("-reviewer")]
+    else:
+        base = agent_name
+    return f"{base}-review.json"
+
+
+def _finish_agent(tmp_path, name, issues=None, verdict="APPROVE"):
+    (tmp_path / _reviewer_filename(name)).write_text(json.dumps({
+        "issues": issues or [], "verdict": verdict,
     }))
 
 
@@ -162,3 +171,70 @@ class TestCheckStatus:
         cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         assert r.returncode == 1
+
+
+class TestFilenameConvention:
+    """Status check must find files using the reviewer name, not the agent name."""
+
+    def test_finds_review_file_with_reviewer_name(self, mod, tmp_path):
+        """security-reviewer agent writes security-review.json — status should be FINISHED."""
+        plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+
+        review = {"issues": [], "verdict": "approve"}
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = mod.check_status(str(tmp_path))
+        agent = result["agents"][0]
+        assert agent["status"] == "FINISHED", (
+            f"Expected FINISHED but got {agent['status']}. "
+            f"Status check is looking for the wrong filename."
+        )
+
+    def test_agent_without_reviewer_suffix(self, mod, tmp_path):
+        """pr-reviewer → pr-review.json (same convention applies)."""
+        plan = {"agents": [{"name": "pr-reviewer", "status": "DISPATCH"}]}
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+
+        review = {"issues": [{"title": "Bug", "file": "a.py", "severity": "high"}], "verdict": "request_changes"}
+        (tmp_path / "pr-review.json").write_text(json.dumps(review))
+
+        result = mod.check_status(str(tmp_path))
+        agent = result["agents"][0]
+        assert agent["status"] == "FINISHED"
+
+    def test_non_reviewer_agent_name_unchanged(self, mod, tmp_path):
+        """Agent names not ending in -reviewer use the name as-is."""
+        plan = {"agents": [{"name": "gemini-reviewer", "status": "DISPATCH"}]}
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+
+        review = {"issues": [], "verdict": "approve"}
+        (tmp_path / "gemini-review.json").write_text(json.dumps(review))
+
+        result = mod.check_status(str(tmp_path))
+        agent = result["agents"][0]
+        assert agent["status"] == "FINISHED"
+
+
+class TestIssuesKey:
+    """Status check must read the 'issues' key, not 'findings'."""
+
+    def test_reads_issues_key(self, mod, tmp_path):
+        """ReviewOutputBuilder emits 'issues', not 'findings'."""
+        plan = {"agents": [{"name": "security-reviewer", "status": "DISPATCH"}]}
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+
+        review = {
+            "issues": [
+                {"title": "XSS", "file": "a.php", "severity": "critical"},
+                {"title": "CSRF", "file": "b.php", "severity": "high"},
+            ],
+            "verdict": "block",
+        }
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = mod.check_status(str(tmp_path))
+        agent = result["agents"][0]
+        assert agent["status"] == "FINISHED"
+        assert agent["counts"]["critical"] == 1
+        assert agent["counts"]["high"] == 1
