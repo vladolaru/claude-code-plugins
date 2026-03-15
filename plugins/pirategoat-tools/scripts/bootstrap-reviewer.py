@@ -684,6 +684,13 @@ def main():
         output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    # Write started marker — check-reviewer-agent-status.py uses this
+    # to distinguish RUNNING from NOT_DISPATCHED
+    started_path = os.path.join(output_dir, f"{args.agent}.started")
+    with open(started_path, "w") as f:
+        from datetime import datetime, timezone
+        f.write(datetime.now(timezone.utc).isoformat())
+
     # Compute file history for agents that request it
     file_history_output = None
     if config.get("file_history") and scope_output:
