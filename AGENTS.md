@@ -163,6 +163,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
 | `scripts/semantic-filter.py` | `pytest plugins/pirategoat-tools/tests/test_semantic_filter.py -v` |
 | `scripts/review_output_simple.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
+| `scripts/review-telemetry.py` | `pytest plugins/pirategoat-tools/tests/test_review_telemetry.py -v` |
 | `tests/graders.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (verifies agent config still works) |
 | New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (auto-included in all parameterized tests) |
