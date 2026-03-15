@@ -6,50 +6,42 @@ You are a code review orchestrator. Your mission: dispatch specialized reviewer 
 
 This is a **branch-level review** — no PR or GitHub context required. Useful for pre-PR feedback during development.
 
-## Step 1: Detect Branch and Range
+## Step 1: Gather Context
 
 **Parse arguments:** `$ARGUMENTS`
-- If empty: auto-detect default branch, review `<default-branch>..HEAD`
+- If empty: auto-detect default branch
 - If a branch name (no `..`): review `<argument>..HEAD`
-- If a git range (contains `..`): use it directly
+- If a git range (contains `..`): use directly
 
-**Determine current state:**
+**Construct output directory** (sanitize all fragments for filesystem safety):
 
 ```bash
-# Current branch
-git branch --show-current
-
-# Default branch (if needed for auto-detect)
-git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
+OWNER=$(git remote get-url origin | sed -E 's#.*/([^/]+)/[^/]+(\.git)?$#\1#')
+REPO=$(git remote get-url origin | sed -E 's#.*/([^/]+?)(\.git)?$#\1#')
+BRANCH=$(git branch --show-current)
+SAFE_OWNER=$(echo "$OWNER" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
+SAFE_REPO=$(echo "$REPO" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
+SAFE_BRANCH=$(echo "$BRANCH" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
+OUTPUT_DIR="/tmp/branch-review-${SAFE_OWNER}-${SAFE_REPO}-${SAFE_BRANCH}"
+mkdir -p "$OUTPUT_DIR"
 ```
 
-If default branch detection fails, try `main`, then `master`, then `trunk`:
 ```bash
-git rev-parse --verify main 2>/dev/null && echo "main" || (git rev-parse --verify master 2>/dev/null && echo "master" || echo "trunk")
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gather-review-context.py \
+  --branch \
+  --git-range "<explicit range if provided>" \
+  --output-dir "$OUTPUT_DIR"
 ```
 
-**Guard rails:**
+Read `review-context.json` for `git_range`, `merge_base`, `github_cli_command`, changed files.
 
-- **On default branch with no explicit range:** STOP. Tell the user: "You are on the default branch. Switch to a feature branch or provide a range: `/full-code-review HEAD~5..HEAD`"
-- **No commits in range:** STOP. Tell the user: "No commits found between `<base>` and `HEAD`. Nothing to review."
+Guard rails: on default branch → stop; no commits in range → stop.
 
-Verify changes exist:
-```bash
-git rev-list --count <range>
-```
-
-Store: `BRANCH_NAME`, `GIT_RANGE` (e.g., `main..HEAD`), `BASE_REF` (e.g., `main`).
+Store: Read `BRANCH_NAME`, `GIT_RANGE`, `BASE_REF`, `OUTPUT_DIR` from `review-context.json`.
 
 ## Step 2: Create Output Directory
 
-Sanitize the branch name for filesystem use and create the output directory:
-
-```bash
-BRANCH_SAFE=$(echo "<branch>" | tr '/' '-' | sed 's/^-//')
-OUTPUT_DIR="/tmp/branch-review-${BRANCH_SAFE}"
-rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR"
-```
+Output directory was already created in Step 1. Proceed to ground truth collection.
 
 ## Step 2.5: Ground Truth Collection (optional)
 
@@ -221,13 +213,13 @@ After ALL dispatched agents have returned their signals, run the deterministic r
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/reconcile-reviews.py \
   --output-dir <OUTPUT_DIR> \
-  --agent-signals "$AGENT_SIGNALS_TEXT" \
-  --changed-files "$(echo "$CHANGED_FILES_CSV")"
+  --dispatch-plan <OUTPUT_DIR>/dispatch-plan.json \
+  --changed-files "<CHANGED_FILES_CSV from review-context.json>"
 ```
 
 Where:
-- `AGENT_SIGNALS_TEXT` is the exact `agent_signals_text` value from Step 3.5. It must remain a single quoted shell argument, even if it spans multiple lines. Never splat the list directly into the command, and never use an unquoted expansion such as `--agent-signals $AGENT_SIGNALS_TEXT`.
-- `CHANGED_FILES_CSV` is the `changed_files` list from the Step 3.5 dispatch plan output, joined with commas. This enables test-gap detection advisories.
+- `--dispatch-plan` points to the dispatch plan file written by Step 3.5. The script discovers agent status from the plan + review files on disk — no LLM-composed signal text needed.
+- `CHANGED_FILES_CSV` is `git.changed_files_csv` from `review-context.json`. This enables test-gap detection advisories.
 
 This script reads all `*-review.json` files, deduplicates findings across agents, and writes `reconciled-structured.json` to the output directory. It handles:
 - Exact and near deduplication (same file + overlapping lines + similar title)
