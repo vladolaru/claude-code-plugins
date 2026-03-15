@@ -183,7 +183,7 @@ def discover_agent_signals(output_dir: str, dispatch_plan_path: str) -> str:
             except (json.JSONDecodeError, KeyError):
                 signals.append(f"{name}: STATUS=FINISHED (output malformed)")
         else:
-            signals.append(f"{name}: STATUS=FAILED (no review file)")
+            signals.append(f"{name}: STATUS=NOT_RUN (no review file — agent was not dispatched)")
 
     signal_text = "\n".join(signals)
 

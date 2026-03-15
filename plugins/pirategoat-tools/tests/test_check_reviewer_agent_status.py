@@ -88,7 +88,7 @@ class TestCheckStatus:
         _finish_agent(tmp_path, "pr-reviewer")
 
         result = mod.check_status(str(tmp_path))
-        assert result["all_done"] is False
+        assert result["all_done"] is True  # NOT_DISPATCHED no longer blocks
         assert result["not_dispatched"] == 1
         security = [a for a in result["agents"] if a["name"] == "security-reviewer"][0]
         assert security["status"] == "NOT_DISPATCHED"
@@ -171,6 +171,53 @@ class TestCheckStatus:
         cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         assert r.returncode == 1
+
+
+class TestNotDispatchedDoesNotBlockPipeline:
+    """NOT_DISPATCHED agents must not block ALL_DONE or trigger ACTION REQUIRED."""
+
+    def test_not_dispatched_does_not_block_all_done(self, mod, tmp_path):
+        """Pipeline should proceed even if some DISPATCH agents never started."""
+        _write_plan(tmp_path, [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        _start_agent(tmp_path, "pr-reviewer")
+        _finish_agent(tmp_path, "pr-reviewer")
+        # security-reviewer: plan says DISPATCH but never started (triaged out)
+
+        result = mod.check_status(str(tmp_path))
+        assert result["all_done"] is True, (
+            "NOT_DISPATCHED should not block ALL_DONE — pipeline must not hang "
+            "waiting for agents that will never start"
+        )
+        assert result["not_dispatched"] == 1
+        assert result["finished"] == 1
+
+    def test_not_dispatched_shown_as_note_not_action_required(self, mod, tmp_path):
+        """NOT_DISPATCHED should produce a NOTE, not ACTION REQUIRED."""
+        _write_plan(tmp_path, [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "dead-code-reviewer", "status": "DISPATCH"},
+        ])
+        _start_agent(tmp_path, "pr-reviewer")
+        _finish_agent(tmp_path, "pr-reviewer")
+
+        result = mod.check_status(str(tmp_path))
+        output = mod.format_output(result)
+        assert "ACTION REQUIRED" not in output
+        assert "NOTE" in output or "not dispatched" in output.lower()
+
+    def test_all_not_dispatched_still_all_done(self, mod, tmp_path):
+        """Even if ALL agents are NOT_DISPATCHED, pipeline should not hang."""
+        _write_plan(tmp_path, [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        # Neither agent started
+
+        result = mod.check_status(str(tmp_path))
+        assert result["all_done"] is True
 
 
 class TestFilenameConvention:

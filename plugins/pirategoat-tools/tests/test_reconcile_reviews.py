@@ -799,7 +799,7 @@ class TestDiscoverAgentSignals:
         signals = discover_agent_signals(tmp_dir, os.path.join(tmp_dir, "dispatch-plan.json"))
         assert "pr-reviewer: STATUS=FINISHED" in signals
         assert "critical=1" in signals
-        assert "security-reviewer: STATUS=FAILED" in signals
+        assert "security-reviewer: STATUS=NOT_RUN" in signals
 
     def test_includes_skipped_agents(self, tmp_dir):
         plan = {"agents": [

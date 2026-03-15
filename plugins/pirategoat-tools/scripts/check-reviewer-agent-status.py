@@ -127,9 +127,10 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
             not_dispatched += 1
             agents.append({"name": name, "status": "NOT_DISPATCHED"})
 
-    # ALL_DONE = nothing left to wait for (running=0, not_dispatched=0)
-    # Timed out agents are not waited for — they count as "done"
-    all_done = running == 0 and not_dispatched == 0
+    # ALL_DONE = nothing left to WAIT for.
+    # NOT_DISPATCHED agents will never start — don't wait for them.
+    # Only RUNNING agents block completion.
+    all_done = running == 0
 
     return {
         "all_done": all_done,
@@ -173,12 +174,12 @@ def format_output(result: dict) -> str:
             elapsed = _fmt_elapsed(a.get("elapsed_seconds", 0))
             lines.append(f"  {name:30s} TIMED_OUT ({elapsed} — exceeded timeout)")
         elif st == "NOT_DISPATCHED":
-            lines.append(f"  {name:30s} NOT_DISPATCHED — no .started marker found")
+            lines.append(f"  {name:30s} NOT_DISPATCHED (triaged out or skipped)")
     lines.append("")
     lines.append(f"ALL_DONE: {'true' if result['all_done'] else 'false'}")
     if result["not_dispatched"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "NOT_DISPATCHED"]
-        lines.append(f"ACTION REQUIRED: Dispatch missing agents: {', '.join(names)}")
+        lines.append(f"NOTE: {len(names)} agent(s) not dispatched (triaged out or skipped): {', '.join(names)}")
     if result["timed_out"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "TIMED_OUT"]
         lines.append(f"NOTE: Timed out agents will be excluded from reconciliation: {', '.join(names)}")
