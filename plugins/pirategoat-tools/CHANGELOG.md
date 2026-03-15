@@ -5,6 +5,28 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.54.0] - 2026-03-15
+
+### Added
+
+- **`gather-review-context.py`** — unified Ring 1 context script for all review entry points. Gap-filling design: reads existing `review-context.json`, fills what's missing, writes the complete file. Supports `--pr-number`, `--branch`, and `--branch --incremental` modes
+- **`pr-review-pipeline.py`** — 15-step mode-aware step-injection script that replaces both the `reviewing-pr` skill and the `/pr-review` override table. Bot mode detected from `review-context.json`, headless mode from `--headless` flag
+- **`check-reviewer-agent-status.py`** — deterministic agent status check with four states: FINISHED, RUNNING, TIMED_OUT, NOT_DISPATCHED. Reads dispatch plan + `.started` markers + review files
+- **`.started` markers in `bootstrap-reviewer.py`** — each agent writes a timestamped marker on entry for status tracking
+
+### Changed
+
+- **`/pr-review` command rewritten as step-injection pipeline** — the 265-line command with 7-entry override table is now ~80 lines delegating to `pr-review-pipeline.py`. No override table — mode switching is deterministic script logic
+- **`/full-code-review` and `/code-review` use `gather-review-context.py`** — replaces ad-hoc branch detection, range computation, and output directory creation with the shared context script
+- **Reconciliation uses `--dispatch-plan` for signal discovery** — `reconcile-reviews.py` now accepts `--dispatch-plan` to discover agent status from files instead of LLM-composed `--agent-signals` text
+- **`plan-review-dispatch.py` schema normalized** — `"dispatch"` → `"agents"`, `"agent"` → `"name"` in the dispatch plan output. Also writes `dispatch-plan.json` to `--output-dir`
+- **`ingest-code-review.py` and `decision-critic.py` output formatting aligned** — ═══ separators, phase in header, (MANDATORY) next pointers
+- **`dig-into-linear-issue` PR handoff updated** — invokes `/pr-review` instead of the deleted `reviewing-pr` skill
+
+### Removed
+
+- **`reviewing-pr` skill deleted** — folded into `/pr-review` pipeline script
+
 ## [1.53.3] - 2026-03-14
 
 ### Added

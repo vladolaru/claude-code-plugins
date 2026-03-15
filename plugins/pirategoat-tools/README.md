@@ -41,7 +41,7 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 - **sonnet** (12 agents) — Structured analysis against well-defined checklists. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
 - **haiku** (4 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
 
-### 19 Skills
+### 18 Skills
 
 | Skill | What it brings |
 |-------|---------------|
@@ -52,7 +52,6 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | **go-testing-patterns** | Standard testing package, table-driven tests, httptest, benchmarks, fuzz testing |
 | **software-architecture** | GoF patterns, SOLID, hexagonal architecture with an 87KB pattern library |
 | **wordpress-backend-dev** | WPCS coding standards, security patterns, i18n, hooks API, REST API |
-| **reviewing-pr** | Structured PR review workflow with parallel agent spawning |
 | **browser-interaction** | Browser automation via MCP servers (chrome-devtools, playwright) |
 | **woocommerce-browser-interaction** | WooCommerce-specific browser workflows — login, admin, checkout |
 | **dig-into-linear-issue** | Linear issue investigation with RCA templates |
