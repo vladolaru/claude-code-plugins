@@ -207,6 +207,74 @@ def assert_findings_severity(
     return AssertionResult(passed=True, name="findings_severity")
 
 
+def _compute_verdict_from_clusters(clusters: list[dict]) -> str:
+    """Compute verdict from cluster severities using ReviewOutputBuilder thresholds."""
+    counts = {"critical": 0, "high": 0, "medium": 0}
+    for c in clusters:
+        canonical = c.get("canonical", {})
+        sev = canonical.get("severity", c.get("severity", "medium")).lower()
+        if sev in counts:
+            counts[sev] += 1
+
+    if counts["critical"] > 0:
+        return "block"
+    if counts["high"] >= 3:
+        return "block"
+    if counts["high"] > 0 or counts["medium"] >= 5:
+        return "request_changes"
+    if counts["medium"] > 0:
+        return "comment"
+    return "approve"
+
+
+def assert_verdict_in(path: str, expected_verdicts: list[str]) -> AssertionResult:
+    """Check that the computed verdict is one of the expected values.
+
+    The verdict is computed from reconciled cluster severities using
+    the same thresholds as ReviewOutputBuilder._calculate_verdict.
+    reconciled-structured.json has no top-level verdict field.
+    """
+    data, err = _load_json(path)
+    if err:
+        return AssertionResult(passed=False, name="verdict_in", reason=err)
+
+    clusters = data.get("clusters", data.get("issues", []))
+    verdict = _compute_verdict_from_clusters(clusters).upper()
+    expected_upper = [v.upper() for v in expected_verdicts]
+
+    if verdict not in expected_upper:
+        return AssertionResult(
+            passed=False, name="verdict_in",
+            reason=f"Computed verdict '{verdict}' not in expected {expected_verdicts}",
+        )
+    return AssertionResult(passed=True, name="verdict_in")
+
+
+def assert_must_skip_triage(path: str, expected_skipped: list[str]) -> AssertionResult:
+    """Check that specified agents were skipped by triage in the dispatch plan."""
+    data, err = _load_json(path)
+    if err:
+        return AssertionResult(passed=False, name="must_skip_triage", reason=err)
+
+    agents = data.get("agents", [])
+    agent_status = {a["name"]: a.get("status", "") for a in agents}
+
+    failures = []
+    for name in expected_skipped:
+        status = agent_status.get(name)
+        if status is None:
+            failures.append(f"{name}: not found in dispatch plan")
+        elif status != "SKIPPED_TRIAGE":
+            failures.append(f"{name}: expected SKIPPED_TRIAGE, got {status}")
+
+    if failures:
+        return AssertionResult(
+            passed=False, name="must_skip_triage",
+            reason="; ".join(failures),
+        )
+    return AssertionResult(passed=True, name="must_skip_triage")
+
+
 def assert_final_state(output_dir: str, expectations) -> list[AssertionResult]:
     """Run all post-run assertions for a PR. Returns list of results."""
     results = []
@@ -248,6 +316,14 @@ def assert_final_state(output_dir: str, expectations) -> list[AssertionResult]:
             min_important=expectations.min_important_findings,
             max_important=expectations.max_important_findings,
         ))
+
+    # Verdict assertion — compute from reconciled cluster severities.
+    if expectations.verdict_in and os.path.isfile(reconciled_path):
+        results.append(assert_verdict_in(reconciled_path, expectations.verdict_in))
+
+    # Triage skip assertion — check dispatch plan statuses.
+    if expectations.must_skip_triage and os.path.isfile(dispatch_path):
+        results.append(assert_must_skip_triage(dispatch_path, expectations.must_skip_triage))
 
     # Changed files count.
     if expectations.max_changed_files is not None and os.path.isfile(ctx_path):

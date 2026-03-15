@@ -12,6 +12,8 @@ from assertions import (
     assert_dispatch_plan,
     assert_findings_severity,
     assert_context_field,
+    assert_verdict_in,
+    assert_must_skip_triage,
     AssertionFailure,
 )
 
@@ -172,3 +174,98 @@ class TestFindingsSeverity:
             str(path), min_critical=1, min_important=1
         )
         assert result.passed, f"Should find 1 critical + 1 high but got: {result.reason}"
+
+
+class TestVerdictIn:
+    def test_approve_for_low_findings(self, tmp_path):
+        """verdict_in assertion computes verdict from cluster severities."""
+        data = {
+            "clusters": [
+                {"canonical": {"severity": "low", "title": "Minor", "file": "a.php"}},
+            ]
+        }
+        path = tmp_path / "reconciled-structured.json"
+        path.write_text(json.dumps(data))
+
+        result = assert_verdict_in(str(path), ["APPROVE", "COMMENT"])
+        assert result.passed, f"No medium+ findings should yield APPROVE but: {result.reason}"
+
+    def test_fails_when_verdict_excluded(self, tmp_path):
+        """verdict_in fails when computed verdict is not in expected list."""
+        data = {
+            "clusters": [
+                {"canonical": {"severity": "critical", "title": "XSS", "file": "a.php"}},
+            ]
+        }
+        path = tmp_path / "reconciled-structured.json"
+        path.write_text(json.dumps(data))
+
+        result = assert_verdict_in(str(path), ["APPROVE", "COMMENT"])
+        assert not result.passed, "Critical finding should yield BLOCK, not in [APPROVE, COMMENT]"
+
+    def test_block_on_3_highs(self, tmp_path):
+        """verdict_in: 3+ highs escalate to BLOCK."""
+        data = {
+            "clusters": [
+                {"canonical": {"severity": "high", "title": f"Issue {i}", "file": f"{i}.php"}}
+                for i in range(3)
+            ]
+        }
+        path = tmp_path / "reconciled-structured.json"
+        path.write_text(json.dumps(data))
+
+        result = assert_verdict_in(str(path), ["BLOCK"])
+        assert result.passed, f"3 highs should BLOCK but: {result.reason}"
+
+    def test_request_changes_on_5_mediums(self, tmp_path):
+        """verdict_in: 5+ mediums escalate to REQUEST_CHANGES."""
+        data = {
+            "clusters": [
+                {"canonical": {"severity": "medium", "title": f"Issue {i}", "file": f"{i}.php"}}
+                for i in range(5)
+            ]
+        }
+        path = tmp_path / "reconciled-structured.json"
+        path.write_text(json.dumps(data))
+
+        result = assert_verdict_in(str(path), ["REQUEST_CHANGES"])
+        assert result.passed, f"5 mediums should REQUEST_CHANGES but: {result.reason}"
+
+
+class TestMustSkipTriage:
+    def test_passes_when_agent_skipped(self, tmp_path):
+        """must_skip_triage passes when expected agents have SKIPPED_TRIAGE status."""
+        dispatch = tmp_path / "dispatch-plan.json"
+        dispatch.write_text(json.dumps({
+            "agents": [
+                {"name": "a11y-reviewer", "domain": "a11y", "status": "SKIPPED_TRIAGE", "reason": "No frontend files"},
+                {"name": "security-reviewer", "domain": "security", "status": "DISPATCH", "reason": "PHP files changed"},
+            ]
+        }))
+
+        result = assert_must_skip_triage(str(dispatch), ["a11y-reviewer"])
+        assert result.passed
+
+    def test_fails_when_dispatched(self, tmp_path):
+        """must_skip_triage fails when expected-skipped agent was dispatched."""
+        dispatch = tmp_path / "dispatch-plan.json"
+        dispatch.write_text(json.dumps({
+            "agents": [
+                {"name": "a11y-reviewer", "domain": "a11y", "status": "DISPATCH", "reason": "Frontend files found"},
+            ]
+        }))
+
+        result = assert_must_skip_triage(str(dispatch), ["a11y-reviewer"])
+        assert not result.passed
+
+    def test_fails_when_agent_missing(self, tmp_path):
+        """must_skip_triage fails when expected agent is not in dispatch plan at all."""
+        dispatch = tmp_path / "dispatch-plan.json"
+        dispatch.write_text(json.dumps({
+            "agents": [
+                {"name": "security-reviewer", "domain": "security", "status": "DISPATCH", "reason": "PHP files"},
+            ]
+        }))
+
+        result = assert_must_skip_triage(str(dispatch), ["a11y-reviewer"])
+        assert not result.passed
