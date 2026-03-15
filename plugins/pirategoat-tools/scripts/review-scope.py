@@ -65,6 +65,9 @@ def apply_semantic_filter(diff_text: str) -> str:
 # Domain Catalog — single source of truth for file filtering
 # =============================================================================
 
+# Shared test-file exclusion pattern for production-code domains.
+_TEST_EXCLUDE = r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$|_test\.php$|_test\.go$)"
+
 DOMAIN_CATALOG = {
     "code": {
         "description": "All code files (pr-reviewer)",
@@ -84,12 +87,12 @@ DOMAIN_CATALOG = {
     "dead-code": {
         "description": "Production code only, excluding tests (dead-code-reviewer)",
         "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
-        "exclude": r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$|_test\.php$|_test\.go$)",
+        "exclude": _TEST_EXCLUDE,
     },
     "architecture": {
         "description": "Implementation files, excluding tests",
         "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb)$",
-        "exclude": r"(test|spec|\.test\.|\.spec\.|__tests__)",
+        "exclude": _TEST_EXCLUDE,
     },
     "wp-architecture": {
         "description": "WordPress PHP/JS/TS files",
@@ -129,7 +132,7 @@ DOMAIN_CATALOG = {
     "reliability": {
         "description": "Production code for operational resilience review",
         "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
-        "exclude": r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$)",
+        "exclude": _TEST_EXCLUDE,
     },
     "config-ops": {
         "description": "CI/CD configs, Docker, Terraform, and infrastructure files",

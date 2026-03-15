@@ -291,6 +291,34 @@ class TestFilterDomain:
         assert matched == ["src/app.php"]
         assert len(excluded) == 2
 
+    def test_architecture_excludes_go_test_files(self):
+        """architecture domain should not match Go test files."""
+        files = ["pkg/handler_test.go"]
+        matched, excluded = review_scope.filter_domain(files, "architecture")
+        assert matched == [], "_test.go should be excluded from architecture"
+        assert "pkg/handler_test.go" in excluded
+
+    def test_architecture_does_not_exclude_contest(self):
+        """architecture domain should not exclude files containing 'test' as substring."""
+        files = ["pkg/contest_handler.go"]
+        matched, excluded = review_scope.filter_domain(files, "architecture")
+        assert matched == ["pkg/contest_handler.go"], "contest_handler.go should NOT be excluded"
+        assert excluded == []
+
+    def test_reliability_excludes_go_test_files(self):
+        """reliability domain should not match Go test files."""
+        files = ["pkg/handler_test.go"]
+        matched, excluded = review_scope.filter_domain(files, "reliability")
+        assert matched == [], "_test.go should be excluded from reliability"
+        assert "pkg/handler_test.go" in excluded
+
+    def test_reliability_excludes_php_test_files(self):
+        """reliability domain should not match _test.php files."""
+        files = ["tests/unit/handler_test.php"]
+        matched, excluded = review_scope.filter_domain(files, "reliability")
+        assert matched == [], "_test.php should be excluded from reliability"
+        assert "tests/unit/handler_test.php" in excluded
+
     def test_unknown_domain_raises(self):
         with pytest.raises(RuntimeError, match="Unknown domain"):
             review_scope.filter_domain(["app.py"], "nonexistent-domain")

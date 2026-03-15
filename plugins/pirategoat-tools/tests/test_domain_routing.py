@@ -138,7 +138,7 @@ ROUTING_MATRIX = {
         "code": "OK",
         "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "NO_DOMAIN_FILES",  # _test.go excluded
-        "reliability": "OK",  # _test.go not excluded (reliability exclude lacks _test.go pattern)
+        "reliability": "NO_DOMAIN_FILES",  # _test.go excluded by _TEST_EXCLUDE
         "security": "OK",
         "performance": "OK",
         "architecture": "NO_DOMAIN_FILES",  # _test.go contains "test" → excluded
