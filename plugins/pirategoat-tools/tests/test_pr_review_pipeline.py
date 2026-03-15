@@ -1,0 +1,297 @@
+"""Tests for pr-review-pipeline.py step-injection script."""
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from context_fixtures import COMPLETE_CONTEXT
+
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "pr-review-pipeline.py"
+TOTAL_STEPS = 14
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("pr_review_pipeline", SCRIPT_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def mod():
+    return _load_module()
+
+
+class TestSetupPhase:
+    """Steps 0-2: Parse PR, repo setup, context discovery."""
+
+    def _vals(self, mod, tmp_path, pr_number="42", with_context=False):
+        if with_context:
+            (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        return mod.load_context_values(str(tmp_path), pr_number)
+
+    def test_step_0_title(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(0, TOTAL_STEPS, vals, False, "")
+        assert g["title"] == "Parse PR Number"
+
+    def test_step_0_skips_ask_when_pr_provided(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(0, TOTAL_STEPS, vals, False, "")
+        actions = "\n".join(g["actions"])
+        assert "AskUserQuestion" not in actions
+
+    def test_step_0_asks_when_no_pr(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path, pr_number=None)
+        g = mod.get_step_guidance(0, TOTAL_STEPS, vals, False, "")
+        actions = "\n".join(g["actions"])
+        assert "Usage" in actions or "required" in actions.lower()
+
+    def test_step_1_skips_repo_setup_when_context_exists(self, mod, tmp_path):
+        """Bot mode: review-context.json exists → skip repo setup."""
+        vals = self._vals(mod, tmp_path, with_context=True)
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, False, "")
+        actions = "\n".join(g["actions"])
+        assert "skip" in actions.lower() or "pre-computed" in actions.lower()
+        assert "git stash" not in actions
+        assert "git checkout" not in actions
+
+    def test_step_1_full_setup_when_no_context(self, mod, tmp_path):
+        """Interactive mode: full repo setup."""
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, False, "")
+        actions = "\n".join(g["actions"])
+        assert "git status" in actions or "uncommitted" in actions.lower()
+
+    def test_step_1_auto_stash_when_headless(self, mod, tmp_path):
+        """Headless mode: auto-stash instead of asking."""
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, True, "")
+        actions = "\n".join(g["actions"])
+        assert "auto" in actions.lower() or "stash push" in actions
+
+    def test_step_2_skips_discovery_when_context_exists(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path, with_context=True)
+        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, False, "")
+        actions = "\n".join(g["actions"])
+        assert "review-context.json" in actions
+        assert "gather-review-context" not in actions
+
+    def test_step_2_discovers_when_no_context(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, False, "")
+        actions = "\n".join(g["actions"])
+        assert "gather-review-context" in actions
+
+
+class TestAwarenessPhase:
+    """Steps 3-4: PR review state, decide approach."""
+
+    def _vals(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        return mod.load_context_values(str(tmp_path), "42")
+
+    def test_step_3_uses_actual_gh_command(self, mod, tmp_path):
+        """Should print the actual gh command from context, not a placeholder."""
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(3, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        # Context has github_cli_command: "ghe"
+        assert "ghe" in actions
+
+    def test_step_4_auto_full_review_when_headless(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(4, TOTAL_STEPS, vals, True, "state")
+        actions = "\n".join(g["actions"])
+        assert "Full review" in actions
+        assert "AskUserQuestion" not in actions
+
+    def test_step_4_asks_user_when_interactive(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(4, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "AskUserQuestion" in actions
+
+
+class TestExecutionPhase:
+    """Steps 8-11: Size, ground truth, dispatch, agents."""
+
+    def test_step_8_reads_size_from_context(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(8, TOTAL_STEPS, vals, True, "state")
+        actions = "\n".join(g["actions"])
+        assert "review-context.json" in actions
+
+    def test_step_10_interpolates_actual_git_range(self, mod, tmp_path):
+        """Script should print the actual git range, not a template variable."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "plan-review-dispatch" in actions
+        # Should contain the actual range from the context file, not a placeholder
+        assert "abc123..fix/thing" in actions
+        assert "${GIT_RANGE}" not in actions
+        assert "<GIT_RANGE>" not in actions
+
+    def test_step_11_has_parallel_dispatch(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(11, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "parallel" in actions.lower() or "SINGLE message" in actions
+
+    def test_step_12_interpolates_actual_output_dir(self, mod, tmp_path):
+        """Ingest command should have the actual output dir path."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert str(tmp_path) in actions
+        assert "${OUTPUT_DIR}" not in actions
+
+    def test_step_13_interpolates_report_path(self, mod, tmp_path):
+        """Report path should be absolute, not a template."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert str(tmp_path / "review-report.md") in actions
+
+
+class TestValidationPhase:
+    """Step 12: Ingest."""
+
+    def test_step_12_references_ingest(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "ingest-code-review" in actions
+
+
+class TestOutputPhase:
+    """Steps 13-14: Report, critic, present, cleanup."""
+
+    def test_step_13_has_decision_critic(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "decision" in actions.lower()
+        assert "review-report.md" in actions
+
+    def test_step_14_skips_cleanup_in_bot_mode(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(14, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "skip" in actions.lower() or "bot" in actions.lower()
+
+    def test_step_14_restores_branch_when_interactive(self, mod, tmp_path):
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(14, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "checkout" in actions.lower() or "restore" in actions.lower()
+
+
+class TestStructure:
+    """Cross-cutting structural checks."""
+
+    def _vals(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        return mod.load_context_values(str(tmp_path), "42")
+
+    def test_steps_1_to_N_have_state_requirement(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        for step in range(1, TOTAL_STEPS + 1):
+            g = mod.get_step_guidance(step, TOTAL_STEPS, vals, False, "state")
+            actions = "\n".join(g["actions"])
+            assert "CONTEXT REQUIREMENT" in actions, f"Step {step} missing CONTEXT REQUIREMENT"
+
+    def test_non_final_steps_have_next(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        for step in range(0, TOTAL_STEPS):
+            g = mod.get_step_guidance(step, TOTAL_STEPS, vals, False, "state")
+            assert g["next"] is not None, f"Step {step} should have next"
+
+    def test_final_step_has_no_next(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(TOTAL_STEPS, TOTAL_STEPS, vals, False, "state")
+        assert g["next"] is None
+
+    def test_all_steps_have_role_reinforcement(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        for step in range(1, TOTAL_STEPS + 1):
+            g = mod.get_step_guidance(step, TOTAL_STEPS, vals, False, "state")
+            actions = "\n".join(g["actions"])
+            assert "PR review" in actions or "review" in actions.lower()
+
+    def test_no_template_variables_in_output(self, mod, tmp_path):
+        """No step should contain ${...} or <...> template placeholders."""
+        vals = self._vals(mod, tmp_path)
+        for step in range(0, TOTAL_STEPS + 1):
+            g = mod.get_step_guidance(step, TOTAL_STEPS, vals, False, "state")
+            actions = "\n".join(g["actions"])
+            assert "${OUTPUT_DIR}" not in actions, f"Step {step} has unresolved ${{OUTPUT_DIR}}"
+            assert "${GIT_RANGE}" not in actions, f"Step {step} has unresolved ${{GIT_RANGE}}"
+            assert "<GIT_RANGE>" not in actions, f"Step {step} has unresolved <GIT_RANGE>"
+            assert "<OUTPUT_DIR>" not in actions, f"Step {step} has unresolved <OUTPUT_DIR>"
+
+
+class TestFormatOutput:
+    def test_header_has_separators(self, mod, tmp_path):
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, False, "")
+        output = mod.format_output(1, TOTAL_STEPS, g)
+        assert "═══" in output
+        assert "Step 1/" in output
+
+    def test_next_is_mandatory(self, mod, tmp_path):
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, False, "")
+        output = mod.format_output(1, TOTAL_STEPS, g)
+        assert "MANDATORY" in output
+
+    def test_final_step_shows_complete(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(TOTAL_STEPS, TOTAL_STEPS, vals, False, "state")
+        output = mod.format_output(TOTAL_STEPS, TOTAL_STEPS, g)
+        assert "COMPLETE" in output
+
+
+class TestCLIIntegration:
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_0_exits_0(self, tmp_path):
+        r = self._run(
+            "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+            "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
+        )
+        assert r.returncode == 0
+
+    def test_headless_flag(self, tmp_path):
+        r = self._run(
+            "--step-number", "4", "--total-steps", str(TOTAL_STEPS),
+            "--pr-number", "42", "--output-dir", str(tmp_path),
+            "--headless", "--thoughts", "state",
+        )
+        assert r.returncode == 0
+        assert "Full review" in r.stdout
+
+    def test_invalid_step_exits_1(self, tmp_path):
+        r = self._run(
+            "--step-number", "99", "--total-steps", str(TOTAL_STEPS),
+            "--output-dir", str(tmp_path), "--thoughts", "",
+        )
+        assert r.returncode == 1
