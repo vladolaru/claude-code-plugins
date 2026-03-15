@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.57.2] - 2026-03-15
+
+### Changed
+
+- **Pass change purpose to reconciliator** — All three review commands now include a `Change Purpose` field in the reconciliator prompt (1-3 sentence summary of what the change does). Enables the reconciliator to calibrate finding severity by relevance to the change's goal, closing a gap where borderline findings could be dropped before the main session could recalibrate them with PR context
+
 ## [1.57.1] - 2026-03-15
 
 ### Fixed

@@ -224,6 +224,7 @@ Agent tool:
     Output Directory: <OUTPUT_DIR>
     Git Range: <GIT_RANGE>
     PR Context: Branch review in <REPO>
+    Change Purpose: <1-3 sentence summary of what this branch does, derived from commit messages in GIT_RANGE>
     Changed Files: <CHANGED_FILES_CSV>
     Ground Truth: <GROUND_TRUTH_PATH>  (if available)
 ```

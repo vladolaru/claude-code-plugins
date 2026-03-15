@@ -475,6 +475,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 f"        Output Directory: {od}",
                 f"        Git Range: {gr}",
                 f"        PR Context: PR #{pr} in this repo",
+                "        Change Purpose: <1-3 sentence summary: PR title, what the PR is solving, linked issue goal if known — from your accumulated --thoughts context>",
                 f"        Changed Files: {vals['changed_files_csv']}" + gt_line,
                 "",
                 "The reconciliator reads all agent findings, groups by underlying concern,",

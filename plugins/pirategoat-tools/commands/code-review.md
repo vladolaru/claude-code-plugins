@@ -252,6 +252,7 @@ Agent tool:
     Output Directory: <OUTPUT_DIR>
     Git Range: <GIT_RANGE>
     PR Context: Incremental branch review in <REPO>
+    Change Purpose: <1-3 sentence summary of what the new commits do, derived from commit messages in GIT_RANGE>
     Changed Files: <CHANGED_FILES_CSV>
     Ground Truth: <GROUND_TRUTH_PATH>  (if available)
 ```
