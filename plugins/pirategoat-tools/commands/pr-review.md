@@ -45,7 +45,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
   --step-number <0-15> \
   --total-steps 15 \
   --pr-number "<PR number>" \
-  --output-dir "/tmp/pr-review-<REPO_PATH>-<PR_NUMBER>" \
+  --output-dir "/tmp/pr-review-<SAFE_REPO_PATH>-<PR_NUMBER>" \
   --headless \
   --thoughts "<accumulated state from all previous steps>"
 ```
@@ -70,8 +70,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | sed 's/^-//')
-OUTPUT_DIR="/tmp/pr-review-${REPO_PATH}-<PR_NUMBER>"
+SAFE_REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | sed 's/^-//')
+OUTPUT_DIR="/tmp/pr-review-${SAFE_REPO_PATH}-<PR_NUMBER>"
 mkdir -p "$OUTPUT_DIR"
 ```
 
