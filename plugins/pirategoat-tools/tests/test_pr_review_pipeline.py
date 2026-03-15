@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -330,3 +331,83 @@ class TestCLIIntegration:
             "--output-dir", str(tmp_path), "--thoughts", "",
         )
         assert r.returncode == 1
+
+
+class TestTelemetryIntegration:
+    """Verify pipeline calls telemetry at each step."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_0_creates_telemetry_log(self, tmp_path):
+        """Step 0 should create a telemetry log file."""
+        log_dir = tmp_path / "telemetry-logs"
+        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+            r = self._run(
+                "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
+            )
+        assert r.returncode == 0
+        marker = tmp_path / ".telemetry-log-path"
+        assert marker.is_file()
+
+    def test_telemetry_failure_does_not_break_pipeline(self, tmp_path):
+        """Pipeline works even if telemetry log_dir is unwritable."""
+        log_dir = tmp_path / "unwritable"
+        log_dir.mkdir()
+        log_dir.chmod(0o000)
+        try:
+            with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+                r = self._run(
+                    "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                    "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
+                )
+            # Pipeline should still succeed
+            assert r.returncode == 0
+            assert "Step 0/" in r.stdout
+        finally:
+            log_dir.chmod(0o755)
+
+    def test_step_1_appends_to_telemetry_log(self, tmp_path):
+        """Step 1 should append to the log created by step 0."""
+        log_dir = tmp_path / "telemetry-logs"
+        env = {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}
+        with patch.dict(os.environ, env):
+            self._run(
+                "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
+            )
+            self._run(
+                "--step-number", "1", "--total-steps", str(TOTAL_STEPS),
+                "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "state",
+            )
+        marker = tmp_path / ".telemetry-log-path"
+        log_path = marker.read_text().strip()
+        with open(log_path) as f:
+            lines = f.readlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0])["event"] == "pipeline_start"
+        assert json.loads(lines[1])["event"] == "step"
+
+    def test_final_step_writes_pipeline_end(self, tmp_path):
+        """Final step should write pipeline_end event."""
+        log_dir = tmp_path / "telemetry-logs"
+        env = {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        with patch.dict(os.environ, env):
+            self._run(
+                "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
+            )
+            self._run(
+                "--step-number", str(TOTAL_STEPS), "--total-steps", str(TOTAL_STEPS),
+                "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "state",
+            )
+        marker = tmp_path / ".telemetry-log-path"
+        log_path = marker.read_text().strip()
+        with open(log_path) as f:
+            lines = f.readlines()
+        last = json.loads(lines[-1])
+        assert last["event"] == "pipeline_end"
+        assert "summary" in last
