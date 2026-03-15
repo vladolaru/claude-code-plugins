@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Include untracked files in stash and use STASH_REF for restore** — `git stash push` now passes `-u` to capture untracked files, and cleanup uses `git stash apply/drop <STASH_REF>` instead of blind `git stash pop`
 - **Act on decision critic verdict before presenting results** — Step 13 now instructs the agent to wait for the critic, read `decision-critic-findings.md`, spot-check factual claims, and act on verdicts: REVISE recalculates the verdict from updated findings, ESCALATE overrides the verdict to COMMENT and flags validity concerns in the report. Matches the behavior in `/code-review` and `/full-code-review`
 - **E2E tests monitor the actual pipeline output directory** — `test_pipeline.py` now watches `/tmp/pr-review-<owner>-<repo>-<PR>` (where the real pipeline writes) instead of a pytest-managed temp path, and cleans stale artifacts before each run
+- **Align review filename convention across status check and reconciliation** — `check-reviewer-agent-status.py` and `reconcile-reviews.py:discover_agent_signals()` now apply the same `-reviewer` suffix stripping as `bootstrap-reviewer.py`, matching the files agents actually write
+- **Read `issues` key instead of `findings` in status check and signal discovery** — matches `ReviewOutputBuilder`'s output schema
+- **Surface advisories in reconciliator narrative** — test-gap warnings and other advisories from `reconciled-structured.json` are now promoted to recommendations and processed by the reconciliator agent
+
+### Changed
+
+- **Unify triage language across all review entry points** — `/pr-review` Step 10 now describes bidirectional triage (upgrade or downgrade conditional agents) matching `/full-code-review` and `/code-review`
 
 ## [1.54.0] - 2026-03-15
 
