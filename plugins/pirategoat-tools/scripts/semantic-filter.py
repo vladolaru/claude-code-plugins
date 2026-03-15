@@ -21,6 +21,29 @@ Comment-heavy PRs: 35-45%
 import sys
 import re
 
+# Suppression/intent-bearing comment patterns — these are NOT noise.
+# They carry developer intent that is review-relevant:
+#   - Linter/type suppressions: eslint-disable, phpcs:ignore, @ts-ignore, noqa, nosec
+#   - Deprecation markers: @deprecated
+#   - Action markers: TODO, FIXME, HACK, XXX
+_STRUCTURED_COMMENT_PATTERNS = re.compile(
+    r'(?i)'  # case-insensitive
+    r'(?:'
+    r'eslint-disable|'
+    r'phpcs:(ignore|disable|enable)|'
+    r'@ts-(ignore|expect-error|nocheck)|'
+    r'noinspection\s|'
+    r'noqa|'
+    r'nosec|'
+    r'nolint|'
+    r'type:\s*ignore|'
+    r'pylint:\s*(disable|enable)|'
+    r'@deprecated|'
+    r'deprecated:|'
+    r'\b(TODO|FIXME|HACK|XXX)\b'
+    r')'
+)
+
 
 def is_blank_line_change(line):
     """Check if line is just adding/removing whitespace."""
@@ -57,15 +80,19 @@ def is_docblock_line(line):
 
 
 def is_inline_comment_only(line):
-    """Check if line is only an inline comment change."""
+    """Check if line is only an inline comment change.
+
+    Returns False for structured directives (eslint-disable, phpcs:ignore,
+    @ts-ignore, noqa, nosec, TODO, FIXME, @deprecated) — these carry
+    intent and are review-relevant.
+    """
     stripped = line.lstrip('+-').strip()
 
     # Single-line comments
-    if stripped.startswith('//'):
-        return True
-
-    # Hash comments (Python, Shell)
-    if stripped.startswith('#'):
+    if stripped.startswith('//') or stripped.startswith('#'):
+        # Exempt structured directives — they carry intent
+        if _STRUCTURED_COMMENT_PATTERNS.search(stripped):
+            return False
         return True
 
     return False
