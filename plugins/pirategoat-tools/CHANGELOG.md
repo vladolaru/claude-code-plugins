@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **1-based step numbering** in `pr-review-pipeline.py` — Steps now count 1-14 with `--total-steps 14`, eliminating the dissonance between step count and max step index that could confuse the executing LLM. Aligns with `code-review.md` and `full-code-review.md` which already used 1-based numbering
+
 ## [1.61.0] - 2026-03-16
 
 ### Removed
