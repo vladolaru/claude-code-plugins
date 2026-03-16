@@ -127,15 +127,19 @@ pytest plugins/yoloing-safe/tests/test_meta.py -v
 pytest plugins/yoloing-safe/tests/benchmark_hook.py -v
 ```
 
-E2E suite:
+E2E suite (**must be run manually by the user** — requires interactive TTY for `make auth` and a Docker daemon):
 
 ```bash
-# Note: return to repo root after this before running pytest
 cd plugins/yoloing-safe/tests/e2e
-make build
-make auth
-make run
+make generate   # regenerate test-cases.json from RULES + test-fixtures.json
+make build      # build Docker image with latest hook code and fixtures
+make auth       # interactive — authenticates Claude CLI inside the container
+make run        # executes all e2e tests (model calls, slow)
+# Return to repo root before running pytest
+cd /path/to/repo
 ```
+
+Agents cannot run `make auth` or `make run` — they require an interactive terminal and a valid Claude API session. When e2e-relevant changes are made (new rules, allowlist patterns, test fixtures, Dockerfile), agents should run `make generate` and `make build`, then tell the user to run `make auth` + `make run` manually.
 
 ## Which Tests to Run
 
@@ -145,7 +149,7 @@ make run
 | `RULES` assembly or rule metadata | `pytest plugins/yoloing-safe/tests/test_meta.py -v` then `cd plugins/yoloing-safe/tests/e2e && make generate` |
 | `ALLOWLIST_PATTERNS` | `pytest plugins/yoloing-safe/tests/test_meta.py -v` and the affected rule suites |
 | `tests/scenarios/*.json` | `pytest plugins/yoloing-safe/tests/test_scenarios.py -v` |
-| `tests/e2e/test-fixtures.json` | `cd plugins/yoloing-safe/tests/e2e && make generate` |
+| `tests/e2e/test-fixtures.json` or `Dockerfile` | `cd plugins/yoloing-safe/tests/e2e && make generate && make build` then tell user to run `make run` manually |
 
 ## Rule Workflows
 

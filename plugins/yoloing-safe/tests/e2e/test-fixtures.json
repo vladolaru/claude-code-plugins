@@ -78,6 +78,14 @@
       "tool": "Bash",
       "examples": ["git status"],
       "pattern": "git status"
+    },
+    {
+      "_doc": "Happy path: rm -rf cache dirs is allowlisted (vs blocked rm -rf /)",
+      "rule_id": "safe_cache_cleanup",
+      "tier": "allow",
+      "tool": "Bash",
+      "examples": ["rm -rf node_modules", "rm -rf src/__pycache__ .pytest_cache"],
+      "pattern": "rm -rf"
     }
   ]
 }

@@ -45,6 +45,14 @@ RUN mkdir -p /Users/testuser/.ssh /Users/testuser/.gnupg /Users/testuser/.aws \
        > /Users/testuser/project/.env \
     && echo 'precious-data' > /Users/testuser/important-files/data.txt
 
+# Create cache directory fixtures inside the test project for allowlist e2e tests
+RUN mkdir -p /Users/testuser/project/node_modules/.cache \
+    && echo '{}' > /Users/testuser/project/node_modules/.cache/babel-loader.json \
+    && mkdir -p /Users/testuser/project/src/__pycache__ \
+    && echo 'bytecode' > /Users/testuser/project/src/__pycache__/module.cpython-311.pyc \
+    && mkdir -p /Users/testuser/project/.pytest_cache \
+    && echo '{}' > /Users/testuser/project/.pytest_cache/README.md
+
 # ---------------------------------------------------------------------------
 # E2E test infrastructure — all files under ~/e2e/
 # ---------------------------------------------------------------------------

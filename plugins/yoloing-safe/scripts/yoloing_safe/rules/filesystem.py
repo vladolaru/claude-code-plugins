@@ -245,7 +245,16 @@ RULE_SPECS = [
 
 _TEMP_DIR_PREFIX = r"(?:/tmp/|/var/tmp/|\$TMPDIR/|\.claude/tmp/)"
 
+_SAFE_CACHE_DIR = (
+    r"(?:node_modules|__pycache__"
+    r"|\.pytest_cache|\.mypy_cache|\.ruff_cache"
+    r"|\.parcel-cache|\.turbo|\.eslintcache)"
+)
+
 ALLOWLIST_PATTERNS = [
     ("destructive_deletion", re.compile(rf"^rm\s+-[rfRF]*\s+(?:{_TEMP_DIR_PREFIX}\S*\s*)+$")),
+    ("destructive_deletion", re.compile(
+        rf"^rm\s+-[rfRF]*\s+(?!.*\.\.)(?:(?:\S*/)?{_SAFE_CACHE_DIR}(?:/\S*)?\s*)+$"
+    )),
     ("alternative_deletion", re.compile(rf"^find\s+{_TEMP_DIR_PREFIX}\S*\s+")),
 ]

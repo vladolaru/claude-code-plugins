@@ -93,6 +93,48 @@
   {
     "tool_name": "Bash",
     "tool_input": {
+      "command": "rm -rf __pycache__"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf node_modules"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf plugins/pirategoat-tools/scripts/__pycache__ plugins/pirategoat-tools/tests/__pycache__"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf .pytest_cache .mypy_cache"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf src/node_modules/.cache"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "rm -rf .turbo .ruff_cache .parcel-cache .eslintcache"
+    },
+    "category": "allowlisted"
+  },
+  {
+    "tool_name": "Bash",
+    "tool_input": {
       "command": "chmod +x script.sh"
     },
     "category": "allowlisted"

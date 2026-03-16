@@ -5,6 +5,12 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-03-16
+
+### Added
+- `destructive_deletion` allowlist for common cache directories — `rm -rf` targeting `node_modules`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.parcel-cache`, `.turbo`, or `.eslintcache` is now allowed without confirmation
+- Traversal protection (`..`) prevents abuse of the cache dir allowlist
+
 ## [1.12.0] - 2026-03-12
 
 ### Added
