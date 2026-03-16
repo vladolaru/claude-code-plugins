@@ -64,12 +64,12 @@ Code review orchestration with 19 parallel review agents, 18 skills, and 6 comma
 | `agents/` | 19 review agent definitions + 2 shared protocols in `agents/shared/` |
 | `skills/` | 18 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, etc.) |
 | `commands/` | 6 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, reconciliation, ingestion, ground truth integrators, review output |
+| `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, reconciliation, ingestion, review output |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
 | `AGENTS.md` | Full development instructions, architecture, agent registry reference |
 
-**Dev notes:** Agents run in parallel by default. Model tier assignment matters (`inherit`/`sonnet`/`haiku` based on reasoning depth). Ground truth tools (linters, scanners) are optional — agents fall back to manual analysis.
+**Dev notes:** Agents run in parallel by default. Model tier assignment matters (`inherit`/`sonnet`/`haiku` based on reasoning depth).
 
 ### dex
 

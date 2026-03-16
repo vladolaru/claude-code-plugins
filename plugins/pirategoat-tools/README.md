@@ -75,21 +75,6 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | `/copy-as [content] [slack\|p2]` | Copy content to clipboard — markdown, Slack mrkdwn, or P2 HTML |
 | `/switch-to <branch\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |
 
-### Ground Truth Integration
-
-Agents don't guess — they use actual tool outputs when available. The review commands extract tool commands from the project's CLAUDE.md and pass them to the ground truth orchestrator.
-
-| Phase | Tools | Parser |
-|-------|-------|--------|
-| Linters | ESLint, PHPCS | `parse-linter-results.py` |
-| Security | Semgrep | `parse-security-results.py` |
-| Tests | Jest, PHPUnit | `parse-test-results.py` |
-| Coverage | Jest, PHPUnit (Xdebug/PCOV) | `parse-coverage-results.py` |
-
-**How it works:** Before running `run-ground-truth.py`, the orchestrating LLM reads the project's CLAUDE.md to find how each tool is invoked (e.g., `pnpm test:unit`, `vendor/bin/phpcs`, `wp-env run tests-cli phpunit`). It writes a `tool-config.json` with the extracted commands. The script executes those commands, parses the output, and writes `ground-truth-summary.json`.
-
-All tools are optional — if a tool isn't configured, the script marks it as `not_configured` and agents fall back to manual analysis.
-
 ### Pipeline Analytics
 
 `scripts/extract-session-metrics.py` — extracts operational metrics from Claude Code session transcripts to measure agent performance and triage effectiveness.
@@ -117,13 +102,12 @@ Outputs markdown and JSON reports. Auto-detects the Claude Code sessions directo
 ## How Reviews Work
 
 1. Check for project-specific context (CLAUDE.md, skills)
-2. Check for ground truth files (linters, coverage, scanners)
-3. Load skill knowledge (testing-patterns, software-architecture)
-4. Analyze code changes
-5. Report findings with confidence scores
-6. Output both JSON (automation) and Markdown (humans)
+2. Load skill knowledge (testing-patterns, software-architecture)
+3. Analyze code changes
+4. Report findings with confidence scores
+5. Output both JSON (automation) and Markdown (humans)
 
-Agents use ground truth results at confidence 1.0 and fall back to manual analysis otherwise. All output is dual-format — `.json` for automation, `.md` for reading.
+All output is dual-format — `.json` for automation, `.md` for reading.
 
 ## Documentation
 

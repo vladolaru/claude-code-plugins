@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Ground truth collection step** — Removed linting, security scanning, test runners, and coverage parsers from the review pipeline. Real-world testing showed near-zero actionable signal: Semgrep free rules produced 100% noise on production PRs, and linting/tests duplicated what CI already surfaces. Agents now rely on their own analysis without pre-computed tool findings
+- **Scripts removed:** `run-ground-truth.py`, `parse-linter-results.py`, `parse-security-results.py`, `parse-test-results.py`, `parse-coverage-results.py`, and 4 shell wrapper scripts
+- **Ground truth injection** from `bootstrap-reviewer.py` (`--ground-truth` flag, `format_ground_truth_section()`)
+- **Ground truth cross-referencing** from `reconcile-reviews.py` (`--ground-truth` flag, `_load_ground_truth()`, `_match_ground_truth()`)
+- **Ground truth step** from `pr-review-pipeline.py` (Step 7 removed, pipeline reduced from 15 steps to 14), `code-review.md` (Step 3 removed), and `full-code-review.md` (Step 3 removed)
+- **Ground truth references** from reviewer-protocol.md, dead-code-reviewer.md, review-reconciliator.md, and tests-reviewer-protocol.md
+
 ### Added
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
