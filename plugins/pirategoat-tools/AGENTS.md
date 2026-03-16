@@ -92,7 +92,7 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `manual` | Only on explicit user request |
 | `special` | Orchestration/synthesis agents, not dispatched by triage |
 
-Commands handle triage at step 3.6 — they check each conditional agent's `triage_criteria` against the diffstat and commit messages.
+Commands handle triage at the "Adaptive Agent Triage" step — they check each conditional agent's `triage_criteria` against the diffstat and commit messages.
 
 ## Output Contract
 

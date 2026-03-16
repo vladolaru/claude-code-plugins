@@ -339,7 +339,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 8: Generate Dispatch Plan",
+            "next": "Step 8: Generate Dispatch Plan + Triage",
         }
 
     # Step 8: Generate Dispatch Plan
@@ -367,7 +367,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 9: Dispatch Agents + Reconcile",
+            "next": "Step 9: Dispatch Agents",
         }
 
     # Step 9: Dispatch Agents

@@ -7,7 +7,7 @@ extracts per-agent metrics (tokens, duration, findings, model), and produces
 summary reports in Markdown and JSON formats.
 
 Also extracts triage decisions from orchestrator sessions when the adaptive
-agent dispatch system is in use (Step 3.6 triage).
+agent dispatch system is in use (Adaptive Agent Triage step).
 
 Usage:
     # Scan default Claude Code sessions directory for the current project
@@ -111,7 +111,7 @@ NON_REVIEWER_AGENT_FINGERPRINTS = {
     ],
 }
 
-# Agents subject to LLM triage (Step 3.6 adaptive dispatch)
+# Agents subject to LLM triage (Adaptive Agent Triage step)
 TRIAGED_AGENTS = [
     "security-reviewer",
     "dead-code-reviewer",
@@ -293,7 +293,7 @@ def scan_triage_decisions(
     """Scan orchestrator session files for triage decisions.
 
     Looks in the main session JSONL files (not subagent files) for triage
-    lines emitted by the review orchestrator in Step 3.6.
+    lines emitted by the review orchestrator in the Adaptive Agent Triage step.
     """
     all_decisions = []
     sessions_checked = 0
@@ -1130,7 +1130,7 @@ def main():
     parser.add_argument(
         "--triage",
         action="store_true",
-        help="Extract and report on adaptive triage decisions (Step 3.6). "
+        help="Extract and report on adaptive triage decisions. "
         "Scans orchestrator sessions for TRIAGE lines and compares "
         "dispatch/skip decisions against actual agent outcomes.",
     )
@@ -1172,7 +1172,7 @@ def main():
         if not triage_decisions:
             print(
                 "No triage decisions found. Triage is only present in sessions "
-                "using adaptive agent dispatch (Step 3.6).",
+                "using adaptive agent dispatch.",
                 file=sys.stderr,
             )
             sys.exit(1)

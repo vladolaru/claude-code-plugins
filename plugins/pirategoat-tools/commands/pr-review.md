@@ -30,10 +30,10 @@ whatever instructions it provides.
 | Failure point | Recovery |
 |---------------|----------|
 | Before PR details (Steps 1-2) | STOP. Restore branch/stash if touched. |
-| After PR details, before dispatch (Steps 3-7) | Write partial report, skip to Step 12. |
-| During dispatch (Step 10) | Continue with available agents. Note failures. |
-| Reconciliation failure (Step 11) | Note "No findings" and proceed to Step 12. |
-| Decision critic error (Step 13) | Skip critic, present as-is. |
+| After PR details, before dispatch (Steps 3-8) | Write partial report, skip to Step 12. |
+| During dispatch (Step 9) | Continue with available agents. Note failures. |
+| Reconciliation failure (Step 10) | Note "No findings" and proceed to Step 12. |
+| Decision critic error (Step 12) | Skip critic, present as-is. |
 
 ## Invocation
 
