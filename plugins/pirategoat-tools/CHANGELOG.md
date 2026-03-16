@@ -19,12 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Remove headless mode** — The PR review pipeline always runs autonomously. Removed `--headless` flag, collapsed three-way branching (bot_mode / headless / interactive) to two-way (bot_mode / default), and removed dead interactive code paths. Eliminates the source of the step 16 cleanup regression
 - **Split Present Results / Cleanup** — Step 15 now only presents review results. Step 16 handles workspace cleanup (branch restore, stash pop). Pipeline grows from 16 steps (0-15) to 17 steps (0-16)
 - **Telemetry log directory** — Moved from `~/.claude/logs/pirategoat-tools/pr-reviews/` to `~/.pirategoat-tools/logs/pr-reviews/`
 
 ### Fixed
 
-- **Headless cleanup regression** — Step 16 cleanup incorrectly skipped workspace restore for all headless runs. Since `/pr-review` always passes `--headless` and step 1 auto-stashes + checks out the PR branch, the user's workspace was left altered after every non-bot review
+- **Workspace cleanup regression** — Step 16 cleanup incorrectly skipped workspace restore for non-bot runs. Since step 1 auto-stashes and checks out the PR branch, the user's workspace was left altered after every review. Root cause was the three-way branching — now eliminated
 - **Agent name mismatch in completion telemetry** — `ReviewOutputBuilder.save()` passed the stripped reviewer name (e.g., `security`) to `log_agent_complete`, but bootstrap writes `.started` files and `agent_start` events using the full agent name (`security-reviewer`). Duration was always null and start/complete events couldn't be correlated
 - **Scope metrics in agent_start telemetry** — `scope_files` and `scope_lines` were computed from raw scope text (total line count and character count), not from the structured `=== FILES ===` section. Extracted helper functions that parse the actual file entries and sum `(+N -M)` stats
 
