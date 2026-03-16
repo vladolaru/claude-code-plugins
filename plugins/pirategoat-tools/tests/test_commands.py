@@ -732,13 +732,6 @@ class TestPrReview:
             f"{self.COMMAND}: missing reference to pr-review-pipeline.py"
         )
 
-    def test_has_headless_flag(self):
-        """Should always pass --headless for autonomous operation."""
-        content = _read_command(self.COMMAND)
-        assert "--headless" in content, (
-            f"{self.COMMAND}: missing --headless flag"
-        )
-
     def test_has_phase_overview(self):
         """Should have a phase overview table."""
         content = _read_command(self.COMMAND)
