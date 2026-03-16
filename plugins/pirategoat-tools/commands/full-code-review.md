@@ -57,17 +57,20 @@ TOOLCFG
 
 **Supported tools and their expected output files:**
 
-| Tool name | Purpose | Expected output |
-|-----------|---------|----------------|
-| `eslint` | JS/TS linting | `eslint-results.json` (ESLint JSON format) |
-| `phpcs` | PHP linting | `phpcs-results.json` (PHPCS JSON format) |
-| `semgrep` | Security scanning | `semgrep-results.json` (Semgrep JSON format) |
-| `jest` | JS/TS test results | `jest-results.json` (Jest JSON format) |
-| `jest_coverage` | JS/TS coverage | `jest-coverage-summary.json` (Jest coverage-summary) |
-| `phpunit` | PHP test results | `phpunit-results.json` (PHPUnit JSON/JUnit) |
-| `phpunit_coverage` | PHP coverage | `phpunit-coverage.xml` (Clover XML) |
+| Tool name | Purpose | Scope | Expected output |
+|-----------|---------|-------|----------------|
+| `eslint` | JS/TS linting | Changed files (`{files}`) | `eslint-results.json` (ESLint JSON format) |
+| `phpcs` | PHP linting | Changed files (`{files}`) | `phpcs-results.json` (PHPCS JSON format) |
+| `semgrep` | Security scanning | Changed files (`{files}`) | `semgrep-results.json` (Semgrep JSON format) |
+| `jest` | JS/TS tests + coverage | Full project + scoped coverage | `jest-results.json` + `jest-coverage-summary.json` |
+| `phpunit` | PHP tests + coverage | Full project + scoped coverage | `phpunit-results.json` + `phpunit-coverage.xml` |
 
 **Placeholders:** Use `{output_file}` for the tool's output path, `{output_dir}` for the output directory, `{files}` for changed files (shell-quoted by the script).
+
+**Scoping rules:**
+- Linters/scanners: use `{files}` — runs only on changed files
+- Test suites: do NOT use `{files}` — must run full project to catch regressions
+- Coverage: include coverage flags in the test command (`--coverage`, `--coverage-clover`). Scope coverage to changed files where the tool supports it (`--collectCoverageFrom`, `--coverage-filter`)
 
 **Rules:**
 - Only include tools the project actually uses and has instructions for

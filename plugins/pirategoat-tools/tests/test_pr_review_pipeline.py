@@ -163,6 +163,16 @@ class TestExecutionPhase:
         actions = "\n".join(g["actions"])
         assert "review-context.json" in actions
 
+    def test_step_7_has_tool_discovery_instructions(self, mod, tmp_path):
+        """Step 7 should instruct Claude to read CLAUDE.md and write tool-config.json."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(7, TOTAL_STEPS, vals, "state")
+        actions = "\n".join(g["actions"])
+        assert "tool-config.json" in actions
+        assert "CLAUDE.md" in actions
+        assert "run-ground-truth.py" in actions
+
     def test_step_8_interpolates_actual_git_range(self, mod, tmp_path):
         """Script should print the actual git range, not a template variable."""
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
