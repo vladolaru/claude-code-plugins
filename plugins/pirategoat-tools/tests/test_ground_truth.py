@@ -605,6 +605,32 @@ class TestCollectGroundTruthIntegration:
         assert "jest" in summary["tools_not_configured"]
 
     @patch.object(_mod, "run_configured_tool")
+    def test_jest_with_coverage_produces_both_outputs(self, mock_run, tmp_output_dir):
+        """A single jest run with --coverage should populate both test_results and coverage."""
+        def side_effect(tool, cmd, out_dir, files, timeout):
+            _write_jest_results(out_dir, success=True)
+            # Also write coverage (simulating --coverage flag in the same run)
+            data = {
+                "total": {
+                    "lines": {"pct": 85.5},
+                    "branches": {"pct": 72.0},
+                    "functions": {"pct": 90.0},
+                    "statements": {"pct": 85.0},
+                }
+            }
+            with open(os.path.join(out_dir, "jest-coverage-summary.json"), "w") as f:
+                json.dump(data, f)
+            return True, ""
+
+        mock_run.side_effect = side_effect
+        config = {"jest": "npx jest --json --outputFile={output_file} --coverage --coverageDirectory={output_dir}"}
+
+        summary = _mod.collect_ground_truth(["src/app.js"], tmp_output_dir, tool_config=config)
+        assert "jest" in summary["tools_run"]
+        assert "test_results" in summary
+        assert "coverage" in summary
+
+    @patch.object(_mod, "run_configured_tool")
     def test_coverage_included_when_configured(self, mock_run, tmp_output_dir):
         def side_effect(tool, cmd, out_dir, files, timeout):
             if tool == "jest_coverage":

@@ -396,22 +396,27 @@ def collect_ground_truth(
             if err:
                 print(f"  {err}", file=sys.stderr)
 
-    # --- Parse results from tools that ran ---
+    # --- Parse results by output file existence (not tool name) ---
+    # This supports merged runs where e.g. jest --coverage produces both
+    # test results and coverage files in a single invocation.
 
     # Linters
-    if "eslint" in tools_run or "phpcs" in tools_run:
+    if (os.path.exists(os.path.join(output_dir, "eslint-results.json"))
+            or os.path.exists(os.path.join(output_dir, "phpcs-results.json"))):
         all_findings.extend(parse_linter_findings(output_dir, changed_set))
 
     # Security
-    if "semgrep" in tools_run:
+    if os.path.exists(os.path.join(output_dir, "semgrep-results.json")):
         all_findings.extend(parse_security_findings(output_dir, changed_set))
 
     # Tests
-    if "jest" in tools_run or "phpunit" in tools_run:
+    if (os.path.exists(os.path.join(output_dir, "jest-results.json"))
+            or os.path.exists(os.path.join(output_dir, "phpunit-results.json"))):
         test_results = parse_test_results(output_dir)
 
     # Coverage
-    if "jest_coverage" in tools_run or "phpunit_coverage" in tools_run:
+    if (os.path.exists(os.path.join(output_dir, "jest-coverage-summary.json"))
+            or os.path.exists(os.path.join(output_dir, "phpunit-coverage.xml"))):
         coverage = parse_coverage_results(output_dir, changed_set)
 
     # --- Build summary ---
