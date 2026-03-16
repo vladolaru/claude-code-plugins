@@ -63,6 +63,10 @@ def _read_events(log_path):
 class TestStart:
     """ReviewTelemetry.start() creates log infrastructure."""
 
+    def test_default_log_dir_is_pirategoat_tools(self, mod):
+        assert "/.pirategoat-tools/" in mod.LOG_DIR
+        assert mod.LOG_DIR.endswith("/logs/pr-reviews")
+
     def test_creates_log_directory(self, telemetry, tmp_path):
         log_dir = tmp_path / "logs"
         assert not log_dir.exists()
@@ -436,3 +440,119 @@ class TestReReviews:
         pattern = str(log_dir / "pr-review-org-repo-42--*.jsonl")
         matches = glob.glob(pattern)
         assert len(matches) == 2
+
+
+# ── log_agent_start() ────────────────────────────────────────────
+
+
+class TestLogAgentStart:
+    """ReviewTelemetry.log_agent_start() appends agent lifecycle events."""
+
+    def test_appends_agent_start_event(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(agent_name="security-reviewer", domain="security")
+        events = _read_events(telemetry.log_path)
+        assert len(events) == 2
+        assert events[1]["event"] == "agent_start"
+        assert events[1]["agent"] == "security-reviewer"
+
+    def test_includes_domain_and_model_tier(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(
+            agent_name="security-reviewer", domain="security",
+            model_tier="sonnet", scope_files=3, scope_lines=150,
+        )
+        events = _read_events(telemetry.log_path)
+        assert events[1]["domain"] == "security"
+        assert events[1]["model_tier"] == "sonnet"
+
+    def test_includes_scope(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(
+            agent_name="security-reviewer", domain="security",
+            scope_files=3, scope_lines=150,
+        )
+        events = _read_events(telemetry.log_path)
+        assert events[1]["scope"]["files"] == 3
+        assert events[1]["scope"]["lines"] == 150
+
+    def test_has_timestamp(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(agent_name="security-reviewer", domain="security")
+        events = _read_events(telemetry.log_path)
+        ts = datetime.fromisoformat(events[1]["timestamp"])
+        assert ts.tzinfo is not None
+
+    def test_noop_without_start(self, mod, output_dir, tmp_path):
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.log_agent_start(agent_name="security-reviewer", domain="security")
+        assert t.log_path is None
+
+    def test_multiple_agents(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(agent_name="security-reviewer", domain="security")
+        telemetry.log_agent_start(agent_name="performance-reviewer", domain="performance")
+        events = _read_events(telemetry.log_path)
+        agents = [e for e in events if e["event"] == "agent_start"]
+        assert len(agents) == 2
+        assert agents[0]["agent"] == "security-reviewer"
+        assert agents[1]["agent"] == "performance-reviewer"
+
+
+# ── log_agent_complete() ─────────────────────────────────────────
+
+
+class TestLogAgentComplete:
+    """ReviewTelemetry.log_agent_complete() appends completion events."""
+
+    def test_appends_agent_complete_event(self, telemetry, output_dir):
+        telemetry.start(pr_number="42")
+        (output_dir / "security-reviewer.started").write_text(
+            datetime.now(timezone.utc).isoformat()
+        )
+        time.sleep(0.05)
+        telemetry.log_agent_complete(
+            agent_name="security-reviewer", verdict="comment",
+            issue_count=2, severities={"high": 1, "medium": 1},
+        )
+        events = _read_events(telemetry.log_path)
+        assert events[-1]["event"] == "agent_complete"
+        assert events[-1]["agent"] == "security-reviewer"
+
+    def test_includes_verdict_and_issues(self, telemetry, output_dir):
+        telemetry.start(pr_number="42")
+        (output_dir / "security-reviewer.started").write_text(
+            datetime.now(timezone.utc).isoformat()
+        )
+        telemetry.log_agent_complete(
+            agent_name="security-reviewer", verdict="comment",
+            issue_count=2, severities={"high": 1, "medium": 1},
+        )
+        events = _read_events(telemetry.log_path)
+        assert events[-1]["verdict"] == "comment"
+        assert events[-1]["issue_count"] == 2
+        assert events[-1]["severities"] == {"high": 1, "medium": 1}
+
+    def test_calculates_duration_from_started_file(self, telemetry, output_dir):
+        telemetry.start(pr_number="42")
+        (output_dir / "security-reviewer.started").write_text(
+            datetime.now(timezone.utc).isoformat()
+        )
+        time.sleep(0.05)
+        telemetry.log_agent_complete(agent_name="security-reviewer", verdict="approve")
+        events = _read_events(telemetry.log_path)
+        assert events[-1]["duration_ms"] is not None
+        assert events[-1]["duration_ms"] >= 40
+
+    def test_duration_none_without_started_file(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_complete(agent_name="security-reviewer", verdict="approve")
+        events = _read_events(telemetry.log_path)
+        assert events[-1]["duration_ms"] is None
+
+    def test_noop_without_start(self, mod, output_dir, tmp_path):
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.log_agent_complete(agent_name="security-reviewer", verdict="approve")
+        assert t.log_path is None
