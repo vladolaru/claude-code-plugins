@@ -384,59 +384,11 @@ def _cluster_findings(all_findings: List[dict]) -> List[List[dict]]:
 # =============================================================================
 
 
-def _load_ground_truth(path: Optional[str]) -> List[dict]:
-    """Load ground truth findings from summary JSON. Returns empty list on failure."""
-    if not path or not os.path.isfile(path):
-        return []
-    try:
-        with open(path) as f:
-            data = json.load(f)
-        return data.get("findings", [])
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def _match_ground_truth(
-    canonical: dict, gt_findings: List[dict], line_tolerance: int = 3
-) -> Optional[str]:
-    """Check if a canonical finding matches any ground truth finding.
-
-    Match criteria: same file + line within ±line_tolerance.
-    Returns the tool name if matched, None otherwise.
-    """
-    c_file = canonical.get("file", "")
-    c_line = canonical.get("line")
-    if not c_file or c_line is None:
-        return None
-
-    for gt in gt_findings:
-        gt_file = gt.get("file", "")
-        gt_line = gt.get("line", 0)
-        if not gt_file or not gt_line:
-            continue
-
-        # File match (direct or suffix)
-        file_match = (
-            c_file == gt_file
-            or c_file.endswith(gt_file)
-            or gt_file.endswith(c_file)
-        )
-        if not file_match:
-            continue
-
-        # Line proximity match
-        if abs(c_line - gt_line) <= line_tolerance:
-            return gt.get("tool", "unknown")
-
-    return None
-
-
 def reconcile(
     output_dir: str,
     agent_signals: str = "",
     write_output: bool = False,
     changed_files: Optional[List[str]] = None,
-    ground_truth_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run the full reconciliation pipeline.
 
@@ -445,7 +397,6 @@ def reconcile(
         agent_signals: Raw agent signals string (for skipped agent detection).
         write_output: If True, write reconciled-structured.json to output_dir.
         changed_files: Optional list of changed file paths for test gap detection.
-        ground_truth_path: Optional path to ground-truth-summary.json.
 
     Returns:
         Reconciliation result dict matching the output schema.
@@ -551,15 +502,6 @@ def reconcile(
             "canonical": canonical,
         })
 
-    # 5.5. Ground truth cross-referencing
-    gt_findings = _load_ground_truth(ground_truth_path)
-    if gt_findings:
-        for cluster in clusters_output:
-            tool = _match_ground_truth(cluster["canonical"], gt_findings)
-            if tool:
-                cluster["canonical"]["ground_truth_match"] = True
-                cluster["canonical"]["ground_truth_tool"] = tool
-
     # 6. Compute agent stats
     # For each agent, count: total findings, unique (in single-finding clusters),
     # duplicated (in multi-finding clusters)
@@ -654,12 +596,6 @@ def main():
         default=None,
         help="Comma-separated list of changed file paths for test gap detection.",
     )
-    parser.add_argument(
-        "--ground-truth",
-        default=None,
-        help="Path to ground-truth-summary.json for cross-referencing findings.",
-    )
-
     args = parser.parse_args()
 
     if not os.path.isdir(args.output_dir):
@@ -682,7 +618,6 @@ def main():
         agent_signals=agent_signals,
         write_output=True,
         changed_files=changed_files,
-        ground_truth_path=args.ground_truth,
     )
 
     # Print summary
