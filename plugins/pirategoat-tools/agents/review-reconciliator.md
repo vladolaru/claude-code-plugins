@@ -127,7 +127,8 @@ output['meta']['reconciliation'] = {
 import json
 with open(f"{output_dir}/review-findings.json", 'w') as f:
     json.dump(output, f, indent=2, ensure_ascii=False)
-builder.write_markdown(f"{output_dir}/review-findings.md")
+with open(f"{output_dir}/review-findings.md", 'w') as f:
+    f.write(builder.to_markdown())
 ```
 
 ### Narrative Output (`review-findings.md`)
