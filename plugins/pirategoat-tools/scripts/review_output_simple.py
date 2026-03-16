@@ -21,10 +21,32 @@ Usage:
 """
 
 import json
+import os
 import sys
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+
+def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, severities):
+    """Best-effort telemetry logging on agent completion. Never raises."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "review_telemetry",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "review-telemetry.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        t = mod.ReviewTelemetry(output_dir)
+        t.log_agent_complete(
+            agent_name=reviewer,
+            verdict=verdict,
+            issue_count=issue_count,
+            severities=severities,
+        )
+    except Exception:
+        pass
+
 
 class ReviewOutputBuilder:
     """Simple builder for structured review outputs."""
@@ -252,7 +274,6 @@ class ReviewOutputBuilder:
 
     def save(self, output_dir: str):
         """Save both JSON and markdown."""
-        import os
         os.makedirs(output_dir, exist_ok=True)
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
@@ -263,6 +284,16 @@ class ReviewOutputBuilder:
 
         with open(md_path, 'w') as f:
             f.write(self.to_markdown())
+
+        # Telemetry: log agent completion (best-effort)
+        output = self.to_dict()
+        _log_agent_complete_telemetry(
+            output_dir,
+            self.reviewer,
+            output['verdict'],
+            output['summary']['total_issues'],
+            output['summary']['by_severity'],
+        )
 
         return {'json': json_path, 'markdown': md_path}
 
