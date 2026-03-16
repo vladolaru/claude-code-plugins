@@ -224,6 +224,3 @@ Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/dead-code-re
 
 **Handoff signal:** If your analysis reveals a potential issue outside your domain, note it in your review as an observation (not a finding) with a tag like `[architecture-reviewer]` or `[performance-reviewer]`.
 
-## Linter Results
-
-When available, load `lint-results-unified.json` per shared protocol. Linters may flag unused imports or variables — treat these as **ground truth** (confirmed dead code). Don't duplicate them; reference and escalate if they're in changed files.

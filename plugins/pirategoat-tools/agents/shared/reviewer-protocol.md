@@ -224,16 +224,3 @@ find . -type f \( -name "CLAUDE.md" -o -name "*.md" \) -path "*/.claude/*" 2>/de
 
 Look for: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. Read and apply project-specific standards before generic patterns. **Project standards override generic patterns.** Apply project conventions before your own domain expertise. This is **exploration** — it informs your review but is not itself reviewable.
 
-## Ground Truth Data Loading
-
-When the main session provides linter/scanner/test/coverage results, load them as ground truth:
-
-```python
-import json, os
-results_file = f"{output_dir}/{results_type}-unified.json"
-if os.path.exists(results_file):
-    with open(results_file) as f:
-        results = json.load(f)
-```
-
-Available result types: `lint-results`, `security-results`, `test-results`, `coverage-results`. Treat tool findings as **definitive**. Use them as supporting evidence, not duplicating them unless they have domain significance.

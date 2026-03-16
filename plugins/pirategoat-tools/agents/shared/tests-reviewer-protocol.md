@@ -103,14 +103,6 @@ Apply the **Refactoring Resilience Test:**
 [] Edge cases covered?
 ```
 
-## Test Results (Ground Truth)
-
-When available, load `test-results-unified.json` per shared protocol. If tests show failures: identify root causes (test correct + code buggy? test incorrect? test flaky?), analyze error messages, VERDICT = BLOCK. If all pass: review quality. If unavailable: note limitation.
-
-## Coverage Results (Ground Truth)
-
-When available, load `coverage-results-unified.json` per shared protocol. Use coverage gaps to identify untested critical paths. High coverage + weak assertions = false confidence. Make specific recommendations (file:line), not "increase coverage."
-
 ## Expected Situations
 
 | Situation | Action |
