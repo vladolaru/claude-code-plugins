@@ -125,7 +125,7 @@ File output instructions to skip.
 
 Should be included.
 
-## Ground Truth Data Loading
+## Severity Calibration
 
 Should be included.
 
@@ -152,7 +152,7 @@ This section was added later and should be included automatically.
         assert "## RULE: Reviewing vs Exploring" in result
         assert "Important rule that should be included" in result
         assert "## Project-Specific Knowledge" in result
-        assert "## Ground Truth Data Loading" in result
+        assert "## Severity Calibration" in result
 
     def test_new_section_auto_included(self):
         """New sections added to protocol are included by default (skip-list resilience)."""
