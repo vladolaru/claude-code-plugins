@@ -116,9 +116,7 @@ def parse_changed_files_list(files_str: str) -> List[str]:
 def render_agent_signals_text(agent_signals: List[str]) -> str:
     """Render agent signals as the canonical text block for downstream steps.
 
-    The review commands pass this text verbatim to reconcile-reviews.py as a
-    single quoted --agent-signals argument and paste the same block into the
-    reconciliator prompt.
+    The review commands paste this text block into the reconciliator prompt.
     """
     return "\n".join(agent_signals)
 
@@ -566,7 +564,7 @@ def main():
     # Output JSON to stdout (for inline parsing by commands)
     print(json.dumps(plan, indent=2))
 
-    # Write to disk (for downstream scripts: check-reviewer-agent-status.py, reconcile-reviews.py)
+    # Write to disk (for downstream scripts: check-reviewer-agent-status.py)
     plan_path = os.path.join(args.output_dir, "dispatch-plan.json")
     os.makedirs(args.output_dir, exist_ok=True)
     with open(plan_path, "w") as f:
