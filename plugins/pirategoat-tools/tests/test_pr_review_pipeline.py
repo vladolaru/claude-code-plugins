@@ -229,6 +229,25 @@ class TestReconcilePhase:
         actions = "\n".join(g["actions"])
         assert "abc123..fix/thing" in actions
 
+    def test_step_10_includes_dispatch_plan(self, mod, tmp_path):
+        """Reconcile step should pass dispatch-plan.json to the reconciliator."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
+        actions = "\n".join(g["actions"])
+        assert "dispatch-plan.json" in actions
+
+    def test_step_10_passes_all_dispatched_agents(self, mod, tmp_path):
+        """Should pass paths for ALL dispatched agents, not just FINISHED."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
+        actions = "\n".join(g["actions"])
+        # Should NOT filter to only FINISHED
+        assert "FINISHED" not in actions
+        # Should reference all dispatched agents
+        assert "DISPATCH" in actions
+
 
 class TestReviewPhase:
     """Step 11: Generate review report."""
