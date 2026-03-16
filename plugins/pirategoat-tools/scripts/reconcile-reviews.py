@@ -539,7 +539,7 @@ def reconcile(
         "agent_stats": agent_stats,
     }
 
-    # 8.5. Flat issues list (for downstream consumers like ingest-preprocess.py)
+    # 8.5. Flat issues list (for downstream consumers)
     result["issues"] = [c["canonical"] for c in clusters_output]
 
     # 8.6. Test gap detection (only when changed_files is provided)

@@ -1,13 +1,12 @@
 """
 Tests for review API contracts — cross-component integration tests.
 
-Verifies the contracts between the three review pipeline layers:
+Verifies the contracts between the review pipeline layers:
   1. Producer: ReviewOutputBuilder (review_output_simple.py)
-  2. Consumer 1: reconcile() (reconcile-reviews.py)
-  3. Consumer 2: preprocess_findings() (ingest-preprocess.py)
+  2. Consumer: reconcile() (reconcile-reviews.py)
 
 Each test feeds real output from one layer into the next, catching
-interface mismatches like the clusters/issues key bug.
+interface mismatches.
 
 Zero external dependencies beyond stdlib + pytest.
 """
@@ -38,14 +37,6 @@ _reconcile_spec = importlib.util.spec_from_file_location(
 _reconcile_mod = importlib.util.module_from_spec(_reconcile_spec)
 _reconcile_spec.loader.exec_module(_reconcile_mod)
 reconcile = _reconcile_mod.reconcile
-
-# ingest-preprocess.py — importlib (hyphenated filename)
-_ingest_spec = importlib.util.spec_from_file_location(
-    "ingest_preprocess", str(SCRIPTS_DIR / "ingest-preprocess.py")
-)
-_ingest_mod = importlib.util.module_from_spec(_ingest_spec)
-_ingest_spec.loader.exec_module(_ingest_mod)
-preprocess_findings = _ingest_mod.preprocess_findings
 
 
 # ---------------------------------------------------------------------------
@@ -162,45 +153,6 @@ class TestProducerToReconcileContract:
         assert result["deduplicated_findings"] == 1
 
 
-# =============================================================================
-# TestReconcileToIngestContract
-# =============================================================================
-
-
-class TestReconcileToIngestContract:
-    """reconcile() output consumed correctly by preprocess_findings()."""
-
-    def test_reconcile_output_consumed_by_ingest(self, tmp_dir):
-        """Reconcile output is read by ingest — the core contract test.
-
-        This catches the clusters/issues mismatch bug: reconcile writes
-        clusters, but ingest reads issues. After the fix, reconcile also
-        writes an issues key.
-        """
-        _build_and_save(tmp_dir, "security", [
-            {"severity": "high", "title": "SQL Injection", "file": "src/db.php",
-             "line": 10, "description": "Direct input in query",
-             "recommendation": "Use prepare()"},
-        ])
-
-        # Run reconcile and write output
-        reconcile(tmp_dir, write_output=True)
-
-        # Run ingest on the reconcile output
-        result = preprocess_findings(
-            output_dir=tmp_dir,
-            changed_files=["src/db.php"],
-            diff_hunks={"src/db.php": [(1, 50)]},
-            git_range="main..HEAD",
-        )
-
-        # The critical assertion: findings should NOT be empty
-        assert len(result["findings"]) > 0, (
-            "Ingest got zero findings from reconcile output — "
-            "likely reading wrong key (clusters vs issues)"
-        )
-        assert result["findings"][0]["title"] == "SQL Injection"
-
     def test_reconcile_output_has_issues_key(self, tmp_dir):
         """Reconcile output contains an 'issues' key for downstream consumers."""
         _build_and_save(tmp_dir, "security", [
@@ -212,141 +164,3 @@ class TestReconcileToIngestContract:
         assert "issues" in result, "Reconcile output missing 'issues' key"
         assert "clusters" in result, "Reconcile output missing 'clusters' key"
         assert len(result["issues"]) == len(result["clusters"])
-
-    def test_ingest_reads_correct_key(self, tmp_dir):
-        """Ingest reads the 'issues' key from reconcile output."""
-        _build_and_save(tmp_dir, "security", [
-            {"severity": "high", "title": "Issue A", "file": "src/a.php",
-             "line": 5, "description": "desc A", "recommendation": "rec A"},
-            {"severity": "medium", "title": "Issue B", "file": "src/b.php",
-             "line": 15, "description": "desc B", "recommendation": "rec B"},
-        ])
-
-        reconcile(tmp_dir, write_output=True)
-        result = preprocess_findings(
-            output_dir=tmp_dir,
-            changed_files=["src/a.php", "src/b.php"],
-            diff_hunks={"src/a.php": [(1, 50)], "src/b.php": [(1, 50)]},
-            git_range="main..HEAD",
-        )
-
-        assert result["summary"]["total"] == 2
-
-    def test_empty_reconcile_empty_ingest(self, tmp_dir):
-        """Empty reconcile output produces empty ingest output."""
-        # No agent output files → empty reconcile
-        reconcile(tmp_dir, write_output=True)
-
-        result = preprocess_findings(
-            output_dir=tmp_dir,
-            changed_files=["src/a.php"],
-            diff_hunks={"src/a.php": [(1, 50)]},
-            git_range="main..HEAD",
-        )
-
-        assert result["findings"] == []
-        assert result["summary"]["total"] == 0
-
-
-# =============================================================================
-# TestFullRoundTrip
-# =============================================================================
-
-
-class TestFullRoundTrip:
-    """Full 3-layer pipeline: ReviewOutputBuilder → reconcile → ingest."""
-
-    def test_three_agent_pipeline(self, tmp_dir):
-        """3 agents → reconcile → ingest: no findings silently dropped."""
-        _build_and_save(tmp_dir, "security", [
-            {"severity": "critical", "title": "SQL Injection", "file": "src/db.php",
-             "line": 42, "description": "Direct input in query",
-             "recommendation": "Use prepare()"},
-        ])
-        _build_and_save(tmp_dir, "pr", [
-            {"severity": "high", "title": "SQL Injection", "file": "src/db.php",
-             "line": 42, "description": "User input in query without sanitization",
-             "recommendation": "Sanitize input"},
-            {"severity": "medium", "title": "Missing error handling",
-             "file": "src/api.php", "line": 10, "description": "No try/catch",
-             "recommendation": "Add error handling"},
-        ])
-        _build_and_save(tmp_dir, "architecture", [
-            {"severity": "low", "title": "God class detected",
-             "file": "src/manager.php", "line": 1,
-             "description": "Class has too many responsibilities",
-             "recommendation": "Split into smaller classes"},
-        ])
-
-        # Reconcile
-        reconciled = reconcile(tmp_dir, write_output=True)
-        # SQL Injection should be deduped (2→1), others unique
-        assert reconciled["deduplicated_findings"] == 3
-
-        # Ingest
-        result = preprocess_findings(
-            output_dir=tmp_dir,
-            changed_files=["src/db.php", "src/api.php", "src/manager.php"],
-            diff_hunks={
-                "src/db.php": [(1, 100)],
-                "src/api.php": [(1, 50)],
-                "src/manager.php": [(1, 50)],
-            },
-            git_range="main..HEAD",
-        )
-
-        # All 3 deduplicated findings should arrive in ingest
-        assert result["summary"]["total"] == 3, (
-            f"Expected 3 findings in ingest, got {result['summary']['total']}. "
-            f"Findings may have been silently dropped between reconcile and ingest."
-        )
-
-    def test_severity_preserved_through_pipeline(self, tmp_dir):
-        """Severity from the highest-severity source survives the full pipeline."""
-        _build_and_save(tmp_dir, "security", [
-            {"severity": "critical", "title": "XSS Vulnerability",
-             "file": "src/view.php", "line": 5,
-             "description": "Unescaped output", "recommendation": "Escape"},
-        ])
-        _build_and_save(tmp_dir, "pr", [
-            {"severity": "medium", "title": "XSS Vulnerability",
-             "file": "src/view.php", "line": 5,
-             "description": "Raw HTML output", "recommendation": "Use esc_html()"},
-        ])
-
-        reconcile(tmp_dir, write_output=True)
-        result = preprocess_findings(
-            output_dir=tmp_dir,
-            changed_files=["src/view.php"],
-            diff_hunks={"src/view.php": [(1, 50)]},
-            git_range="main..HEAD",
-        )
-
-        assert len(result["findings"]) == 1
-        assert result["findings"][0]["severity"] == "critical"
-
-    def test_finding_fields_present_in_ingest(self, tmp_dir):
-        """All key finding fields survive the full pipeline to ingest output."""
-        _build_and_save(tmp_dir, "security", [
-            {"severity": "high", "title": "CSRF Missing", "file": "src/form.php",
-             "line": 25, "description": "No nonce verification",
-             "recommendation": "Add wp_verify_nonce()", "category": "csrf",
-             "confidence": 0.88},
-        ])
-
-        reconcile(tmp_dir, write_output=True)
-        result = preprocess_findings(
-            output_dir=tmp_dir,
-            changed_files=["src/form.php"],
-            diff_hunks={"src/form.php": [(1, 50)]},
-            git_range="main..HEAD",
-        )
-
-        finding = result["findings"][0]
-        assert finding["title"] == "CSRF Missing"
-        assert finding["file"] == "src/form.php"
-        assert finding["line"] == 25
-        assert finding["severity"] == "high"
-        assert finding["confidence"] == 0.88
-        assert finding["description"] == "No nonce verification"
-        assert finding["category"] == "csrf"

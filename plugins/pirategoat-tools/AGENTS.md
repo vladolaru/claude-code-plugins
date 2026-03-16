@@ -13,8 +13,6 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review-scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. |
 | `scripts/plan-review-dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Used by all review commands. |
 | `scripts/reconcile-reviews.py` | Deterministic dedup utility. No longer called as a pipeline step — the reconciliator agent handles semantic dedup + verification. |
-| `scripts/ingest-preprocess.py` | Deterministic pre-classification utility. No longer called as a pipeline step — functionality absorbed by the reconciliator agent. |
-| `scripts/ingest-code-review.py` | Step-injection script for standalone finding validation. No longer called as a pipeline step. |
 | `scripts/review_output_simple.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
 | `scripts/review-telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |

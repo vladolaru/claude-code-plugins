@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ground truth cross-referencing** from `reconcile-reviews.py` (`--ground-truth` flag, `_load_ground_truth()`, `_match_ground_truth()`)
 - **Ground truth step** from `pr-review-pipeline.py` (Step 7 removed, pipeline reduced from 15 steps to 14), `code-review.md` (Step 3 removed), and `full-code-review.md` (Step 3 removed)
 - **Ground truth references** from reviewer-protocol.md, dead-code-reviewer.md, review-reconciliator.md, and tests-reviewer-protocol.md
+- **Dead ingest scripts** — `ingest-preprocess.py` and `ingest-code-review.py` had been marked "no longer called as a pipeline step" since their functionality was absorbed by the reconciliator agent. No active callers in the pipeline, commands, or pirategoat-bot
 
 ### Added
 
