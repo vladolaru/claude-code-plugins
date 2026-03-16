@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.59.0] - 2026-03-16
+
+### Added
+
+- **Agent-level telemetry** — Reviewer agents now log `agent_start` (from bootstrap-reviewer.py) and `agent_complete` (from ReviewOutputBuilder.save()) events to the telemetry JSONL log. Captures per-agent timing, domain, scope size, verdict, and issue counts
+
+### Changed
+
+- **Split Present Results / Cleanup** — Step 15 now only presents review results. Step 16 handles workspace cleanup (branch restore, stash pop). Pipeline grows from 16 steps (0-15) to 17 steps (0-16)
+- **Telemetry log directory** — Moved from `~/.claude/logs/pirategoat-tools/pr-reviews/` to `~/.pirategoat-tools/logs/pr-reviews/`
+
 ## [1.58.0] - 2026-03-16
 
 ### Added

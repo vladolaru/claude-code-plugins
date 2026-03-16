@@ -16,7 +16,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/ingest-preprocess.py` | Deterministic pre-classification utility. No longer called as a pipeline step — functionality absorbed by the reconciliator agent. |
 | `scripts/ingest-code-review.py` | Step-injection script for standalone finding validation. No longer called as a pipeline step. |
 | `scripts/review_output_simple.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
-| `scripts/review-telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures timing, snapshots, and summaries per pipeline step. |
+| `scripts/review-telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
 | `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
 | `schemas/review-output.ts` | TypeScript type definitions for structured review output (Issue, SecurityIssue, PerformanceIssue, etc.). |
