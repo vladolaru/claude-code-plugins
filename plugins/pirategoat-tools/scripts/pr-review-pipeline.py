@@ -92,6 +92,7 @@ def load_context_values(output_dir, pr_number=None):
 STATE_REQ = (
     "CONTEXT REQUIREMENT: Your --thoughts must include: "
     "ORIGINAL_BRANCH (if repo setup ran), STASHED (bool), STASH_REF (if stashed), "
+    "PR purpose (1-2 sentences), key changes, review focus areas, "
     "verdict (once determined), and any failure notes. "
     "Everything else is in review-context.json or the output directory."
 )
@@ -369,11 +370,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 "Parse the JSON output. Display which agents will be dispatched.",
                 "",
-                "For conditional agents (DISPATCH or SKIPPED_TRIAGE):",
-                "  Apply your own triage using commit messages, diffstat, and file list.",
-                "  Decide: keep DISPATCH, downgrade DISPATCH to SKIP, or upgrade SKIPPED_TRIAGE to DISPATCH.",
-                "  Log reasoning: 'TRIAGE: <agent>: <DISPATCH|SKIP> — <one-line reason>'",
-                "  Default: when in doubt, DISPATCH.",
+                "Review the dispatch plan output. The script's triage decisions are authoritative.",
+                "Only override a decision if you have strong evidence the script missed:",
+                "  - Override SKIPPED_TRIAGE → DISPATCH: when commit messages or PR context clearly indicate relevance the script couldn't detect",
+                "  - Override DISPATCH → SKIP: almost never — when in doubt, keep DISPATCH",
+                "Log any overrides: 'TRIAGE OVERRIDE: <agent>: <old> → <new> — <one-line reason>'",
                 "",
                 STATE_REQ,
             ],

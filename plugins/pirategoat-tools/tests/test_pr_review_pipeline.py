@@ -136,6 +136,16 @@ class TestExecutionPhase:
         assert "${GIT_RANGE}" not in actions
         assert "<GIT_RANGE>" not in actions
 
+    def test_step_10_triage_references_dispatch_plan(self, mod, tmp_path):
+        """Step 10 should tell Claude to use the script's triage, not redo it."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
+        actions = "\n".join(g["actions"])
+        # Should reference reviewing the script's decisions, not "Apply your own triage"
+        assert "Apply your own triage" not in actions
+        assert "override" in actions.lower() or "review the plan" in actions.lower()
+
     def test_step_11_has_parallel_dispatch(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
@@ -287,6 +297,11 @@ class TestStructure:
     def _vals(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         return mod.load_context_values(str(tmp_path), "42")
+
+    def test_state_req_includes_context_fields(self, mod, tmp_path):
+        """STATE_REQ should mention PR purpose and review focus, not just branch/stash."""
+        assert "purpose" in mod.STATE_REQ.lower()
+        assert "review focus" in mod.STATE_REQ.lower() or "focus" in mod.STATE_REQ.lower()
 
     def test_steps_1_to_N_have_state_requirement(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
