@@ -124,6 +124,23 @@ class TestContextExtraction:
         assert "linked_issues" in vals
         assert vals["linked_issues"] == "None found"
 
+    def test_load_context_values_extracts_issue_from_branch_name(self, mod, tmp_path):
+        """Should extract issue IDs from head_ref when linked_issues is empty."""
+        ctx = {**COMPLETE_CONTEXT, "linked_issues": []}
+        ctx["git"]["head_ref"] = "fix/WOOPLUG-5988-fix-auth"
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        assert "WOOPLUG-5988" in vals["linked_issues"]
+
+    def test_load_context_values_merges_branch_and_body_issues(self, mod, tmp_path):
+        """Branch issue IDs should be merged with body-extracted ones."""
+        ctx = {**COMPLETE_CONTEXT, "linked_issues": ["WOOPLUG-1234"]}
+        ctx["git"]["head_ref"] = "fix/WOOPLUG-5988-fix-auth"
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        assert "WOOPLUG-1234" in vals["linked_issues"]
+        assert "WOOPLUG-5988" in vals["linked_issues"]
+
 
 class TestContextSummary:
     """Step 3: Review Context Summary (replaces old Steps 3+4+5)."""

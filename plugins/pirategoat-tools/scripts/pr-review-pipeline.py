@@ -24,6 +24,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import sys
 
 
@@ -86,9 +87,15 @@ def load_context_values(output_dir, pr_number=None):
     else:
         reviews_formatted = "No existing reviews. First review."
 
-    # Linked issues
-    raw_issues = ctx.get("linked_issues", [])
-    issues_formatted = ", ".join(raw_issues) if raw_issues else "None found"
+    # Linked issues — merge context-extracted and branch-name-extracted
+    raw_issues = set(ctx.get("linked_issues", []))
+    # Also extract from branch name (e.g. fix/WOOPLUG-5988-desc → WOOPLUG-5988)
+    head_ref = git.get("head_ref", "")
+    if head_ref:
+        for m in re.finditer(r'\b([A-Z]+-\d+)\b', head_ref):
+            raw_issues.add(m.group(1))
+    issues_sorted = sorted(raw_issues)
+    issues_formatted = ", ".join(issues_sorted) if issues_sorted else "None found"
 
     return {
         "output_dir": output_dir,
