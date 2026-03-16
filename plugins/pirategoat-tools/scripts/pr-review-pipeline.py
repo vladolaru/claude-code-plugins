@@ -5,17 +5,17 @@ PR Review Pipeline — unified step-injection script.
 Provides step-by-step guidance for the full PR review pipeline.
 Always runs autonomously. Detects bot mode from review-context.json.
 
-17 steps (0-16) covering:
+15 steps (0-14) covering:
   SETUP      (0-2):  Parse PR, repo setup, context discovery
-  AWARENESS  (3-4):  PR review state, decide approach
-  CONTEXT    (5-7):  Linked issue, fetch context, summarize
-  EXECUTION  (8-12): Size assessment, ground truth, dispatch, agents, reconcile+verify
-  REVIEW     (13):   Generate review report
-  VALIDATION (14):   Decision critic
-  OUTPUT     (15-16): Present results, cleanup
+  AWARENESS  (3):    Review context summary (reviews, linked issues, PR metadata)
+  CONTEXT    (4-5):  Fetch issue context, summarize
+  EXECUTION  (6-10): Size assessment, ground truth, dispatch, agents, reconcile+verify
+  REVIEW     (11):   Generate review report
+  VALIDATION (12):   Decision critic
+  OUTPUT     (13-14): Present results, cleanup
 
 Usage:
-    python3 pr-review-pipeline.py --step-number 0 --total-steps 16 \
+    python3 pr-review-pipeline.py --step-number 0 --total-steps 14 \
         --pr-number 42 --output-dir /tmp/pr-review-org-repo-42 \
         --thoughts ""
 """
@@ -61,6 +61,35 @@ def load_context_values(output_dir, pr_number=None):
     git = ctx.get("git", {})
     pr = ctx.get("pr", {})
 
+    # Reviews summary
+    reviews = ctx.get("reviews", {})
+    review_summary = reviews.get("summary", {})
+    reviewers_list = reviews.get("reviewers", [])
+    pending = reviews.get("pending", [])
+
+    if review_summary.get("total", 0) > 0:
+        parts = []
+        for key in ("approved", "changes_requested", "commented"):
+            count = review_summary.get(key, 0)
+            if count > 0:
+                parts.append(f"{count} {key.replace('_', ' ')}")
+        reviewer_lines = []
+        for r in reviewers_list:
+            reviewer_lines.append(f"{r['login']} ({r['type']}, {r['state']})")
+        pending_str = f"Pending: {', '.join(pending)}" if pending else "No pending requests"
+        reviews_formatted = (
+            f"Reviews: {', '.join(parts) if parts else 'none'}. "
+            f"Reviewers: {'; '.join(reviewer_lines) if reviewer_lines else 'none'}. "
+            f"{pending_str}. "
+            f"Re-review."
+        )
+    else:
+        reviews_formatted = "No existing reviews. First review."
+
+    # Linked issues
+    raw_issues = ctx.get("linked_issues", [])
+    issues_formatted = ", ".join(raw_issues) if raw_issues else "None found"
+
     return {
         "output_dir": output_dir,
         "ctx_path": ctx_path,
@@ -82,6 +111,8 @@ def load_context_values(output_dir, pr_number=None):
         "agent_timeout": ctx.get("review", {}).get("agent_timeout_seconds", 1200),
         "bot_mode": ctx.get("source") == "pirategoat-bot",
         "has_context": bool(git.get("merge_base")),
+        "reviews_summary": reviews_formatted,
+        "linked_issues": issues_formatted,
     }
 
 
@@ -102,8 +133,8 @@ def get_step_guidance(step, total_steps, vals, thoughts):
     """Return guidance dict for a given step.
 
     Args:
-        step: Current step number (0-16).
-        total_steps: Total step count (16).
+        step: Current step number (0-14).
+        total_steps: Total step count (14).
         vals: Dict from load_context_values().
         thoughts: Accumulated --thoughts string.
     """
@@ -217,73 +248,43 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "next": "Step 3: PR Review State",
             }
 
-    # Step 3: PR Review State
+    # Step 3: Review Context Summary (merged from old Steps 3+4+5+6+7)
     if step == 3:
         return {
             "phase": "AWARENESS",
-            "title": "PR Review State",
+            "title": "Review Context Summary",
             "actions": [
-                "You are a thorough PR reviewer. Analyze the current review state.",
+                "You are a thorough PR reviewer. Internalize the review context.",
                 "",
-                f"Run: `{gh} pr view {pr} --json reviews,reviewRequests`",
+                f"**Existing reviews:** {vals['reviews_summary']}",
                 "",
-                "Summarize:",
-                "- How many reviews exist? Approved/Changes Requested/Commented?",
-                "- Are there pending review requests?",
-                "- Is this a re-review or first review?",
+                f"**Linked issues:** {vals['linked_issues']}",
+                "",
+                f"**PR title:** {vals['pr_title']}",
+                f"**PR author:** {vals['pr_author']}",
+                "",
+                "Analyze the context above. Record in --thoughts:",
+                "- PR purpose (from title, body, linked issue)",
+                "- Key changes (from diff stats in review-context.json)",
+                "- Review focus areas (from issue context, if any)",
+                "- Whether this is a first review or re-review",
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 4: Decide Approach",
+            "next": "Step 4: Fetch Issue Context",
         }
 
-    # Step 4: Decide Approach
+    # Step 4: Fetch Issue Context (was Step 6)
     if step == 4:
-        return {
-            "phase": "AWARENESS",
-            "title": "Decide Approach",
-            "actions": [
-                "You are a thorough PR reviewer.",
-                "",
-                "Proceeding with full multi-agent review pipeline.",
-                "",
-                STATE_REQ,
-            ],
-            "next": "Step 5: Extract Linked Issue",
-        }
-
-    # Step 5: Extract Linked Issue
-    if step == 5:
-        body_preview = vals["pr_body"][:200] if vals["pr_body"] else "(no body)"
-        return {
-            "phase": "CONTEXT",
-            "title": "Extract Linked Issue",
-            "actions": [
-                "You are a thorough PR reviewer. Check for linked issues.",
-                "",
-                f"PR body preview: {body_preview}",
-                "",
-                "Look for:",
-                "- Linear issue IDs (e.g., WOOPLUG-1234, WOOPRD-56)",
-                "- GitHub issue refs (Closes #99, Fixes #100)",
-                "- Branch name patterns (fix/WOOPLUG-5988-desc → WOOPLUG-5988)",
-                "",
-                "Record any linked issue IDs for the next step.",
-                "",
-                STATE_REQ,
-            ],
-            "next": "Step 6: Fetch Issue Context",
-        }
-
-    # Step 6: Fetch Issue Context
-    if step == 6:
         return {
             "phase": "CONTEXT",
             "title": "Fetch Issue Context",
             "actions": [
                 "You are a thorough PR reviewer. Gather issue context if available.",
                 "",
-                "If linked issues were found in Step 5:",
+                f"Linked issues from review context: {vals['linked_issues']}",
+                "",
+                "If linked issues were found:",
                 "  - For Linear IDs: use the Linear MCP server to fetch issue details",
                 "  - For GitHub IDs: use `gh issue view <ID> --json title,body,labels`",
                 "",
@@ -293,11 +294,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 7: Summarize Context",
+            "next": "Step 5: Summarize Context",
         }
 
-    # Step 7: Summarize Context
-    if step == 7:
+    # Step 5: Summarize Context (was Step 7)
+    if step == 5:
         return {
             "phase": "CONTEXT",
             "title": "Summarize Context",
@@ -311,11 +312,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 8: Assess PR Size",
+            "next": "Step 6: Assess PR Size",
         }
 
-    # Step 8: Assess PR Size
-    if step == 8:
+    # Step 6: Assess PR Size (was Step 8)
+    if step == 6:
         return {
             "phase": "EXECUTION",
             "title": "Assess PR Size",
@@ -332,11 +333,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 9: Ground Truth Collection",
+            "next": "Step 7: Ground Truth Collection",
         }
 
-    # Step 9: Ground Truth Collection
-    if step == 9:
+    # Step 7: Ground Truth Collection (was Step 9)
+    if step == 7:
         return {
             "phase": "EXECUTION",
             "title": "Ground Truth Collection",
@@ -350,11 +351,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 10: Generate Dispatch Plan",
+            "next": "Step 8: Generate Dispatch Plan",
         }
 
-    # Step 10: Generate Dispatch Plan
-    if step == 10:
+    # Step 8: Generate Dispatch Plan (was Step 10)
+    if step == 8:
         return {
             "phase": "EXECUTION",
             "title": "Generate Dispatch Plan + Triage",
@@ -378,11 +379,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 11: Dispatch Agents + Reconcile",
+            "next": "Step 9: Dispatch Agents + Reconcile",
         }
 
-    # Step 11: Dispatch Agents
-    if step == 11:
+    # Step 9: Dispatch Agents (was Step 11)
+    if step == 9:
         gt_arg = ""
         if os.path.isfile(vals["ground_truth"]):
             gt_arg = f" --ground-truth \"{vals['ground_truth']}\""
@@ -414,11 +415,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 12: Reconcile + Verify",
+            "next": "Step 10: Reconcile + Verify",
         }
 
-    # Step 12: Reconcile + Verify
-    if step == 12:
+    # Step 10: Reconcile + Verify (was Step 12)
+    if step == 10:
         gt_line = ""
         if os.path.isfile(vals["ground_truth"]):
             gt_line = f"\n        Ground Truth: {vals['ground_truth']}"
@@ -430,7 +431,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "You are a thorough PR reviewer. Dispatch the reconciliator.",
                 "",
                 "Build the list of completed agent review file paths from the status check",
-                "(use the check-reviewer-agent-status.py output from Step 11). For each agent",
+                "(use the check-reviewer-agent-status.py output from Step 9). For each agent",
                 f"with status FINISHED, add: {od}/<agent-name>-review.json",
                 "",
                 "Dispatch the reconciliator with the explicit file list:",
@@ -454,11 +455,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 13: Generate Review Report",
+            "next": "Step 11: Generate Review Report",
         }
 
-    # Step 13: Generate Review Report
-    if step == 13:
+    # Step 11: Generate Review Report (was Step 13)
+    if step == 11:
         return {
             "phase": "REVIEW",
             "title": "Generate Review Report",
@@ -469,7 +470,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 f"- {od}/review-findings.json — structured findings (severity, file, line, confidence)",
                 f"- {od}/review-findings.md — the reconciliator's narrative framing",
                 "",
-                "Combine with PR context accumulated from Steps 0-7:",
+                "Combine with PR context accumulated from Steps 0-5:",
                 "- PR purpose (title, body, linked issue details)",
                 "- Size assessment",
                 "- Review focus areas",
@@ -485,11 +486,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 14: Decision Critic",
+            "next": "Step 12: Decision Critic",
         }
 
-    # Step 14: Decision Critic
-    if step == 14:
+    # Step 12: Decision Critic (was Step 14)
+    if step == 12:
         return {
             "phase": "VALIDATION",
             "title": "Decision Critic",
@@ -511,7 +512,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "3. If both fail: note 'Decision critic unavailable' and present as-is.",
                 "",
                 "Act on the verdict:",
-                "- STAND: No changes needed. Proceed to Step 15.",
+                "- STAND: No changes needed. Proceed to Step 13.",
                 "- REVISE: Spot-check 2-3 of the critic's factual claims (file paths, line refs,",
                 "  counts) with a single command each. Strip any claim that fails spot-check.",
                 "  Apply valid adjustments to the review report (upgrade/downgrade severities,",
@@ -525,11 +526,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 15: Present Results",
+            "next": "Step 13: Present Results",
         }
 
-    # Step 15: Present Results
-    if step == 15:
+    # Step 13: Present Results (was Step 15)
+    if step == 13:
         return {
             "phase": "OUTPUT",
             "title": "Present Results",
@@ -546,11 +547,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 16: Cleanup",
+            "next": "Step 14: Cleanup",
         }
 
-    # Step 16: Cleanup
-    if step == 16:
+    # Step 14: Cleanup (was Step 16)
+    if step == 14:
         if vals["bot_mode"]:
             return {
                 "phase": "OUTPUT",
