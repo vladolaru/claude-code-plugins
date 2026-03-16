@@ -5,17 +5,17 @@ PR Review Pipeline — unified step-injection script.
 Provides step-by-step guidance for the full PR review pipeline.
 Always runs autonomously. Detects bot mode from review-context.json.
 
-15 steps (0-14) covering:
+14 steps (0-13) covering:
   SETUP      (0-2):  Parse PR, repo setup, context discovery
   AWARENESS  (3):    Review context summary (reviews, linked issues, PR metadata)
   CONTEXT    (4-5):  Fetch issue context, summarize
-  EXECUTION  (6-10): Size assessment, ground truth, dispatch, agents, reconcile+verify
-  REVIEW     (11):   Generate review report
-  VALIDATION (12):   Decision critic
-  OUTPUT     (13-14): Present results, cleanup
+  EXECUTION  (6-9):  Size assessment, dispatch, agents, reconcile+verify
+  REVIEW     (10):   Generate review report
+  VALIDATION (11):   Decision critic
+  OUTPUT     (12-13): Present results, cleanup
 
 Usage:
-    python3 pr-review-pipeline.py --step-number 0 --total-steps 14 \
+    python3 pr-review-pipeline.py --step-number 0 --total-steps 13 \
         --pr-number 42 --output-dir /tmp/pr-review-org-repo-42 \
         --thoughts ""
 """
@@ -113,7 +113,6 @@ def load_context_values(output_dir, pr_number=None):
         "pr_body": pr.get("body", ""),
         "pr_url": pr.get("url", ""),
         "review_report": os.path.join(output_dir, "review-report.md"),
-        "ground_truth": os.path.join(output_dir, "ground-truth-summary.json"),
         "dispatch_plan": os.path.join(output_dir, "dispatch-plan.json"),
         "agent_timeout": ctx.get("review", {}).get("agent_timeout_seconds", 1200),
         "bot_mode": ctx.get("source") == "pirategoat-bot",
@@ -340,65 +339,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 7: Ground Truth Collection",
+            "next": "Step 7: Generate Dispatch Plan",
         }
 
-    # Step 7: Ground Truth Collection (was Step 9)
+    # Step 7: Generate Dispatch Plan
     if step == 7:
-        return {
-            "phase": "EXECUTION",
-            "title": "Ground Truth Collection",
-            "actions": [
-                "You are a thorough PR reviewer. Collect ground truth signals (optional).",
-                "",
-                "**Phase A — Tool Discovery:**",
-                "Read the project's CLAUDE.md and AGENTS.md (if present). Extract the commands",
-                "this project uses to run linters, test suites, security scanners, and coverage.",
-                f"Write a tool-config.json in {od}:",
-                "",
-                f'    cat > "{od}/tool-config.json" << \'TOOLCFG\'',
-                '    {',
-                '      "<tool_name>": { "cmd": "<command template>" }',
-                '    }',
-                "    TOOLCFG",
-                "",
-                "**Supported tools:**",
-                "",
-                "| Tool | Purpose | Scope | Output |",
-                "|------|---------|-------|--------|",
-                "| `eslint` | JS/TS linting | Changed files (`{files}`) | `eslint-results.json` |",
-                "| `phpcs` | PHP linting | Changed files (`{files}`) | `phpcs-results.json` |",
-                "| `semgrep` | Security scanning | Changed files (`{files}`) | `semgrep-results.json` |",
-                "| `jest` | JS/TS tests + coverage | Full project (no `{files}`) | `jest-results.json` + coverage |",
-                "| `phpunit` | PHP tests + coverage | Full project (no `{files}`) | `phpunit-results.json` + coverage |",
-                "",
-                "**Scoping rules:**",
-                "- Linters/scanners: use `{files}` placeholder — scopes to changed files only",
-                "- Test suites: do NOT use `{files}` — must run full project to catch regressions",
-                "- Coverage: include coverage flags in test commands (e.g., `--coverage`, `--coverage-clover`)",
-                "  Scope coverage to changed files where supported (`--collectCoverageFrom`, `--coverage-filter`)",
-                "",
-                "**Rules:**",
-                "- Only include tools the project actually uses and has instructions for",
-                "- If you can't determine the exact command, omit the tool",
-                "- If the project has no tool instructions at all, write an empty config `{}`",
-                "",
-                "**Phase B — Tool Execution:**",
-                "",
-                f"    python3 {sd}/run-ground-truth.py \\",
-                f"      --output-dir \"{od}\" \\",
-                f"      --changed-files \"{vals['changed_files_csv']}\" \\",
-                f"      --tool-config \"{od}/tool-config.json\"",
-                "",
-                "If the script exits non-zero or produces no findings, continue — ground truth is additive, not required.",
-                "",
-                STATE_REQ,
-            ],
-            "next": "Step 8: Generate Dispatch Plan",
-        }
-
-    # Step 8: Generate Dispatch Plan (was Step 10)
-    if step == 8:
         return {
             "phase": "EXECUTION",
             "title": "Generate Dispatch Plan + Triage",
@@ -422,15 +367,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 9: Dispatch Agents + Reconcile",
+            "next": "Step 8: Dispatch Agents + Reconcile",
         }
 
-    # Step 9: Dispatch Agents (was Step 11)
-    if step == 9:
-        gt_arg = ""
-        if os.path.isfile(vals["ground_truth"]):
-            gt_arg = f" --ground-truth \"{vals['ground_truth']}\""
-
+    # Step 8: Dispatch Agents
+    if step == 8:
         return {
             "phase": "EXECUTION",
             "title": "Dispatch Agents",
@@ -449,7 +390,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 f"        python3 {sd}/bootstrap-reviewer.py \\",
                 f"          --agent <agent-name> \\",
                 f"          --range \"{gr}\" \\",
-                f"          --output-dir \"{od}\"{gt_arg}",
+                f"          --output-dir \"{od}\"",
                 "",
                 "After ALL agents complete, check status:",
                 "",
@@ -458,15 +399,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 10: Reconcile + Verify",
+            "next": "Step 9: Reconcile + Verify",
         }
 
-    # Step 10: Reconcile + Verify (was Step 12)
-    if step == 10:
-        gt_line = ""
-        if os.path.isfile(vals["ground_truth"]):
-            gt_line = f"\n        Ground Truth: {vals['ground_truth']}"
-
+    # Step 9: Reconcile + Verify
+    if step == 9:
         return {
             "phase": "EXECUTION",
             "title": "Reconcile + Verify",
@@ -497,7 +434,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 f"        PR Context: PR #{pr} in this repo",
                 "        Change Purpose: <1-3 sentence summary: PR title, what the PR is solving, linked issue goal if known — from your accumulated --thoughts context>",
                 f"        Changed Files: {vals['changed_files_csv']}",
-                f"        Dispatch Plan: {vals['dispatch_plan']}" + gt_line,
+                f"        Dispatch Plan: {vals['dispatch_plan']}",
                 "",
                 "The reconciliator reads all agent findings, groups by underlying concern,",
                 "verifies each against actual code, and writes:",
@@ -506,11 +443,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 11: Generate Review Report",
+            "next": "Step 10: Generate Review Report",
         }
 
-    # Step 11: Generate Review Report (was Step 13)
-    if step == 11:
+    # Step 10: Generate Review Report
+    if step == 10:
         return {
             "phase": "REVIEW",
             "title": "Generate Review Report",
@@ -537,11 +474,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 12: Decision Critic",
+            "next": "Step 11: Decision Critic",
         }
 
-    # Step 12: Decision Critic (was Step 14)
-    if step == 12:
+    # Step 11: Decision Critic
+    if step == 11:
         return {
             "phase": "VALIDATION",
             "title": "Decision Critic",
@@ -563,7 +500,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "3. If both fail: note 'Decision critic unavailable' and present as-is.",
                 "",
                 "Act on the verdict:",
-                "- STAND: No changes needed. Proceed to Step 13.",
+                "- STAND: No changes needed. Proceed to Step 12.",
                 "- REVISE: Spot-check 2-3 of the critic's factual claims (file paths, line refs,",
                 "  counts) with a single command each. Strip any claim that fails spot-check.",
                 "  Apply valid adjustments to the review report (upgrade/downgrade severities,",
@@ -577,11 +514,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 13: Present Results",
+            "next": "Step 12: Present Results",
         }
 
-    # Step 13: Present Results (was Step 15)
-    if step == 13:
+    # Step 12: Present Results
+    if step == 12:
         return {
             "phase": "OUTPUT",
             "title": "Present Results",
@@ -598,11 +535,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 14: Cleanup",
+            "next": "Step 13: Cleanup",
         }
 
-    # Step 14: Cleanup (was Step 16)
-    if step == 14:
+    # Step 13: Cleanup
+    if step == 13:
         if vals["bot_mode"]:
             return {
                 "phase": "OUTPUT",

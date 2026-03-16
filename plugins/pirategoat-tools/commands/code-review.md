@@ -51,58 +51,7 @@ The context script in Step 1 handles incremental range detection. Check the resu
 - If the range starts from a previous SHA: incremental review of new commits only
 - Tell the user what range is being reviewed and how many commits
 
-## Step 3: Ground Truth Collection (optional)
-
-### 3a — Extract tool configuration
-
-Read the project's CLAUDE.md and AGENTS.md (if present). Extract the commands this project uses to run linters, test suites, security scanners, and coverage. Write a `tool-config.json` in OUTPUT_DIR:
-
-```bash
-cat > "${OUTPUT_DIR}/tool-config.json" << 'TOOLCFG'
-{
-  "<tool_name>": { "cmd": "<command template>" }
-}
-TOOLCFG
-```
-
-**Supported tools and their expected output files:**
-
-| Tool name | Purpose | Scope | Expected output |
-|-----------|---------|-------|----------------|
-| `eslint` | JS/TS linting | Changed files (`{files}`) | `eslint-results.json` (ESLint JSON format) |
-| `phpcs` | PHP linting | Changed files (`{files}`) | `phpcs-results.json` (PHPCS JSON format) |
-| `semgrep` | Security scanning | Changed files (`{files}`) | `semgrep-results.json` (Semgrep JSON format) |
-| `jest` | JS/TS tests + coverage | Full project + scoped coverage | `jest-results.json` + `jest-coverage-summary.json` |
-| `phpunit` | PHP tests + coverage | Full project + scoped coverage | `phpunit-results.json` + `phpunit-coverage.xml` |
-
-**Placeholders:** Use `{output_file}` for the tool's output path, `{output_dir}` for the output directory, `{files}` for changed files (shell-quoted by the script).
-
-**Scoping rules:**
-- Linters/scanners: use `{files}` — runs only on changed files
-- Test suites: do NOT use `{files}` — must run full project to catch regressions
-- Coverage: include coverage flags in the test command (`--coverage`, `--coverage-clover`). Scope coverage to changed files where the tool supports it (`--collectCoverageFrom`, `--coverage-filter`)
-
-**Rules:**
-- Only include tools the project actually uses and has instructions for
-- If you can't determine the exact command, omit the tool
-- If the project has no tool instructions at all, write an empty config `{}`
-
-### 3b — Run ground truth collection
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run-ground-truth.py \
-  --output-dir "${OUTPUT_DIR}" \
-  --changed-files "${CHANGED_FILES_CSV}" \
-  --tool-config "${OUTPUT_DIR}/tool-config.json"
-```
-
-Where `CHANGED_FILES_CSV` is a comma-separated list of changed files from `git diff --name-only <GIT_RANGE>`.
-
-- If the script exits non-zero or produces no findings, continue without ground truth — it is additive, not required.
-- If it succeeds, `OUTPUT_DIR/ground-truth-summary.json` is available for the bootstrap dispatch phase.
-- Store: `GROUND_TRUTH_PATH` = `OUTPUT_DIR/ground-truth-summary.json` (or empty if unavailable).
-
-## Step 4: Scope Summary
+## Step 3: Scope Summary
 
 Show the user what will be reviewed:
 
@@ -112,7 +61,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-scope.py --domain code --summary --
 
 Present a brief summary: number of files changed, lines added/removed in the incremental range.
 
-## Step 5: Generate Dispatch Plan
+## Step 4: Generate Dispatch Plan
 
 Run the dispatch planner to determine which agents to dispatch:
 
@@ -143,7 +92,7 @@ Parse the `BRANCH_FRESHNESS:` section from the preflight output.
 - If `IS_STALE: true` and `RANGE_REBASED: true`: Tell the user: "Branch is N commits behind base. Review scope adjusted to merge-base to exclude unrelated trunk files. Consider rebasing before your next review iteration."
 - If `IS_STALE: false`: proceed normally, no message needed.
 
-## Step 6: Adaptive Agent Triage
+## Step 5: Adaptive Agent Triage
 
 The dispatch planner handles domain-level filtering and deterministic triage (keyword matching, test-file detection, diffstat checks). **Its DISPATCH decisions are preliminary — they confirm the agent has matching files and basic signal, not that it should definitely run.** Your judgment here is the quality gate.
 
@@ -176,11 +125,11 @@ TRIAGE: reliability-reviewer: DISPATCH — new external API client without timeo
 
 Agents skipped by triage are recorded as `STATUS=SKIPPED_TRIAGE` in the agent signals for the reconciliator.
 
-## Step 7: Execute Dispatch Plan
+## Step 6: Execute Dispatch Plan
 
 **CRITICAL: Dispatch all eligible agents in a SINGLE message with MULTIPLE Task tool calls for parallel execution. Do NOT dispatch them sequentially (one per message).**
 
-For each agent with status "DISPATCH" in the plan (after triage adjustments in Step 6), dispatch using the Agent tool.
+For each agent with status "DISPATCH" in the plan (after triage adjustments in Step 5), dispatch using the Agent tool.
 
 Each agent receives this context in its prompt:
 ```
@@ -189,7 +138,7 @@ Git Range: <GIT_RANGE>
 Review Type: Branch review (incremental, reviewing only new commits since last review)
 
 When running bootstrap, include these flags:
-python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR> --ground-truth <GROUND_TRUTH_PATH>
+python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range <GIT_RANGE> --output-dir <OUTPUT_DIR>
 ```
 
 <!-- Agent dispatch reference table (sourced from agent-registry.json) -->
@@ -213,9 +162,9 @@ python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name> --range 
 
 Agents not dispatched are recorded in agent signals for the reconciliator:
 - Domain skip: `<agent>: STATUS=SKIPPED (no files in <domain> domain)`
-- Triage skip: `<agent>: STATUS=SKIPPED_TRIAGE (<one-line reason from Step 6>)`
+- Triage skip: `<agent>: STATUS=SKIPPED_TRIAGE (<one-line reason from Step 5>)`
 
-## Step 8: Save Review State
+## Step 7: Save Review State
 
 After all agents have returned their signals, save the review state **before** dispatching the reconciliator:
 
@@ -233,7 +182,7 @@ STATEEOF
 
 This ensures state is persisted even if reconciliation encounters an issue.
 
-## Step 9: Reconcile + Verify Findings
+## Step 8: Reconcile + Verify Findings
 
 After ALL dispatched agents have returned their signals, dispatch the reconciliator to deduplicate, verify, and produce the review findings.
 
@@ -255,14 +204,13 @@ Agent tool:
     PR Context: Incremental branch review in <REPO>
     Change Purpose: <1-3 sentence summary of what the new commits do, derived from commit messages in GIT_RANGE>
     Changed Files: <CHANGED_FILES_CSV>
-    Ground Truth: <GROUND_TRUTH_PATH>  (if available)
 ```
 
 The reconciliator reads all agent findings, groups by underlying concern, verifies each against actual code, and writes:
 - `review-findings.json` — structured output (ReviewOutputBuilder format)
 - `review-findings.md` — narrative review summary
 
-## Step 10: Decision Critic
+## Step 9: Decision Critic
 
 Stress-test the review's conclusions by dispatching the decision-reviewer agent:
 
@@ -286,7 +234,7 @@ Once you have a verdict, act on it:
 - **REVISE:** Read `decision-critic-findings.md` for the recommended adjustments. **Before applying revisions, spot-check the critic's factual claims:** extract 2-3 claims that contain specific numbers, file paths, line references, or git metadata, and verify each with a single command. If any claim fails spot-check, strip it from the adjustments. Apply remaining valid adjustments to `review-findings.md` — upgrade/downgrade severities, recategorize findings, add or remove items. **Recalculate the review verdict** from the updated findings (any critical → `REQUEST_CHANGES`, any high/medium → `COMMENT`, all clear → `APPROVE`).
 - **ESCALATE:** Read `decision-critic-findings.md` for the validity concerns. **Spot-check any factual claims as described above for REVISE.** Update `review-findings.md` — flag prominently that the review's validity has significant concerns requiring human judgment before acting on findings. **Override the review verdict to `COMMENT`** regardless of original verdict.
 
-## Step 11: Present Final Results
+## Step 10: Present Final Results
 
 Present the final validated review to the user:
 
