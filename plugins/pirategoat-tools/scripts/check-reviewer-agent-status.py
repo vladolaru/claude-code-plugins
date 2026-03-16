@@ -157,7 +157,7 @@ def format_output(result: dict) -> str:
     r = result["running"]
     t = result["timed_out"]
     nd = result["not_dispatched"]
-    lines.append(f"AGENT STATUS: {d} dispatched, {f} finished, {r} running, {t} timed out, {nd} not dispatched")
+    lines.append(f"AGENT STATUS: {d} expected, {f} finished, {r} running, {t} timed out, {nd} never started")
     lines.append("")
     for a in result["agents"]:
         name = a["name"]
@@ -174,12 +174,12 @@ def format_output(result: dict) -> str:
             elapsed = _fmt_elapsed(a.get("elapsed_seconds", 0))
             lines.append(f"  {name:30s} TIMED_OUT ({elapsed} — exceeded timeout)")
         elif st == "NOT_DISPATCHED":
-            lines.append(f"  {name:30s} NOT_DISPATCHED (triaged out or skipped)")
+            lines.append(f"  {name:30s} NOT_DISPATCHED (never started — LLM may have failed to dispatch)")
     lines.append("")
     lines.append(f"ALL_DONE: {'true' if result['all_done'] else 'false'}")
     if result["not_dispatched"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "NOT_DISPATCHED"]
-        lines.append(f"NOTE: {len(names)} agent(s) not dispatched (triaged out or skipped): {', '.join(names)}")
+        lines.append(f"NOTE: {len(names)} agent(s) never started (LLM may have failed to dispatch): {', '.join(names)}")
     if result["timed_out"] > 0:
         names = [a["name"] for a in result["agents"] if a["status"] == "TIMED_OUT"]
         lines.append(f"NOTE: Timed out agents will be excluded from reconciliation: {', '.join(names)}")
