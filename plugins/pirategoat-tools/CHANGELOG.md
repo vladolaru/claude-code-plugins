@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E stream-content assertions for review state** — `StreamMonitor` accumulates text per step and supports `stream_assertion` callbacks on checkpoints. PR 2 and PR 3 expectations verify that Step 3 (review state analysis) mentions `CHANGES_REQUESTED` and `APPROVED` respectively in the stream output
 
+## [1.60.0] - 2026-03-16
+
+### Changed
+
+- **STATE_REQ contract** — Now includes PR purpose, key changes, and review focus areas alongside branch/stash/verdict fields. Matches what the pipeline actually requires
+- **Step 8 triage** (was Step 10) — Script's dispatch decisions are now authoritative. Claude only overrides with strong evidence and explicit logging
+- **Steps 3+4+5 collapsed** — Three steps (PR Review State, Decide Approach, Extract Linked Issue) merged into one "Review Context Summary" step. Reviews and linked issues are now pre-computed by `load_context_values()` instead of re-queried. Pipeline reduced from 17 steps (0-16) to 15 steps (0-14)
+- **Step 10 reconciliator context** (was Step 12) — Now passes `dispatch-plan.json` path and file paths for ALL dispatched agents, enabling the reconciliator to track expected-but-missing agents
+- **Ground truth two-phase pattern** — Step 7 (was Step 9) now uses the same tool discovery + `run-ground-truth.py` execution pattern as `/full-code-review` and `/code-review`
+- **Tool slots merged** — `jest_coverage` merged into `jest`, `phpunit_coverage` merged into `phpunit`. Coverage flags go in the test command. Legacy names still accepted
+- **Tool scoping guidance** — Linters/scanners scoped to changed files (`{files}`), test suites run full project, coverage scoped to changed files
+
+### Improved
+
+- **Ground truth parallel execution** — `collect_ground_truth()` now runs all configured tools concurrently via `ThreadPoolExecutor`. Wall time drops from sum(all tools) to max(single tool)
+- **Ground truth parsing resilience** — Result parsing now checks for output files on disk rather than tool name in `tools_run`, supporting merged test+coverage runs
+
 ## [1.59.0] - 2026-03-16
 
 ### Added
