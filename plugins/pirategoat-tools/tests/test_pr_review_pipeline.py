@@ -265,14 +265,15 @@ class TestCleanupStep:
         """Step 15 should only present results, not restore branches."""
         vals = self._vals(mod, tmp_path)
         g = mod.get_step_guidance(15, TOTAL_STEPS, vals, False, "state")
-        actions = "\n".join(g["actions"])
+        # Filter out STATE_REQ boilerplate (contains "STASHED", "stashed")
+        actions = "\n".join(a for a in g["actions"] if "CONTEXT REQUIREMENT" not in a)
         assert "checkout" not in actions.lower()
         assert "stash" not in actions.lower()
 
     def test_step_16_headless_is_noop(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
         g = mod.get_step_guidance(16, TOTAL_STEPS, vals, True, "state")
-        actions = "\n".join(g["actions"])
+        actions = "\n".join(a for a in g["actions"] if "CONTEXT REQUIREMENT" not in a)
         assert "checkout" not in actions.lower()
         assert "stash" not in actions.lower()
 
@@ -280,7 +281,7 @@ class TestCleanupStep:
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(16, TOTAL_STEPS, vals, False, "state")
-        actions = "\n".join(g["actions"])
+        actions = "\n".join(a for a in g["actions"] if "CONTEXT REQUIREMENT" not in a)
         assert "checkout" not in actions.lower()
         assert "stash" not in actions.lower()
 

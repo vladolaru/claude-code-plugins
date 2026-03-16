@@ -26,7 +26,7 @@ by the script — follow whatever instructions it provides.
 | EXECUTION | 8-12 | Size assessment, ground truth, dispatch plan + triage, parallel agents, reconcile + verify |
 | REVIEW | 13 | Generate review report |
 | VALIDATION | 14 | Decision critic |
-| OUTPUT | 15 | Present results, cleanup |
+| OUTPUT | 15-16 | Present results, cleanup |
 
 ## Failure Recovery
 
@@ -43,7 +43,7 @@ by the script — follow whatever instructions it provides.
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
   --step-number <0-15> \
-  --total-steps 15 \
+  --total-steps 16 \
   --pr-number "<PR number>" \
   --output-dir "/tmp/pr-review-<SAFE_REPO_PATH>-<PR_NUMBER>" \
   --headless \
@@ -52,9 +52,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `--step-number` | Yes | Current step (0-15) |
-| `--total-steps` | Yes | Always 15 |
-| `--pr-number` | Step 0 | PR number. Steps 1-15 read from `--thoughts`. |
+| `--step-number` | Yes | Current step (0-16) |
+| `--total-steps` | Yes | Always 16 |
+| `--pr-number` | Step 0 | PR number. Steps 1-16 read from `--thoughts`. |
 | `--output-dir` | Step 1 | Output directory. Bot mode detected from `review-context.json` here. |
 | `--headless` | Yes | Always pass for /pr-review (autonomous operation). |
 | `--thoughts` | Yes | All accumulated state. Pass `""` on step 0. |
@@ -80,7 +80,7 @@ mkdir -p "$OUTPUT_DIR"
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
   --step-number 0 \
-  --total-steps 15 \
+  --total-steps 16 \
   --pr-number "<PR_NUMBER>" \
   --output-dir "$OUTPUT_DIR" \
   --headless \
@@ -89,4 +89,4 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 
 Execute the instructions printed by the script. After completing each
 step, call the script with `--step-number N+1` and pass ALL accumulated
-state in `--thoughts`. Continue until Step 15 completes.
+state in `--thoughts`. Continue until Step 16 completes.

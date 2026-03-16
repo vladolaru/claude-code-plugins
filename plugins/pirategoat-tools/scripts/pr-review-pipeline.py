@@ -6,17 +6,17 @@ Provides step-by-step guidance for the full PR review pipeline.
 Mode-aware: detects bot mode from review-context.json, headless mode
 from --headless flag.
 
-16 steps (0-15) covering:
+17 steps (0-16) covering:
   SETUP      (0-2):  Parse PR, repo setup, context discovery
   AWARENESS  (3-4):  PR review state, decide approach
   CONTEXT    (5-7):  Linked issue, fetch context, summarize
   EXECUTION  (8-12): Size assessment, ground truth, dispatch, agents, reconcile+verify
   REVIEW     (13):   Generate review report
   VALIDATION (14):   Decision critic
-  OUTPUT     (15):   Present results, cleanup
+  OUTPUT     (15-16): Present results, cleanup
 
 Usage:
-    python3 pr-review-pipeline.py --step-number 0 --total-steps 15 \
+    python3 pr-review-pipeline.py --step-number 0 --total-steps 16 \
         --pr-number 42 --output-dir /tmp/pr-review-org-repo-42 \
         --headless --thoughts ""
 """
@@ -568,27 +568,38 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 15: Present Results + Cleanup",
+            "next": "Step 15: Present Results",
         }
 
-    # Step 15: Present Results + Cleanup
+    # Step 15: Present Results
     if step == 15:
-        if vals["bot_mode"]:
+        return {
+            "phase": "OUTPUT",
+            "title": "Present Results",
+            "actions": [
+                "You are a thorough PR reviewer. Present the final results.",
+                "",
+                f"Read the review report from: {vals['review_report']}",
+                "",
+                "Present to user:",
+                "1. Overall verdict",
+                "2. Key findings summary",
+                f"3. Full report location: {vals['review_report']}",
+                f"4. Output directory: {od}",
+                "",
+                STATE_REQ,
+            ],
+            "next": "Step 16: Cleanup",
+        }
+
+    # Step 16: Cleanup
+    if step == 16:
+        if vals["bot_mode"] or headless:
             return {
                 "phase": "OUTPUT",
-                "title": "Present Results + Cleanup",
+                "title": "Cleanup",
                 "actions": [
-                    "You are a thorough PR reviewer. Present the final results.",
-                    "",
-                    "Bot mode — skip branch restore and stash pop.",
-                    "",
-                    f"Read the review report from: {vals['review_report']}",
-                    "",
-                    "Present to user:",
-                    "1. Overall verdict",
-                    "2. Key findings summary",
-                    f"3. Full report location: {vals['review_report']}",
-                    f"4. Output directory: {od}",
+                    "Pipeline complete.",
                     "",
                     STATE_REQ,
                 ],
@@ -597,21 +608,13 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
         else:
             return {
                 "phase": "OUTPUT",
-                "title": "Present Results + Cleanup",
+                "title": "Cleanup",
                 "actions": [
-                    "You are a thorough PR reviewer. Present results and restore workspace.",
-                    "",
-                    f"Read the review report from: {vals['review_report']}",
-                    "",
-                    "Present to user:",
-                    "1. Overall verdict",
-                    "2. Key findings summary",
-                    f"3. Full report location: {vals['review_report']}",
-                    f"4. Output directory: {od}",
-                    "",
-                    "Cleanup:",
+                    "Restore workspace:",
                     "- If ORIGINAL_BRANCH in --thoughts: `git checkout <ORIGINAL_BRANCH>`",
                     "- If STASHED=true: `git stash apply <STASH_REF> && git stash drop <STASH_REF>`",
+                    "",
+                    "Pipeline complete.",
                     "",
                     STATE_REQ,
                 ],
