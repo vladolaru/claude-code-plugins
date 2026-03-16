@@ -19,6 +19,7 @@ Zero external dependencies (stdlib only).
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -26,6 +27,18 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+# Import telemetry (sibling script, best-effort)
+try:
+    _telemetry_spec = importlib.util.spec_from_file_location(
+        "review_telemetry",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "review-telemetry.py"),
+    )
+    _telemetry_mod = importlib.util.module_from_spec(_telemetry_spec)
+    _telemetry_spec.loader.exec_module(_telemetry_mod)
+    ReviewTelemetry = _telemetry_mod.ReviewTelemetry
+except Exception:
+    ReviewTelemetry = None
 
 # =============================================================================
 # Agent Configuration — loaded from agent-registry.json
@@ -690,6 +703,20 @@ def main():
     with open(started_path, "w") as f:
         from datetime import datetime, timezone
         f.write(datetime.now(timezone.utc).isoformat())
+
+    # Telemetry: log agent start (best-effort)
+    if ReviewTelemetry is not None:
+        try:
+            _t = ReviewTelemetry(output_dir)
+            _t.log_agent_start(
+                agent_name=args.agent,
+                domain=config.get("domain", ""),
+                model_tier=config.get("model_tier", ""),
+                scope_files=len(scope_output.splitlines()) if scope_output else 0,
+                scope_lines=len(scope_output) if scope_output else 0,
+            )
+        except Exception:
+            pass
 
     # Compute file history for agents that request it
     file_history_output = None
