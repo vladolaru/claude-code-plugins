@@ -270,12 +270,12 @@ class TestCleanupStep:
         assert "checkout" not in actions.lower()
         assert "stash" not in actions.lower()
 
-    def test_step_16_headless_is_noop(self, mod, tmp_path):
+    def test_step_16_headless_nonbot_restores_workspace(self, mod, tmp_path):
+        """Headless non-bot runs (normal /pr-review) must restore workspace."""
         vals = self._vals(mod, tmp_path)
         g = mod.get_step_guidance(16, TOTAL_STEPS, vals, True, "state")
         actions = "\n".join(a for a in g["actions"] if "CONTEXT REQUIREMENT" not in a)
-        assert "checkout" not in actions.lower()
-        assert "stash" not in actions.lower()
+        assert "checkout" in actions.lower() or "branch" in actions.lower()
 
     def test_step_16_bot_mode_is_noop(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))

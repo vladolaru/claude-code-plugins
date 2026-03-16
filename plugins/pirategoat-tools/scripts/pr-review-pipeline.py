@@ -594,7 +594,7 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
 
     # Step 16: Cleanup
     if step == 16:
-        if vals["bot_mode"] or headless:
+        if vals["bot_mode"]:
             return {
                 "phase": "OUTPUT",
                 "title": "Cleanup",
