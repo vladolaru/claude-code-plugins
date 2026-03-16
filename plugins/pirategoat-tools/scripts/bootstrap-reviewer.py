@@ -284,85 +284,6 @@ def get_file_history(files: List[str], max_commits: int = 15) -> str:
     return "\n".join(lines)
 
 
-def format_ground_truth_section(
-    ground_truth_path: str, scope_files: List[str]
-) -> Optional[str]:
-    """Build a ground truth section filtered to the agent's domain files.
-
-    Reads ground-truth-summary.json and returns formatted markdown for
-    injection into the bootstrap prompt. Returns None if no relevant
-    findings exist.
-    """
-    if not ground_truth_path or not os.path.isfile(ground_truth_path):
-        return None
-
-    try:
-        with open(ground_truth_path) as f:
-            summary = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
-
-    findings = summary.get("findings", [])
-    if not findings:
-        return None
-
-    # Filter findings to files in the agent's scope
-    scope_set = set(scope_files)
-    relevant = []
-    for finding in findings:
-        ffile = finding.get("file", "")
-        # Match directly or by suffix (tool may use absolute paths)
-        if ffile in scope_set or any(
-            ffile.endswith(sf) or sf.endswith(ffile) for sf in scope_set
-        ):
-            relevant.append(finding)
-
-    if not relevant:
-        return None
-
-    # Group findings by tool
-    by_tool: Dict[str, list] = {}
-    for f in relevant:
-        tool = f.get("tool", "unknown")
-        by_tool.setdefault(tool, []).append(f)
-
-    lines = ["=== GROUND TRUTH FINDINGS ===", ""]
-    lines.append(
-        "The following issues were detected by automated tools. "
-        "Reference them when relevant — do not duplicate tool findings "
-        "unless you have additional context to add."
-    )
-    lines.append("")
-
-    for tool, tool_findings in sorted(by_tool.items()):
-        tool_label = tool.upper()
-        lines.append(f"### {tool_label} ({len(tool_findings)} findings in your scope)")
-        for tf in tool_findings:
-            file_ref = tf.get("file", "?")
-            line_num = tf.get("line", 0)
-            rule = tf.get("rule", "?")
-            msg = tf.get("message", "")
-            loc = f"`{file_ref}:{line_num}`" if line_num else f"`{file_ref}`"
-            lines.append(f"- {loc} — `{rule}`: {msg}")
-        lines.append("")
-
-    # Include test results summary if present
-    test_results = summary.get("test_results")
-    if test_results and test_results.get("failed", 0) > 0:
-        lines.append("### TEST FAILURES")
-        lines.append(
-            f"- {test_results['failed']} test(s) failed out of "
-            f"{test_results.get('total', '?')}"
-        )
-        for failure in test_results.get("failures", [])[:5]:
-            test_name = failure.get("test", "?")
-            msg = failure.get("message", "")[:200]
-            lines.append(f"- `{test_name}`: {msg}")
-        lines.append("")
-
-    return "\n".join(lines)
-
-
 def extract_scope_files(scope_output: str) -> List[str]:
     """Extract file paths from the === FILES === section of scope output."""
     files = []
@@ -414,7 +335,6 @@ def build_output(
     pr_number: Optional[str],
     reviewer_name: str,
     file_history: Optional[str] = None,
-    ground_truth: Optional[str] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
     lines = []
@@ -509,10 +429,6 @@ def build_output(
         lines.append(f"DYNAMIC_DISPATCH_RISK: {risk}")
         lines.append("")
 
-    if ground_truth:
-        lines.append(ground_truth)
-        lines.append("")
-
     # Section 3: Output Instructions (bottom position — recency effect)
     lines.append("--- Section 3: OUTPUT INSTRUCTIONS (operational) ---")
     lines.append("")
@@ -595,12 +511,6 @@ def main():
         default=None,
         help="Override output directory. Auto-detected if omitted.",
     )
-    parser.add_argument(
-        "--ground-truth",
-        default=None,
-        help="Path to ground-truth-summary.json. Findings in scope are injected into the prompt.",
-    )
-
     args = parser.parse_args()
 
     # Step 1: Validate agent name
@@ -767,14 +677,6 @@ def main():
             max_commits = config.get("max_history_commits", 15)
             file_history_output = get_file_history(file_lines, max_commits=max_commits)
 
-    # Compute ground truth section if provided
-    ground_truth_section = None
-    if args.ground_truth and scope_output:
-        scope_files = extract_scope_files(scope_output)
-        ground_truth_section = format_ground_truth_section(
-            args.ground_truth, scope_files
-        )
-
     # Step 5: Build and output the structured block
     reviewer_name = derive_reviewer_name(args.agent)
 
@@ -795,7 +697,6 @@ def main():
         pr_number=pr_number,
         reviewer_name=reviewer_name,
         file_history=file_history_output,
-        ground_truth=ground_truth_section,
     )
 
     print(output)
