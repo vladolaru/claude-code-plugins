@@ -37,6 +37,7 @@ extract_output_dir = _mod.extract_output_dir
 extract_status = _mod.extract_status
 build_output = _mod.build_output
 build_error_output = _mod.build_error_output
+load_pr_intent = _mod.load_pr_intent
 AGENT_CONFIG = _mod.AGENT_CONFIG
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
@@ -322,6 +323,129 @@ class TestBuildOutput:
         assert "STATUS: FINISHED" in self.output
         assert "VERDICT:" in self.output
         assert "COUNTS:" in self.output
+
+
+class TestLoadPrIntent:
+    """PR intent loading from review-context.json."""
+
+    def test_returns_none_when_no_file(self, tmp_path):
+        assert load_pr_intent(str(tmp_path)) is None
+
+    def test_returns_none_when_empty_json(self, tmp_path):
+        (tmp_path / "review-context.json").write_text("{}")
+        assert load_pr_intent(str(tmp_path)) is None
+
+    def test_returns_none_when_no_title(self, tmp_path):
+        ctx = {"pr": {"body": "Some body", "author": "dev"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        assert load_pr_intent(str(tmp_path)) is None
+
+    def test_returns_intent_with_title(self, tmp_path):
+        ctx = {"pr": {"title": "Fix rounding in refunds"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        intent = load_pr_intent(str(tmp_path))
+        assert intent is not None
+        assert "Fix rounding in refunds" in intent
+
+    def test_includes_author(self, tmp_path):
+        ctx = {"pr": {"title": "Fix thing", "author": "alice"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        intent = load_pr_intent(str(tmp_path))
+        assert "alice" in intent
+
+    def test_includes_body(self, tmp_path):
+        ctx = {"pr": {"title": "Fix thing", "body": "Refund totals were off"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        intent = load_pr_intent(str(tmp_path))
+        assert "Refund totals were off" in intent
+
+    def test_includes_linked_issues(self, tmp_path):
+        ctx = {"pr": {"title": "Fix thing"}, "linked_issues": ["WOOPLUG-123"]}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        intent = load_pr_intent(str(tmp_path))
+        assert "WOOPLUG-123" in intent
+
+    def test_truncates_long_body(self, tmp_path):
+        ctx = {"pr": {"title": "Fix thing", "body": "x" * 1000}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        intent = load_pr_intent(str(tmp_path))
+        assert len(intent) < 700  # 500 char truncation + title + overhead
+        assert "..." in intent
+
+    def test_handles_malformed_json(self, tmp_path):
+        (tmp_path / "review-context.json").write_text("not json")
+        assert load_pr_intent(str(tmp_path)) is None
+
+
+class TestPrIntentInjection:
+    """PR intent is injected into bootstrap output between rules and content."""
+
+    def test_intent_present_when_provided(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            pr_intent="PR Title: Fix rounding in refunds",
+        )
+        assert "=== PR INTENT ===" in output
+        assert "Fix rounding in refunds" in output
+
+    def test_intent_absent_when_none(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+        )
+        assert "=== PR INTENT ===" not in output
+
+    def test_intent_between_rules_and_content(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            pr_intent="PR Title: Fix thing",
+        )
+        rules_pos = output.index("=== REVIEW RULES ===")
+        intent_pos = output.index("=== PR INTENT ===")
+        content_pos = output.index("--- Section 2: REVIEW CONTENT")
+        assert rules_pos < intent_pos < content_pos
+
+    def test_intent_includes_severity_guidance(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            pr_intent="PR Title: Fix thing",
+        )
+        assert "severity" in output.lower()
 
 
 class TestBuildErrorOutput:

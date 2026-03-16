@@ -323,6 +323,49 @@ def extract_scope_line_count(scope_output: str) -> int:
     return total
 
 
+def load_pr_intent(output_dir: str) -> Optional[str]:
+    """Load PR intent from review-context.json in the output directory.
+
+    Extracts PR title, body, and linked issues to build a concise intent
+    block that helps specialist reviewers calibrate severity.
+
+    Returns formatted intent string, or None if no context is available.
+    """
+    ctx_path = os.path.join(output_dir, "review-context.json")
+    if not os.path.isfile(ctx_path):
+        return None
+
+    try:
+        with open(ctx_path) as f:
+            ctx = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    pr = ctx.get("pr", {})
+    title = pr.get("title", "").strip()
+    body = pr.get("body", "").strip()
+    author = pr.get("author", "").strip()
+    linked_issues = ctx.get("linked_issues", [])
+
+    # Need at least a title to be useful
+    if not title:
+        return None
+
+    parts = []
+    parts.append(f"PR Title: {title}")
+    if author:
+        parts.append(f"PR Author: {author}")
+    if body:
+        # Truncate long bodies to keep the intent section concise
+        if len(body) > 500:
+            body = body[:500] + "..."
+        parts.append(f"PR Description: {body}")
+    if linked_issues:
+        parts.append(f"Linked Issues: {', '.join(linked_issues)}")
+
+    return "\n".join(parts)
+
+
 def build_output(
     agent_name: str,
     plugin_root: str,
@@ -335,6 +378,7 @@ def build_output(
     pr_number: Optional[str],
     reviewer_name: str,
     file_history: Optional[str] = None,
+    pr_intent: Optional[str] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
     lines = []
@@ -355,6 +399,17 @@ def build_output(
     if domain_rules:
         lines.append("=== DOMAIN RULES ===")
         lines.append(domain_rules)
+        lines.append("")
+
+    # PR Intent — injected between rules and content so reviewers
+    # understand the PR's purpose before reading the diff.
+    if pr_intent:
+        lines.append("=== PR INTENT ===")
+        lines.append("Use this context to calibrate severity — issues on the PR's")
+        lines.append("critical path deserve higher severity than issues on")
+        lines.append("tangentially touched code.")
+        lines.append("")
+        lines.append(pr_intent)
         lines.append("")
 
     # Section 2: Review Content (middle position — processing zone)
@@ -680,6 +735,9 @@ def main():
     # Step 5: Build and output the structured block
     reviewer_name = derive_reviewer_name(args.agent)
 
+    # Load PR intent from review-context.json (if available)
+    pr_intent = load_pr_intent(output_dir)
+
     # Determine overall status
     overall_status = scope_status
     if config["domain"] is None:
@@ -697,6 +755,7 @@ def main():
         pr_number=pr_number,
         reviewer_name=reviewer_name,
         file_history=file_history_output,
+        pr_intent=pr_intent,
     )
 
     print(output)
