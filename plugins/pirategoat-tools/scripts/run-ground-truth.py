@@ -377,6 +377,14 @@ def collect_ground_truth(
     if tool_config is None:
         tool_config = {}
 
+    # --- Clean stale output files from previous runs ---
+    # Since we parse by file existence, leftover files from a prior run
+    # would be ingested even if the current run didn't configure that tool.
+    for output_file in TOOL_OUTPUT_FILES.values():
+        stale = os.path.join(output_dir, output_file)
+        if os.path.exists(stale):
+            os.remove(stale)
+
     changed_set = frozenset(changed_files)
     tools_run: List[str] = []
     tools_failed: List[str] = []

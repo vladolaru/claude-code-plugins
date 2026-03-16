@@ -513,6 +513,23 @@ class TestCollectGroundTruthIntegration:
     """Integration tests for collect_ground_truth with mocked tool execution."""
 
     @patch.object(_mod, "run_configured_tool")
+    def test_stale_output_files_not_parsed(self, mock_run, tmp_output_dir):
+        """Stale result files from a previous run should not be parsed."""
+        # Simulate a previous run that left eslint results on disk
+        _write_eslint_results(tmp_output_dir)
+        assert os.path.exists(os.path.join(tmp_output_dir, "eslint-results.json"))
+
+        # Current run has no tools configured
+        mock_run.return_value = (True, "")
+        summary = _mod.collect_ground_truth(
+            ["src/app.js"], tmp_output_dir, tool_config={}
+        )
+        # Stale eslint results should NOT appear in findings
+        assert summary["findings"] == [], (
+            f"Stale eslint findings leaked into current run: {summary['findings']}"
+        )
+
+    @patch.object(_mod, "run_configured_tool")
     def test_configured_tool_runs_and_findings_collected(
         self, mock_run, tmp_output_dir
     ):
