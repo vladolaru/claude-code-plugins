@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.61.0] - 2026-03-16
+
 ### Removed
 
 - **Ground truth collection step** — Removed linting, security scanning, test runners, and coverage parsers from the review pipeline. Real-world testing showed near-zero actionable signal: Semgrep free rules produced 100% noise on production PRs, and linting/tests duplicated what CI already surfaces. Agents now rely on their own analysis without pre-computed tool findings
