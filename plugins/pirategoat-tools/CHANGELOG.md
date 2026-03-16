@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Stale step cross-references** — `pr-review.md` failure recovery table had step numbers shifted by +1, `pr-review-pipeline.py` had two mismatched "next" pointer titles, and `AGENTS.md`/`extract-session-metrics.py` referenced a defunct "Step 3.6" numbering scheme
+- **Misleading agent status output** — `check-reviewer-agent-status.py` said "10 dispatched, 4 not dispatched" which is contradictory; now says "10 expected, 4 never started" with accurate NOT_DISPATCHED descriptions
 
 ## [1.61.0] - 2026-03-16
 
