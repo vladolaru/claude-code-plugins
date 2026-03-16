@@ -3,7 +3,7 @@
 Review Telemetry — JSONL telemetry for PR review pipelines.
 
 Captures timing, decisions, and outcomes at each pipeline step.
-Logs to ~/.claude/logs/pirategoat-tools/pr-reviews/.
+Logs to ~/.pirategoat-tools/logs/pr-reviews/.
 
 Best-effort: failures never break the pipeline.
 Zero external dependencies (stdlib only).
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
-LOG_DIR = os.path.expanduser("~/.claude/logs/pirategoat-tools/pr-reviews")
+LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/pr-reviews")
 MARKER_FILE = ".telemetry-log-path"
 
 
@@ -101,6 +101,60 @@ class ReviewTelemetry:
             },
         }
         self._append(event)
+
+    def log_agent_start(self, agent_name: str, domain: str = "",
+                        model_tier: str = "", scope_files: int = 0,
+                        scope_lines: int = 0) -> None:
+        """Append agent_start event. No-op if not started."""
+        if self.log_path is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        event = {
+            "event": "agent_start",
+            "timestamp": now.isoformat(),
+            "agent": agent_name,
+            "domain": domain,
+            "model_tier": model_tier,
+            "scope": {
+                "files": scope_files,
+                "lines": scope_lines,
+            },
+        }
+        self._append(event)
+
+    def log_agent_complete(self, agent_name: str, verdict: str = "",
+                           issue_count: int = 0,
+                           severities: Optional[dict] = None) -> None:
+        """Append agent_complete event with duration from .started file. No-op if not started."""
+        if self.log_path is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        duration_ms = self._agent_duration(agent_name, now)
+
+        event = {
+            "event": "agent_complete",
+            "timestamp": now.isoformat(),
+            "agent": agent_name,
+            "duration_ms": duration_ms,
+            "verdict": verdict,
+            "issue_count": issue_count,
+            "severities": severities or {},
+        }
+        self._append(event)
+
+    def _agent_duration(self, agent_name: str, now: datetime) -> Optional[int]:
+        """Calculate milliseconds since the agent's .started file timestamp."""
+        started_path = os.path.join(self.output_dir, f"{agent_name}.started")
+        if not os.path.isfile(started_path):
+            return None
+        try:
+            with open(started_path) as f:
+                started_at = datetime.fromisoformat(f.read().strip())
+            return int((now - started_at).total_seconds() * 1000)
+        except (ValueError, OSError):
+            return None
 
     def finalize(self, step: int, phase: str, title: str,
                  headless: bool = False, bot_mode: bool = False,
