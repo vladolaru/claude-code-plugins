@@ -70,7 +70,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-SAFE_REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | sed 's/^-//')
+SAFE_REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//')
 OUTPUT_DIR="/tmp/pr-review-${SAFE_REPO_PATH}-<PR_NUMBER>"
 mkdir -p "$OUTPUT_DIR"
 ```

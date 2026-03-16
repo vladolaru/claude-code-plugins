@@ -17,7 +17,7 @@ This is a **branch-level review** — no PR or GitHub context required. Useful f
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-SAFE_REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | sed 's/^-//')
+SAFE_REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//')
 BRANCH=$(git branch --show-current)
 SAFE_BRANCH=$(echo "$BRANCH" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//;s/-$//')
 OUTPUT_DIR="/tmp/branch-review-${SAFE_REPO_PATH}-${SAFE_BRANCH}"
