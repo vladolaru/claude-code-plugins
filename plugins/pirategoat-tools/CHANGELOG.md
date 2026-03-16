@@ -7,14 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PR intent propagation to specialist reviewers** — `bootstrap-reviewer.py` now reads `review-context.json` and injects a `=== PR INTENT ===` section (PR title, author, description, linked issues) between review rules and review content. Specialists can now calibrate finding severity against the PR's purpose instead of reviewing against generic domain heuristics alone
+
 ### Changed
 
 - **1-based step numbering** in `pr-review-pipeline.py` — Steps now count 1-14 with `--total-steps 14`, eliminating the dissonance between step count and max step index that could confuse the executing LLM. Aligns with `code-review.md` and `full-code-review.md` which already used 1-based numbering
+- **File-based triage overrides** — Step 8 now instructs the model to update `dispatch-plan.json` with `DISPATCH_OVERRIDE` status when overriding triage decisions, instead of logging overrides to `--thoughts` prose. Step 10 reads the file for accurate dispatch state, eliminating the fragile prose-recall pattern that caused a prior regression
 
 ### Fixed
 
 - **Stale step cross-references** — `pr-review.md` failure recovery table had step numbers shifted by +1, `pr-review-pipeline.py` had two mismatched "next" pointer titles, and `AGENTS.md`/`extract-session-metrics.py` referenced a defunct "Step 3.6" numbering scheme
 - **Misleading agent status output** — `check-reviewer-agent-status.py` said "10 dispatched, 4 not dispatched" which is contradictory; now says "10 expected, 4 never started" with accurate NOT_DISPATCHED descriptions
+- **Wrong API in reconciliator example** — `review-reconciliator.md` used `builder.write_markdown()` which does not exist in `review_output_simple.py`; corrected to `builder.to_markdown()` with manual file write
 
 ## [1.61.0] - 2026-03-16
 

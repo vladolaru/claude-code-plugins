@@ -202,6 +202,19 @@ class TestExecutionPhase:
         assert "Apply your own triage" not in actions
         assert "override" in actions.lower() or "review the plan" in actions.lower()
 
+    def test_step_8_overrides_update_dispatch_plan(self, mod, tmp_path):
+        """Step 8 must instruct to update dispatch-plan.json for overrides."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(8, TOTAL_STEPS, vals, "state")
+        actions = "\n".join(g["actions"])
+        assert "DISPATCH_OVERRIDE" in actions, (
+            "Step 8 must tell the model to use DISPATCH_OVERRIDE status"
+        )
+        assert "dispatch-plan.json" in actions, (
+            "Step 8 must tell the model to update dispatch-plan.json"
+        )
+
     def test_step_9_has_parallel_dispatch(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
@@ -266,22 +279,19 @@ class TestReconcilePhase:
         assert "DISPATCH" in actions
 
     def test_step_10_handles_overridden_agents(self, mod, tmp_path):
-        """Reconcile must include agents dispatched via Step 9 override.
+        """Reconcile must include agents with DISPATCH_OVERRIDE status.
 
-        Step 9 allows SKIPPED_TRIAGE → DISPATCH overrides stored only in
-        --thoughts, not in dispatch-plan.json. Step 10 must tell Claude to
-        also scan the output dir for review files from overridden agents.
+        Step 8 updates dispatch-plan.json for overrides (SKIPPED_TRIAGE →
+        DISPATCH_OVERRIDE). Step 10 must read the file and include both
+        DISPATCH and DISPATCH_OVERRIDE agents.
         """
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
-        # Replace tmp_path in actions to avoid test-name leaking keywords
-        actions = "\n".join(g["actions"]).replace(str(tmp_path), "/OD")
-        assert "review.json" in actions.lower()
-        # Must mention checking for files beyond the plan
-        assert any(phrase in actions.lower() for phrase in [
-            "triage override", "manually dispatched", "overridden agent",
-        ]), f"Step 10 must instruct to include overridden agents. Got:\n{actions[:500]}"
+        actions = "\n".join(g["actions"])
+        assert "DISPATCH_OVERRIDE" in actions, (
+            "Step 10 must reference DISPATCH_OVERRIDE status. Got:\n" + actions[:500]
+        )
 
 
 class TestReviewPhase:
