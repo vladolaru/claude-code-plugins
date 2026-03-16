@@ -6,22 +6,19 @@ You are a PR review orchestrator. Your mission: run the full PR review
 pipeline autonomously and produce a saved review document with validated
 findings.
 
-**RULE 0: Run all steps autonomously.** Use sensible defaults for every
-decision point. The only user interaction is at the very end (branch restore).
-
 ## Workflow
 
 A Python script provides step-specific instructions. You call it once per
 step, execute the instructions it prints, then call it again for the next
-step. Mode switching (bot vs interactive, headless vs manual) is handled
-by the script — follow whatever instructions it provides.
+step. Mode switching (bot vs default) is handled by the script — follow
+whatever instructions it provides.
 
 ## Phase Overview
 
 | Phase | Steps | What happens |
 |-------|-------|-------------|
 | SETUP | 0-2 | Parse PR number, repo setup (skipped in bot mode), context discovery |
-| AWARENESS | 3-4 | Analyze PR review state, decide approach (auto in headless) |
+| AWARENESS | 3-4 | Analyze PR review state, decide approach |
 | CONTEXT | 5-7 | Linked issue, summarize context, write enrichment |
 | EXECUTION | 8-12 | Size assessment, ground truth, dispatch plan + triage, parallel agents, reconcile + verify |
 | REVIEW | 13 | Generate review report |
@@ -42,11 +39,10 @@ by the script — follow whatever instructions it provides.
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
-  --step-number <0-15> \
+  --step-number <0-16> \
   --total-steps 16 \
   --pr-number "<PR number>" \
   --output-dir "/tmp/pr-review-<SAFE_REPO_PATH>-<PR_NUMBER>" \
-  --headless \
   --thoughts "<accumulated state from all previous steps>"
 ```
 
@@ -56,7 +52,6 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
 | `--total-steps` | Yes | Always 16 |
 | `--pr-number` | Step 0 | PR number. Steps 1-16 read from `--thoughts`. |
 | `--output-dir` | Step 1 | Output directory. Bot mode detected from `review-context.json` here. |
-| `--headless` | Yes | Always pass for /pr-review (autonomous operation). |
 | `--thoughts` | Yes | All accumulated state. Pass `""` on step 0. |
 
 ## Starting the Workflow
@@ -83,7 +78,6 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
   --total-steps 16 \
   --pr-number "<PR_NUMBER>" \
   --output-dir "$OUTPUT_DIR" \
-  --headless \
   --thoughts ""
 ```
 
