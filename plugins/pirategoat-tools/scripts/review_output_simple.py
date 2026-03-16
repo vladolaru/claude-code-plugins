@@ -286,10 +286,12 @@ class ReviewOutputBuilder:
             f.write(self.to_markdown())
 
         # Telemetry: log agent completion (best-effort)
+        # Use full agent name (reviewer + "-reviewer") to match the
+        # agent_start event and .started file written by bootstrap-reviewer.py.
         output = self.to_dict()
         _log_agent_complete_telemetry(
             output_dir,
-            self.reviewer,
+            f"{self.reviewer}-reviewer",
             output['verdict'],
             output['summary']['total_issues'],
             output['summary']['by_severity'],
