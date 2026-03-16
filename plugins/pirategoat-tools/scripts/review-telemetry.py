@@ -26,9 +26,9 @@ class ReviewTelemetry:
 
     Usage:
         t = ReviewTelemetry(output_dir)
-        t.start(pr_number="42", headless=True)     # Step 0
-        t.log_step(step=1, phase="SETUP", ...)      # Steps 1–N-1
-        t.finalize(step=N, phase="OUTPUT", ...)      # Final step
+        t.start(pr_number="42")                      # Step 0
+        t.log_step(step=1, phase="SETUP", ...)       # Steps 1–N-1
+        t.finalize(step=N, phase="OUTPUT", ...)       # Final step
     """
 
     def __init__(self, output_dir: str, log_dir: Optional[str] = None):
@@ -47,7 +47,7 @@ class ReviewTelemetry:
         return self._log_path
 
     def start(self, pr_number: str = "", total_steps: int = 15,
-              headless: bool = False, bot_mode: bool = False) -> str:
+              bot_mode: bool = False) -> str:
         """Create log file + marker. Write pipeline_start. Return log path."""
         os.makedirs(self.log_dir, exist_ok=True)
 
@@ -70,7 +70,6 @@ class ReviewTelemetry:
                 "pr_number": pr_number,
                 "output_dir": self.output_dir,
                 "total_steps": total_steps,
-                "headless": headless,
                 "bot_mode": bot_mode,
             },
         }
@@ -78,7 +77,7 @@ class ReviewTelemetry:
         return self._log_path
 
     def log_step(self, step: int, phase: str, title: str,
-                 headless: bool = False, bot_mode: bool = False,
+                 bot_mode: bool = False,
                  thoughts_length: int = 0) -> None:
         """Append step timing event (no snapshot). No-op if not started."""
         if self.log_path is None:
@@ -95,7 +94,6 @@ class ReviewTelemetry:
             "title": title,
             "duration_since_prev_ms": duration_ms,
             "args": {
-                "headless": headless,
                 "bot_mode": bot_mode,
                 "thoughts_length": thoughts_length,
             },
@@ -157,7 +155,7 @@ class ReviewTelemetry:
             return None
 
     def finalize(self, step: int, phase: str, title: str,
-                 headless: bool = False, bot_mode: bool = False,
+                 bot_mode: bool = False,
                  thoughts_length: int = 0) -> None:
         """Append pipeline_end with snapshot + summary. No-op if not started."""
         if self.log_path is None:
@@ -179,7 +177,6 @@ class ReviewTelemetry:
             "title": title,
             "duration_since_prev_ms": duration_ms,
             "args": {
-                "headless": headless,
                 "bot_mode": bot_mode,
                 "thoughts_length": thoughts_length,
             },

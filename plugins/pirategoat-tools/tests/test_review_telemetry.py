@@ -116,13 +116,12 @@ class TestStart:
 
     def test_pipeline_start_has_pipeline_info(self, telemetry, output_dir):
         path = telemetry.start(pr_number="42", total_steps=15,
-                               headless=True, bot_mode=False)
+                               bot_mode=False)
         events = _read_events(path)
         pipeline = events[0]["pipeline"]
         assert pipeline["pr_number"] == "42"
         assert pipeline["output_dir"] == str(output_dir)
         assert pipeline["total_steps"] == 15
-        assert pipeline["headless"] is True
         assert pipeline["bot_mode"] is False
 
     def test_pipeline_start_has_timestamp(self, telemetry):
@@ -161,10 +160,9 @@ class TestLogStep:
     def test_includes_args(self, telemetry):
         telemetry.start(pr_number="42")
         telemetry.log_step(step=1, phase="SETUP", title="Repo Setup",
-                           headless=True, bot_mode=True, thoughts_length=200)
+                           bot_mode=True, thoughts_length=200)
         events = _read_events(telemetry.log_path)
         args = events[1]["args"]
-        assert args["headless"] is True
         assert args["bot_mode"] is True
         assert args["thoughts_length"] == 200
 
