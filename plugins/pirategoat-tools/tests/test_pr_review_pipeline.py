@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context_fixtures import COMPLETE_CONTEXT
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "pr-review-pipeline.py"
-TOTAL_STEPS = 15
+TOTAL_STEPS = 16
 
 
 def _load_module():
@@ -236,6 +236,59 @@ class TestOutputPhase:
         g = mod.get_step_guidance(15, TOTAL_STEPS, vals, False, "state")
         actions = "\n".join(g["actions"])
         assert "checkout" in actions.lower() or "restore" in actions.lower()
+
+
+class TestCleanupStep:
+    """Step 16: Cleanup — restore workspace after presenting results."""
+
+    def _vals(self, mod, tmp_path, pr_number="42"):
+        return mod.load_context_values(str(tmp_path), pr_number)
+
+    def test_step_16_exists(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(16, TOTAL_STEPS, vals, True, "state")
+        assert g is not None
+        assert g["phase"] == "OUTPUT"
+        assert g["title"] == "Cleanup"
+
+    def test_step_16_is_final(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(16, TOTAL_STEPS, vals, True, "state")
+        assert g["next"] is None
+
+    def test_step_15_points_to_step_16(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(15, TOTAL_STEPS, vals, True, "state")
+        assert "16" in g["next"]
+
+    def test_step_15_no_longer_has_cleanup(self, mod, tmp_path):
+        """Step 15 should only present results, not restore branches."""
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(15, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "checkout" not in actions.lower()
+        assert "stash" not in actions.lower()
+
+    def test_step_16_headless_is_noop(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(16, TOTAL_STEPS, vals, True, "state")
+        actions = "\n".join(g["actions"])
+        assert "checkout" not in actions.lower()
+        assert "stash" not in actions.lower()
+
+    def test_step_16_bot_mode_is_noop(self, mod, tmp_path):
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(16, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "checkout" not in actions.lower()
+        assert "stash" not in actions.lower()
+
+    def test_step_16_interactive_restores_workspace(self, mod, tmp_path):
+        vals = self._vals(mod, tmp_path)
+        g = mod.get_step_guidance(16, TOTAL_STEPS, vals, False, "state")
+        actions = "\n".join(g["actions"])
+        assert "checkout" in actions.lower() or "branch" in actions.lower()
 
 
 class TestStructure:
