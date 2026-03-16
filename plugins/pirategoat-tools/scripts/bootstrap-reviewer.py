@@ -363,6 +363,45 @@ def format_ground_truth_section(
     return "\n".join(lines)
 
 
+def extract_scope_files(scope_output: str) -> List[str]:
+    """Extract file paths from the === FILES === section of scope output."""
+    files = []
+    in_files = False
+    for line in scope_output.splitlines():
+        if line.startswith("=== FILES ==="):
+            in_files = True
+            continue
+        if in_files and line.startswith("==="):
+            break
+        if in_files and line.strip():
+            # File line format: "path/to/file  (+N -M)"
+            file_path = line.split("  ")[0].strip()
+            if file_path:
+                files.append(file_path)
+    return files
+
+
+def extract_scope_line_count(scope_output: str) -> int:
+    """Extract total changed lines from the === FILES === section.
+
+    Parses (+N -M) stats per file and sums additions + deletions.
+    """
+    total = 0
+    in_files = False
+    for line in scope_output.splitlines():
+        if line.startswith("=== FILES ==="):
+            in_files = True
+            continue
+        if in_files and line.startswith("==="):
+            break
+        if in_files and line.strip():
+            # Parse "(+N -M)" from "path/to/file  (+N -M)"
+            match = re.search(r'\(\+(\d+)\s+-(\d+)\)', line)
+            if match:
+                total += int(match.group(1)) + int(match.group(2))
+    return total
+
+
 def build_output(
     agent_name: str,
     plugin_root: str,
@@ -707,13 +746,15 @@ def main():
     # Telemetry: log agent start (best-effort)
     if ReviewTelemetry is not None:
         try:
+            _scope_files = extract_scope_files(scope_output) if scope_output else []
+            _scope_lines = extract_scope_line_count(scope_output) if scope_output else 0
             _t = ReviewTelemetry(output_dir)
             _t.log_agent_start(
                 agent_name=args.agent,
                 domain=config.get("domain", ""),
                 model_tier=config.get("model_tier", ""),
-                scope_files=len(scope_output.splitlines()) if scope_output else 0,
-                scope_lines=len(scope_output) if scope_output else 0,
+                scope_files=len(_scope_files),
+                scope_lines=_scope_lines,
             )
         except Exception:
             pass
@@ -721,20 +762,7 @@ def main():
     # Compute file history for agents that request it
     file_history_output = None
     if config.get("file_history") and scope_output:
-        # Extract file list from scope output
-        file_lines = []
-        in_files = False
-        for line in scope_output.splitlines():
-            if line.startswith("=== FILES ==="):
-                in_files = True
-                continue
-            if in_files and line.startswith("==="):
-                break
-            if in_files and line.strip():
-                # File line format: "path/to/file  (+N -M)"
-                file_path = line.split("  ")[0].strip()
-                if file_path:
-                    file_lines.append(file_path)
+        file_lines = extract_scope_files(scope_output)
         if file_lines:
             max_commits = config.get("max_history_commits", 15)
             file_history_output = get_file_history(file_lines, max_commits=max_commits)
@@ -742,19 +770,7 @@ def main():
     # Compute ground truth section if provided
     ground_truth_section = None
     if args.ground_truth and scope_output:
-        # Extract file list from scope output for filtering
-        scope_files = []
-        in_files_section = False
-        for line in scope_output.splitlines():
-            if line.startswith("=== FILES ==="):
-                in_files_section = True
-                continue
-            if in_files_section and line.startswith("==="):
-                break
-            if in_files_section and line.strip():
-                file_path = line.split("  ")[0].strip()
-                if file_path:
-                    scope_files.append(file_path)
+        scope_files = extract_scope_files(scope_output)
         ground_truth_section = format_ground_truth_section(
             args.ground_truth, scope_files
         )
