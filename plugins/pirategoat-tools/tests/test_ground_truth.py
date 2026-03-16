@@ -605,6 +605,41 @@ class TestCollectGroundTruthIntegration:
         assert "jest" in summary["tools_not_configured"]
 
     @patch.object(_mod, "run_configured_tool")
+    def test_tools_run_concurrently(self, mock_run, tmp_output_dir):
+        """Multiple tools should run in parallel, not sequentially."""
+        import threading
+        import time
+
+        active_threads = []
+        lock = threading.Lock()
+        max_concurrent = [0]
+
+        def side_effect(tool, cmd, out_dir, files, timeout):
+            with lock:
+                active_threads.append(threading.current_thread().name)
+                current = len(active_threads)
+                if current > max_concurrent[0]:
+                    max_concurrent[0] = current
+            time.sleep(0.1)  # Simulate work
+            with lock:
+                active_threads.remove(threading.current_thread().name)
+            # Write mock output files so tools "succeed"
+            if tool == "eslint":
+                _write_eslint_results(out_dir)
+            return True, ""
+
+        mock_run.side_effect = side_effect
+        config = {
+            "eslint": "eslint {files}",
+            "phpcs": "phpcs {files}",
+            "semgrep": "semgrep {files}",
+        }
+
+        _mod.collect_ground_truth(["src/app.js"], tmp_output_dir, tool_config=config)
+        # With 3 tools and 0.1s sleep, sequential would never exceed 1 concurrent
+        assert max_concurrent[0] >= 2, f"Expected concurrent execution, got max {max_concurrent[0]} threads"
+
+    @patch.object(_mod, "run_configured_tool")
     def test_jest_with_coverage_produces_both_outputs(self, mock_run, tmp_output_dir):
         """A single jest run with --coverage should populate both test_results and coverage."""
         def side_effect(tool, cmd, out_dir, files, timeout):

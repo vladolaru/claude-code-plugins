@@ -31,6 +31,7 @@ import os
 import shlex
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -384,17 +385,21 @@ def collect_ground_truth(
     test_results: Optional[Dict[str, Any]] = None
     coverage: Optional[Dict[str, Any]] = None
 
-    # --- Run each configured tool ---
-    for tool_name, cmd_template in tool_config.items():
-        ok, err = run_configured_tool(
-            tool_name, cmd_template, output_dir, changed_files, timeout
-        )
-        if ok:
-            tools_run.append(tool_name)
-        else:
-            tools_failed.append(tool_name)
-            if err:
-                print(f"  {err}", file=sys.stderr)
+    # --- Run configured tools in parallel ---
+    with ThreadPoolExecutor(max_workers=len(tool_config) or 1) as pool:
+        futures = {
+            pool.submit(run_configured_tool, name, cmd, output_dir, changed_files, timeout): name
+            for name, cmd in tool_config.items()
+        }
+        for future in as_completed(futures):
+            tool_name = futures[future]
+            ok, err = future.result()
+            if ok:
+                tools_run.append(tool_name)
+            else:
+                tools_failed.append(tool_name)
+                if err:
+                    print(f"  {err}", file=sys.stderr)
 
     # --- Parse results by output file existence (not tool name) ---
     # This supports merged runs where e.g. jest --coverage produces both
