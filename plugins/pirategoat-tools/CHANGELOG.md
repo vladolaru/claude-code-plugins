@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ground truth parallel execution** — `collect_ground_truth()` now runs all configured tools concurrently via `ThreadPoolExecutor`. Wall time drops from sum(all tools) to max(single tool)
 - **Ground truth parsing resilience** — Result parsing now checks for output files on disk rather than tool name in `tools_run`, supporting merged test+coverage runs
 
+### Fixed
+
+- **Stale ground truth files** — `collect_ground_truth()` now cleans all known tool output files before running tools. File-existence-based parsing could ingest leftover results from a previous run in reused output directories
+- **Triage override agents dropped** — Step 10 now instructs to include review files from agents dispatched via triage override in Step 8. Overrides stored in `--thoughts` weren't reflected in `dispatch-plan.json`, so manually dispatched agents were excluded from reconciliation
+- **Branch-name issue extraction** — `load_context_values()` now extracts issue IDs from `head_ref` (e.g., `fix/WOOPLUG-5988-desc` → `WOOPLUG-5988`), restoring the branch-name extraction lost when Steps 3+4+5 were collapsed
+
 ## [1.59.0] - 2026-03-16
 
 ### Added
