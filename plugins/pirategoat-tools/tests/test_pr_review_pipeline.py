@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context_fixtures import COMPLETE_CONTEXT
 
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "pr-review-pipeline.py"
-TOTAL_STEPS = 13
+TOTAL_STEPS = 14
 
 
 def _load_module():
@@ -30,63 +30,63 @@ def mod():
 
 
 class TestSetupPhase:
-    """Steps 0-2: Parse PR, repo setup, context discovery."""
+    """Steps 1-3: Parse PR, repo setup, context discovery."""
 
     def _vals(self, mod, tmp_path, pr_number="42", with_context=False):
         if with_context:
             (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         return mod.load_context_values(str(tmp_path), pr_number)
 
-    def test_step_0_title(self, mod, tmp_path):
+    def test_step_1_title(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(0, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
         assert g["title"] == "Parse PR Number"
 
-    def test_step_0_skips_ask_when_pr_provided(self, mod, tmp_path):
+    def test_step_1_skips_ask_when_pr_provided(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(0, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
         actions = "\n".join(g["actions"])
         assert "AskUserQuestion" not in actions
 
-    def test_step_0_asks_when_no_pr(self, mod, tmp_path):
+    def test_step_1_asks_when_no_pr(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path, pr_number=None)
-        g = mod.get_step_guidance(0, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
         actions = "\n".join(g["actions"])
         assert "Usage" in actions or "required" in actions.lower()
 
-    def test_step_1_skips_repo_setup_when_context_exists(self, mod, tmp_path):
+    def test_step_2_skips_repo_setup_when_context_exists(self, mod, tmp_path):
         """Bot mode: review-context.json exists → skip repo setup."""
         vals = self._vals(mod, tmp_path, with_context=True)
-        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, "")
         actions = "\n".join(g["actions"])
         assert "skip" in actions.lower() or "pre-computed" in actions.lower()
         assert "git stash" not in actions
         assert "git checkout" not in actions
 
-    def test_step_1_full_setup_when_no_context(self, mod, tmp_path):
+    def test_step_2_full_setup_when_no_context(self, mod, tmp_path):
         """Interactive mode: full repo setup."""
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, "")
         actions = "\n".join(g["actions"])
         assert "git status" in actions or "uncommitted" in actions.lower()
 
-    def test_step_1_auto_stash_when_not_bot_mode(self, mod, tmp_path):
+    def test_step_2_auto_stash_when_not_bot_mode(self, mod, tmp_path):
         """Default (non-bot) mode: auto-stash uncommitted changes."""
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, "")
         actions = "\n".join(g["actions"])
         assert "auto" in actions.lower() or "stash push" in actions
 
-    def test_step_2_skips_discovery_when_context_exists(self, mod, tmp_path):
+    def test_step_3_skips_discovery_when_context_exists(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path, with_context=True)
-        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(3, TOTAL_STEPS, vals, "")
         actions = "\n".join(g["actions"])
         assert "review-context.json" in actions
         assert "gather-review-context" not in actions
 
-    def test_step_2_discovers_when_no_context(self, mod, tmp_path):
+    def test_step_3_discovers_when_no_context(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, "")
+        g = mod.get_step_guidance(3, TOTAL_STEPS, vals, "")
         actions = "\n".join(g["actions"])
         assert "gather-review-context" in actions
 
@@ -143,48 +143,48 @@ class TestContextExtraction:
 
 
 class TestContextSummary:
-    """Step 3: Review Context Summary (replaces old Steps 3+4+5)."""
+    """Step 4: Review Context Summary."""
 
     def _vals(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         return mod.load_context_values(str(tmp_path), "42")
 
-    def test_step_3_presents_reviews(self, mod, tmp_path):
+    def test_step_4_presents_reviews(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(3, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(4, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "approved" in actions.lower()
         # Should NOT run gh pr view — data is pre-computed
         assert "gh pr view" not in actions and "ghe pr view" not in actions
 
-    def test_step_3_presents_linked_issues(self, mod, tmp_path):
+    def test_step_4_presents_linked_issues(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(3, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(4, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "WOOPLUG-1234" in actions
 
-    def test_step_3_asks_for_context_synthesis(self, mod, tmp_path):
+    def test_step_4_asks_for_context_synthesis(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(3, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(4, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "purpose" in actions.lower() or "PR purpose" in actions
 
 
 class TestExecutionPhase:
-    """Steps 6-9: Size, dispatch, agents, reconcile."""
+    """Steps 7-10: Size, dispatch, agents, reconcile."""
 
-    def test_step_6_reads_size_from_context(self, mod, tmp_path):
-        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
-        vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(6, TOTAL_STEPS, vals, "state")
-        actions = "\n".join(g["actions"])
-        assert "review-context.json" in actions
-
-    def test_step_7_interpolates_actual_git_range(self, mod, tmp_path):
-        """Script should print the actual git range, not a template variable."""
+    def test_step_7_reads_size_from_context(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(7, TOTAL_STEPS, vals, "state")
+        actions = "\n".join(g["actions"])
+        assert "review-context.json" in actions
+
+    def test_step_8_interpolates_actual_git_range(self, mod, tmp_path):
+        """Script should print the actual git range, not a template variable."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(8, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "plan-review-dispatch" in actions
         # Should contain the actual range from the context file, not a placeholder
@@ -192,73 +192,73 @@ class TestExecutionPhase:
         assert "${GIT_RANGE}" not in actions
         assert "<GIT_RANGE>" not in actions
 
-    def test_step_7_triage_references_dispatch_plan(self, mod, tmp_path):
-        """Step 7 should tell Claude to use the script's triage, not redo it."""
+    def test_step_8_triage_references_dispatch_plan(self, mod, tmp_path):
+        """Step 8 should tell Claude to use the script's triage, not redo it."""
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(7, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(8, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         # Should reference reviewing the script's decisions, not "Apply your own triage"
         assert "Apply your own triage" not in actions
         assert "override" in actions.lower() or "review the plan" in actions.lower()
 
-    def test_step_8_has_parallel_dispatch(self, mod, tmp_path):
-        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
-        vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(8, TOTAL_STEPS, vals, "state")
-        actions = "\n".join(g["actions"])
-        assert "parallel" in actions.lower() or "SINGLE message" in actions
-
-    def test_step_9_dispatches_reconciliator(self, mod, tmp_path):
-        """Reconcile step should dispatch the reconciliator agent."""
+    def test_step_9_has_parallel_dispatch(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
         g = mod.get_step_guidance(9, TOTAL_STEPS, vals, "state")
+        actions = "\n".join(g["actions"])
+        assert "parallel" in actions.lower() or "SINGLE message" in actions
+
+    def test_step_10_dispatches_reconciliator(self, mod, tmp_path):
+        """Reconcile step should dispatch the reconciliator agent."""
+        (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
+        vals = mod.load_context_values(str(tmp_path), "42")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "review-reconciliator" in actions
         assert str(tmp_path) in actions
         assert "${OUTPUT_DIR}" not in actions
 
-    def test_step_10_interpolates_report_path(self, mod, tmp_path):
+    def test_step_11_interpolates_report_path(self, mod, tmp_path):
         """Report path should be absolute, not a template."""
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(11, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert str(tmp_path / "review-report.md") in actions
 
 
 class TestReconcilePhase:
-    """Step 9: Reconcile + Verify."""
+    """Step 10: Reconcile + Verify."""
 
-    def test_step_9_dispatches_reconciliator(self, mod, tmp_path):
+    def test_step_10_dispatches_reconciliator(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(9, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "review-reconciliator" in actions
         assert "review-findings.json" in actions
 
-    def test_step_9_has_git_range(self, mod, tmp_path):
+    def test_step_10_has_git_range(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(9, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "abc123..fix/thing" in actions
 
-    def test_step_9_includes_dispatch_plan(self, mod, tmp_path):
+    def test_step_10_includes_dispatch_plan(self, mod, tmp_path):
         """Reconcile step should pass dispatch-plan.json to the reconciliator."""
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(9, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "dispatch-plan.json" in actions
 
-    def test_step_9_passes_all_dispatched_agents(self, mod, tmp_path):
+    def test_step_10_passes_all_dispatched_agents(self, mod, tmp_path):
         """Should pass paths for ALL dispatched agents, not just FINISHED."""
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(9, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         # Should NOT filter to only FINISHED
         assert "FINISHED" not in actions
@@ -266,52 +266,52 @@ class TestReconcilePhase:
         assert "DISPATCH" in actions
 
     def test_step_10_handles_overridden_agents(self, mod, tmp_path):
-        """Reconcile must include agents dispatched via Step 8 override.
+        """Reconcile must include agents dispatched via Step 9 override.
 
-        Step 8 allows SKIPPED_TRIAGE → DISPATCH overrides stored only in
+        Step 9 allows SKIPPED_TRIAGE → DISPATCH overrides stored only in
         --thoughts, not in dispatch-plan.json. Step 10 must tell Claude to
         also scan the output dir for review files from overridden agents.
         """
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(9, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
         # Replace tmp_path in actions to avoid test-name leaking keywords
         actions = "\n".join(g["actions"]).replace(str(tmp_path), "/OD")
         assert "review.json" in actions.lower()
         # Must mention checking for files beyond the plan
         assert any(phrase in actions.lower() for phrase in [
             "triage override", "manually dispatched", "overridden agent",
-        ]), f"Step 9 must instruct to include overridden agents. Got:\n{actions[:500]}"
+        ]), f"Step 10 must instruct to include overridden agents. Got:\n{actions[:500]}"
 
 
 class TestReviewPhase:
-    """Step 10: Generate review report."""
+    """Step 11: Generate review report."""
 
-    def test_step_10_writes_report(self, mod, tmp_path):
+    def test_step_11_writes_report(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(10, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(11, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "review-report.md" in actions
         assert "review-findings" in actions
 
 
 class TestValidationPhase:
-    """Step 11: Decision critic."""
+    """Step 12: Decision critic."""
 
-    def test_step_11_has_decision_critic(self, mod, tmp_path):
+    def test_step_12_has_decision_critic(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(11, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "decision" in actions.lower()
         assert "review-report.md" in actions
 
-    def test_step_11_no_ingest_verification(self, mod, tmp_path):
+    def test_step_12_no_ingest_verification(self, mod, tmp_path):
         """Decision critic should NOT reference ingestion verification."""
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(11, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "ingest-verification" not in actions
         assert "Ingestion Verification" not in actions
@@ -319,60 +319,60 @@ class TestValidationPhase:
 
 
 class TestOutputPhase:
-    """Step 12: Present results."""
+    """Step 13: Present results."""
 
-    def test_step_12_presents_results(self, mod, tmp_path):
+    def test_step_13_presents_results(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, "state")
         actions = "\n".join(g["actions"])
         assert "review-report.md" in actions
         assert "verdict" in actions.lower()
 
 
 class TestCleanupStep:
-    """Step 13: Cleanup — restore workspace after presenting results."""
+    """Step 14: Cleanup — restore workspace after presenting results."""
 
     def _vals(self, mod, tmp_path, pr_number="42"):
         return mod.load_context_values(str(tmp_path), pr_number)
 
-    def test_step_13_exists(self, mod, tmp_path):
+    def test_step_14_exists(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(14, TOTAL_STEPS, vals, "state")
         assert g is not None
         assert g["phase"] == "OUTPUT"
         assert g["title"] == "Cleanup"
 
-    def test_step_13_is_final(self, mod, tmp_path):
+    def test_step_14_is_final(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(14, TOTAL_STEPS, vals, "state")
         assert g["next"] is None
 
-    def test_step_12_points_to_step_13(self, mod, tmp_path):
+    def test_step_13_points_to_step_14(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, "state")
-        assert "13" in g["next"]
+        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, "state")
+        assert "14" in g["next"]
 
-    def test_step_12_no_longer_has_cleanup(self, mod, tmp_path):
-        """Step 12 should only present results, not restore branches."""
+    def test_step_13_no_longer_has_cleanup(self, mod, tmp_path):
+        """Step 13 should only present results, not restore branches."""
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(12, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, "state")
         # Filter out STATE_REQ boilerplate (contains "STASHED", "stashed")
         actions = "\n".join(a for a in g["actions"] if "CONTEXT REQUIREMENT" not in a)
         assert "checkout" not in actions.lower()
         assert "stash" not in actions.lower()
 
-    def test_step_13_nonbot_restores_workspace(self, mod, tmp_path):
+    def test_step_14_nonbot_restores_workspace(self, mod, tmp_path):
         """Non-bot runs (normal /pr-review) must restore workspace."""
         vals = self._vals(mod, tmp_path)
-        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(14, TOTAL_STEPS, vals, "state")
         actions = "\n".join(a for a in g["actions"] if "CONTEXT REQUIREMENT" not in a)
         assert "checkout" in actions.lower() or "branch" in actions.lower()
 
-    def test_step_13_bot_mode_is_noop(self, mod, tmp_path):
+    def test_step_14_bot_mode_is_noop(self, mod, tmp_path):
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(13, TOTAL_STEPS, vals, "state")
+        g = mod.get_step_guidance(14, TOTAL_STEPS, vals, "state")
         actions = "\n".join(a for a in g["actions"] if "CONTEXT REQUIREMENT" not in a)
         assert "checkout" not in actions.lower()
         assert "stash" not in actions.lower()
@@ -391,16 +391,16 @@ class TestStructure:
         assert "purpose" in mod.STATE_REQ.lower()
         assert "review focus" in mod.STATE_REQ.lower() or "focus" in mod.STATE_REQ.lower()
 
-    def test_steps_1_to_N_have_state_requirement(self, mod, tmp_path):
+    def test_steps_2_to_N_have_state_requirement(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        for step in range(1, TOTAL_STEPS + 1):
+        for step in range(2, TOTAL_STEPS + 1):
             g = mod.get_step_guidance(step, TOTAL_STEPS, vals, "state")
             actions = "\n".join(g["actions"])
             assert "CONTEXT REQUIREMENT" in actions, f"Step {step} missing CONTEXT REQUIREMENT"
 
     def test_non_final_steps_have_next(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        for step in range(0, TOTAL_STEPS):
+        for step in range(1, TOTAL_STEPS):
             g = mod.get_step_guidance(step, TOTAL_STEPS, vals, "state")
             assert g["next"] is not None, f"Step {step} should have next"
 
@@ -411,7 +411,7 @@ class TestStructure:
 
     def test_all_steps_have_role_reinforcement(self, mod, tmp_path):
         vals = self._vals(mod, tmp_path)
-        for step in range(1, TOTAL_STEPS + 1):
+        for step in range(2, TOTAL_STEPS + 1):
             g = mod.get_step_guidance(step, TOTAL_STEPS, vals, "state")
             actions = "\n".join(g["actions"])
             assert "PR review" in actions or "review" in actions.lower()
@@ -419,7 +419,7 @@ class TestStructure:
     def test_no_template_variables_in_output(self, mod, tmp_path):
         """No step should contain ${...} or <...> template placeholders."""
         vals = self._vals(mod, tmp_path)
-        for step in range(0, TOTAL_STEPS + 1):
+        for step in range(1, TOTAL_STEPS + 1):
             g = mod.get_step_guidance(step, TOTAL_STEPS, vals, "state")
             actions = "\n".join(g["actions"])
             assert "${OUTPUT_DIR}" not in actions, f"Step {step} has unresolved ${{OUTPUT_DIR}}"
@@ -431,15 +431,15 @@ class TestStructure:
 class TestFormatOutput:
     def test_header_has_separators(self, mod, tmp_path):
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
-        output = mod.format_output(1, TOTAL_STEPS, g)
+        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, "")
+        output = mod.format_output(2, TOTAL_STEPS, g)
         assert "═══" in output
-        assert "Step 1/" in output
+        assert "Step 2/" in output
 
     def test_next_is_mandatory(self, mod, tmp_path):
         vals = mod.load_context_values(str(tmp_path), "42")
-        g = mod.get_step_guidance(1, TOTAL_STEPS, vals, "")
-        output = mod.format_output(1, TOTAL_STEPS, g)
+        g = mod.get_step_guidance(2, TOTAL_STEPS, vals, "")
+        output = mod.format_output(2, TOTAL_STEPS, g)
         assert "MANDATORY" in output
 
     def test_final_step_shows_complete(self, mod, tmp_path):
@@ -455,9 +455,9 @@ class TestCLIIntegration:
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True)
 
-    def test_step_0_exits_0(self, tmp_path):
+    def test_step_1_exits_0(self, tmp_path):
         r = self._run(
-            "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+            "--step-number", "1", "--total-steps", str(TOTAL_STEPS),
             "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
         )
         assert r.returncode == 0
@@ -477,12 +477,12 @@ class TestTelemetryIntegration:
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True)
 
-    def test_step_0_creates_telemetry_log(self, tmp_path):
-        """Step 0 should create a telemetry log file."""
+    def test_step_1_creates_telemetry_log(self, tmp_path):
+        """Step 1 should create a telemetry log file."""
         log_dir = tmp_path / "telemetry-logs"
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             r = self._run(
-                "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                "--step-number", "1", "--total-steps", str(TOTAL_STEPS),
                 "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
             )
         assert r.returncode == 0
@@ -497,26 +497,26 @@ class TestTelemetryIntegration:
         try:
             with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
                 r = self._run(
-                    "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                    "--step-number", "1", "--total-steps", str(TOTAL_STEPS),
                     "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
                 )
             # Pipeline should still succeed
             assert r.returncode == 0
-            assert "Step 0/" in r.stdout
+            assert "Step 1/" in r.stdout
         finally:
             log_dir.chmod(0o755)
 
-    def test_step_1_appends_to_telemetry_log(self, tmp_path):
-        """Step 1 should append to the log created by step 0."""
+    def test_step_2_appends_to_telemetry_log(self, tmp_path):
+        """Step 2 should append to the log created by step 1."""
         log_dir = tmp_path / "telemetry-logs"
         env = {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}
         with patch.dict(os.environ, env):
             self._run(
-                "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                "--step-number", "1", "--total-steps", str(TOTAL_STEPS),
                 "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
             )
             self._run(
-                "--step-number", "1", "--total-steps", str(TOTAL_STEPS),
+                "--step-number", "2", "--total-steps", str(TOTAL_STEPS),
                 "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "state",
             )
         marker = tmp_path / ".telemetry-log-path"
@@ -534,7 +534,7 @@ class TestTelemetryIntegration:
         (tmp_path / "review-context.json").write_text(json.dumps(COMPLETE_CONTEXT))
         with patch.dict(os.environ, env):
             self._run(
-                "--step-number", "0", "--total-steps", str(TOTAL_STEPS),
+                "--step-number", "1", "--total-steps", str(TOTAL_STEPS),
                 "--pr-number", "42", "--output-dir", str(tmp_path), "--thoughts", "",
             )
             self._run(

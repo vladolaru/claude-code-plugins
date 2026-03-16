@@ -5,17 +5,17 @@ PR Review Pipeline — unified step-injection script.
 Provides step-by-step guidance for the full PR review pipeline.
 Always runs autonomously. Detects bot mode from review-context.json.
 
-14 steps (0-13) covering:
-  SETUP      (0-2):  Parse PR, repo setup, context discovery
-  AWARENESS  (3):    Review context summary (reviews, linked issues, PR metadata)
-  CONTEXT    (4-5):  Fetch issue context, summarize
-  EXECUTION  (6-9):  Size assessment, dispatch, agents, reconcile+verify
-  REVIEW     (10):   Generate review report
-  VALIDATION (11):   Decision critic
-  OUTPUT     (12-13): Present results, cleanup
+14 steps (1-14) covering:
+  SETUP      (1-3):  Parse PR, repo setup, context discovery
+  AWARENESS  (4):    Review context summary (reviews, linked issues, PR metadata)
+  CONTEXT    (5-6):  Fetch issue context, summarize
+  EXECUTION  (7-10): Size assessment, dispatch, agents, reconcile+verify
+  REVIEW     (11):   Generate review report
+  VALIDATION (12):   Decision critic
+  OUTPUT     (13-14): Present results, cleanup
 
 Usage:
-    python3 pr-review-pipeline.py --step-number 0 --total-steps 13 \
+    python3 pr-review-pipeline.py --step-number 1 --total-steps 14 \
         --pr-number 42 --output-dir /tmp/pr-review-org-repo-42 \
         --thoughts ""
 """
@@ -139,7 +139,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
     """Return guidance dict for a given step.
 
     Args:
-        step: Current step number (0-14).
+        step: Current step number (1-14).
         total_steps: Total step count (14).
         vals: Dict from load_context_values().
         thoughts: Accumulated --thoughts string.
@@ -150,8 +150,8 @@ def get_step_guidance(step, total_steps, vals, thoughts):
     gr = vals["git_range"]
     sd = vals["scripts_dir"]
 
-    # Step 0: Parse PR Number
-    if step == 0:
+    # Step 1: Parse PR Number
+    if step == 1:
         if pr:
             return {
                 "phase": "SETUP",
@@ -162,7 +162,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                     "",
                     "PR number confirmed. Proceeding to repo setup.",
                 ],
-                "next": "Step 1: Repo Setup",
+                "next": "Step 2: Repo Setup",
             }
         else:
             return {
@@ -176,8 +176,8 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "next": None,
             }
 
-    # Step 1: Repo Setup
-    if step == 1:
+    # Step 2: Repo Setup
+    if step == 2:
         if vals["bot_mode"]:
             return {
                 "phase": "SETUP",
@@ -190,7 +190,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                     "",
                     STATE_REQ,
                 ],
-                "next": "Step 2: Context Discovery",
+                "next": "Step 3: Context Discovery",
             }
         else:
             return {
@@ -209,11 +209,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                     "",
                     STATE_REQ,
                 ],
-                "next": "Step 2: Context Discovery",
+                "next": "Step 3: Context Discovery",
             }
 
-    # Step 2: Context Discovery
-    if step == 2:
+    # Step 3: Context Discovery
+    if step == 3:
         if vals["bot_mode"]:
             return {
                 "phase": "SETUP",
@@ -229,7 +229,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                     "",
                     STATE_REQ,
                 ],
-                "next": "Step 3: PR Review State",
+                "next": "Step 4: Review Context Summary",
             }
         else:
             return {
@@ -251,11 +251,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                     "",
                     STATE_REQ,
                 ],
-                "next": "Step 3: PR Review State",
+                "next": "Step 4: Review Context Summary",
             }
 
-    # Step 3: Review Context Summary (merged from old Steps 3+4+5+6+7)
-    if step == 3:
+    # Step 4: Review Context Summary
+    if step == 4:
         return {
             "phase": "AWARENESS",
             "title": "Review Context Summary",
@@ -277,11 +277,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 4: Fetch Issue Context",
+            "next": "Step 5: Fetch Issue Context",
         }
 
-    # Step 4: Fetch Issue Context (was Step 6)
-    if step == 4:
+    # Step 5: Fetch Issue Context
+    if step == 5:
         return {
             "phase": "CONTEXT",
             "title": "Fetch Issue Context",
@@ -300,11 +300,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 5: Summarize Context",
+            "next": "Step 6: Summarize Context",
         }
 
-    # Step 5: Summarize Context (was Step 7)
-    if step == 5:
+    # Step 6: Summarize Context
+    if step == 6:
         return {
             "phase": "CONTEXT",
             "title": "Summarize Context",
@@ -318,11 +318,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 6: Assess PR Size",
+            "next": "Step 7: Assess PR Size",
         }
 
-    # Step 6: Assess PR Size (was Step 8)
-    if step == 6:
+    # Step 7: Assess PR Size
+    if step == 7:
         return {
             "phase": "EXECUTION",
             "title": "Assess PR Size",
@@ -339,11 +339,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 7: Generate Dispatch Plan",
+            "next": "Step 8: Generate Dispatch Plan",
         }
 
-    # Step 7: Generate Dispatch Plan
-    if step == 7:
+    # Step 8: Generate Dispatch Plan
+    if step == 8:
         return {
             "phase": "EXECUTION",
             "title": "Generate Dispatch Plan + Triage",
@@ -367,11 +367,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 8: Dispatch Agents + Reconcile",
+            "next": "Step 9: Dispatch Agents + Reconcile",
         }
 
-    # Step 8: Dispatch Agents
-    if step == 8:
+    # Step 9: Dispatch Agents
+    if step == 9:
         return {
             "phase": "EXECUTION",
             "title": "Dispatch Agents",
@@ -399,11 +399,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 9: Reconcile + Verify",
+            "next": "Step 10: Reconcile + Verify",
         }
 
-    # Step 9: Reconcile + Verify
-    if step == 9:
+    # Step 10: Reconcile + Verify
+    if step == 10:
         return {
             "phase": "EXECUTION",
             "title": "Reconcile + Verify",
@@ -414,7 +414,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "For EVERY agent with status DISPATCH in the plan (not just finished ones),",
                 f"add: {od}/<agent-name>-review.json",
                 "",
-                "Also include any agents you dispatched via triage override in Step 8",
+                "Also include any agents you dispatched via triage override in Step 9",
                 f"(their review files may exist at {od}/<agent>-review.json even though",
                 "the dispatch plan still shows SKIPPED_TRIAGE for them).",
                 "",
@@ -443,11 +443,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 10: Generate Review Report",
+            "next": "Step 11: Generate Review Report",
         }
 
-    # Step 10: Generate Review Report
-    if step == 10:
+    # Step 11: Generate Review Report
+    if step == 11:
         return {
             "phase": "REVIEW",
             "title": "Generate Review Report",
@@ -458,7 +458,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 f"- {od}/review-findings.json — structured findings (severity, file, line, confidence)",
                 f"- {od}/review-findings.md — the reconciliator's narrative framing",
                 "",
-                "Combine with PR context accumulated from Steps 0-5:",
+                "Combine with PR context accumulated from Steps 1-6:",
                 "- PR purpose (title, body, linked issue details)",
                 "- Size assessment",
                 "- Review focus areas",
@@ -474,11 +474,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 11: Decision Critic",
+            "next": "Step 12: Decision Critic",
         }
 
-    # Step 11: Decision Critic
-    if step == 11:
+    # Step 12: Decision Critic
+    if step == 12:
         return {
             "phase": "VALIDATION",
             "title": "Decision Critic",
@@ -500,7 +500,7 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "3. If both fail: note 'Decision critic unavailable' and present as-is.",
                 "",
                 "Act on the verdict:",
-                "- STAND: No changes needed. Proceed to Step 12.",
+                "- STAND: No changes needed. Proceed to Step 13.",
                 "- REVISE: Spot-check 2-3 of the critic's factual claims (file paths, line refs,",
                 "  counts) with a single command each. Strip any claim that fails spot-check.",
                 "  Apply valid adjustments to the review report (upgrade/downgrade severities,",
@@ -514,11 +514,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 12: Present Results",
+            "next": "Step 13: Present Results",
         }
 
-    # Step 12: Present Results
-    if step == 12:
+    # Step 13: Present Results
+    if step == 13:
         return {
             "phase": "OUTPUT",
             "title": "Present Results",
@@ -535,11 +535,11 @@ def get_step_guidance(step, total_steps, vals, thoughts):
                 "",
                 STATE_REQ,
             ],
-            "next": "Step 13: Cleanup",
+            "next": "Step 14: Cleanup",
         }
 
-    # Step 13: Cleanup
-    if step == 13:
+    # Step 14: Cleanup
+    if step == 14:
         if vals["bot_mode"]:
             return {
                 "phase": "OUTPUT",
@@ -605,8 +605,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.step_number < 0 or args.step_number > args.total_steps:
-        print(f"ERROR: Step {args.step_number} out of range (0-{args.total_steps})",
+    if args.step_number < 1 or args.step_number > args.total_steps:
+        print(f"ERROR: Step {args.step_number} out of range (1-{args.total_steps})",
               file=sys.stderr)
         sys.exit(1)
 
@@ -638,7 +638,7 @@ def main():
                 thoughts_length=len(args.thoughts),
             )
 
-            if args.step_number == 0:
+            if args.step_number == 1:
                 telemetry.start(
                     pr_number=args.pr_number or "",
                     total_steps=args.total_steps,
