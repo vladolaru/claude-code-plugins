@@ -3,8 +3,7 @@
 PR Review Pipeline — unified step-injection script.
 
 Provides step-by-step guidance for the full PR review pipeline.
-Mode-aware: detects bot mode from review-context.json, headless mode
-from --headless flag.
+Always runs autonomously. Detects bot mode from review-context.json.
 
 17 steps (0-16) covering:
   SETUP      (0-2):  Parse PR, repo setup, context discovery
@@ -18,7 +17,7 @@ from --headless flag.
 Usage:
     python3 pr-review-pipeline.py --step-number 0 --total-steps 16 \
         --pr-number 42 --output-dir /tmp/pr-review-org-repo-42 \
-        --headless --thoughts ""
+        --thoughts ""
 """
 
 import argparse
@@ -98,14 +97,13 @@ STATE_REQ = (
 )
 
 
-def get_step_guidance(step, total_steps, vals, headless, thoughts):
+def get_step_guidance(step, total_steps, vals, thoughts):
     """Return guidance dict for a given step.
 
     Args:
-        step: Current step number (0-15).
-        total_steps: Total step count (15).
+        step: Current step number (0-16).
+        total_steps: Total step count (16).
         vals: Dict from load_context_values().
-        headless: Bool — auto-select decision points.
         thoughts: Accumulated --thoughts string.
     """
     od = vals["output_dir"]
@@ -156,25 +154,6 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 ],
                 "next": "Step 2: Context Discovery",
             }
-        elif headless:
-            return {
-                "phase": "SETUP",
-                "title": "Repo Setup",
-                "actions": [
-                    "You are a thorough PR reviewer. Running the full review pipeline.",
-                    "",
-                    "Headless mode — auto-stash any uncommitted changes.",
-                    "",
-                    "1. Run `git status` to check for uncommitted changes",
-                    "2. If dirty: `git stash push -u -m 'pr-review-auto-stash'`",
-                    "   Record STASHED=true and STASH_REF (from `git stash list -1 --format=%H`) in --thoughts",
-                    "3. Record ORIGINAL_BRANCH from `git branch --show-current`",
-                    f"4. Checkout the PR branch: `{gh} pr checkout {pr}`",
-                    "",
-                    STATE_REQ,
-                ],
-                "next": "Step 2: Context Discovery",
-            }
         else:
             return {
                 "phase": "SETUP",
@@ -182,10 +161,10 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
                 "actions": [
                     "You are a thorough PR reviewer. Running the full review pipeline.",
                     "",
+                    "Auto-stash any uncommitted changes.",
+                    "",
                     "1. Run `git status` to check for uncommitted changes",
-                    "2. If dirty: Ask user whether to stash or abort",
-                    "   Use AskUserQuestion: 'You have uncommitted changes. Stash them?'",
-                    "   If yes: `git stash push -u -m 'pr-review-stash'`",
+                    "2. If dirty: `git stash push -u -m 'pr-review-auto-stash'`",
                     "   Record STASHED=true and STASH_REF (from `git stash list -1 --format=%H`) in --thoughts",
                     "3. Record ORIGINAL_BRANCH from `git branch --show-current`",
                     f"4. Checkout the PR branch: `{gh} pr checkout {pr}`",
@@ -259,41 +238,18 @@ def get_step_guidance(step, total_steps, vals, headless, thoughts):
 
     # Step 4: Decide Approach
     if step == 4:
-        if headless:
-            return {
-                "phase": "AWARENESS",
-                "title": "Decide Approach",
-                "actions": [
-                    "You are a thorough PR reviewer.",
-                    "",
-                    "Headless mode — auto-selecting: Full review.",
-                    "",
-                    "Proceeding with full multi-agent review pipeline.",
-                    "",
-                    STATE_REQ,
-                ],
-                "next": "Step 5: Extract Linked Issue",
-            }
-        else:
-            return {
-                "phase": "AWARENESS",
-                "title": "Decide Approach",
-                "actions": [
-                    "You are a thorough PR reviewer.",
-                    "",
-                    "Use AskUserQuestion to ask the user:",
-                    "  'Based on the PR review state, how would you like to proceed?'",
-                    "Options:",
-                    "  1. Full review (recommended) — dispatch all relevant agents",
-                    "  2. Quick review — PR reviewer only",
-                    "  3. Abort — stop the review",
-                    "",
-                    "If 'Abort': STOP. Restore branch/stash if touched.",
-                    "",
-                    STATE_REQ,
-                ],
-                "next": "Step 5: Extract Linked Issue",
-            }
+        return {
+            "phase": "AWARENESS",
+            "title": "Decide Approach",
+            "actions": [
+                "You are a thorough PR reviewer.",
+                "",
+                "Proceeding with full multi-agent review pipeline.",
+                "",
+                STATE_REQ,
+            ],
+            "next": "Step 5: Extract Linked Issue",
+        }
 
     # Step 5: Extract Linked Issue
     if step == 5:
@@ -655,7 +611,6 @@ def main():
     parser.add_argument("--total-steps", type=int, required=True)
     parser.add_argument("--pr-number", type=str)
     parser.add_argument("--output-dir", type=str, required=True)
-    parser.add_argument("--headless", action="store_true")
     parser.add_argument("--thoughts", type=str, required=True)
 
     args = parser.parse_args()
@@ -671,7 +626,7 @@ def main():
 
     guidance = get_step_guidance(
         args.step_number, args.total_steps,
-        vals, args.headless, args.thoughts,
+        vals, args.thoughts,
     )
 
     if guidance is None:
@@ -689,7 +644,6 @@ def main():
                 step=args.step_number,
                 phase=guidance["phase"],
                 title=guidance["title"],
-                headless=args.headless,
                 bot_mode=vals["bot_mode"],
                 thoughts_length=len(args.thoughts),
             )
@@ -698,7 +652,6 @@ def main():
                 telemetry.start(
                     pr_number=args.pr_number or "",
                     total_steps=args.total_steps,
-                    headless=args.headless,
                     bot_mode=vals["bot_mode"],
                 )
             elif args.step_number == args.total_steps:
