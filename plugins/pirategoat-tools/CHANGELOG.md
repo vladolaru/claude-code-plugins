@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Branch review flows now pass dispatch plan to reconciliator
 - Decision critic input unified to review-report.md for all modes
 - Full review followed by incremental review now correctly starts from full review baseline
+- Step 7 briefing instructs agent-completion check via `check-reviewer-agent-status.py` before proceeding to reconciliation — prevents starting reconciliation while agents are still running
+- Step 8 surfaces completed review file paths in the reconciliator prompt — eliminates cognitive load on the main session to discover them
+- Step 9 re-injects change purpose (or commit message fallback) into the situation block — re-anchors the model after parallel agent fan-out and reconciliation
+- Critic verdict (STAND/REVISE/ESCALATE) persisted to `decision-critic-verdict.json` and read by step 11 — breaks reliance on conversational memory for a critical validation step
 
 ## [1.61.0] - 2026-03-16
 
