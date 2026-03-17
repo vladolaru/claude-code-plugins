@@ -296,15 +296,14 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
         return _step_8_reconcile(mode, state, context, config, output_dir)
     elif step == 9:
         return _step_9_review_report(mode, state, context, config, output_dir)
+    elif step == 10:
+        return _step_10_decision_critic(mode, state, context, config, output_dir)
+    elif step == 11:
+        return _step_11_present_results(mode, state, context, config, output_dir)
+    elif step == 12:
+        return _step_12_cleanup(mode, state, context, config, output_dir)
     else:
-        # Placeholder for steps 10-12 — implemented in subsequent tasks
-        return {
-            "phase": step_def["phase"],
-            "title": step_def["title"],
-            "situation": [f"Step {step}: {step_def['title']} ({mode} mode)"],
-            "actions": [f"Execute step {step} actions."],
-            "handoff": None,
-        }
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -926,6 +925,160 @@ def _step_9_review_report(mode, state, context, config, output_dir):
     return {
         "phase": "SYNTHESIS",
         "title": "Review Report Synthesis",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 10: Decision Critic
+# ---------------------------------------------------------------------------
+
+def _step_10_decision_critic(mode, state, context, config, output_dir):
+    """Step 10: Decision Critic — stress-test conclusions."""
+    od = output_dir or "<OUTPUT_DIR>"
+    degradation = state.get("degradation", {})
+
+    situation = []
+    actions = []
+
+    # Determine which file the critic should review
+    if degradation.get("report_synthesis_failed"):
+        critic_target = f"{od}/review-findings.md"
+        situation.append("⚠️ Review report synthesis failed — critic will review review-findings.md instead.")
+    else:
+        critic_target = f"{od}/review-report.md"
+
+    actions.append(
+        f"Dispatch the `decision-reviewer` agent to stress-test the review conclusions."
+    )
+    actions.append("")
+    actions.append(f"The critic should review: `{critic_target}`")
+    actions.append("")
+    actions.append("**IMPORTANT:** Wait for the critic to finish — do NOT run in background.")
+    actions.append("You need the critic's verdict before proceeding to the next step.")
+    actions.append("")
+    actions.append("The critic will return one of three verdicts:")
+    actions.append("- **STAND** — Conclusions are sound. No changes needed.")
+    actions.append("- **REVISE** — Apply recommended adjustments (spot-check factual claims first).")
+    actions.append("- **ESCALATE** — Flag validity concerns, override verdict to COMMENT.")
+    actions.append("")
+    actions.append("After acting on the critic's verdict, write the final verdict:")
+    actions.append(f"```json")
+    actions.append(f'// Write to {od}/review-verdict.json')
+    actions.append(f'{{"verdict": "REQUEST_CHANGES"}}')
+    actions.append(f"```")
+    actions.append(f"Valid values: APPROVE, REQUEST_CHANGES, COMMENT")
+
+    return {
+        "phase": "VALIDATION",
+        "title": "Decision Critic",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 11: Present Results
+# ---------------------------------------------------------------------------
+
+def _step_11_present_results(mode, state, context, config, output_dir):
+    """Step 11: Present Results — show review output."""
+    od = output_dir or "<OUTPUT_DIR>"
+    is_interactive = config.get("interactive", True)
+    degradation = state.get("degradation", {})
+    critic_verdict = state.get("critic_verdict")
+    forced_verdict = state.get("forced_verdict")
+    review_verdict = state.get("review_verdict")
+
+    situation = []
+    actions = []
+
+    if is_interactive:
+        actions.append(f"Present to the user: read `{od}/review-report.md` and present "
+                       "a formatted summary of the review findings.")
+        actions.append("")
+        actions.append(f"Show the verdict and any key findings.")
+
+        if critic_verdict == "unavailable" or degradation.get("critic_failed"):
+            actions.append("")
+            actions.append("⚠️ Decision critic verdict is unavailable — present the review as-is.")
+
+        if forced_verdict:
+            actions.append("")
+            actions.append(f"⚠️ Verdict forced to **{forced_verdict}** due to pipeline degradation.")
+            if degradation.get("reconciliation_failed") or degradation.get("report_synthesis_failed"):
+                actions.append("Both reconciliation and report synthesis failed — presenting degraded results.")
+
+        if mode == "incremental":
+            actions.append("")
+            actions.append("Note: Review baseline saved. Next `/code-review` will only review new commits.")
+
+        actions.append("")
+        actions.append("If you want to drill down on a specific topic, re-invoke the reconciliator "
+                       "in focused mode for a deeper analysis of specific findings.")
+
+    else:
+        # Non-interactive: list output files
+        actions.append("PIPELINE COMPLETE. Output files:")
+        actions.append(f"- `{od}/review-report.md` — review report")
+        actions.append(f"- `{od}/review-findings.json` — structured findings")
+        actions.append(f"- `{od}/review-findings.md` — human-readable findings")
+        actions.append(f"- `{od}/pipeline-result.json` — structured result for callers")
+        actions.append("")
+        actions.append("`pipeline-result.json` contains:")
+        actions.append("- `status` — pipeline completion status (success/degraded/failed)")
+        actions.append("- `verdict` — final review verdict (APPROVE/REQUEST_CHANGES/COMMENT)")
+        actions.append("- `report_path` — path to the review report")
+        actions.append("- `findings_path` — path to the structured findings")
+        actions.append("- `critic_verdict` — decision critic verdict (STAND/REVISE/ESCALATE/unavailable)")
+        actions.append("- `degradation_notes` — list of degradation reasons (empty if clean)")
+
+        if mode == "incremental":
+            actions.append("")
+            actions.append("Review baseline saved. Next run will only review new commits.")
+
+    return {
+        "phase": "OUTPUT",
+        "title": "Present Results",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 12: Cleanup
+# ---------------------------------------------------------------------------
+
+def _step_12_cleanup(mode, state, context, config, output_dir):
+    """Step 12: Cleanup — restore workspace (interactive only)."""
+    ws = state.get("workspace", {})
+    original_branch = ws.get("original_branch")
+    stash_ref = ws.get("stash_ref")
+
+    situation = []
+    actions = []
+
+    if original_branch:
+        situation.append(f"Workspace was modified: original branch was `{original_branch}`.")
+        if stash_ref:
+            situation.append(f"Changes were stashed (ref: {stash_ref}).")
+
+        actions.append(f"Ask the user if they want to restore the workspace:")
+        actions.append(f"- Checkout original branch: `git checkout {original_branch}`")
+        if stash_ref:
+            actions.append(f"- Restore stashed changes: `git stash pop`")
+        actions.append("")
+        actions.append("Confirm with the user before making changes.")
+    else:
+        actions.append("No workspace changes to restore.")
+
+    return {
+        "phase": "OUTPUT",
+        "title": "Cleanup",
         "situation": situation,
         "actions": actions,
         "handoff": None,

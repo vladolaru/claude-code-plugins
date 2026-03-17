@@ -955,3 +955,186 @@ class TestStep9ReviewReport:
         assert "summary" in text.lower()
         assert "critical" in text.lower()
         assert "verdict" in text.lower()
+
+
+# ===================================================================
+# VALIDATION and OUTPUT Phase Tests (Steps 10-12)
+# ===================================================================
+
+
+class TestStep10DecisionCritic:
+    def test_dispatches_decision_reviewer(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "decision-reviewer" in text
+
+    def test_reviews_report_not_findings(self, mod, tmp_path):
+        """Critic should review review-report.md (all modes now)."""
+        for mode in ("pr", "full", "incremental"):
+            state = {"completed_steps": []}
+            ctx = {}
+            g = mod.get_step_guidance(10, mode, state, ctx)
+            text = "\n".join(g["actions"])
+            assert "review-report.md" in text
+
+    def test_has_verdict_handling(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "STAND" in text
+        assert "REVISE" in text
+        assert "ESCALATE" in text
+
+    def test_instructs_wait_for_critic(self, mod, tmp_path):
+        """Critic must NOT run in background — LLM needs the verdict."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "wait" in text.lower() or "do not" in text.lower()
+        assert "background" in text.lower()
+
+    def test_instructs_writing_review_verdict_json(self, mod, tmp_path):
+        """Should instruct the LLM to write review-verdict.json after acting on verdict."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "review-verdict.json" in text
+        assert "verdict" in text.lower()
+
+
+class TestStep11PresentResults:
+    def test_shows_verdict_interactive(self, mod, tmp_path):
+        config = {"mode": "pr", "interactive": True}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "verdict" in text.lower()
+        assert "Present to the user" in text or "review-report.md" in text
+
+    def test_non_interactive_confirms_files_only(self, mod, tmp_path):
+        """Non-interactive mode lists output files, no user presentation."""
+        config = {"mode": "pr", "interactive": False}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "review-report.md" in text
+        assert "pipeline-result.json" in text
+        assert "Present to the user" not in text
+
+    def test_incremental_mentions_baseline_saved(self, mod, tmp_path):
+        config = {"mode": "incremental", "interactive": True}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(11, "incremental", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "baseline saved" in text.lower() or "next" in text.lower()
+
+    def test_interactive_has_focused_reconciliator_followup(self, mod, tmp_path):
+        """Interactive mode should offer focused reconciliator for drill-down."""
+        config = {"mode": "pr", "interactive": True}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "focused" in text.lower() or "drill down" in text.lower()
+
+    def test_incremental_mentions_next_code_review(self, mod, tmp_path):
+        """Incremental should mention next /code-review scope."""
+        config = {"mode": "incremental", "interactive": True}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(11, "incremental", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "new commits" in text.lower() or "/code-review" in text
+
+
+class TestStep12Cleanup:
+    def test_asks_user_for_restore(self, mod, tmp_path):
+        """Cleanup should ask user, not silently restore."""
+        state = {"workspace": {"original_branch": "develop", "stash_ref": "abc"},
+                 "completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(12, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "develop" in text  # references original branch
+        assert "ask" in text.lower() or "confirm" in text.lower()
+
+    def test_no_restore_when_no_workspace_state(self, mod, tmp_path):
+        """Should be a no-op when no workspace state."""
+        state = {"workspace": {"original_branch": None, "stash_ref": None},
+                 "completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(12, "pr", state, ctx)
+        # This step shouldn't even run — but if called, should be minimal
+        assert g is not None
+
+
+class TestDegradedPaths:
+    """Degraded-path scenarios and pipeline-result.json contract (rule 31)."""
+
+    def test_pipeline_result_schema(self, mod, tmp_path):
+        """Step 11 output should reference all pipeline-result.json fields."""
+        config = {"mode": "pr", "interactive": False}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "pipeline-result.json" in text
+        # Schema fields should be referenced or documented
+        for field in ("status", "verdict", "report_path", "findings_path",
+                      "critic_verdict", "degradation_notes"):
+            assert field in text, f"Step 11 output missing pipeline-result.json field: {field}"
+
+    def test_scenario_a_reconciliation_failed(self, mod, tmp_path):
+        """Step 9 should run degraded when reconciliation failed."""
+        state = {"completed_steps": [], "degradation": {"reconciliation_failed": True}}
+        ctx = {}
+        g = mod.get_step_guidance(9, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "raw agent" in text.lower() or "degraded" in text.lower()
+
+    def test_scenario_b_report_synthesis_failed(self, mod, tmp_path):
+        """Step 10 should fall back to review-findings.md when review-report.md missing."""
+        state = {"completed_steps": [], "degradation": {"report_synthesis_failed": True}}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "review-findings.md" in text
+
+    def test_scenario_c_critic_failed(self, mod, tmp_path):
+        """Step 11 should show critic_verdict as unavailable when critic failed."""
+        state = {"completed_steps": [], "degradation": {"critic_failed": True},
+                 "critic_verdict": "unavailable"}
+        ctx = {}
+        config = {"mode": "pr", "interactive": True}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "unavailable" in text.lower()
+
+    def test_scenario_d_both_failed(self, mod, tmp_path):
+        """Both reconciliation and report failed: verdict forced to COMMENT."""
+        state = {"completed_steps": [],
+                 "degradation": {"reconciliation_failed": True, "report_synthesis_failed": True},
+                 "forced_verdict": "COMMENT"}
+        ctx = {}
+        config = {"mode": "pr", "interactive": True}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "COMMENT" in text
+        assert "failed" in text.lower() or "degraded" in text.lower()
+
+    def test_missing_review_verdict_json(self, mod, tmp_path):
+        """Step 11 should handle gracefully when review-verdict.json not written."""
+        state = {"completed_steps": [], "review_verdict": None}
+        ctx = {}
+        config = {"mode": "pr", "interactive": False}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        # Should not crash — script handles missing verdict
+        assert g is not None
