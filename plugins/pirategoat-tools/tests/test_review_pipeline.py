@@ -413,21 +413,19 @@ class TestCLIIntegration:
         assert (tmp_path / "run-config.json").is_file()
         assert (tmp_path / ".branch-review-baseline.json").is_file()
 
-    def test_step_1_clears_review_context_for_interactive(self, tmp_path):
-        """Step 1 should clear review-context.json for interactive runs (reused output dirs)."""
-        (tmp_path / "review-context.json").write_text('{"git": {"merge_base": "stale"}}')
+    def test_step_1_preserves_review_context(self, tmp_path):
+        """Step 1 should preserve review-context.json — gather-review-context.py overwrites it at step 3."""
+        (tmp_path / "review-context.json").write_text('{"output": {"directory": "/some/path"}}')
         self._run("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path))
-        assert not (tmp_path / "review-context.json").exists()
+        assert (tmp_path / "review-context.json").is_file(), "review-context.json should be preserved for incremental baseline lookup"
 
-    def test_step_1_preserves_review_context_for_non_interactive(self, tmp_path):
-        """Step 1 should preserve review-context.json for non-interactive (bot) runs."""
-        (tmp_path / "review-context.json").write_text('{"git": {"merge_base": "precomputed"}}')
-        # Pre-write run-config.json with interactive: false (as the bot does)
-        (tmp_path / "run-config.json").write_text('{"mode": "pr", "pr_number": "42", "interactive": false}')
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
-        assert (tmp_path / "review-context.json").is_file(), "Bot's pre-written context should be preserved"
+    def test_step_1_clears_change_purpose(self, tmp_path):
+        """Step 1 should clear stale change-purpose.md from previous runs."""
+        (tmp_path / "change-purpose.md").write_text("Old change purpose from previous review.")
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        assert not (tmp_path / "change-purpose.md").exists(), "Stale change-purpose.md should be cleared"
 
     def test_step_1_writes_run_id(self, tmp_path):
         """Step 1 should write a run_id to pipeline-state.json."""
@@ -746,6 +744,20 @@ class TestStep11Orchestration:
         result = json.loads(result_path.read_text())
         assert result["status"] in ("degraded", "failed")
 
+    def test_step_11_degrades_when_findings_missing(self, tmp_path):
+        """Step 11 should report degraded when review-findings.json is missing (partial run)."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        # Verdict and report exist, but findings do not (reconciliation failed)
+        (tmp_path / "review-verdict.json").write_text('{"verdict": "COMMENT"}')
+        (tmp_path / "review-report.md").write_text("# Review\nReport here.")
+        r = self._run("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["status"] == "degraded"
+        assert any("review-findings.json" in n for n in result["degradation_notes"])
+
 
 class TestTelemetryFinalize:
     """Telemetry finalize is called at the last active step."""
@@ -853,9 +865,10 @@ class TestFullSequenceIntegration:
         r = self._run("--step", "8", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
 
-        # Pre-write verdict and report as if steps 9-10 ran
+        # Pre-write verdict, report, and findings as if steps 8-10 ran
         (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (tmp_path / "review-report.md").write_text("# Review\nAll clear.")
+        (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
 
         # Step 11: present results
         r = self._run("--step", "11", "--mode", "full", "--output-dir", od)

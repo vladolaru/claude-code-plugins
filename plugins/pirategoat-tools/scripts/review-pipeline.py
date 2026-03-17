@@ -65,6 +65,7 @@ _STALE_ARTIFACTS = [
     "review-verdict.json",
     "pipeline-result.json",
     "decision-critic-findings.md",
+    "change-purpose.md",
 ]
 
 # Files to preserve across runs
@@ -1374,6 +1375,8 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             degradation_notes.append("review-report.md not found")
             alt = os.path.join(output_dir, "review-findings.md")
             report_path = alt if os.path.isfile(alt) else None
+        if not os.path.isfile(findings_path):
+            degradation_notes.append("review-findings.json not found")
 
         verdict = verdict_data.get("verdict", "COMMENT") if verdict_data else "COMMENT"
         status = "success" if not degradation_notes else "degraded"
@@ -1466,12 +1469,11 @@ def main():
         else:
             config = existing_config
 
-        # Clear stale review-context.json for interactive runs only.
-        # Non-interactive (bot) runs pre-write this file — must not delete it.
-        if config.get("interactive", True):
-            ctx_file = os.path.join(output_dir, "review-context.json")
-            if os.path.isfile(ctx_file):
-                os.remove(ctx_file)
+        # Note: review-context.json is NOT cleared here. For interactive runs,
+        # gather-review-context.py overwrites it at step 3. For non-interactive
+        # (bot) runs, the bot pre-writes it — deleting would break that flow.
+        # The output.directory field is needed by gather-review-context.py to
+        # locate .branch-review-baseline.json for incremental reviews.
 
         # Initialize fresh pipeline state
         state = json.loads(json.dumps(_DEFAULT_STATE))
