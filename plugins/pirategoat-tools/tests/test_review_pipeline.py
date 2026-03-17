@@ -785,3 +785,173 @@ class TestStep6DispatchAgents:
         g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
         assert "check-reviewer-agent-status.py" in text
+
+
+# ===================================================================
+# SYNTHESIS Phase Tests (Steps 7-9)
+# ===================================================================
+
+
+class TestStep7SaveReviewBaseline:
+    def test_confirms_baseline_saved(self, mod, tmp_path):
+        """Step 7 confirms the file was written (script writes it internally). Runs for ALL modes."""
+        for mode in ("pr", "full", "incremental"):
+            state = {"resolved_params": {"git_range": "abc..HEAD"}, "completed_steps": []}
+            ctx = {"git": {"git_range": "abc..HEAD"}}
+            g = mod.get_step_guidance(7, mode, state, ctx)
+            text = "\n".join(g["situation"] + g["actions"])
+            assert ".branch-review-baseline.json" in text
+            assert "saved" in text.lower() or "baseline" in text.lower()
+            # Should NOT instruct the LLM to write the file
+            assert "cat >" not in text
+            assert "STATEEOF" not in text
+
+    def test_incremental_mode_mentions_next_review(self, mod, tmp_path):
+        """Incremental mode briefing mentions next review will only cover new commits."""
+        state = {"resolved_params": {"git_range": "abc..HEAD"}, "completed_steps": []}
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(7, "incremental", state, ctx)
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "new commits" in text.lower() or "only cover" in text.lower()
+
+    def test_full_mode_mentions_baseline(self, mod, tmp_path):
+        """Full mode briefing mentions baseline saved for future incremental reviews."""
+        state = {"resolved_params": {"git_range": "abc..HEAD"}, "completed_steps": []}
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(7, "full", state, ctx)
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "baseline" in text.lower()
+
+
+class TestStep8Reconcile:
+    """Step 8: Reconcile + Verify. main() reads dispatch-plan.json + review files, passes to get_step_guidance()."""
+
+    def _make_state_with_agents(self, change_purpose_exists=False):
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["pr-reviewer", "security-reviewer", "performance-reviewer"],
+                "completed": ["pr-reviewer", "security-reviewer"],
+                "failed": [],
+            },
+            "change_purpose": "Adds retry logic to the payment gateway." if change_purpose_exists else None,
+            "commit_messages": ["feat: add payment retry logic", "test: add retry tests"],
+        }
+
+    def test_dispatches_reconciliator(self, mod, tmp_path):
+        state = self._make_state_with_agents(change_purpose_exists=True)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py,b.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "review-reconciliator" in text
+
+    def test_presents_agent_completion_summary(self, mod, tmp_path):
+        """Should show which agents completed, missing, failed."""
+        state = self._make_state_with_agents(change_purpose_exists=True)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"])
+        assert "pr-reviewer" in text
+        assert "security-reviewer" in text
+
+    def test_includes_dispatch_plan_path(self, mod, tmp_path):
+        """All modes should pass dispatch plan to reconciliator."""
+        for mode in ("pr", "full", "incremental"):
+            state = self._make_state_with_agents(change_purpose_exists=True)
+            ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+            g = mod.get_step_guidance(8, mode, state, ctx, output_dir=str(tmp_path))
+            text = "\n".join(g["actions"])
+            assert "dispatch-plan.json" in text
+
+    def test_includes_change_purpose_when_available(self, mod, tmp_path):
+        """Should include change purpose in reconciliator prompt."""
+        state = self._make_state_with_agents(change_purpose_exists=True)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "retry logic" in text.lower() or "change purpose" in text.lower()
+
+    def test_change_purpose_fallback_when_missing(self, mod, tmp_path):
+        """When change-purpose.md is missing, script provides fallback from commits."""
+        state = self._make_state_with_agents(change_purpose_exists=False)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "commit" in text.lower() or "derive" in text.lower()
+
+
+class TestStep9ReviewReport:
+    def test_writes_review_report(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(9, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "review-report.md" in text
+
+    def test_references_review_findings(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(9, "full", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "review-findings" in text
+
+    def test_all_modes_have_this_step(self, mod, tmp_path):
+        """Review report synthesis runs for ALL modes (fixes branch flow gap)."""
+        for mode in ("pr", "full", "incremental"):
+            state = {"completed_steps": []}
+            ctx = {}
+            g = mod.get_step_guidance(9, mode, state, ctx)
+            assert g is not None
+            text = "\n".join(g["actions"])
+            assert "review-report.md" in text
+
+    def test_includes_output_instructions_default(self, mod, tmp_path):
+        """Step 9 should include default output instructions when none in config."""
+        state = {"completed_steps": []}
+        ctx = {"pr": {"author_name": "Maria Rodriguez"}}
+        g = mod.get_step_guidance(9, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "Maria" in text  # default addresses author by name
+        assert "actionable" in text.lower()
+
+    def test_includes_output_instructions_override(self, mod, tmp_path):
+        """Step 9 should use caller-provided output_instructions from run-config.json verbatim."""
+        config = {"mode": "pr", "output_instructions": "Keep it brief. Bullet points only."}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(9, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "Keep it brief" in text
+        assert "Bullet points only" in text
+
+    def test_output_instructions_override_replaces_default(self, mod, tmp_path):
+        """When override is set in run-config.json, default instructions should NOT appear."""
+        config = {"mode": "pr", "output_instructions": "Custom instructions only."}
+        state = {"completed_steps": []}
+        ctx = {"pr": {"author_name": "Maria Rodriguez"}}
+        g = mod.get_step_guidance(9, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "Custom instructions only" in text
+        # Default "address by name" should NOT appear when overridden
+        assert "Maria" not in text
+
+    def test_branch_mode_default_instructions(self, mod, tmp_path):
+        """Branch mode default should NOT reference author by name."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(9, "full", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "actionable" in text.lower()
+        # Branch mode has no PR author
+        assert "first name" not in text.lower()
+
+    def test_report_structure_guidance(self, mod, tmp_path):
+        """Briefing should mention the expected report sections."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(9, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "summary" in text.lower()
+        assert "critical" in text.lower()
+        assert "verdict" in text.lower()

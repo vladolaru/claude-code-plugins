@@ -290,8 +290,14 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
         return _step_5_dispatch_plan(mode, state, context, config, output_dir)
     elif step == 6:
         return _step_6_dispatch_agents(mode, state, context, config, output_dir)
+    elif step == 7:
+        return _step_7_save_baseline(mode, state, context, config, output_dir)
+    elif step == 8:
+        return _step_8_reconcile(mode, state, context, config, output_dir)
+    elif step == 9:
+        return _step_9_review_report(mode, state, context, config, output_dir)
     else:
-        # Placeholder for steps 7-12 — implemented in subsequent tasks
+        # Placeholder for steps 10-12 — implemented in subsequent tasks
         return {
             "phase": step_def["phase"],
             "title": step_def["title"],
@@ -728,6 +734,198 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
     return {
         "phase": "EXECUTION",
         "title": "Dispatch Agents",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 7: Save Review Baseline
+# ---------------------------------------------------------------------------
+
+def _step_7_save_baseline(mode, state, context, config, output_dir):
+    """Step 7: Save Review Baseline — script writes file internally."""
+    git = context.get("git", {})
+    git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+
+    situation = [
+        f"Review baseline saved to `.branch-review-baseline.json`.",
+    ]
+
+    actions = []
+    if mode == "incremental":
+        actions.append(
+            "Baseline saved. Next `/code-review` will only cover new commits from this point forward."
+        )
+    elif mode == "full":
+        actions.append(
+            "Review baseline saved. Next `/code-review` on this branch will start from this point."
+        )
+    else:  # PR mode
+        actions.append("Review baseline saved.")
+
+    actions.append("")
+    actions.append("The script wrote `.branch-review-baseline.json` with the current HEAD SHA, "
+                   "timestamp, review type, and git range. No action needed from you.")
+
+    return {
+        "phase": "EXECUTION",
+        "title": "Save Review Baseline",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 8: Reconcile + Verify
+# ---------------------------------------------------------------------------
+
+def _step_8_reconcile(mode, state, context, config, output_dir):
+    """Step 8: Reconcile + Verify — dispatch reconciliator with all context."""
+    git = context.get("git", {})
+    git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+    changed_files_csv = git.get("changed_files_csv", "")
+    od = output_dir or "<OUTPUT_DIR>"
+    agents_state = state.get("agents", {})
+    dispatched = agents_state.get("dispatched", [])
+    completed = agents_state.get("completed", [])
+    failed = agents_state.get("failed", [])
+    change_purpose = state.get("change_purpose")
+    commit_messages = state.get("commit_messages", [])
+
+    situation = [
+        f"**Agents dispatched:** {', '.join(dispatched) if dispatched else 'see dispatch plan'}",
+        f"**Agents completed:** {', '.join(completed) if completed else 'check status'}",
+    ]
+    if failed:
+        situation.append(f"**Agents failed:** {', '.join(failed)}")
+
+    if change_purpose:
+        situation.append(f"**Change purpose:** {change_purpose}")
+    elif commit_messages:
+        situation.append(f"**Change purpose (derived from commits):** {'; '.join(commit_messages[:3])}")
+
+    actions = [
+        f"Dispatch the `review-reconciliator` agent to deduplicate, verify, and produce "
+        f"consolidated findings.",
+        "",
+        "The reconciliator needs:",
+        f"- **Git range:** `{git_range}`",
+        f"- **Changed files:** `{changed_files_csv}`",
+        f"- **Output directory:** `{od}`",
+        f"- **Dispatch plan:** `{od}/dispatch-plan.json`",
+    ]
+
+    if change_purpose:
+        actions.append(f"- **Change purpose:** {change_purpose}")
+    else:
+        actions.append("- **Change purpose:** Derive from commit messages if change-purpose.md is missing")
+
+    actions.append("")
+    actions.append("The reconciliator will produce:")
+    actions.append(f"- `{od}/review-findings.json` — structured findings")
+    actions.append(f"- `{od}/review-findings.md` — human-readable findings")
+
+    return {
+        "phase": "SYNTHESIS",
+        "title": "Reconcile + Verify",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 9: Review Report Synthesis
+# ---------------------------------------------------------------------------
+
+# Default output instructions for PR mode
+_DEFAULT_OUTPUT_INSTRUCTIONS_PR = """\
+Address the PR author by first name — use a warm, collegial tone.
+Be specific and actionable, not vague.
+Acknowledge intent or effort before raising concerns.
+Frame suggestions collaboratively: "What if we...?" not "You should..."
+Say what's genuinely good, plainly.
+
+STRUCTURE:
+- Brief human recap (3-5 short bullets: what you noticed, what matters)
+- Below a ---, detailed findings in a collapsible <details> block
+- For each finding: the file/line, what's wrong, what to do about it
+- Group findings by severity (critical > important > consider)
+
+Include a clear verdict recommendation and summary of key findings.
+Keep it actionable — every finding should have a concrete recommendation.
+"""
+
+_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH = """\
+Be specific and actionable, not vague.
+Frame suggestions collaboratively.
+
+STRUCTURE:
+- Brief summary of key findings
+- Detailed findings grouped by severity (critical > important > consider)
+- For each finding: the file/line, what's wrong, what to do about it
+
+Include a clear verdict recommendation and summary of key findings.
+Keep it actionable — every finding should have a concrete recommendation.
+"""
+
+
+def _step_9_review_report(mode, state, context, config, output_dir):
+    """Step 9: Review Report Synthesis — generate the review report."""
+    od = output_dir or "<OUTPUT_DIR>"
+    degradation = state.get("degradation", {})
+
+    situation = []
+    actions = []
+
+    if degradation.get("reconciliation_failed"):
+        situation.append("⚠️ Reconciliation failed — working with raw agent output in degraded mode.")
+        actions.append("Read the individual agent review files directly (raw agent output).")
+        actions.append("Synthesize them manually into a coherent review report.")
+        actions.append("")
+
+    # Resolve output instructions
+    output_instructions = config.get("output_instructions")
+    if output_instructions:
+        # Caller-provided override — use verbatim
+        actions.append("**Output instructions (caller override):**")
+        actions.append(output_instructions)
+    else:
+        # Default instructions based on mode
+        if mode == "pr":
+            pr = context.get("pr", {})
+            author_name = pr.get("author_name", "")
+            if author_name:
+                first_name = author_name.split()[0]
+                instructions = _DEFAULT_OUTPUT_INSTRUCTIONS_PR.replace(
+                    "Address the PR author by first name",
+                    f"Address {first_name} by name"
+                )
+            else:
+                instructions = _DEFAULT_OUTPUT_INSTRUCTIONS_PR
+            actions.append("**Output instructions (default — PR mode):**")
+            actions.append(instructions)
+        else:
+            actions.append("**Output instructions (default — branch mode):**")
+            actions.append(_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH)
+
+    actions.append("")
+    actions.append(f"Write the review report to `{od}/review-report.md`.")
+    actions.append("")
+    actions.append("The report should include:")
+    actions.append("- A summary of the review findings")
+    actions.append("- Critical and important issues highlighted")
+    actions.append("- A clear verdict recommendation (APPROVE, REQUEST_CHANGES, or COMMENT)")
+    actions.append("")
+    actions.append(f"Reference `{od}/review-findings.json` and `{od}/review-findings.md` "
+                   "for the consolidated findings from the reconciliator.")
+
+    return {
+        "phase": "SYNTHESIS",
+        "title": "Review Report Synthesis",
         "situation": situation,
         "actions": actions,
         "handoff": None,
