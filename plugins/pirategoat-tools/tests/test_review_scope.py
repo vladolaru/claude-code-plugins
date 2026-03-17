@@ -420,19 +420,6 @@ class TestMergeBaseGatingIntegration:
             cmd, cwd=repo, capture_output=True, text=True, timeout=30,
         )
 
-    def _run_preflight(self, repo: str, extra_args: list = None) -> subprocess.CompletedProcess:
-        cmd = [
-            sys.executable, str(REVIEW_SCOPE_SCRIPT),
-            "--preflight",
-            "--range", "main..HEAD",
-            "--format", "json",
-        ]
-        if extra_args:
-            cmd.extend(extra_args)
-        return subprocess.run(
-            cmd, cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-
     # -- The critical fix: non-stale branches also get rebased --
 
     def test_non_stale_branch_still_rebased_to_merge_base(self):
@@ -455,19 +442,6 @@ class TestMergeBaseGatingIntegration:
         assert data["total_changed"] == 1, (
             f"Expected 1 file (feature.php), got {data['total_changed']}: {data['files']}"
         )
-
-    def test_non_stale_branch_preflight_also_rebased(self):
-        """Preflight mode also rebases non-stale branches."""
-        repo = self._setup_repo(3)
-        result = self._run_preflight(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        bf = data["branch_freshness"]
-
-        assert bf["is_stale"] is False
-        assert bf["range_rebased"] is True
-        # Should see 1 file changed, not 1 + 3 trunk files
-        assert data["files_changed"] == 1
 
     def test_1_commit_behind_still_rebased(self):
         """Even 1 commit behind should rebase (any divergence matters)."""
@@ -503,16 +477,6 @@ class TestMergeBaseGatingIntegration:
         assert data["branch_freshness"]["range_rebased"] is False
         # Without merge-base rebase, we see trunk files + feature file
         assert data["total_changed"] == 4  # 3 trunk + 1 feature
-
-    def test_no_merge_base_flag_preflight(self):
-        """--no-merge-base works in preflight mode too."""
-        repo = self._setup_repo(3)
-        result = self._run_preflight(repo, extra_args=["--no-merge-base"])
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-
-        assert data["branch_freshness"]["range_rebased"] is False
-        assert data["files_changed"] == 4  # 3 trunk + 1 feature
 
     def test_no_merge_base_stale_branch(self):
         """--no-merge-base on stale branch shows ALL files."""

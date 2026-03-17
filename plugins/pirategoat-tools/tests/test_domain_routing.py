@@ -328,153 +328,6 @@ def test_domain_routing(fixture_name: str, domain: str, expected_status: str):
     )
 
 
-# ---------------------------------------------------------------------------
-# Preflight helpers
-# ---------------------------------------------------------------------------
-def run_preflight(cwd: str, fmt: str = "text", range_spec: str = "HEAD~1..HEAD") -> subprocess.CompletedProcess:
-    """Run review-scope.py --preflight and return the CompletedProcess."""
-    cmd = [sys.executable, str(REVIEW_SCOPE_SCRIPT), "--preflight", "--range", range_spec]
-    if fmt == "json":
-        cmd.extend(["--format", "json"])
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30)
-
-
-def parse_preflight_text(output: str) -> dict:
-    """Parse preflight text output into {domain: file_count} dict."""
-    result = {}
-    in_domain_status = False
-    for line in output.splitlines():
-        if line.strip() == "DOMAIN_STATUS:":
-            in_domain_status = True
-            continue
-        if in_domain_status:
-            line = line.strip()
-            if not line or line.startswith("DISPATCH_DOMAINS:") or line.startswith("SKIP_DOMAINS:"):
-                in_domain_status = False
-                continue
-            # Parse "domain_name: STATUS (N files)"
-            parts = line.split(":", 1)
-            if len(parts) == 2:
-                domain = parts[0].strip()
-                rest = parts[1].strip()
-                # Extract file count from "OK (12 files)" or "NO_FILES (0 files)"
-                paren_start = rest.find("(")
-                paren_end = rest.find(" files)")
-                if paren_start != -1 and paren_end != -1:
-                    count = int(rest[paren_start + 1:paren_end])
-                    result[domain] = count
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Preflight tests
-# ---------------------------------------------------------------------------
-class TestPreflight:
-    """Tests for --preflight mode of review-scope.py."""
-
-    def test_preflight_text_output_format(self):
-        """Preflight output contains expected sections."""
-        repo = _get_repo("mixed-code-and-tests.diff")
-        result = run_preflight(repo)
-        assert result.returncode == 0
-        assert "=== PREFLIGHT SCOPE CHECK ===" in result.stdout
-        assert "DISPATCH_DOMAINS:" in result.stdout
-        assert "SKIP_DOMAINS:" in result.stdout
-        assert "DOMAIN_STATUS:" in result.stdout
-        assert "RANGE:" in result.stdout
-        assert "FILES_CHANGED:" in result.stdout
-        assert "NOISE_SKIPPED:" in result.stdout
-        assert "REVIEWABLE_FILES:" in result.stdout
-
-    def test_preflight_json_output(self):
-        """Preflight JSON output has expected structure."""
-        repo = _get_repo("mixed-code-and-tests.diff")
-        result = run_preflight(repo, fmt="json")
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        assert "dispatch_domains" in data
-        assert "skip_domains" in data
-        assert "domains" in data
-        assert "range" in data
-        assert "files_changed" in data
-        assert "noise_skipped" in data
-        assert "reviewable_files" in data
-        # Each domain entry has status and file_count
-        for domain_name, info in data["domains"].items():
-            assert "status" in info
-            assert "file_count" in info
-            assert info["status"] in ("OK", "NO_FILES")
-
-    def test_preflight_no_domain_required(self):
-        """--preflight works without --domain argument."""
-        repo = _get_repo("php-source.diff")
-        result = run_preflight(repo)
-        assert result.returncode == 0
-        assert "ERROR" not in result.stdout
-
-    def test_preflight_with_range(self):
-        """--preflight works with --range argument."""
-        repo = _get_repo("php-source.diff")
-        result = run_preflight(repo, range_spec="HEAD~1..HEAD")
-        assert result.returncode == 0
-        assert "PREFLIGHT" in result.stdout
-
-    def test_preflight_matches_individual_domain_checks(self):
-        """Preflight results must match running --domain X individually for each domain."""
-        for fixture_name, domain_map in sorted(ROUTING_MATRIX.items()):
-            repo = _get_repo(fixture_name)
-            result = run_preflight(repo)
-            assert result.returncode == 0, (
-                f"Preflight failed for {fixture_name}: {result.stderr}"
-            )
-            preflight = parse_preflight_text(result.stdout)
-
-            for domain, expected_status in domain_map.items():
-                file_count = preflight.get(domain, -1)
-                preflight_status = "OK" if file_count > 0 else "NO_DOMAIN_FILES"
-                assert preflight_status == expected_status, (
-                    f"Fixture {fixture_name}, domain {domain}: "
-                    f"preflight says {preflight_status} ({file_count} files), "
-                    f"individual check says {expected_status}"
-                )
-
-    def test_preflight_no_code_changes_all_skip(self):
-        """When only non-code files changed, all domains should be in SKIP."""
-        repo = _get_repo("no-code-changes.diff")
-        result = run_preflight(repo)
-        assert result.returncode == 0
-        preflight = parse_preflight_text(result.stdout)
-        assert all(count == 0 for count in preflight.values()), (
-            f"Expected all domains to have 0 files, got: {preflight}"
-        )
-
-    def test_preflight_dispatch_skip_consistency(self):
-        """DISPATCH_DOMAINS and SKIP_DOMAINS should cover all domains exactly once."""
-        repo = _get_repo("multi-file-realistic.diff")
-        result = run_preflight(repo, fmt="json")
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        all_domains_from_results = set(data["domains"].keys())
-        dispatch_set = set(data["dispatch_domains"])
-        skip_set = set(data["skip_domains"])
-        # No overlap
-        assert dispatch_set & skip_set == set(), "Overlap between dispatch and skip"
-        # Complete coverage
-        assert dispatch_set | skip_set == all_domains_from_results, (
-            f"Missing domains: {all_domains_from_results - dispatch_set - skip_set}"
-        )
-
-    def test_preflight_json_domains_cover_all_catalog_domains(self):
-        """Preflight JSON should report on every domain in DOMAIN_CATALOG."""
-        repo = _get_repo("php-source.diff")
-        result = run_preflight(repo, fmt="json")
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
-        reported_domains = set(data["domains"].keys())
-        assert reported_domains == set(ALL_DOMAINS), (
-            f"Preflight domains {reported_domains} != catalog domains {set(ALL_DOMAINS)}"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Branch Freshness helpers
@@ -555,27 +408,31 @@ class TestBranchFreshness:
     """Tests for stale branch detection and merge-base range rebasing."""
 
     def test_freshness_detects_stale_branch(self):
-        """15 commits behind → IS_STALE: true, BEHIND: 15."""
+        """15 commits behind → is_stale: true, behind: 15."""
         repo = _setup_stale_branch_repo(15)
         result = subprocess.run(
             [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--preflight", "--range", "main..HEAD"],
+             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
             cwd=repo, capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0
-        assert "IS_STALE: true" in result.stdout
-        assert "BEHIND: 15" in result.stdout
+        data = json.loads(result.stdout)
+        bf = data["branch_freshness"]
+        assert bf["is_stale"] is True
+        assert bf["behind"] == 15
 
     def test_freshness_not_stale_when_close(self):
-        """3 commits behind → IS_STALE: false."""
+        """3 commits behind → is_stale: false."""
         repo = _setup_stale_branch_repo(3)
         result = subprocess.run(
             [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--preflight", "--range", "main..HEAD"],
+             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
             cwd=repo, capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0
-        assert "IS_STALE: false" in result.stdout
+        data = json.loads(result.stdout)
+        bf = data["branch_freshness"]
+        assert bf["is_stale"] is False
 
     def test_stale_branch_range_is_rebased_to_merge_base(self):
         """15 behind → RANGE_REBASED: true, only feature file in scope."""
@@ -607,7 +464,7 @@ class TestBranchFreshness:
         repo = _setup_stale_branch_repo(15)
         result = subprocess.run(
             [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--preflight", "--range", "main..HEAD", "--format", "json"],
+             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
             cwd=repo, capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0
@@ -625,7 +482,7 @@ class TestBranchFreshness:
         repo = _setup_stale_branch_repo(3)
         result = subprocess.run(
             [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--preflight", "--range", "main..HEAD", "--format", "json"],
+             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
             cwd=repo, capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0

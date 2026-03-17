@@ -135,9 +135,16 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
         git.setdefault("head_ref", head)
 
         if incremental:
-            # Look for .review-state.json
-            state_file = os.path.join(ctx.get("output", {}).get("directory", "."), ".review-state.json")
-            if os.path.isfile(state_file):
+            # Baseline migration (rule 26): read new format first, fall back to legacy
+            output_base = ctx.get("output", {}).get("directory", ".")
+            baseline_file = os.path.join(output_base, ".branch-review-baseline.json")
+            legacy_file = os.path.join(output_base, ".review-state.json")
+            state_file = None
+            if os.path.isfile(baseline_file):
+                state_file = baseline_file
+            elif os.path.isfile(legacy_file):
+                state_file = legacy_file  # migration read
+            if state_file:
                 with open(state_file) as f:
                     state = json.load(f)
                 last_sha = state.get("last_reviewed_sha")
@@ -315,15 +322,16 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
         ctx["github_cli_command"] = gh_cmd or resolve_gh_cmd()
 
     # Git context — recompute when explicit inputs are provided.
-    # Only skip for bot-pre-computed context (source == "pirategoat-bot"
-    # with merge_base already present and no explicit overrides).
+    # Skip recomputation when pre-computed context exists: merge_base is
+    # present and no explicit git_range override. Caller-agnostic (rule 28):
+    # any caller that writes review-context.json with a valid merge_base
+    # gets this optimization — no identity detection.
     git = ctx.setdefault("git", {})
-    bot_precomputed = (
-        ctx.get("source") == "pirategoat-bot"
-        and "merge_base" in git
-        and not git_range  # explicit range overrides even bot context
+    precomputed = (
+        "merge_base" in git
+        and not git_range  # explicit range overrides even pre-computed context
     )
-    if not bot_precomputed:
+    if not precomputed:
         # Clear stale git context so _fill_git_context recomputes
         if "merge_base" in git:
             git.clear()
@@ -368,10 +376,100 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     if "linked_issues" not in ctx and pr.get("body"):
         ctx["linked_issues"] = extract_linked_issues(pr["body"])
 
+    # Also extract from branch name (e.g. fix/WOOPLUG-5988-desc → WOOPLUG-5988)
+    head_ref = git.get("head_ref", "")
+    if head_ref:
+        existing = set(ctx.get("linked_issues", []))
+        for m in re.finditer(r'\b([A-Z]+-\d+)\b', head_ref):
+            existing.add(m.group(1))
+        ctx["linked_issues"] = sorted(existing)
+
+    # Staleness detection — compare merge_base age against base branch
+    _detect_staleness(ctx)
+
+    # Linear ID flagging — detect TEAM-NNN patterns for MCP fetch
+    _detect_linear_issues(ctx)
+
+    # GitHub issue fetching — fetch #NNN details via gh
+    _fetch_github_issues(ctx)
+
+    # Author name resolution — fetch display name for PR author
+    _resolve_author_name(ctx)
+
     # Review defaults
     ctx.setdefault("review", {}).setdefault("agent_timeout_seconds", 1200)
 
     return ctx
+
+
+def _detect_staleness(ctx):
+    """Detect if the branch is stale (behind the base branch)."""
+    git = ctx.get("git", {})
+    merge_base = git.get("merge_base")
+    base_ref = git.get("base_ref", "main")
+    if not merge_base:
+        return
+
+    # Count commits the base branch has that the merge_base doesn't
+    count_str = _run_cmd(["git", "rev-list", "--count",
+                          f"{merge_base}..origin/{base_ref}"])
+    if count_str:
+        try:
+            behind = int(count_str)
+            ctx["staleness"] = {
+                "is_stale": behind >= 10,  # matches STALE_BRANCH_THRESHOLD
+                "commits_behind": behind,
+            }
+        except ValueError:
+            pass
+
+
+def _detect_linear_issues(ctx):
+    """Flag has_unfetched_issues when Linear IDs (TEAM-NNN) are found."""
+    issues = ctx.get("linked_issues", [])
+    # Linear IDs match [A-Z]+-\d+ but NOT pure GitHub refs (which are just numbers)
+    linear_ids = [i for i in issues if re.match(r'^[A-Z]+-\d+$', str(i))]
+    ctx["has_unfetched_issues"] = len(linear_ids) > 0
+
+
+def _fetch_github_issues(ctx):
+    """Fetch details for GitHub issue refs (#NNN)."""
+    issues = ctx.get("linked_issues", [])
+    gh_cmd = ctx.get("github_cli_command", "gh")
+    details = []
+
+    for issue_ref in issues:
+        # Only fetch pure numeric refs (GitHub issues)
+        if isinstance(issue_ref, str) and issue_ref.isdigit():
+            result = _run_cmd([gh_cmd, "issue", "view", issue_ref,
+                              "--json", "title,body,labels"])
+            if result:
+                try:
+                    data = json.loads(result)
+                    details.append({
+                        "id": f"#{issue_ref}",
+                        "title": data.get("title", ""),
+                        "body": data.get("body", ""),
+                        "labels": [l.get("name", "") for l in data.get("labels", [])],
+                    })
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+    if details:
+        ctx["linked_issues_details"] = details
+
+
+def _resolve_author_name(ctx):
+    """Fetch PR author's display name via GitHub API."""
+    pr = ctx.get("pr", {})
+    author = pr.get("author")
+    if not author or pr.get("author_name"):
+        return
+
+    gh_cmd = ctx.get("github_cli_command", "gh")
+    name = _run_cmd([gh_cmd, "api", f"users/{author}", "--jq", ".name"])
+    if name:
+        pr["author_name"] = name
 
 
 # ---------------------------------------------------------------------------
