@@ -808,7 +808,11 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         situation.append(f"**Change purpose (derived from commits):** {'; '.join(commit_messages[:3])}")
 
     actions = [
-        f"Dispatch the `review-reconciliator` agent to deduplicate, verify, and produce "
+        "**First:** Stop any remaining background review agents. Their work has either completed "
+        "(review files written) or will not be incorporated. Use TaskStop to force-stop all "
+        "remaining agents before proceeding.",
+        "",
+        f"**Then:** Dispatch the `review-reconciliator` agent to deduplicate, verify, and produce "
         f"consolidated findings.",
         "",
         "The reconciliator needs:",
@@ -1407,6 +1411,127 @@ def main():
                 state["dispatched_agents"] = []
         else:
             state["dispatched_agents"] = []
+
+    if step == 7:
+        git = context.get("git", {})
+        git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+        base_ref = git.get("base_ref", "main")
+
+        head_sha, _ = _run_subprocess(["git", "rev-parse", "HEAD"])
+        if not head_sha or len(head_sha) < 7:
+            head_sha = "0000000"
+
+        baseline_path = os.path.join(output_dir, ".branch-review-baseline.json")
+        review_count = 0
+        if os.path.isfile(baseline_path):
+            try:
+                with open(baseline_path) as f:
+                    old = json.load(f)
+                review_count = old.get("review_count", 0)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        baseline = {
+            "last_reviewed_sha": head_sha,
+            "last_reviewed_at": datetime.now(timezone.utc).isoformat(),
+            "review_type": mode,
+            "review_count": review_count + 1,
+            "base_ref": base_ref,
+            "git_range_used": git_range or f"{head_sha}..HEAD",
+        }
+        with open(baseline_path, "w") as f:
+            json.dump(baseline, f, indent=2)
+
+    if step == 8:
+        cp_path = os.path.join(output_dir, "change-purpose.md")
+        if os.path.isfile(cp_path):
+            try:
+                with open(cp_path) as f:
+                    state["change_purpose"] = f.read().strip()
+            except OSError:
+                pass
+
+        git = context.get("git", {})
+        git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+        if git_range and not state.get("change_purpose"):
+            log_out, _ = _run_subprocess(["git", "log", "--format=%s", git_range])
+            if log_out:
+                state["commit_messages"] = log_out.strip().split("\n")
+
+        plan_path = os.path.join(output_dir, "dispatch-plan.json")
+        if os.path.isfile(plan_path):
+            try:
+                with open(plan_path) as f:
+                    plan = json.load(f)
+                dispatched_names = [
+                    a["name"] for a in plan.get("agents", [])
+                    if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                ]
+                completed = []
+                for name in dispatched_names:
+                    review_file = os.path.join(output_dir, f"{name.replace('-reviewer', '-review')}.json")
+                    if os.path.isfile(review_file):
+                        completed.append(name)
+                state["agents"] = {
+                    "dispatched": dispatched_names,
+                    "completed": completed,
+                    "failed": [],
+                }
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    if step == 11:
+        verdict_path = os.path.join(output_dir, "review-verdict.json")
+        verdict_data = None
+        if os.path.isfile(verdict_path):
+            try:
+                with open(verdict_path) as f:
+                    verdict_data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        report_path = os.path.join(output_dir, "review-report.md")
+        findings_path = os.path.join(output_dir, "review-findings.json")
+        degradation_notes = []
+
+        if not verdict_data:
+            degradation_notes.append("review-verdict.json not found")
+        if not os.path.isfile(report_path):
+            degradation_notes.append("review-report.md not found")
+            alt = os.path.join(output_dir, "review-findings.md")
+            report_path = alt if os.path.isfile(alt) else None
+
+        verdict = verdict_data.get("verdict", "COMMENT") if verdict_data else "COMMENT"
+        status = "success" if not degradation_notes else "degraded"
+
+        # Rule 23: update review-findings.json verdict to match
+        if verdict_data and os.path.isfile(findings_path):
+            try:
+                with open(findings_path) as f:
+                    findings = json.load(f)
+                findings["verdict"] = verdict
+                with open(findings_path, "w") as f:
+                    json.dump(findings, f, indent=2)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        pipeline_result = {
+            "status": status,
+            "verdict": verdict,
+            "report_path": report_path if report_path and os.path.isfile(report_path) else None,
+            "findings_path": findings_path if os.path.isfile(findings_path) else None,
+            "critic_verdict": state.get("critic_verdict", "unavailable"),
+            "degradation_notes": degradation_notes,
+            "review_baseline_saved": os.path.isfile(
+                os.path.join(output_dir, ".branch-review-baseline.json")
+            ),
+        }
+        result_path = os.path.join(output_dir, "pipeline-result.json")
+        with open(result_path, "w") as f:
+            json.dump(pipeline_result, f, indent=2)
+
+        state["review_verdict"] = verdict
+        state["pipeline_status"] = status
 
     # --- Update state ---
     if step not in state.get("completed_steps", []):

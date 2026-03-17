@@ -637,6 +637,116 @@ class TestStep6Orchestration:
         assert "abc..HEAD" in r.stdout
 
 
+class TestStep7Orchestration:
+    """Step 7 main() writes .branch-review-baseline.json."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_7_writes_baseline_file(self, tmp_path):
+        """Step 7 should create .branch-review-baseline.json."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        r = self._run("--step", "7", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        baseline_path = tmp_path / ".branch-review-baseline.json"
+        assert baseline_path.is_file(), "Baseline file was not created"
+        baseline = json.loads(baseline_path.read_text())
+        assert "last_reviewed_sha" in baseline
+        assert "last_reviewed_at" in baseline
+        assert "review_type" in baseline
+        assert baseline["review_type"] == "full"
+        assert "git_range_used" in baseline
+        assert ".." in baseline["git_range_used"]
+
+    def test_step_7_baseline_grades_clean(self, tmp_path):
+        """The written baseline should pass the grader."""
+        from graders import grade_review_baseline
+        self._run("--step", "1", "--mode", "incremental",
+                   "--output-dir", str(tmp_path))
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        self._run("--step", "7", "--mode", "incremental",
+                   "--output-dir", str(tmp_path))
+        baseline_path = tmp_path / ".branch-review-baseline.json"
+        result = grade_review_baseline(str(baseline_path))
+        assert result.passed, f"Baseline grading failed: {result.failures}"
+
+
+class TestStep8Orchestration:
+    """Step 8 main() reads change-purpose.md and agent completion status."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_8_reads_change_purpose(self, tmp_path):
+        """Step 8 should read change-purpose.md into state."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        (tmp_path / "change-purpose.md").write_text("Adds retry logic to payment gateway.")
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        r = self._run("--step", "8", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert "retry logic" in state.get("change_purpose", "").lower()
+
+
+class TestStep11Orchestration:
+    """Step 11 main() reads review-verdict.json and writes pipeline-result.json."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_11_writes_pipeline_result(self, tmp_path):
+        """Step 11 should write pipeline-result.json."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        (tmp_path / "review-verdict.json").write_text('{"verdict": "REQUEST_CHANGES"}')
+        (tmp_path / "review-report.md").write_text("# Review Report\nFindings here.")
+        (tmp_path / "review-findings.json").write_text('{"verdict": "COMMENT", "issues": []}')
+        r = self._run("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        result_path = tmp_path / "pipeline-result.json"
+        assert result_path.is_file(), "pipeline-result.json was not created"
+        result = json.loads(result_path.read_text())
+        assert result["verdict"] == "REQUEST_CHANGES"
+        assert result["status"] in ("success", "degraded")
+        assert "report_path" in result
+
+    def test_step_11_updates_findings_verdict(self, tmp_path):
+        """Step 11 should update review-findings.json verdict to match review-verdict.json (rule 23)."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        (tmp_path / "review-verdict.json").write_text('{"verdict": "REQUEST_CHANGES"}')
+        (tmp_path / "review-report.md").write_text("# Review")
+        (tmp_path / "review-findings.json").write_text('{"verdict": "COMMENT", "issues": []}')
+        self._run("--step", "11", "--mode", "pr",
+                   "--output-dir", str(tmp_path))
+        findings = json.loads((tmp_path / "review-findings.json").read_text())
+        assert findings["verdict"] == "REQUEST_CHANGES"
+
+    def test_step_11_handles_missing_verdict(self, tmp_path):
+        """Step 11 should handle missing review-verdict.json gracefully."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = self._run("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        result_path = tmp_path / "pipeline-result.json"
+        assert result_path.is_file()
+        result = json.loads(result_path.read_text())
+        assert result["status"] in ("degraded", "failed")
+
+
 # ===================================================================
 # SETUP Phase Tests (Steps 1-3)
 # ===================================================================
@@ -1041,6 +1151,14 @@ class TestStep8Reconcile:
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["situation"] + g["actions"])
         assert "commit" in text.lower() or "derive" in text.lower()
+
+    def test_instructs_stopping_background_agents(self, mod, tmp_path):
+        """Step 8 should instruct stopping remaining background agents first."""
+        state = self._make_state_with_agents(change_purpose_exists=True)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "stop" in text.lower() or "TaskStop" in text
 
 
 class TestStep9ReviewReport:
