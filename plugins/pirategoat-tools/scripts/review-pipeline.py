@@ -65,6 +65,7 @@ _STALE_ARTIFACTS = [
     "review-verdict.json",
     "pipeline-result.json",
     "decision-critic-findings.md",
+    "decision-critic-verdict.json",
     "change-purpose.md",
 ]
 
@@ -997,6 +998,13 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("- **REVISE** — Apply recommended adjustments (spot-check factual claims first).")
     actions.append("- **ESCALATE** — Flag validity concerns, override verdict to COMMENT.")
     actions.append("")
+    actions.append("Also write the critic's own verdict (before any adjustments):")
+    actions.append(f"```json")
+    actions.append(f'// Write to {od}/decision-critic-verdict.json')
+    actions.append(f'{{"verdict": "STAND"}}')
+    actions.append(f"```")
+    actions.append(f"Valid values: STAND, REVISE, ESCALATE")
+    actions.append("")
     actions.append("After acting on the critic's verdict, write the final verdict:")
     actions.append(f"```json")
     actions.append(f'// Write to {od}/review-verdict.json')
@@ -1386,6 +1394,18 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 pass
 
     if step == 11:
+        # Read critic verdict from file (written by LLM at step 10)
+        critic_path = os.path.join(output_dir, "decision-critic-verdict.json")
+        if os.path.isfile(critic_path):
+            try:
+                with open(critic_path) as f:
+                    critic_data = json.load(f)
+                state["critic_verdict"] = critic_data.get("verdict", "unavailable")
+            except (json.JSONDecodeError, OSError):
+                state["critic_verdict"] = "unavailable"
+        else:
+            state["critic_verdict"] = "unavailable"
+
         verdict_path = os.path.join(output_dir, "review-verdict.json")
         verdict_data = None
         if os.path.isfile(verdict_path):

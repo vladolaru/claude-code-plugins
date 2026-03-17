@@ -1486,6 +1486,56 @@ class TestStep10DecisionCritic:
         assert "verdict" in text.lower()
 
 
+class TestCriticVerdictPersistence:
+    """Critic verdict is persisted to file and read back by step 11."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_10_instructs_writing_critic_verdict_file(self, mod, tmp_path):
+        """Step 10 should instruct writing decision-critic-verdict.json."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "decision-critic-verdict.json" in text
+
+    def test_step_11_reads_critic_verdict_from_file(self, tmp_path):
+        """Step 11 should read decision-critic-verdict.json into state."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
+        (tmp_path / "review-report.md").write_text("# Review")
+        (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+        (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
+        r = self._run("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["critic_verdict"] == "STAND"
+
+    def test_step_11_critic_verdict_unavailable_when_file_missing(self, tmp_path):
+        """Step 11 should report critic_verdict as unavailable when file is missing."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
+        (tmp_path / "review-report.md").write_text("# Review")
+        (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+        r = self._run("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["critic_verdict"] == "unavailable"
+
+    def test_step_1_clears_stale_critic_verdict(self, tmp_path):
+        """Step 1 should clear decision-critic-verdict.json from previous runs."""
+        (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "REVISE"}')
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        assert not (tmp_path / "decision-critic-verdict.json").exists()
+
+
 class TestStep11PresentResults:
     def test_shows_verdict_interactive(self, mod, tmp_path):
         config = {"mode": "pr", "interactive": True}
