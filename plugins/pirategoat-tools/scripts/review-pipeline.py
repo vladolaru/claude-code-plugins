@@ -284,8 +284,14 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
         return _step_2_repo_setup(mode, state, context, config, output_dir)
     elif step == 3:
         return _step_3_gather_context(mode, state, context, config, output_dir)
+    elif step == 4:
+        return _step_4_fetch_issues(mode, state, context, config, output_dir)
+    elif step == 5:
+        return _step_5_dispatch_plan(mode, state, context, config, output_dir)
+    elif step == 6:
+        return _step_6_dispatch_agents(mode, state, context, config, output_dir)
     else:
-        # Placeholder for steps 4-12 — implemented in subsequent tasks
+        # Placeholder for steps 7-12 — implemented in subsequent tasks
         return {
             "phase": step_def["phase"],
             "title": step_def["title"],
@@ -579,6 +585,152 @@ def _step_3_gather_context(mode, state, context, config, output_dir):
         "situation": situation,
         "actions": actions,
         "handoff": handoff,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Fetch Issue Context (conditional — has_unfetched_issues)
+# ---------------------------------------------------------------------------
+
+def _step_4_fetch_issues(mode, state, context, config, output_dir):
+    """Step 4: Fetch Issue Context — Linear issues via MCP."""
+    issues = context.get("linked_issues", [])
+    # Filter to Linear IDs only
+    import re as _re
+    linear_ids = [i for i in issues if _re.match(r'^[A-Z]+-\d+$', str(i))]
+
+    situation = [
+        f"Linked Linear issues detected: {', '.join(linear_ids)}",
+        "These issues need fetching for you to get the full context.",
+    ]
+
+    actions = [
+        "Use the Linear MCP server to fetch the details for each linked issue:",
+        "",
+    ]
+    for issue_id in linear_ids:
+        actions.append(f"- Fetch **{issue_id}**: title, description, status, labels")
+    actions.append("")
+    actions.append("After fetching, you'll have enough context to write the change purpose.")
+
+    handoff = [
+        f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`",
+        "Include: what the change does, why it's being made, and what to focus on during review.",
+    ]
+
+    return {
+        "phase": "SETUP",
+        "title": "Fetch Issue Context",
+        "situation": situation,
+        "actions": actions,
+        "handoff": handoff,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Dispatch Plan + Triage
+# ---------------------------------------------------------------------------
+
+def _step_5_dispatch_plan(mode, state, context, config, output_dir):
+    """Step 5: Dispatch Plan + Triage — present planner output, allow overrides."""
+    git = context.get("git", {})
+    git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+
+    situation = []
+    actions = []
+
+    # The script runs plan-review-dispatch.py internally and stores the output
+    plan_output = state.get("dispatch_plan_output", "")
+    plan_summary = state.get("dispatch_plan_summary", {})
+
+    if plan_summary:
+        situation.append(
+            f"Dispatch plan computed: {plan_summary.get('dispatched', 0)} agents to dispatch, "
+            f"{plan_summary.get('skipped', 0)} skipped, "
+            f"{plan_summary.get('conditional', 0)} conditional."
+        )
+
+    actions.append(
+        "The dispatch planner's decisions are authoritative. Review the plan below and override "
+        "only if you have specific domain knowledge that contradicts the planner's analysis."
+    )
+    actions.append("")
+
+    if plan_output:
+        actions.append("--- DISPATCH PLAN ---")
+        actions.append(plan_output)
+        actions.append("--- END DISPATCH PLAN ---")
+    else:
+        actions.append("(Dispatch plan output will be provided by the script at runtime.)")
+
+    actions.append("")
+    actions.append("To override an agent's status, edit `dispatch-plan.json` in the output directory:")
+    actions.append('- To force-dispatch a skipped agent: set status to `"DISPATCH_OVERRIDE"` with `"override_reason": "..."`')
+    actions.append('- To force-skip a dispatched agent: set status to `"SKIPPED_OVERRIDE"` with `"override_reason": "..."`')
+    actions.append("")
+    actions.append("Example overrides in dispatch-plan.json:")
+    actions.append('```json')
+    actions.append('{"name": "dead-code-reviewer", "status": "DISPATCH_OVERRIDE", "override_reason": "Large refactor with deletions"}')
+    actions.append('{"name": "go-tests-reviewer", "status": "SKIPPED_OVERRIDE", "override_reason": "No Go code in this repo"}')
+    actions.append('```')
+
+    return {
+        "phase": "EXECUTION",
+        "title": "Dispatch Plan + Triage",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 6: Dispatch Agents
+# ---------------------------------------------------------------------------
+
+def _step_6_dispatch_agents(mode, state, context, config, output_dir):
+    """Step 6: Dispatch Agents — parallel agent dispatch with concrete calls."""
+    git = context.get("git", {})
+    git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+    dispatched = state.get("dispatched_agents", [])
+    od = output_dir or "<OUTPUT_DIR>"
+
+    situation = [
+        f"{len(dispatched)} agents ready for dispatch." if dispatched else
+        "Agents will be dispatched based on the dispatch plan.",
+    ]
+
+    actions = [
+        "Dispatch ALL eligible agents in a SINGLE message with MULTIPLE Agent tool calls.",
+        "Each agent runs in parallel — do NOT dispatch them one at a time.",
+        "",
+    ]
+
+    if dispatched:
+        actions.append("Agent dispatch calls (copy each to an Agent tool):")
+        actions.append("")
+        for agent in dispatched:
+            name = agent.get("name", agent) if isinstance(agent, dict) else agent
+            actions.append(f"**{name}:**")
+            actions.append(f"```")
+            actions.append(f'python3 {SCRIPTS_DIR}/bootstrap-reviewer.py --agent {name} --range "{git_range}" --output-dir "{od}"')
+            actions.append(f"```")
+            actions.append("")
+
+    actions.append("After dispatching all agents, you can monitor their progress at any time:")
+    actions.append(f"```")
+    actions.append(f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{od}\"")
+    actions.append(f"```")
+    actions.append("")
+    actions.append("Use the Agent tool for dispatching. Each agent should run via "
+                   "`bootstrap-reviewer.py` which handles scope discovery, protocol extraction, "
+                   "and output instructions.")
+
+    return {
+        "phase": "EXECUTION",
+        "title": "Dispatch Agents",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
     }
 
 

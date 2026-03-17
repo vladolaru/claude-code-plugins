@@ -663,3 +663,125 @@ class TestStep3GatherContext:
         assert "${" not in all_text
         assert "<GIT_RANGE>" not in all_text
         assert "<OUTPUT_DIR>" not in all_text
+
+
+# ===================================================================
+# Steps 4-6 Tests
+# ===================================================================
+
+
+class TestStep4FetchLinearIssues:
+    """Step 4: Fetch Issue Context — data-driven condition."""
+
+    def test_instructs_linear_mcp(self, mod, tmp_path):
+        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
+        ctx = COMPLETE_CONTEXT
+        g = mod.get_step_guidance(4, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "linear" in text.lower() or "Linear" in text
+
+    def test_has_change_purpose_handoff(self, mod, tmp_path):
+        """Step 4 should include the change-purpose handoff (deferred from step 3)."""
+        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
+        ctx = COMPLETE_CONTEXT
+        g = mod.get_step_guidance(4, "pr", state, ctx)
+        assert g["handoff"] is not None
+        text = "\n".join(g["handoff"])
+        assert "change-purpose.md" in text
+
+
+class TestStep5DispatchPlan:
+    """Step 5: Dispatch Plan + Triage. main() runs planner, passes output to get_step_guidance()."""
+
+    def _make_state_with_plan(self):
+        """State with planner output pre-computed by main()."""
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3],
+            "dispatch_plan_output": "pr-reviewer: DISPATCH (domain: code)\nsecurity-reviewer: SKIPPED (no files in security domain)",
+            "dispatch_plan_summary": {"dispatched": 7, "skipped": 3, "conditional": 2},
+        }
+
+    def test_presents_dispatch_plan_output(self, mod, tmp_path):
+        state = self._make_state_with_plan()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(5, "pr", state, ctx)
+        text = "\n".join(g["actions"] + g["situation"])
+        # Script presents planner output in delimited section
+        assert "DISPATCH PLAN" in text
+        # Planner output should NOT instruct the LLM to run the command
+        assert not ("python3" in text and "plan-review-dispatch.py" in text)
+
+    def test_triage_authority(self, mod, tmp_path):
+        """Triage model should be consistent: planner is authoritative."""
+        state = self._make_state_with_plan()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(5, "full", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "authoritative" in text.lower() or "override" in text.lower()
+        assert "preliminary" not in text.lower()
+
+    def test_override_writes_to_dispatch_plan(self, mod, tmp_path):
+        state = self._make_state_with_plan()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(5, "pr", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "dispatch-plan.json" in text
+        assert "DISPATCH_OVERRIDE" in text
+        assert "SKIPPED_OVERRIDE" in text
+
+
+class TestStep6DispatchAgents:
+    """Step 6: Dispatch Agents. main() reads dispatch-plan.json, passes agent list."""
+
+    def _make_state_with_agents(self, output_dir="/tmp/review-42"):
+        """State with dispatched agents pre-computed by main()."""
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [
+                {"name": "pr-reviewer", "domain": "code"},
+                {"name": "security-reviewer", "domain": "security"},
+            ],
+        }
+
+    def test_parallel_dispatch(self, mod, tmp_path):
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "parallel" in text.lower() or "SINGLE message" in text
+
+    def test_references_bootstrap(self, mod, tmp_path):
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "bootstrap-reviewer.py" in text
+
+    def test_lists_each_agent_dispatch_call(self, mod, tmp_path):
+        """Should list each agent's full dispatch call with concrete values."""
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "pr-reviewer" in text
+        assert "security-reviewer" in text
+        assert "abc..HEAD" in text  # concrete range, not template
+
+    def test_references_agent_tool(self, mod, tmp_path):
+        """Should reference Agent tool, not Task tool."""
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "Agent tool" in text or "Agent" in text
+        assert "Task tool" not in text
+
+    def test_references_status_check(self, mod, tmp_path):
+        """Should reference check-reviewer-agent-status.py for monitoring."""
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "check-reviewer-agent-status.py" in text
