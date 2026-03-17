@@ -1413,6 +1413,28 @@ class TestStep9ReviewReport:
         assert "critical" in text.lower()
         assert "verdict" in text.lower()
 
+    def test_reinjects_change_purpose(self, mod, tmp_path):
+        """Step 9 should re-inject change purpose to anchor the model."""
+        state = {
+            "completed_steps": [],
+            "change_purpose": "Adds retry logic to the payment gateway with exponential backoff.",
+        }
+        ctx = {}
+        g = mod.get_step_guidance(9, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "retry logic" in text.lower()
+
+    def test_reinjects_commit_messages_when_no_change_purpose(self, mod, tmp_path):
+        """Step 9 should use commit messages as fallback when change-purpose.md is missing."""
+        state = {
+            "completed_steps": [],
+            "commit_messages": ["feat: add payment retry", "test: add retry tests"],
+        }
+        ctx = {}
+        g = mod.get_step_guidance(9, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "payment retry" in text.lower() or "commit" in text.lower()
+
 
 # ===================================================================
 # VALIDATION and OUTPUT Phase Tests (Steps 10-12)

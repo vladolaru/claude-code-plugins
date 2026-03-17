@@ -905,6 +905,14 @@ def _step_9_review_report(mode, state, context, config, output_dir):
     situation = []
     actions = []
 
+    change_purpose = state.get("change_purpose")
+    commit_messages = state.get("commit_messages", [])
+
+    if change_purpose:
+        situation.append(f"**Change purpose:** {change_purpose}")
+    elif commit_messages:
+        situation.append(f"**Change purpose (from commits):** {'; '.join(commit_messages[:3])}")
+
     if degradation.get("reconciliation_failed"):
         situation.append("⚠️ Reconciliation failed — working with raw agent output in degraded mode.")
         actions.append("Read the individual agent review files directly (raw agent output).")
