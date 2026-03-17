@@ -837,6 +837,16 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     else:
         actions.append("- **Change purpose:** Derive from commit messages if change-purpose.md is missing")
 
+    review_files = agents_state.get("review_files", [])
+    if review_files:
+        actions.append("")
+        actions.append("**Completed review files:**")
+        for rf in review_files:
+            actions.append(f"- `{rf}`")
+    else:
+        actions.append("")
+        actions.append("**Completed review files:** Check output directory for `*-review.json` files.")
+
     actions.append("")
     actions.append("The reconciliator will produce:")
     actions.append(f"- `{od}/review-findings.json` — structured findings")
@@ -1351,15 +1361,18 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     a["name"] for a in plan.get("agents", [])
                     if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
                 ]
+                review_files = []
                 completed = []
                 for name in dispatched_names:
                     review_file = os.path.join(output_dir, f"{name.replace('-reviewer', '-review')}.json")
                     if os.path.isfile(review_file):
                         completed.append(name)
+                        review_files.append(review_file)
                 state["agents"] = {
                     "dispatched": dispatched_names,
                     "completed": completed,
                     "failed": [],
+                    "review_files": review_files,
                 }
             except (json.JSONDecodeError, OSError):
                 pass

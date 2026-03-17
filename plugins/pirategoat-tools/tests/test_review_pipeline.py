@@ -695,6 +695,29 @@ class TestStep8Orchestration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert "retry logic" in state.get("change_purpose", "").lower()
 
+    def test_step_8_stores_review_file_paths(self, tmp_path):
+        """Step 8 should store paths to completed review files in state."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        plan = {
+            "agents": [
+                {"name": "pr-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
+                {"name": "security-reviewer", "domain": "security", "status": "DISPATCH", "reason": "always"},
+            ],
+            "git_range": "abc..HEAD",
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        # Simulate pr-reviewer finished, security-reviewer not
+        (tmp_path / "pr-review.json").write_text('{"verdict": "approve", "issues": []}')
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        r = self._run("--step", "8", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        review_files = state.get("agents", {}).get("review_files", [])
+        assert any("pr-review.json" in f for f in review_files)
+
 
 class TestStep11Orchestration:
     """Step 11 main() reads review-verdict.json and writes pipeline-result.json."""
@@ -1300,6 +1323,19 @@ class TestStep8Reconcile:
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
         assert "stop" in text.lower() or "TaskStop" in text
+
+    def test_reconciliator_prompt_lists_review_files(self, mod, tmp_path):
+        """Step 8 should list completed review file paths in the reconciliator prompt."""
+        state = self._make_state_with_agents(change_purpose_exists=True)
+        state["agents"]["review_files"] = [
+            "/tmp/out/pr-review.json",
+            "/tmp/out/security-review.json",
+        ]
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "pr-review.json" in text
+        assert "security-review.json" in text
 
 
 class TestStep9ReviewReport:
