@@ -1227,6 +1227,14 @@ class TestStep7SaveReviewBaseline:
         text = "\n".join(g["situation"] + g["actions"])
         assert "baseline" in text.lower()
 
+    def test_step_7_instructs_checking_agent_status(self, mod, tmp_path):
+        """Step 7 should instruct checking agent completion before proceeding."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "check-reviewer-agent-status" in text or "agent status" in text.lower()
+
 
 class TestStep8Reconcile:
     """Step 8: Reconcile + Verify. main() reads dispatch-plan.json + review files, passes to get_step_guidance()."""

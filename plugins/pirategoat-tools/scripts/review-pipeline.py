@@ -768,7 +768,16 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
 
     actions.append("")
     actions.append("The script wrote `.branch-review-baseline.json` with the current HEAD SHA, "
-                   "timestamp, review type, and git range. No action needed from you.")
+                   "timestamp, review type, and git range.")
+
+    actions.append("")
+    actions.append("**Before proceeding to step 8:** Verify all review agents have finished.")
+    actions.append(f"```")
+    actions.append(f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
+    actions.append(f"```")
+    actions.append("- Exit code 0 → all agents finished or timed out — proceed to step 8.")
+    actions.append("- Exit code 2 → agents still running — wait 30 seconds, re-check.")
+    actions.append("- Only proceed to step 8 when ALL agents are done or timed out.")
 
     return {
         "phase": "EXECUTION",
