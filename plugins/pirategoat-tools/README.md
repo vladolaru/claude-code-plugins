@@ -55,7 +55,7 @@ Not all review work requires the same level of reasoning. Agents are assigned to
 | **browser-interaction** | Browser automation via MCP servers (chrome-devtools, playwright) |
 | **woocommerce-browser-interaction** | WooCommerce-specific browser workflows — login, admin, checkout |
 | **dig-into-linear-issue** | Linear issue investigation with RCA templates |
-| **date-time-wrangling** | Time zone reasoning, date calculations, temporal logic for scheduling |
+| **current-datetime** | Verify current date/time before writing timestamps, plus time zones, date arithmetic, scheduling |
 | **decision-critic** | Structured decision analysis for technical trade-offs |
 | **creating-md-slides** | Markdown presentations via Marp (PDF, PPTX, HTML) |
 | **marp-slide-quality** | SlideGauge integration for presentation analysis |

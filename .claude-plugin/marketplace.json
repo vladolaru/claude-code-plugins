@@ -53,7 +53,7 @@
         "./skills/figma-copy-sync",
         "./skills/analyzing-cc-sessions",
         "./skills/creating-md-slides",
-        "./skills/date-time-wrangling",
+        "./skills/current-datetime",
         "./skills/decision-critic",
         "./skills/marp-slide-quality"
       ],

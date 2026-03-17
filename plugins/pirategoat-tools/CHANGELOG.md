@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **current-datetime skill** (formerly date-time-wrangling) — rewritten RULE 0 to trigger on any date/time dependency (writing timestamps, stating times, calculating staleness), not just temporal reasoning questions. Added "Most Common Command" section. Removed duplicate examples, workflow tutorials, and platform detection — same operational value in half the lines.
 - Unified pr-review, full-code-review, and code-review into a single pipeline script
 - All three commands now thin wrappers (~40 lines each) calling review-pipeline.py
 - Review report synthesis now runs for all modes (previously PR-only)
@@ -38,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **date-time-wrangling skill** — renamed to **current-datetime** with rewritten description to trigger on any date/time dependency, not just temporal reasoning questions
 - `pr-review-pipeline.py` — replaced by unified `review-pipeline.py`
 - `review-scope.py --preflight` — stale branch detection moved to `gather-review-context.py`
 - `.review-state.json` — replaced by `.branch-review-baseline.json` (with migration fallback)
@@ -1307,7 +1309,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **date-time-wrangling skill** - Verify temporal information using Unix date commands
+- **current-datetime skill** (formerly date-time-wrangling) - Verify current date/time before writing timestamps, plus temporal reasoning with Unix date commands
   - Date operations: current date, day of week, date arithmetic, days between dates
   - Time operations: current time (12h/24h), ISO 8601, Unix timestamps, time arithmetic
   - Time zone support: 16 major geographic regions with TZ identifiers
