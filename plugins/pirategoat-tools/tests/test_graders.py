@@ -24,7 +24,7 @@ from graders import (
     grade_no_domain_files,
     grade_error_exit,
     grade_output_pair,
-    grade_review_state,
+    grade_review_baseline,
 )
 
 from review_output_simple import ReviewOutputBuilder
@@ -223,12 +223,13 @@ class TestGradeOutputPair:
         assert not result.passed
 
 
-def _make_valid_state(tmp_dir: str) -> str:
-    """Create a valid .review-state.json file."""
-    path = os.path.join(tmp_dir, ".review-state.json")
+def _make_valid_baseline(tmp_dir: str) -> str:
+    """Create a valid .branch-review-baseline.json file."""
+    path = os.path.join(tmp_dir, ".branch-review-baseline.json")
     data = {
         "last_reviewed_sha": "abc123def456789012345678901234567890abcd",
         "last_reviewed_at": "2026-02-09T12:34:56",
+        "review_type": "full",
         "review_count": 1,
         "base_ref": "main",
         "git_range_used": "main..HEAD",
@@ -238,93 +239,97 @@ def _make_valid_state(tmp_dir: str) -> str:
     return path
 
 
-class TestGradeReviewState:
-    """Tests for grade_review_state."""
+class TestGradeReviewBaseline:
+    """Tests for grade_review_baseline."""
 
-    def test_valid_state_passes(self, tmp_dir):
-        path = _make_valid_state(tmp_dir)
-        result = grade_review_state(path)
+    def test_valid_baseline_passes(self, tmp_dir):
+        path = _make_valid_baseline(tmp_dir)
+        result = grade_review_baseline(path)
         assert result.passed, f"Failures: {result.failures}"
         assert result.score == 1.0
 
     def test_missing_file_fails(self):
-        result = grade_review_state("/nonexistent/.review-state.json")
+        result = grade_review_baseline("/nonexistent/.branch-review-baseline.json")
         assert not result.passed
         assert any("does not exist" in f for f in result.failures)
 
     def test_invalid_json_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".review-state.json")
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         with open(path, "w") as f:
             f.write("not json {{{")
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert not result.passed
         assert any("Invalid JSON" in f for f in result.failures)
 
     def test_missing_required_field_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".review-state.json")
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         data = {"last_reviewed_sha": "abc1234", "review_count": 1}
         with open(path, "w") as f:
             json.dump(data, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert not result.passed
         assert any("base_ref" in f for f in result.failures)
 
     def test_invalid_sha_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".review-state.json")
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         data = {
             "last_reviewed_sha": "not-a-sha!",
             "last_reviewed_at": "2026-02-09T12:34:56",
+            "review_type": "full",
             "review_count": 1,
             "base_ref": "main",
             "git_range_used": "main..HEAD",
         }
         with open(path, "w") as f:
             json.dump(data, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert not result.passed
         assert any("Invalid SHA" in f for f in result.failures)
 
     def test_short_sha_passes(self, tmp_dir):
         """Short SHAs (7+ chars) are valid."""
-        path = os.path.join(tmp_dir, ".review-state.json")
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         data = {
             "last_reviewed_sha": "abc1234",
             "last_reviewed_at": "2026-02-09T12:34:56",
+            "review_type": "incremental",
             "review_count": 1,
             "base_ref": "main",
             "git_range_used": "main..HEAD",
         }
         with open(path, "w") as f:
             json.dump(data, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert result.passed, f"Failures: {result.failures}"
 
     def test_zero_review_count_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".review-state.json")
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         data = {
             "last_reviewed_sha": "abc1234",
             "last_reviewed_at": "2026-02-09T12:34:56",
+            "review_type": "full",
             "review_count": 0,
             "base_ref": "main",
             "git_range_used": "main..HEAD",
         }
         with open(path, "w") as f:
             json.dump(data, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert not result.passed
         assert any("review_count" in f for f in result.failures)
 
     def test_missing_range_separator_fails(self, tmp_dir):
-        path = os.path.join(tmp_dir, ".review-state.json")
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         data = {
             "last_reviewed_sha": "abc1234",
             "last_reviewed_at": "2026-02-09T12:34:56",
+            "review_type": "full",
             "review_count": 1,
             "base_ref": "main",
             "git_range_used": "HEAD",
         }
         with open(path, "w") as f:
             json.dump(data, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert not result.passed
         assert any("git_range_used" in f for f in result.failures)

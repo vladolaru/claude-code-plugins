@@ -248,9 +248,10 @@ def grade_output_pair(output_dir: str, reviewer_name: str) -> GradeResult:
     )
 
 
-REQUIRED_STATE_FIELDS = {
+REQUIRED_BASELINE_FIELDS = {
     "last_reviewed_sha",
     "last_reviewed_at",
+    "review_type",
     "review_count",
     "base_ref",
     "git_range_used",
@@ -259,11 +260,11 @@ REQUIRED_STATE_FIELDS = {
 SHA_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
 
 
-def grade_review_state(path: str) -> GradeResult:
-    """Grade a .review-state.json file.
+def grade_review_baseline(path: str) -> GradeResult:
+    """Grade a .branch-review-baseline.json file.
 
-    Checks: file exists, valid JSON, required fields, SHA format,
-    review_count is positive int, git_range_used contains '..'.
+    Checks: file exists, valid JSON, required fields (including review_type),
+    SHA format, review_count is positive int, git_range_used contains '..'.
     """
     checks = []
 
@@ -288,7 +289,7 @@ def grade_review_state(path: str) -> GradeResult:
         return _grade(checks)
 
     # Required fields
-    for field_name in REQUIRED_STATE_FIELDS:
+    for field_name in REQUIRED_BASELINE_FIELDS:
         checks.append(
             (field_name in data, f"Missing required field: {field_name}")
         )

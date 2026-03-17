@@ -87,7 +87,7 @@ Deterministic pytest suite that validates structural properties of review comman
 | `TestMarketplaceRegistration` | All review commands are registered in `marketplace.json` |
 | `TestCodeReviewIterative` | `code-review.md` has state file reference, incremental mode, full/reset option, rebase detection, no-new-commits guard |
 | `TestFullCodeReview` | `full-code-review.md` has default branch guard, reconciliator dispatch, no state file reference |
-| `TestStateFileGrading` | `.review-state.json` round-trip: valid state files pass, incremented counts pass, explicit ranges pass |
+| `TestBaselineFileGrading` | `.branch-review-baseline.json` round-trip: valid baseline files pass, incremented counts pass, explicit ranges pass |
 
 ### Level 1: ReviewOutputBuilder Unit Tests (`test_review_output.py`)
 
@@ -144,7 +144,7 @@ class GradeResult:
 | `grade_no_domain_files(text)` | Agent output for no-code scenario | APPROVE verdict, zero findings |
 | `grade_error_exit(text)` | Agent output for error scenario | Error indication, no STATUS: FINISHED |
 | `grade_output_pair(output_dir, reviewer_name)` | Output directory + reviewer name | Both `.json` and `.md` exist, delegates to json + markdown graders, reviewer name matches |
-| `grade_review_state(path)` | Path to `.review-state.json` | File exists, valid JSON, required fields (`last_reviewed_sha`, `last_reviewed_at`, `review_count`, `base_ref`, `git_range_used`), SHA format (7-40 hex), positive review_count, range contains `..` |
+| `grade_review_baseline(path)` | Path to `.branch-review-baseline.json` | File exists, valid JSON, required fields (`last_reviewed_sha`, `last_reviewed_at`, `review_type`, `review_count`, `base_ref`, `git_range_used`), SHA format (7-40 hex), positive review_count, range contains `..` |
 
 ### Level 3: E2E Pipeline Tests (`tests/e2e/`)
 

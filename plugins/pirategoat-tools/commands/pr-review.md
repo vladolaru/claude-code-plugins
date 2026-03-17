@@ -8,51 +8,9 @@ findings.
 
 ## Workflow
 
-A Python script provides step-specific instructions. You call it once per
-step, execute the instructions it prints, then call it again for the next
-step. Mode switching (bot vs default) is handled by the script — follow
-whatever instructions it provides.
-
-## Phase Overview
-
-| Phase | Steps | What happens |
-|-------|-------|-------------|
-| SETUP | 1-3 | Parse PR number, repo setup (skipped in bot mode), context discovery |
-| AWARENESS | 4 | Review context summary (reviews, linked issues, PR metadata) |
-| CONTEXT | 5-6 | Fetch issue context, summarize |
-| EXECUTION | 7-10 | Size assessment, dispatch plan + triage, parallel agents, reconcile + verify |
-| REVIEW | 11 | Generate review report |
-| VALIDATION | 12 | Decision critic |
-| OUTPUT | 13-14 | Present results, cleanup |
-
-## Failure Recovery
-
-| Failure point | Recovery |
-|---------------|----------|
-| Before PR details (Steps 1-2) | STOP. Restore branch/stash if touched. |
-| After PR details, before dispatch (Steps 3-8) | Write partial report, skip to Step 12. |
-| During dispatch (Step 9) | Continue with available agents. Note failures. |
-| Reconciliation failure (Step 10) | Note "No findings" and proceed to Step 12. |
-| Decision critic error (Step 12) | Skip critic, present as-is. |
-
-## Invocation
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
-  --step-number <1-14> \
-  --total-steps 14 \
-  --pr-number "<PR number>" \
-  --output-dir "/tmp/pr-review-<SAFE_REPO_PATH>-<PR_NUMBER>" \
-  --thoughts "<accumulated state from all previous steps>"
-```
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--step-number` | Yes | Current step (1-14) |
-| `--total-steps` | Yes | Always 14 |
-| `--pr-number` | Step 1 | PR number. Steps 2-14 read from `--thoughts`. |
-| `--output-dir` | Step 2 | Output directory. Bot mode detected from `review-context.json` here. |
-| `--thoughts` | Yes | All accumulated state. Pass `""` on step 1. |
+A Python script provides step-specific briefings. Call it once per step,
+execute the briefing, then call it again for the next step indicated in
+the output. The script handles all mode-specific logic internally.
 
 ## Starting the Workflow
 
@@ -73,14 +31,10 @@ mkdir -p "$OUTPUT_DIR"
 **Run Step 1:**
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/pr-review-pipeline.py \
-  --step-number 1 \
-  --total-steps 14 \
-  --pr-number "<PR_NUMBER>" \
-  --output-dir "$OUTPUT_DIR" \
-  --thoughts ""
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-pipeline.py \
+  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>"
 ```
 
-Execute the instructions printed by the script. After completing each
-step, call the script with `--step-number N+1` and pass ALL accumulated
-state in `--thoughts`. Continue until Step 14 completes.
+Execute the briefing printed by the script. Then call with `--step N`
+where N is the next step indicated in the output. Continue until the
+script signals PIPELINE COMPLETE.

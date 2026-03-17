@@ -30,29 +30,21 @@ MARKETPLACE_JSON = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 
 sys.path.insert(0, str(TESTS_DIR))
 
-from graders import grade_review_state
+from graders import grade_review_baseline
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-REVIEW_COMMANDS = [
-    "full-code-review.md",
-    "code-review.md",
-]
 
-# Commands that dispatch agents directly (have agent tables)
-DISPATCH_COMMANDS = [
-    "full-code-review.md",
-    "code-review.md",
-]
-
-# Commands that orchestrate other commands/skills (no inline agent tables)
+# All three review commands are now orchestrators calling review-pipeline.py
 ORCHESTRATOR_COMMANDS = [
     "pr-review.md",
+    "full-code-review.md",
+    "code-review.md",
 ]
 
 # All review-related commands (for shared structural tests)
-ALL_REVIEW_COMMANDS = REVIEW_COMMANDS + ORCHESTRATOR_COMMANDS
+ALL_REVIEW_COMMANDS = ORCHESTRATOR_COMMANDS
 
 # Agent name pattern in markdown tables: `pirategoat-tools:<name>`
 AGENT_REF_PATTERN = re.compile(r"`pirategoat-tools:([\w-]+)`")
@@ -189,84 +181,44 @@ class TestFrontmatter:
 
 
 # =============================================================================
-# Structural Tests — Agent References
-# =============================================================================
-
-
-class TestAgentReferences:
-    """Agent names in dispatch tables match marketplace.json."""
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_agents_exist_in_marketplace(self, command, marketplace_agents, marketplace_skills):
-        content = _read_command(command)
-        refs = _extract_agent_refs(content)
-        # Filter out skill references (e.g., decision-critic is a skill, not an agent)
-        refs = [r for r in refs if r not in marketplace_skills]
-        assert len(refs) > 0, f"{command}: no agent references found"
-
-        # Exclude reconciliator since it's dispatched separately, not in the table
-        reviewer_agents = [a for a in marketplace_agents if a != "technical-writer"]
-        for ref in refs:
-            assert ref in reviewer_agents, (
-                f"{command}: agent '{ref}' not in marketplace.json agents: {reviewer_agents}"
-            )
-
-    def test_dispatch_agents_consistent(self, marketplace_skills):
-        """All dispatch commands should dispatch the same set of agents."""
-        skills = set(marketplace_skills)
-        agent_sets = {}
-        for cmd in DISPATCH_COMMANDS:
-            # Filter out skill references before comparing
-            agent_sets[cmd] = set(_extract_agent_refs(_read_command(cmd))) - skills
-        first_cmd = DISPATCH_COMMANDS[0]
-        for cmd in DISPATCH_COMMANDS[1:]:
-            assert agent_sets[first_cmd] == agent_sets[cmd], (
-                f"Agent mismatch between {first_cmd} and {cmd}.\n"
-                f"Only in {first_cmd}: {agent_sets[first_cmd] - agent_sets[cmd]}\n"
-                f"Only in {cmd}: {agent_sets[cmd] - agent_sets[first_cmd]}"
-            )
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_dispatches_14_agents(self, command, marketplace_skills):
-        """Each dispatch command references exactly 14 agents."""
-        content = _read_command(command)
-        refs = _extract_agent_refs(content)
-        # Exclude reconciliator and skill references from the count
-        skills = set(marketplace_skills)
-        dispatch_refs = [r for r in refs if r != "review-reconciliator" and r not in skills]
-        assert len(dispatch_refs) == 14, (
-            f"{command}: expected 14 dispatch agents, found {len(dispatch_refs)}: {dispatch_refs}"
-        )
-
-
-# =============================================================================
-# Structural Tests — Script References
+# Structural Tests — Script References (all commands reference review-pipeline.py)
 # =============================================================================
 
 
 class TestScriptReferences:
-    """Scripts referenced in commands exist on disk."""
+    """Review commands reference review-pipeline.py (which exists on disk)."""
 
-    @pytest.mark.parametrize("command", REVIEW_COMMANDS)
-    def test_script_files_exist(self, command):
+    @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
+    def test_references_review_pipeline(self, command):
         content = _read_command(command)
-        scripts = set(SCRIPT_REF_PATTERN.findall(content))
-        for script in scripts:
-            path = SCRIPTS_DIR / script
-            assert path.is_file(), (
-                f"{command}: references script '{script}' but {path} does not exist"
-            )
-
-
-class TestAgentSignalsContract:
-    """Review commands dispatch the reconciliator with explicit file paths."""
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_uses_reconciliator(self, command):
-        content = _read_command(command)
-        assert "review-reconciliator" in content, (
-            f"{command}: should dispatch review-reconciliator for reconciliation"
+        assert "review-pipeline.py" in content, (
+            f"{command}: should reference review-pipeline.py"
         )
+
+    def test_review_pipeline_exists(self):
+        path = SCRIPTS_DIR / "review-pipeline.py"
+        assert path.is_file(), f"review-pipeline.py not found at {path}"
+
+
+class TestReviewCommandsReferenceUnifiedScript:
+    """All review commands reference review-pipeline.py with correct mode."""
+
+    @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
+    def test_references_review_pipeline(self, command):
+        content = _read_command(command)
+        assert "review-pipeline.py" in content
+
+    def test_pr_review_uses_pr_mode(self):
+        content = _read_command("pr-review.md")
+        assert "--mode pr" in content
+
+    def test_full_code_review_uses_full_mode(self):
+        content = _read_command("full-code-review.md")
+        assert "--mode full" in content
+
+    def test_code_review_uses_incremental_mode(self):
+        content = _read_command("code-review.md")
+        assert "--mode incremental" in content
 
 
 # =============================================================================
@@ -292,12 +244,6 @@ class TestMarketplaceRegistration:
 class TestCodeReviewIterative:
     """code-review.md has iterative-specific content."""
 
-    def test_has_state_file_reference(self):
-        content = _read_command("code-review.md")
-        assert ".review-state.json" in content, (
-            "code-review.md: missing .review-state.json reference"
-        )
-
     def test_has_incremental_mode(self):
         content = _read_command("code-review.md")
         assert "incremental" in content.lower(), (
@@ -310,285 +256,76 @@ class TestCodeReviewIterative:
             "code-review.md: missing 'full' or 'reset' argument handling"
         )
 
-    def test_has_rebase_detection(self):
+    def test_has_full_reset_deletes_baseline(self):
+        """full/reset should delete .branch-review-baseline.json."""
         content = _read_command("code-review.md")
-        assert "merge-base" in content, (
-            "code-review.md: missing rebase detection (merge-base)"
-        )
-
-    def test_has_no_new_commits_guard(self):
-        content = _read_command("code-review.md")
-        assert "no new commits" in content.lower(), (
-            "code-review.md: missing 'no new commits' guard"
-        )
-
-    def test_has_conditional_stale_branch_handling(self):
-        content = _read_command("code-review.md")
-        assert "BRANCH_FRESHNESS" in content or "stale" in content.lower()
-        # Stale check should be conditional on history-insights-reviewer
-        assert "history-insights" in content.lower()
-
-    def test_has_reconciliator_dispatch(self):
-        """Should dispatch the reconciliator for semantic dedup + verification."""
-        content = _read_command("code-review.md")
-        assert "review-reconciliator" in content, (
-            "code-review.md: missing reconciliator dispatch"
+        assert ".branch-review-baseline.json" in content, (
+            "code-review.md: should reference .branch-review-baseline.json for full/reset"
         )
 
 
 class TestFullCodeReview:
     """full-code-review.md has expected structure."""
 
-    def test_has_default_branch_guard(self):
+    def test_has_full_mode(self):
         content = _read_command("full-code-review.md")
-        assert "default branch" in content.lower(), (
-            "full-code-review.md: missing default branch guard"
-        )
-
-    def test_has_reconciliator_dispatch(self):
-        content = _read_command("full-code-review.md")
-        assert "review-reconciliator" in content, (
-            "full-code-review.md: missing reconciliator dispatch"
-        )
-
-    def test_no_state_file(self):
-        """full-code-review should NOT reference state files (that's code-review's job)."""
-        content = _read_command("full-code-review.md")
-        assert ".review-state.json" not in content, (
-            "full-code-review.md: should NOT reference .review-state.json"
-        )
-
-    def test_has_stale_branch_handling(self):
-        content = _read_command("full-code-review.md")
-        assert "BRANCH_FRESHNESS" in content or "stale" in content.lower()
-
-    def test_has_merge_base_reference(self):
-        content = _read_command("full-code-review.md")
-        assert "merge-base" in content.lower() or "RANGE_REBASED" in content
-
-    def test_has_review_findings_output(self):
-        """Should produce review-findings.json and review-findings.md."""
-        content = _read_command("full-code-review.md")
-        assert "review-findings.json" in content, (
-            "full-code-review.md: missing review-findings.json output reference"
-        )
+        assert "--mode full" in content
 
 
 # =============================================================================
-# Decision Critic Pipeline Tests
+# Baseline File Grader Tests
 # =============================================================================
 
 
-# Commands that include the decision critic pipeline
-CRITIC_COMMANDS = [
-    "full-code-review.md",
-    "code-review.md",
-    # pr-review.md is now a thin wrapper — decision critic is in pr-review-pipeline.py
-]
+class TestBaselineFileGrading:
+    """Grade .branch-review-baseline.json files via the grader."""
 
-
-class TestDecisionCritic:
-    """Decision critic phase is present and well-formed in review commands."""
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_has_decision_critic_dispatch(self, command):
-        """Must dispatch the decision-reviewer agent."""
-        content = _read_command(command)
-        assert "decision-reviewer" in content, (
-            f"{command}: missing decision-reviewer agent dispatch"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_has_verdict_fallback_chain(self, command):
-        """Should fall back to findings file if return message verdict parse fails."""
-        content = _read_command(command)
-        assert "decision-critic-findings.md" in content, (
-            f"{command}: missing fallback to decision-critic-findings.md"
-        )
-        content_lower = content.lower()
-        assert "unavailable" in content_lower, (
-            f"{command}: missing critic-unavailable graceful degradation"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_has_verdict_recalculation_on_revise(self, command):
-        """REVISE must trigger verdict recalculation from updated findings."""
-        content = _read_command(command)
-        content_lower = content.lower()
-        assert "recalculate" in content_lower and "verdict" in content_lower, (
-            f"{command}: REVISE missing verdict recalculation"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_has_verdict_override_on_escalate(self, command):
-        """ESCALATE must override the review verdict to COMMENT."""
-        content = _read_command(command)
-        content_lower = content.lower()
-        assert "override" in content_lower and "COMMENT" in content, (
-            f"{command}: ESCALATE missing verdict override to COMMENT"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_critic_dispatch_after_reconciliator(self, command):
-        """Decision critic must appear after reconciliator in the pipeline."""
-        content = _read_command(command)
-        reconciliator_pos = content.find("review-reconciliator")
-        critic_pos = content.find("decision-reviewer")
-        assert reconciliator_pos > 0 and critic_pos > 0, (
-            f"{command}: missing reconciliator or critic reference"
-        )
-        assert reconciliator_pos < critic_pos, (
-            f"{command}: decision-reviewer must appear after review-reconciliator "
-            f"(reconciliator at {reconciliator_pos}, critic at {critic_pos})"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_critic_reviews_findings(self, command):
-        """Decision critic should review the review-findings output."""
-        content = _read_command(command)
-        assert "review-findings.md" in content, (
-            f"{command}: decision-reviewer should reference review-findings.md"
-        )
-
-    @pytest.mark.parametrize("command", CRITIC_COMMANDS)
-    def test_critic_no_ingestion_verification(self, command):
-        """Decision critic should NOT receive ingestion verification (independent)."""
-        content = _read_command(command)
-        assert "Ingestion Verification" not in content, (
-            f"{command}: decision-reviewer should not receive Ingestion Verification"
-        )
-
-
-# =============================================================================
-# Triage Block Tests (Step 6: Adaptive Agent Triage)
-# =============================================================================
-
-
-# The 6 agents subject to LLM triage (must match design doc)
-TRIAGED_AGENTS = [
-    "security-reviewer",
-    "dead-code-reviewer",
-    "architecture-reviewer",
-    "wp-architecture-reviewer",
-    "performance-reviewer",
-    "a11y-reviewer",
-]
-
-
-class TestTriageBlock:
-    """Step 6 adaptive agent triage is present and well-formed in dispatch commands."""
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_has_triage_step(self, command):
-        """Dispatch commands must contain Step 6 triage block."""
-        content = _read_command(command)
-        assert "Step 6" in content or "Adaptive Agent Triage" in content, (
-            f"{command}: missing Step 6 (Adaptive Agent Triage)"
-        )
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_triage_lists_all_conditional_agents(self, command):
-        """Triage block must reference all 6 conditional agents."""
-        content = _read_command(command)
-        for agent in TRIAGED_AGENTS:
-            # Agent name without -reviewer suffix is acceptable in criteria headings
-            agent_base = agent.replace("-reviewer", "")
-            assert agent in content or agent_base in content, (
-                f"{command}: triage block missing conditional agent '{agent}'"
-            )
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_triage_output_format(self, command):
-        """Triage block must document the TRIAGE: output format."""
-        content = _read_command(command)
-        assert "TRIAGE:" in content, (
-            f"{command}: missing TRIAGE: output format"
-        )
-        # Must show both DISPATCH and SKIP as possible decisions
-        assert "DISPATCH" in content and "SKIP" in content, (
-            f"{command}: triage format must show both DISPATCH and SKIP decisions"
-        )
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_triage_skipped_signal(self, command):
-        """Dispatch commands must include STATUS=SKIPPED_TRIAGE signal for reconciliator."""
-        content = _read_command(command)
-        assert "SKIPPED_TRIAGE" in content, (
-            f"{command}: missing STATUS=SKIPPED_TRIAGE signal for reconciliator"
-        )
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_triage_between_preflight_and_dispatch(self, command):
-        """Step 6 must appear between Step 5 (dispatch plan) and Step 7 (dispatch)."""
-        content = _read_command(command)
-        pos_5 = content.find("Step 5")
-        pos_6 = content.find("Step 6")
-        pos_7 = content.find("Step 7")
-        assert pos_5 < pos_6 < pos_7, (
-            f"{command}: Step 6 must be between Step 5 and Step 7 "
-            f"(positions: 5={pos_5}, 6={pos_6}, 7={pos_7})"
-        )
-
-    @pytest.mark.parametrize("command", DISPATCH_COMMANDS)
-    def test_triage_default_is_dispatch(self, command):
-        """Triage must default to DISPATCH when in doubt (safety mechanism)."""
-        content = _read_command(command).lower()
-        assert "when in doubt" in content and "dispatch" in content, (
-            f"{command}: triage must specify 'when in doubt, DISPATCH' default"
-        )
-
-
-# =============================================================================
-# State File Grader Tests
-# =============================================================================
-
-
-class TestStateFileGrading:
-    """Grade .review-state.json files via the grader."""
-
-    def test_valid_state_roundtrip(self, tmp_dir):
-        """Write a state file and grade it — full round-trip."""
-        path = os.path.join(tmp_dir, ".review-state.json")
+    def test_valid_baseline_roundtrip(self, tmp_dir):
+        """Write a baseline file and grade it — full round-trip."""
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         state = {
             "last_reviewed_sha": "abc123def456789012345678901234567890abcd",
             "last_reviewed_at": "2026-02-09T12:34:56",
+            "review_type": "full",
             "review_count": 3,
             "base_ref": "main",
             "git_range_used": "abc123..HEAD",
         }
         with open(path, "w") as f:
             json.dump(state, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert result.passed, f"Failures: {result.failures}"
 
     def test_incremented_count(self, tmp_dir):
-        """State with review_count > 1 is valid (iterative reviews)."""
-        path = os.path.join(tmp_dir, ".review-state.json")
+        """Baseline with review_count > 1 is valid (iterative reviews)."""
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         state = {
             "last_reviewed_sha": "def4567",
             "last_reviewed_at": "2026-02-09T15:00:00",
+            "review_type": "incremental",
             "review_count": 5,
             "base_ref": "develop",
             "git_range_used": "def4567..HEAD",
         }
         with open(path, "w") as f:
             json.dump(state, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert result.passed, f"Failures: {result.failures}"
 
     def test_explicit_range(self, tmp_dir):
         """git_range_used with explicit SHA range is valid."""
-        path = os.path.join(tmp_dir, ".review-state.json")
+        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
         state = {
             "last_reviewed_sha": "1234567890abcdef1234567890abcdef12345678",
             "last_reviewed_at": "2026-02-09T15:00:00",
+            "review_type": "pr",
             "review_count": 1,
             "base_ref": "main",
             "git_range_used": "abc1234..def5678",
         }
         with open(path, "w") as f:
             json.dump(state, f)
-        result = grade_review_state(path)
+        result = grade_review_baseline(path)
         assert result.passed, f"Failures: {result.failures}"
 
 
@@ -683,9 +420,9 @@ class TestPrUpdate:
         )
 
     def test_not_in_review_commands(self):
-        """pr-update should NOT be in REVIEW_COMMANDS (it's not a review dispatcher)."""
-        assert self.COMMAND not in REVIEW_COMMANDS, (
-            f"{self.COMMAND}: should not be in REVIEW_COMMANDS"
+        """pr-update should NOT be in ALL_REVIEW_COMMANDS (it's not a review orchestrator)."""
+        assert self.COMMAND not in ALL_REVIEW_COMMANDS, (
+            f"{self.COMMAND}: should not be in ALL_REVIEW_COMMANDS"
         )
 
     def test_registered_in_marketplace(self, marketplace_commands):
@@ -701,11 +438,9 @@ class TestPrUpdate:
 
 
 class TestPrReview:
-    """pr-review.md is a thin wrapper delegating to pr-review-pipeline.py."""
+    """pr-review.md is a thin wrapper delegating to review-pipeline.py."""
 
     COMMAND = "pr-review.md"
-
-    # --- Structural ---
 
     def test_file_exists(self):
         path = COMMANDS_DIR / self.COMMAND
@@ -723,37 +458,17 @@ class TestPrReview:
             f"{self.COMMAND}: not registered in marketplace.json: {marketplace_commands}"
         )
 
-    # --- Pipeline script reference ---
-
     def test_references_pipeline_script(self):
-        """Should delegate to pr-review-pipeline.py."""
+        """Should delegate to review-pipeline.py."""
         content = _read_command(self.COMMAND)
-        assert "pr-review-pipeline.py" in content, (
-            f"{self.COMMAND}: missing reference to pr-review-pipeline.py"
+        assert "review-pipeline.py" in content, (
+            f"{self.COMMAND}: missing reference to review-pipeline.py"
         )
 
-    def test_has_phase_overview(self):
-        """Should have a phase overview table."""
+    def test_uses_pr_mode(self):
+        """Should use --mode pr."""
         content = _read_command(self.COMMAND)
-        assert "SETUP" in content
-        assert "EXECUTION" in content
-        assert "VALIDATION" in content
-        assert "OUTPUT" in content
-
-    def test_has_failure_recovery(self):
-        """Should document failure recovery paths."""
-        content = _read_command(self.COMMAND)
-        content_lower = content.lower()
-        assert "failure" in content_lower or "recovery" in content_lower, (
-            f"{self.COMMAND}: missing failure recovery documentation"
-        )
-
-    def test_does_not_reference_reviewing_pr(self):
-        """Should NOT reference the deleted reviewing-pr skill."""
-        content = _read_command(self.COMMAND)
-        assert "reviewing-pr" not in content, (
-            f"{self.COMMAND}: still references deleted reviewing-pr skill"
-        )
+        assert "--mode pr" in content
 
 
 # =============================================================================
