@@ -26,6 +26,7 @@ import argparse
 import glob as glob_mod
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1168,6 +1169,23 @@ def _init_telemetry(output_dir, log_dir=None):
 
 
 # ---------------------------------------------------------------------------
+# Subprocess Helper
+# ---------------------------------------------------------------------------
+
+def _run_subprocess(cmd, cwd=None, timeout=60):
+    """Run a subprocess and return (stdout, success). Never raises."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+        if r.returncode == 0:
+            return r.stdout.strip(), True
+        print(f"WARNING: {cmd[0]} exited {r.returncode}: {r.stderr[:200]}", file=sys.stderr)
+        return r.stdout.strip(), False
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        print(f"WARNING: {cmd[0]} failed: {e}", file=sys.stderr)
+        return "", False
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1222,6 +1240,13 @@ def main():
             write_config(output_dir, config)
         else:
             config = existing_config
+
+        # Clear stale review-context.json for interactive runs only.
+        # Non-interactive (bot) runs pre-write this file — must not delete it.
+        if config.get("interactive", True):
+            ctx_file = os.path.join(output_dir, "review-context.json")
+            if os.path.isfile(ctx_file):
+                os.remove(ctx_file)
 
         # Initialize fresh pipeline state
         state = json.loads(json.dumps(_DEFAULT_STATE))

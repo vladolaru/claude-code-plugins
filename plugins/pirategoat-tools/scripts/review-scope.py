@@ -11,8 +11,6 @@ Usage:
     python3 review-scope.py --domain php-tests --range main..feature-branch
     python3 review-scope.py --domain security --max-lines 3000
     python3 review-scope.py --domain patterns --base-ref-only
-    python3 review-scope.py --preflight --range main..HEAD
-    python3 review-scope.py --preflight --range main..HEAD --format json
 
 Exit codes:
     0  Success — scope determined, output on stdout

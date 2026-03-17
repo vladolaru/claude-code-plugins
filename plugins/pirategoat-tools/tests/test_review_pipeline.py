@@ -413,6 +413,22 @@ class TestCLIIntegration:
         assert (tmp_path / "run-config.json").is_file()
         assert (tmp_path / ".branch-review-baseline.json").is_file()
 
+    def test_step_1_clears_review_context_for_interactive(self, tmp_path):
+        """Step 1 should clear review-context.json for interactive runs (reused output dirs)."""
+        (tmp_path / "review-context.json").write_text('{"git": {"merge_base": "stale"}}')
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        assert not (tmp_path / "review-context.json").exists()
+
+    def test_step_1_preserves_review_context_for_non_interactive(self, tmp_path):
+        """Step 1 should preserve review-context.json for non-interactive (bot) runs."""
+        (tmp_path / "review-context.json").write_text('{"git": {"merge_base": "precomputed"}}')
+        # Pre-write run-config.json with interactive: false (as the bot does)
+        (tmp_path / "run-config.json").write_text('{"mode": "pr", "pr_number": "42", "interactive": false}')
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert (tmp_path / "review-context.json").is_file(), "Bot's pre-written context should be preserved"
+
     def test_step_1_writes_run_id(self, tmp_path):
         """Step 1 should write a run_id to pipeline-state.json."""
         self._run("--step", "1", "--mode", "pr",
