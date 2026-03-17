@@ -1190,142 +1190,16 @@ def _run_subprocess(cmd, cwd=None, timeout=60):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Step Orchestration (side effects — subprocesses, file I/O)
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(description="Unified review pipeline")
-    parser.add_argument("--step", type=int, required=True, help="Step number (1-12)")
-    parser.add_argument("--mode", choices=["pr", "full", "incremental"],
-                        help="Review mode")
-    parser.add_argument("--output-dir", required=True, help="Output directory")
-    parser.add_argument("--pr-number", help="PR number (PR mode)")
-    parser.add_argument("--interactive", type=lambda x: x.lower() in ("true", "1", "yes"),
-                        default=None, help="Interactive mode (default: true)")
-    parser.add_argument("--output-instructions", help="Custom output instructions")
-    parser.add_argument("--git-range", help="Explicit git range")
-    parser.add_argument("--original-branch", help="Branch to restore on cleanup")
-    parser.add_argument("--stash-ref", help="Stash ref to restore on cleanup")
+def _orchestrate_step(step, mode, config, state, context, output_dir):
+    """Run step-specific side effects (subprocesses, file I/O).
 
-    args = parser.parse_args()
-    output_dir = args.output_dir
-    step = args.step
-
-    # Ensure output dir exists
-    os.makedirs(output_dir, exist_ok=True)
-
-    # --- Step 1: Special handling (seed config, clean artifacts) ---
-    if step == 1:
-        # Clean stale artifacts first
-        clean_stale_artifacts(output_dir)
-
-        # Resolve mode: config wins, then CLI, then error
-        existing_config = read_config(output_dir)
-        mode = existing_config.get("mode") or args.mode
-        if not mode:
-            print("ERROR: --mode is required on the first call", file=sys.stderr)
-            sys.exit(2)
-
-        # Write/update run-config.json (seed from CLI on first call)
-        if not existing_config.get("mode"):
-            config = {
-                "mode": mode,
-            }
-            if args.pr_number:
-                config["pr_number"] = args.pr_number
-            if args.interactive is not None:
-                config["interactive"] = args.interactive
-            else:
-                config["interactive"] = True
-            if args.output_instructions:
-                config["output_instructions"] = args.output_instructions
-            if args.git_range:
-                config["git_range"] = args.git_range
-            write_config(output_dir, config)
-        else:
-            config = existing_config
-
-        # Clear stale review-context.json for interactive runs only.
-        # Non-interactive (bot) runs pre-write this file — must not delete it.
-        if config.get("interactive", True):
-            ctx_file = os.path.join(output_dir, "review-context.json")
-            if os.path.isfile(ctx_file):
-                os.remove(ctx_file)
-
-        # Initialize fresh pipeline state
-        state = json.loads(json.dumps(_DEFAULT_STATE))
-        now = datetime.now(timezone.utc)
-        identifier = config.get("pr_number", "branch")
-        state["run_id"] = f"{now.strftime('%Y%m%dT%H%M%S')}-{mode}-{identifier}"
-
-        # Persist workspace params
-        if args.original_branch:
-            state["workspace"]["original_branch"] = args.original_branch
-        if args.stash_ref:
-            state["workspace"]["stash_ref"] = args.stash_ref
-
-        write_state(output_dir, state)
-
-        # Telemetry: start
-        telemetry = _init_telemetry(output_dir)
-        if telemetry:
-            try:
-                pr_number = config.get("pr_number", "")
-                bot_mode = not config.get("interactive", True)
-                telemetry.start(pr_number=pr_number, total_steps=12,
-                                bot_mode=bot_mode)
-            except Exception:
-                pass
-
-    else:
-        # Steps 2+: read existing config and state
-        config = read_config(output_dir)
-        mode = config.get("mode") or args.mode
-        if not mode:
-            print("ERROR: No mode found in run-config.json and --mode not provided",
-                  file=sys.stderr)
-            sys.exit(2)
-
-        state = read_state(output_dir)
-
-        # Persist workspace params if provided
-        if args.original_branch:
-            state["workspace"]["original_branch"] = args.original_branch
-        if args.stash_ref:
-            state["workspace"]["stash_ref"] = args.stash_ref
-
-        # Telemetry: log step
-        telemetry = _init_telemetry(output_dir)
-        if telemetry:
-            try:
-                step_def = _STEP_MAP.get(step, {})
-                bot_mode = not config.get("interactive", True)
-                telemetry.log_step(
-                    step=step, phase=step_def.get("phase", ""),
-                    title=step_def.get("title", ""),
-                    bot_mode=bot_mode,
-                )
-            except Exception:
-                pass
-
-    # Validate step number
-    if step not in _STEP_MAP:
-        print(f"ERROR: Invalid step {step}. Valid steps: 1-12", file=sys.stderr)
-        sys.exit(1)
-
-    # --- Read review context if available ---
+    Called by main() BEFORE get_step_guidance(). Mutates state and context
+    in place. Returns the (possibly updated) context dict.
+    """
     context_path = os.path.join(output_dir, "review-context.json")
-    context = {}
-    if os.path.isfile(context_path):
-        try:
-            with open(context_path) as f:
-                context = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    # --- Step-specific orchestration (subprocesses, file I/O) ---
-    # Runs BEFORE get_step_guidance() and BEFORE active-step computation.
-    # Each step may run commands and hydrate state/context.
 
     if step == 3:
         # Run gather-review-context.py to collect git context, PR metadata, etc.
@@ -1532,6 +1406,146 @@ def main():
 
         state["review_verdict"] = verdict
         state["pipeline_status"] = status
+
+    return context
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Unified review pipeline")
+    parser.add_argument("--step", type=int, required=True, help="Step number (1-12)")
+    parser.add_argument("--mode", choices=["pr", "full", "incremental"],
+                        help="Review mode")
+    parser.add_argument("--output-dir", required=True, help="Output directory")
+    parser.add_argument("--pr-number", help="PR number (PR mode)")
+    parser.add_argument("--interactive", type=lambda x: x.lower() in ("true", "1", "yes"),
+                        default=None, help="Interactive mode (default: true)")
+    parser.add_argument("--output-instructions", help="Custom output instructions")
+    parser.add_argument("--git-range", help="Explicit git range")
+    parser.add_argument("--original-branch", help="Branch to restore on cleanup")
+    parser.add_argument("--stash-ref", help="Stash ref to restore on cleanup")
+
+    args = parser.parse_args()
+    output_dir = args.output_dir
+    step = args.step
+
+    # Ensure output dir exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- Step 1: Special handling (seed config, clean artifacts) ---
+    if step == 1:
+        # Clean stale artifacts first
+        clean_stale_artifacts(output_dir)
+
+        # Resolve mode: config wins, then CLI, then error
+        existing_config = read_config(output_dir)
+        mode = existing_config.get("mode") or args.mode
+        if not mode:
+            print("ERROR: --mode is required on the first call", file=sys.stderr)
+            sys.exit(2)
+
+        # Write/update run-config.json (seed from CLI on first call)
+        if not existing_config.get("mode"):
+            config = {
+                "mode": mode,
+            }
+            if args.pr_number:
+                config["pr_number"] = args.pr_number
+            if args.interactive is not None:
+                config["interactive"] = args.interactive
+            else:
+                config["interactive"] = True
+            if args.output_instructions:
+                config["output_instructions"] = args.output_instructions
+            if args.git_range:
+                config["git_range"] = args.git_range
+            write_config(output_dir, config)
+        else:
+            config = existing_config
+
+        # Clear stale review-context.json for interactive runs only.
+        # Non-interactive (bot) runs pre-write this file — must not delete it.
+        if config.get("interactive", True):
+            ctx_file = os.path.join(output_dir, "review-context.json")
+            if os.path.isfile(ctx_file):
+                os.remove(ctx_file)
+
+        # Initialize fresh pipeline state
+        state = json.loads(json.dumps(_DEFAULT_STATE))
+        now = datetime.now(timezone.utc)
+        identifier = config.get("pr_number", "branch")
+        state["run_id"] = f"{now.strftime('%Y%m%dT%H%M%S')}-{mode}-{identifier}"
+
+        # Persist workspace params
+        if args.original_branch:
+            state["workspace"]["original_branch"] = args.original_branch
+        if args.stash_ref:
+            state["workspace"]["stash_ref"] = args.stash_ref
+
+        write_state(output_dir, state)
+
+        # Telemetry: start
+        telemetry = _init_telemetry(output_dir)
+        if telemetry:
+            try:
+                pr_number = config.get("pr_number", "")
+                bot_mode = not config.get("interactive", True)
+                telemetry.start(pr_number=pr_number, total_steps=12,
+                                bot_mode=bot_mode)
+            except Exception:
+                pass
+
+    else:
+        # Steps 2+: read existing config and state
+        config = read_config(output_dir)
+        mode = config.get("mode") or args.mode
+        if not mode:
+            print("ERROR: No mode found in run-config.json and --mode not provided",
+                  file=sys.stderr)
+            sys.exit(2)
+
+        state = read_state(output_dir)
+
+        # Persist workspace params if provided
+        if args.original_branch:
+            state["workspace"]["original_branch"] = args.original_branch
+        if args.stash_ref:
+            state["workspace"]["stash_ref"] = args.stash_ref
+
+        # Telemetry: log step
+        telemetry = _init_telemetry(output_dir)
+        if telemetry:
+            try:
+                step_def = _STEP_MAP.get(step, {})
+                bot_mode = not config.get("interactive", True)
+                telemetry.log_step(
+                    step=step, phase=step_def.get("phase", ""),
+                    title=step_def.get("title", ""),
+                    bot_mode=bot_mode,
+                )
+            except Exception:
+                pass
+
+    # Validate step number
+    if step not in _STEP_MAP:
+        print(f"ERROR: Invalid step {step}. Valid steps: 1-12", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Read review context if available ---
+    context_path = os.path.join(output_dir, "review-context.json")
+    context = {}
+    if os.path.isfile(context_path):
+        try:
+            with open(context_path) as f:
+                context = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # --- Step-specific orchestration ---
+    context = _orchestrate_step(step, mode, config, state, context, output_dir)
 
     # --- Update state ---
     if step not in state.get("completed_steps", []):
