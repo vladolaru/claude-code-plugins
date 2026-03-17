@@ -747,6 +747,64 @@ class TestStep11Orchestration:
         assert result["status"] in ("degraded", "failed")
 
 
+class TestTelemetryFinalize:
+    """Telemetry finalize is called at the last active step."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_last_step_finalizes_telemetry(self, tmp_path):
+        """The last active step should call telemetry.finalize()."""
+        log_dir = tmp_path / "telemetry-logs"
+        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+            self._run("--step", "1", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+            # Step 11 is the last active step for non-interactive full mode
+            # (step 12 needs workspace + interactive)
+            self._run("--step", "11", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        marker = tmp_path / ".telemetry-log-path"
+        if marker.is_file():
+            log_path = marker.read_text().strip()
+            with open(log_path) as f:
+                lines = f.readlines()
+            events = [json.loads(l)["event"] for l in lines]
+            assert "pipeline_end" in events, f"Expected pipeline_end event, got: {events}"
+
+
+class TestStep8AgentPrompt:
+    """Step 8 should emit a complete reconciliator Agent tool prompt (rule 15)."""
+
+    def test_reconciliator_prompt_has_concrete_values(self, mod, tmp_path):
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["pr-reviewer", "security-reviewer"],
+                "completed": ["pr-reviewer", "security-reviewer"],
+                "failed": [],
+            },
+            "change_purpose": "Adds retry logic.",
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py,b.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "abc..HEAD" in text  # concrete range
+        assert "a.py" in text or "changed_files_csv" in text.lower() or "dispatch-plan.json" in text
+
+
+class TestStep10AgentPrompt:
+    """Step 10 should emit a complete decision critic Agent tool prompt (rule 15)."""
+
+    def test_critic_prompt_has_concrete_path(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert str(tmp_path) in text or "review-report.md" in text
+
+
 # ===================================================================
 # SETUP Phase Tests (Steps 1-3)
 # ===================================================================

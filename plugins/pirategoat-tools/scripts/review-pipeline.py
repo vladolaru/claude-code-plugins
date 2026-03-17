@@ -1564,6 +1564,19 @@ def main():
     else:
         guidance["skip_reason"] = None
 
+    # Telemetry: finalize at last active step
+    if next_info is None and telemetry:
+        try:
+            step_def = _STEP_MAP.get(step, {})
+            bot_mode = not config.get("interactive", True)
+            telemetry.finalize(
+                step=step, phase=step_def.get("phase", ""),
+                title=step_def.get("title", ""),
+                bot_mode=bot_mode,
+            )
+        except Exception:
+            pass
+
     # --- Format and output ---
     output = format_output(step, guidance)
     print(output)
