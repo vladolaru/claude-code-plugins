@@ -8,10 +8,12 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 
 | File | Role |
 |------|------|
+| `scripts/review-pipeline.py` | Unified 12-step review pipeline. Owns step sequence, routing, state management, and curated briefings. Called by all three review commands with `--mode pr\|full\|incremental`. |
 | `scripts/agent-registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
 | `scripts/bootstrap-reviewer.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. |
 | `scripts/review-scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. |
-| `scripts/plan-review-dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Used by all review commands. |
+| `scripts/plan-review-dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review-pipeline.py. |
+| `scripts/gather-review-context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. |
 | `scripts/review_output_simple.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
 | `scripts/review-telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
@@ -23,11 +25,14 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 ### Review Pipeline
 
 ```
-Command (orchestrator)
+Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   │
-  ├─ plan-review-dispatch.py → dispatch plan (which agents, why)
-  │
-  ├─ For each agent (parallel):
+  └─ review-pipeline.py --step N --mode pr|full|incremental
+      │
+      ├─ Step 3: gather-review-context.py → review-context.json
+      ├─ Step 5: plan-review-dispatch.py → dispatch-plan.json
+      │
+      ├─ Step 6: For each agent (parallel):
   │   │
   │   └─ bootstrap-reviewer.py
   │       ├─ Extracts protocol sections (skip-list)
