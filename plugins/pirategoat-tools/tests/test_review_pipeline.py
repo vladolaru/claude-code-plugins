@@ -560,6 +560,83 @@ class TestStep3Orchestration:
         assert "Step 4" in r.stdout
 
 
+class TestStep5Orchestration:
+    """Step 5 main() runs plan-review-dispatch.py and stores output in state."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_5_stores_dispatch_plan_output(self, tmp_path):
+        """Step 5 should store dispatch plan output in state."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        ctx = {
+            "git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                    "changed_files": ["a.py"], "commit_count": 1},
+            "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
+        }
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        r = self._run("--step", "5", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert 5 in state["completed_steps"]
+        # dispatch_plan_output may be empty if planner fails, but key should exist
+        assert "dispatch_plan_output" in state or "dispatch_plan_summary" in state
+
+
+class TestStep6Orchestration:
+    """Step 6 main() reads dispatch-plan.json and populates dispatched_agents."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_6_populates_dispatched_agents(self, tmp_path):
+        """Step 6 should read dispatch-plan.json and populate state.dispatched_agents."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        plan = {
+            "agents": [
+                {"name": "pr-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
+                {"name": "security-reviewer", "domain": "security", "status": "DISPATCH", "reason": "always"},
+                {"name": "go-tests-reviewer", "domain": "go-tests", "status": "SKIPPED", "reason": "no files"},
+            ],
+            "git_range": "abc..HEAD",
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        r = self._run("--step", "6", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        names = [a["name"] for a in state.get("dispatched_agents", [])]
+        assert "pr-reviewer" in names
+        assert "security-reviewer" in names
+        assert "go-tests-reviewer" not in names
+
+    def test_step_6_output_contains_bootstrap_calls(self, tmp_path):
+        """Step 6 output should contain concrete bootstrap-reviewer.py calls."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        plan = {
+            "agents": [
+                {"name": "pr-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
+            ],
+            "git_range": "abc..HEAD",
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        r = self._run("--step", "6", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert "bootstrap-reviewer.py" in r.stdout
+        assert "pr-reviewer" in r.stdout
+        assert "abc..HEAD" in r.stdout
+
+
 # ===================================================================
 # SETUP Phase Tests (Steps 1-3)
 # ===================================================================

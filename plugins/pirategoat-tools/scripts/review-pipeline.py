@@ -1356,6 +1356,58 @@ def main():
         if git.get("git_range"):
             state["resolved_params"]["git_range"] = git["git_range"]
 
+    if step == 5:
+        # Run plan-review-dispatch.py to determine which agents to dispatch
+        git = context.get("git", {})
+        git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+        if git_range:
+            planner_cmd = [
+                sys.executable, str(SCRIPTS_DIR / "plan-review-dispatch.py"),
+                "--mode", mode,
+                "--git-range", git_range,
+                "--output-dir", output_dir,
+            ]
+            changed_csv = git.get("changed_files_csv", "")
+            if changed_csv:
+                planner_cmd.extend(["--changed-files-list", changed_csv])
+
+            stdout, ok = _run_subprocess(planner_cmd, timeout=60)
+            state["dispatch_plan_output"] = stdout if ok else ""
+
+            plan_path = os.path.join(output_dir, "dispatch-plan.json")
+            if os.path.isfile(plan_path):
+                try:
+                    with open(plan_path) as f:
+                        plan = json.load(f)
+                    agents = plan.get("agents", [])
+                    state["dispatch_plan_summary"] = {
+                        "dispatched": sum(1 for a in agents if a.get("status") == "DISPATCH"),
+                        "skipped": sum(1 for a in agents if a.get("status", "").startswith("SKIPPED")),
+                        "conditional": sum(1 for a in agents if a.get("status") == "DISPATCH" and "conditional" in a.get("reason", "").lower()),
+                    }
+                except (json.JSONDecodeError, OSError):
+                    state["dispatch_plan_summary"] = {}
+        else:
+            state["dispatch_plan_output"] = ""
+            state["dispatch_plan_summary"] = {}
+
+    if step == 6:
+        plan_path = os.path.join(output_dir, "dispatch-plan.json")
+        if os.path.isfile(plan_path):
+            try:
+                with open(plan_path) as f:
+                    plan = json.load(f)
+                dispatched = [
+                    {"name": a["name"], "domain": a.get("domain", "")}
+                    for a in plan.get("agents", [])
+                    if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                ]
+                state["dispatched_agents"] = dispatched
+            except (json.JSONDecodeError, OSError):
+                state["dispatched_agents"] = []
+        else:
+            state["dispatched_agents"] = []
+
     # --- Update state ---
     if step not in state.get("completed_steps", []):
         state.setdefault("completed_steps", []).append(step)
