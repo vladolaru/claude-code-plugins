@@ -9,18 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **PR intent propagation to specialist reviewers** — `bootstrap-reviewer.py` now reads `review-context.json` and injects a `=== PR INTENT ===` section (PR title, author, description, linked issues) between review rules and review content. Specialists can now calibrate finding severity against the PR's purpose instead of reviewing against generic domain heuristics alone
+- **`review-pipeline.py`** — unified pipeline script following the curated-context-pipeline pattern
+- **`run-config.json`** — caller-provided config, immutable during run (replaces config fields in old flat `pipeline-state.json`)
+- **`pipeline-result.json`** — machine-readable result for callers (written by script at step 11)
+- **`review-verdict.json`** — LLM→script verdict handoff (written by LLM at step 10)
+- **`.branch-review-baseline.json`** — replaces `.review-state.json`, written for ALL modes
+- `interactive` flag in run-config.json for non-interactive/autonomous runs
+- `output_instructions` in run-config.json — callers can fully override review output tone/style
+- Author display name resolution in gather-review-context.py
+- GitHub issue details fetched programmatically with full bodies
+- Stale branch detection in gather-review-context.py (all modes)
+- Script builds complete agent dispatch prompts (steps 6, 8, 10)
+- Script runs plan-review-dispatch.py internally at step 5
+- Precise degraded paths for steps 8-10 with canonical artifact priority chain
+- **PR intent propagation to specialist reviewers** — `bootstrap-reviewer.py` now reads `review-context.json` and injects a `=== PR INTENT ===` section
 
 ### Changed
 
-- **1-based step numbering** in `pr-review-pipeline.py` — Steps now count 1-14 with `--total-steps 14`, eliminating the dissonance between step count and max step index that could confuse the executing LLM. Aligns with `code-review.md` and `full-code-review.md` which already used 1-based numbering
-- **File-based triage overrides** — Step 8 now instructs the model to update `dispatch-plan.json` with `DISPATCH_OVERRIDE` status when overriding triage decisions, instead of logging overrides to `--thoughts` prose. Step 10 reads the file for accurate dispatch state, eliminating the fragile prose-recall pattern that caused a prior regression
+- Unified pr-review, full-code-review, and code-review into a single pipeline script
+- All three commands now thin wrappers (~40 lines each) calling review-pipeline.py
+- Review report synthesis now runs for all modes (previously PR-only)
+- Review baseline (`.branch-review-baseline.json`) written for all modes (previously incremental-only)
+- Triage authority model unified: dispatch planner decisions are authoritative across all modes
+- Split state model: `run-config.json` (caller config) + `pipeline-state.json` (execution state)
+- Pipeline is self-contained — no dependency on user's CLAUDE.md for review quality
+- Non-interactive PR mode without pre-computed context is now a hard error at step 2
+- Verdict chain: LLM writes review-verdict.json → script reads it → script updates review-findings.json → script writes pipeline-result.json
+
+### Removed
+
+- `pr-review-pipeline.py` — replaced by unified `review-pipeline.py`
+- `review-scope.py --preflight` — stale branch detection moved to `gather-review-context.py`
+- `.review-state.json` — replaced by `.branch-review-baseline.json` (with migration fallback)
+- `source == "pirategoat-bot"` identity check — replaced by state-driven `merge_base` detection
 
 ### Fixed
 
-- **Stale step cross-references** — `pr-review.md` failure recovery table had step numbers shifted by +1, `pr-review-pipeline.py` had two mismatched "next" pointer titles, and `AGENTS.md`/`extract-session-metrics.py` referenced a defunct "Step 3.6" numbering scheme
-- **Misleading agent status output** — `check-reviewer-agent-status.py` said "10 dispatched, 4 not dispatched" which is contradictory; now says "10 expected, 4 never started" with accurate NOT_DISPATCHED descriptions
-- **Wrong API in reconciliator example** — `review-reconciliator.md` used `builder.write_markdown()` which does not exist in `review_output_simple.py`; corrected to `builder.to_markdown()` with manual file write
+- Branch review flows now pass dispatch plan to reconciliator
+- Decision critic input unified to review-report.md for all modes
+- Full review followed by incremental review now correctly starts from full review baseline
 
 ## [1.61.0] - 2026-03-16
 

@@ -64,3 +64,48 @@ PARTIAL_CONTEXT = {
     "review": {"agent_timeout_seconds": 1200},
     "source": "pirategoat-bot",
 }
+
+# A branch-mode context — no PR metadata
+BRANCH_CONTEXT = {
+    "version": 1,
+    "mode": "branch",
+    "github_cli_command": "gh",
+    "git": {
+        "merge_base": "abc123",
+        "git_range": "abc123..HEAD",
+        "head_ref": "feat/new-feature",
+        "base_ref": "main",
+        "changed_files": ["src/feature.py", "tests/test_feature.py"],
+        "changed_files_csv": "src/feature.py,tests/test_feature.py",
+        "diff_stats": " src/feature.py | 50 ++++\n tests/test_feature.py | 30 +++\n 2 files changed",
+        "commit_count": 5,
+    },
+    "output": {"directory": "/tmp/branch-review-org-repo-feat-new-feature"},
+    "pr_size": {"files": 2, "lines": 80, "category": "small"},
+    "review": {"agent_timeout_seconds": 1200},
+    "has_unfetched_issues": False,
+}
+
+# Run config fixtures for the unified pipeline
+RUN_CONFIG_PR = {
+    "mode": "pr",
+    "pr_number": "42",
+    "interactive": True,
+}
+
+RUN_CONFIG_BOT = {
+    "mode": "pr",
+    "pr_number": "42",
+    "interactive": False,
+    "output_instructions": "Keep it brief.",
+}
+
+PIPELINE_RESULT_SUCCESS = {
+    "status": "success",
+    "verdict": "REQUEST_CHANGES",
+    "report_path": "/tmp/pr-review-org-repo-42/review-report.md",
+    "findings_path": "/tmp/pr-review-org-repo-42/review-findings.json",
+    "critic_verdict": "REVISE",
+    "degradation_notes": [],
+    "review_baseline_saved": True,
+}

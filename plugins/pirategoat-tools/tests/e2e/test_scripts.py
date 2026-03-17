@@ -28,7 +28,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 GATHER_CONTEXT = SCRIPTS_DIR / "gather-review-context.py"
 DISPATCH_PLANNER = SCRIPTS_DIR / "plan-review-dispatch.py"
-PIPELINE_SCRIPT = SCRIPTS_DIR / "pr-review-pipeline.py"
+PIPELINE_SCRIPT = SCRIPTS_DIR / "review-pipeline.py"
 
 
 def _skip_if_scripts_missing():

@@ -25,8 +25,8 @@ DISPATCH_AGENTS = {
     "reliability-reviewer",
 }
 
-# Pattern for step headers in pr-review-pipeline.py output.
-STEP_PATTERN = re.compile(r"═══ PR REVIEW Step (\d+)/\d+:")
+# Pattern for step headers in review-pipeline.py output.
+STEP_PATTERN = re.compile(r"REVIEW PIPELINE Step (\d+)")
 
 # Pattern for phase headers in pr-review.py output.
 PHASE_PATTERN = re.compile(r"═══ PIPELINE PHASE (\d+)/\d+:")

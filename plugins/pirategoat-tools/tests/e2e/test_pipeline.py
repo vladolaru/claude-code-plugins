@@ -43,13 +43,13 @@ from stream_monitor import StreamMonitor
 
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent.parent
-PIPELINE_SCRIPT = PLUGIN_ROOT / "scripts" / "pr-review-pipeline.py"
+PIPELINE_SCRIPT = PLUGIN_ROOT / "scripts" / "review-pipeline.py"
 
 
 def _skip_if_not_ready():
     """Skip if prerequisites aren't met."""
     if not PIPELINE_SCRIPT.is_file():
-        pytest.skip("pr-review-pipeline.py not found — run the plugin plan first")
+        pytest.skip("review-pipeline.py not found — run the plugin plan first")
     result = subprocess.run(
         ["claude", "--version"],
         capture_output=True,
