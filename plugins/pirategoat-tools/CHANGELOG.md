@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Script builds complete agent dispatch prompts (steps 6, 8, 10)
 - Script runs plan-review-dispatch.py internally at step 5
 - Precise degraded paths for steps 8-10 with canonical artifact priority chain
+- **Pipeline orchestration** — `main()` now runs subprocesses at steps 3, 5, 6, 7, 8, 11: gathers context, plans dispatch, populates agents, writes baseline, reads change purpose, syncs findings verdict, writes `pipeline-result.json`
+- `_orchestrate_step()` extracted for readability; `_run_subprocess()` helper for all subprocess calls
+- Telemetry `finalize()` called at the last active step (emits `pipeline_end` event)
+- Step 1 clears stale `review-context.json` for interactive runs only (preserves bot pre-written context)
+- Step 8 briefing instructs stopping background agents before reconciliation
 - **PR intent propagation to specialist reviewers** — `bootstrap-reviewer.py` now reads `review-context.json` and injects a `=== PR INTENT ===` section
 
 ### Changed
