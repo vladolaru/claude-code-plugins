@@ -53,6 +53,42 @@ All skills must have a `SKILL.md` file with YAML frontmatter:
   - `metadata` - custom key-value pairs
 - **Body**: Markdown instructions, examples, and guidelines
 
+### Agent Model Routing
+
+Subagents can run on a different model than the parent session. A Sonnet parent can dispatch Opus subagents (and vice versa) — there is no restriction on upgrading or downgrading.
+
+**Precedence order** (highest wins):
+
+1. `model` parameter on the `Agent` tool call (e.g., `model: "opus"`)
+2. `model` field in the agent definition frontmatter (e.g., `model: sonnet`)
+3. `inherit` — use the parent session's model (this is the default)
+
+**Practical implications:**
+
+- Use `model: opus` in agent definitions or Agent calls when the task requires deep reasoning (judgment-heavy synthesis, complex architectural analysis)
+- Use `model: sonnet` for standard analytical work (most review agents, pattern matching)
+- Use `model: haiku` for mechanical tasks (shell command dispatch, template generation)
+- Use `inherit` when the agent should match whatever the user chose for their session
+- Billing reflects the actual model used per subagent, not the parent session model
+
+**Built-in examples:** Claude Code's own `claude-code-guide` agent is hardcoded to Haiku; `statusline-setup` to Sonnet — these run at their specified model regardless of the parent.
+
+**Full reference:** See the [Claude Code subagents documentation](https://code.claude.com/docs/en/sub-agents) for the complete specification — all frontmatter fields, tool restrictions, permission modes, hooks, MCP server scoping, persistent memory, and example subagents.
+
+### Accessing Claude Code Documentation
+
+Claude Code docs live at `https://code.claude.com/docs/en/`. Every page has a `.md` variant that returns raw markdown — much more efficient for agent consumption via `WebFetch` than the HTML page.
+
+**Pattern:** append `.md` to the URL path.
+
+| HTML page | Raw markdown |
+|---|---|
+| `https://code.claude.com/docs/en/sub-agents` | `https://code.claude.com/docs/en/sub-agents.md` |
+| `https://code.claude.com/docs/en/skills` | `https://code.claude.com/docs/en/skills.md` |
+| `https://code.claude.com/docs/en/hooks` | `https://code.claude.com/docs/en/hooks.md` |
+
+**Full index:** Fetch `https://code.claude.com/docs/llms.txt` to discover all available documentation pages.
+
 ## Plugin Inventory
 
 ### pirategoat-tools
@@ -248,6 +284,7 @@ All AI-generated artifacts (plans, analysis, research, decisions, learnings) go 
 | Pattern | When to use |
 |---|---|
 | [step-by-step-prompt-injection](docs/patterns/step-by-step-prompt-injection.md) | Multi-phase analytical workflows where later steps must be independent of earlier conclusions — e.g., verify before judge, gather before synthesize. Includes script template, skill file structure, testing checklist, and two reference implementations. |
+| [curated-context-pipeline](docs/patterns/curated-context-pipeline.md) | Multi-mode LLM pipelines where a script acts as context curator — reads all state, presents pre-digested briefings, controls flow via mode-driven step routing, and manages file-based state. Evolves step-by-step prompt injection for operational workflows with shared logic across modes. |
 
 **Knowledge capture:** After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using `/dex:grok` to capture the knowledge.
 
