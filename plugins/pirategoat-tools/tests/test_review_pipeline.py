@@ -491,6 +491,75 @@ class TestTelemetryIntegration:
         assert json.loads(lines[1])["event"] == "step"
 
 
+class TestStep3Orchestration:
+    """Step 3 main() runs gather-review-context.py and hydrates state."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_3_runs_gather_context(self, tmp_path):
+        """Step 3 should invoke gather-review-context.py (may fail in test env, but state should update)."""
+        # Seed step 1
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        # Run step 3
+        r = self._run("--step", "3", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        # State should have completed_steps including 3
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert 3 in state["completed_steps"]
+
+    def test_step_3_hydrates_unfetched_issues_from_context(self, tmp_path):
+        """When review-context.json has has_unfetched_issues, state should reflect it."""
+        # Seed step 1
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        # Pre-write review-context.json as if gather-review-context.py produced it
+        ctx = {
+            "git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                    "changed_files": ["a.py"], "commit_count": 1},
+            "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
+            "has_unfetched_issues": True,
+            "linked_issues": ["WOOPLUG-1234"],
+        }
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        # Run step 3 — it should read the context and hydrate state
+        r = self._run("--step", "3", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["resolved_params"]["has_unfetched_issues"] is True
+
+    def test_step_3_without_context_still_succeeds(self, tmp_path):
+        """Step 3 should not crash if gather-review-context.py fails (no git repo)."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        r = self._run("--step", "3", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        # Should succeed even without a git repo — subprocess failure is tolerated
+        assert r.returncode == 0
+
+    def test_step_3_next_step_reflects_unfetched_issues(self, tmp_path):
+        """When has_unfetched_issues is True, next step after 3 should be 4 (not 5)."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        ctx = {
+            "git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                    "changed_files": ["a.py"], "commit_count": 1},
+            "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
+            "has_unfetched_issues": True,
+            "linked_issues": ["WOOPLUG-1234"],
+        }
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        r = self._run("--step", "3", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        # Output should point to step 4, not step 5
+        assert "Step 4" in r.stdout
+
+
 # ===================================================================
 # SETUP Phase Tests (Steps 1-3)
 # ===================================================================

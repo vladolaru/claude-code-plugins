@@ -1319,13 +1319,55 @@ def main():
         except (json.JSONDecodeError, OSError):
             pass
 
-    # --- Get active steps and compute next ---
+    # --- Step-specific orchestration (subprocesses, file I/O) ---
+    # Runs BEFORE get_step_guidance() and BEFORE active-step computation.
+    # Each step may run commands and hydrate state/context.
+
+    if step == 3:
+        # Run gather-review-context.py to collect git context, PR metadata, etc.
+        gather_cmd = [sys.executable, str(SCRIPTS_DIR / "gather-review-context.py"),
+                      "--output-dir", output_dir]
+        if mode == "pr":
+            pr_number = config.get("pr_number", "")
+            if pr_number:
+                gather_cmd.extend(["--pr-number", pr_number])
+        else:
+            gather_cmd.append("--branch")
+            if mode == "incremental":
+                gather_cmd.append("--incremental")
+        git_range = config.get("git_range")
+        if git_range:
+            gather_cmd.extend(["--git-range", git_range])
+
+        stdout, ok = _run_subprocess(gather_cmd, timeout=120)
+        # Re-read context (gather-review-context.py writes review-context.json)
+        if os.path.isfile(context_path):
+            try:
+                with open(context_path) as f:
+                    context = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Hydrate state from gathered context
+        if context.get("has_unfetched_issues"):
+            state["resolved_params"]["has_unfetched_issues"] = True
+        # Store git range in resolved_params for downstream steps
+        git = context.get("git", {})
+        if git.get("git_range"):
+            state["resolved_params"]["git_range"] = git["git_range"]
+
+    # --- Update state ---
+    if step not in state.get("completed_steps", []):
+        state.setdefault("completed_steps", []).append(step)
+    write_state(output_dir, state)
+
+    # --- Compute routing AFTER orchestration (state may have changed) ---
     active = get_active_steps(mode, config, state, context)
 
     # Check for hard error: non-interactive PR without pre-computed context
     if mode == "pr" and not config.get("interactive", True):
-        git = context.get("git", {})
-        if not git.get("merge_base") and step <= 2:
+        git_ctx = context.get("git", {})
+        if not git_ctx.get("merge_base") and step <= 2:
             print("PIPELINE STOPPED: Non-interactive PR mode requires pre-computed "
                   "review-context.json with a valid merge_base.", file=sys.stderr)
             sys.exit(1)
@@ -1344,11 +1386,6 @@ def main():
         guidance["skip_reason"] = next_info.get("skip_reason")
     else:
         guidance["skip_reason"] = None
-
-    # --- Update state ---
-    if step not in state.get("completed_steps", []):
-        state.setdefault("completed_steps", []).append(step)
-    write_state(output_dir, state)
 
     # --- Format and output ---
     output = format_output(step, guidance)
