@@ -38,6 +38,8 @@ COMPLETE_CONTEXT = {
         "pending": [],
     },
     "linked_issues": ["WOOPLUG-1234"],
+    "staleness": {"is_stale": False, "commits_behind": 0},
+    "has_unfetched_issues": True,  # WOOPLUG-1234 is a Linear ID
     "source": "pirategoat-bot",
 }
 

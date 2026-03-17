@@ -473,3 +473,193 @@ class TestTelemetryIntegration:
         assert len(lines) == 2
         assert json.loads(lines[0])["event"] == "pipeline_start"
         assert json.loads(lines[1])["event"] == "step"
+
+
+# ===================================================================
+# SETUP Phase Tests (Steps 1-3)
+# ===================================================================
+
+
+class TestStep1ParseInput:
+    """Step 1: Parse Input — all modes."""
+
+    def test_pr_mode_confirms_pr_number(self, mod, tmp_path):
+        config = {"mode": "pr", "pr_number": "42", "interactive": True}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(1, "pr", state, ctx, config=config)
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "42" in text
+
+    def test_pr_mode_stops_when_no_pr(self, mod, tmp_path):
+        config = {"mode": "pr", "pr_number": None, "interactive": True}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(1, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "usage" in text.lower() or "required" in text.lower()
+
+    def test_full_mode_detects_branch(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(1, "full", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "branch" in text.lower() or "range" in text.lower()
+
+    def test_incremental_mode_mentions_state(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(1, "incremental", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "incremental" in text.lower()
+
+    def test_full_mode_stops_on_default_branch(self, mod, tmp_path):
+        """Step 1 should error when on the default branch (full mode)."""
+        state = {"completed_steps": []}
+        ctx = {"on_default_branch": True}
+        g = mod.get_step_guidance(1, "full", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "default branch" in text.lower() or "STOPPED" in text
+
+    def test_incremental_mode_stops_on_no_new_commits(self, mod, tmp_path):
+        """Step 1 should mention no-new-commits guard for incremental mode."""
+        state = {"completed_steps": []}
+        ctx = {"no_new_commits": True}
+        g = mod.get_step_guidance(1, "incremental", state, ctx)
+        text = "\n".join(g["actions"])
+        assert "no new commits" in text.lower() or "STOPPED" in text
+
+
+class TestStep2RepoSetup:
+    """Step 2: Repo Setup — PR mode + interactive only."""
+
+    def test_instructs_stash_and_checkout(self, mod, tmp_path):
+        config = {"mode": "pr", "pr_number": "42", "interactive": True}
+        state = {"completed_steps": [1]}
+        ctx = {"git": {}}
+        g = mod.get_step_guidance(2, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "stash" in text.lower()
+        assert "checkout" in text.lower()
+
+    def test_instructs_passing_workspace_state(self, mod, tmp_path):
+        """Should tell LLM to pass --original-branch and --stash-ref."""
+        config = {"mode": "pr", "pr_number": "42", "interactive": True}
+        state = {"completed_steps": [1]}
+        ctx = {"git": {}}
+        g = mod.get_step_guidance(2, "pr", state, ctx, config=config)
+        text = "\n".join(g["actions"])
+        assert "--original-branch" in text
+        assert "--stash-ref" in text
+
+
+class TestStep3GatherContext:
+    """Step 3: Gather Context — all modes, curated briefing."""
+
+    def _make_context(self):
+        """Return a rich review-context.json content."""
+        return COMPLETE_CONTEXT
+
+    def test_presents_git_range(self, mod, tmp_path):
+        state = {"completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "abc123..fix/thing" in text
+
+    def test_presents_size(self, mod, tmp_path):
+        state = {"completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "small" in text.lower() or "2 files" in text
+
+    def test_presents_pr_metadata_in_pr_mode(self, mod, tmp_path):
+        state = {"completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "Fix the thing" in text  # PR title
+        assert "octocat" in text  # PR author
+
+    def test_no_pr_metadata_in_full_mode(self, mod, tmp_path):
+        state = {"completed_steps": [1]}
+        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                       "changed_files": ["a.py"], "commit_count": 3},
+               "pr_size": {"files": 1, "lines": 20, "category": "tiny"}}
+        g = mod.get_step_guidance(3, "full", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "octocat" not in text
+
+    def test_handoff_change_purpose_when_no_linear(self, mod, tmp_path):
+        """When no Linear issues, step 3 requests the change-purpose handoff."""
+        state = {"resolved_params": {"has_unfetched_issues": False}, "completed_steps": [1]}
+        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                       "changed_files": ["a.py"], "commit_count": 3},
+               "pr_size": {"files": 1, "lines": 20, "category": "tiny"}}
+        g = mod.get_step_guidance(3, "full", state, ctx)
+        assert g["handoff"] is not None
+        text = "\n".join(g["handoff"])
+        assert "change-purpose.md" in text
+
+    def test_no_handoff_when_linear_issues(self, mod, tmp_path):
+        """When Linear issues detected, step 3 defers handoff to step 4."""
+        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        assert g["handoff"] is None
+
+    def test_presents_staleness(self, mod, tmp_path):
+        """Step 3 should present stale branch info when present."""
+        state = {"completed_steps": [1]}
+        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                       "changed_files": ["a.py"], "commit_count": 3},
+               "pr_size": {"files": 1, "lines": 20, "category": "tiny"},
+               "staleness": {"is_stale": True, "commits_behind": 47}}
+        g = mod.get_step_guidance(3, "full", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "47" in text or "behind" in text.lower()
+
+    def test_presents_reviews_summary_in_pr_mode(self, mod, tmp_path):
+        """PR mode should present existing review summary in situation."""
+        state = {"completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "approved" in text.lower() or "review" in text.lower()
+
+    def test_presents_linked_issues(self, mod, tmp_path):
+        """Should present linked issue details in situation."""
+        state = {"completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "WOOPLUG-1234" in text or "issue" in text.lower()
+
+    def test_presents_domain_counts(self, mod, tmp_path):
+        """Should present changed domain file counts in situation."""
+        state = {"completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "domain" in text.lower() or "code" in text.lower()
+
+    def test_presents_freshen_base_when_stale(self, mod, tmp_path):
+        """Should suggest freshening base branch when stale."""
+        state = {"completed_steps": [1]}
+        ctx = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                       "changed_files": ["a.py"], "commit_count": 3},
+               "pr_size": {"files": 1, "lines": 20, "category": "tiny"},
+               "staleness": {"is_stale": True, "commits_behind": 47}}
+        g = mod.get_step_guidance(3, "full", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "rebase" in text.lower() or "freshen" in text.lower() or "behind" in text.lower()
+
+    def test_no_template_variables(self, mod, tmp_path):
+        state = {"completed_steps": [1, 2]}
+        ctx = self._make_context()
+        g = mod.get_step_guidance(3, "pr", state, ctx)
+        all_text = "\n".join(g["situation"] + g["actions"])
+        assert "${" not in all_text
+        assert "<GIT_RANGE>" not in all_text
+        assert "<OUTPUT_DIR>" not in all_text

@@ -278,16 +278,308 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
     step_def = _STEP_MAP[step]
     config = config or {}
 
-    # Placeholder guidance — each task will replace these with real content
-    guidance = {
-        "phase": step_def["phase"],
-        "title": step_def["title"],
-        "situation": [f"Step {step}: {step_def['title']} ({mode} mode)"],
-        "actions": [f"Execute step {step} actions."],
+    if step == 1:
+        return _step_1_parse_input(mode, state, context, config, output_dir)
+    elif step == 2:
+        return _step_2_repo_setup(mode, state, context, config, output_dir)
+    elif step == 3:
+        return _step_3_gather_context(mode, state, context, config, output_dir)
+    else:
+        # Placeholder for steps 4-12 — implemented in subsequent tasks
+        return {
+            "phase": step_def["phase"],
+            "title": step_def["title"],
+            "situation": [f"Step {step}: {step_def['title']} ({mode} mode)"],
+            "actions": [f"Execute step {step} actions."],
+            "handoff": None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Step 1: Parse Input
+# ---------------------------------------------------------------------------
+
+def _step_1_parse_input(mode, state, context, config, output_dir):
+    """Step 1: Parse Input — confirm parameters and mode."""
+    situation = []
+    actions = []
+
+    if mode == "pr":
+        pr_number = config.get("pr_number")
+        if pr_number:
+            situation.append(f"Mode: PR review (PR #{pr_number})")
+            actions.append(f"PR #{pr_number} confirmed. The pipeline will review this pull request.")
+            actions.append("")
+            actions.append("The pipeline script will run gather-review-context.py at step 3 to "
+                           "collect git context, PR metadata, and review history.")
+        else:
+            situation.append("Mode: PR review (no PR number provided)")
+            actions.append("A PR number or URL is required for PR review mode.")
+            actions.append("Usage: /pr-review <PR_URL_or_number>")
+
+    elif mode == "full":
+        situation.append("Mode: Full branch review")
+        # Check default branch guard
+        if context.get("on_default_branch"):
+            actions.append("⛔ PIPELINE STOPPED: You are on the default branch.")
+            actions.append("Switch to a feature branch before running a full review.")
+        else:
+            git_range = config.get("git_range", "")
+            if git_range:
+                actions.append(f"Explicit git range provided: `{git_range}`")
+            else:
+                actions.append("The branch range will be auto-detected from the merge base.")
+            actions.append("The pipeline will review all changes on this branch against the base branch.")
+
+    elif mode == "incremental":
+        situation.append("Mode: Incremental branch review")
+        if context.get("no_new_commits"):
+            actions.append("⛔ PIPELINE STOPPED: No new commits since the last review.")
+            actions.append("There is nothing new to review. Make more commits and try again.")
+        else:
+            actions.append("Running in incremental mode — the pipeline will review only new commits since the last review.")
+            actions.append("If no previous review state exists, this will behave like a full review.")
+
+    return {
+        "phase": "SETUP",
+        "title": "Parse Input",
+        "situation": situation,
+        "actions": actions,
         "handoff": None,
     }
 
-    return guidance
+
+# ---------------------------------------------------------------------------
+# Step 2: Repo Setup (PR mode + interactive only)
+# ---------------------------------------------------------------------------
+
+def _step_2_repo_setup(mode, state, context, config, output_dir):
+    """Step 2: Repo Setup — checkout PR branch, stash changes."""
+    pr_number = config.get("pr_number", "")
+    gh_cmd = context.get("github_cli_command", "gh")
+
+    situation = [
+        f"Setting up workspace for PR #{pr_number} review.",
+        "Need to checkout the PR branch and stash any uncommitted changes.",
+    ]
+
+    actions = [
+        "1. Check for uncommitted changes with `git status`",
+        "2. If dirty: run `git stash push -u -m 'pr-review-auto-stash'`",
+        "3. Record the current branch name with `git branch --show-current`",
+        f"4. Checkout the PR branch: `{gh_cmd} pr checkout {pr_number}`",
+        "",
+        "Pass the workspace state on the next pipeline call:",
+        f"    --original-branch <CURRENT_BRANCH> --stash-ref <STASH_REF_IF_STASHED>",
+    ]
+
+    return {
+        "phase": "SETUP",
+        "title": "Repo Setup",
+        "situation": situation,
+        "actions": actions,
+        "handoff": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 3: Gather Context
+# ---------------------------------------------------------------------------
+
+def _format_pr_metadata(context):
+    """Format PR metadata for step 3 situation."""
+    pr = context.get("pr", {})
+    lines = []
+    if pr.get("title"):
+        lines.append(f"**PR:** #{pr.get('number', '?')} — \"{pr['title']}\" by {pr.get('author', '?')}")
+    if pr.get("labels"):
+        lines.append(f"**Labels:** {', '.join(pr['labels'])}")
+    if pr.get("is_draft"):
+        lines.append("**Status:** Draft PR")
+    return lines
+
+
+def _format_reviews_summary(context):
+    """Format existing review summary for step 3 situation."""
+    reviews = context.get("reviews", {})
+    summary = reviews.get("summary", {})
+    reviewers = reviews.get("reviewers", [])
+    pending = reviews.get("pending", [])
+    lines = []
+
+    if summary.get("total", 0) > 0:
+        parts = []
+        for key in ("approved", "changes_requested", "commented"):
+            count = summary.get(key, 0)
+            if count > 0:
+                parts.append(f"{count} {key.replace('_', ' ')}")
+        reviewer_details = []
+        for r in reviewers:
+            reviewer_details.append(f"{r['login']} ({r.get('type', '?')}, {r.get('state', '?')})")
+        lines.append(f"**Reviews:** {', '.join(parts) if parts else 'none'}")
+        if reviewer_details:
+            lines.append(f"**Reviewers:** {'; '.join(reviewer_details)}")
+        if pending:
+            lines.append(f"**Pending:** {', '.join(pending)}")
+        lines.append("This is a re-review.")
+    else:
+        lines.append("**Reviews:** No existing reviews. This is the first review.")
+
+    return lines
+
+
+def _format_size(context):
+    """Format PR/change size info."""
+    pr_size = context.get("pr_size", {})
+    category = pr_size.get("category", "unknown")
+    files = pr_size.get("files", 0)
+    lines = pr_size.get("lines", 0)
+    return f"**Size:** {category} ({files} files, {lines} lines changed)"
+
+
+def _format_staleness(context):
+    """Format staleness info with freshen suggestion."""
+    staleness = context.get("staleness", {})
+    if not staleness.get("is_stale"):
+        return []
+    behind = staleness.get("commits_behind", 0)
+    lines = [
+        f"⚠️  **Branch is stale:** {behind} commits behind the base branch.",
+        "Consider rebasing or freshening the base branch before review for the most accurate results.",
+    ]
+    return lines
+
+
+def _format_domain_counts(context):
+    """Compute and format domain file counts from changed files."""
+    git = context.get("git", {})
+    changed_files = git.get("changed_files", [])
+    if not changed_files:
+        return []
+
+    # Simple domain detection by file extension/path patterns
+    domain_counts = {}
+    for f in changed_files:
+        fl = f.lower()
+        domains = set()
+        if fl.endswith((".php",)):
+            domains.add("code")
+        if fl.endswith((".js", ".ts", ".jsx", ".tsx")):
+            domains.add("code")
+        if fl.endswith((".py",)):
+            domains.add("code")
+        if "test" in fl or "spec" in fl:
+            if fl.endswith((".php",)):
+                domains.add("php-tests")
+            elif fl.endswith((".js", ".ts", ".jsx", ".tsx")):
+                domains.add("js-tests")
+            elif fl.endswith((".py",)):
+                domains.add("code")
+        if fl.endswith((".css", ".scss")):
+            domains.add("code")
+        if not domains:
+            domains.add("code")
+        for d in domains:
+            domain_counts[d] = domain_counts.get(d, 0) + 1
+
+    if not domain_counts:
+        return []
+
+    parts = [f"{d}: {c}" for d, c in sorted(domain_counts.items())]
+    return [f"**Domains:** {', '.join(parts)}"]
+
+
+def _format_linked_issues(context):
+    """Format linked issues — reference at top, details at bottom."""
+    issues = context.get("linked_issues", [])
+    if not issues:
+        return [], []
+
+    # Top reference
+    top_lines = [f"**Linked issues:** {', '.join(str(i) for i in issues)}"]
+
+    # Bottom details for fetched issues
+    details = context.get("linked_issues_details", [])
+    bottom_lines = []
+    if details:
+        bottom_lines.append("--- LINKED ISSUE DETAILS ---")
+        for issue in details:
+            bottom_lines.append(f"### {issue.get('id', '?')}: {issue.get('title', '?')}")
+            if issue.get("body"):
+                bottom_lines.append(issue["body"])
+            bottom_lines.append("")
+        bottom_lines.append("--- END LINKED ISSUE DETAILS ---")
+
+    return top_lines, bottom_lines
+
+
+def _step_3_gather_context(mode, state, context, config, output_dir):
+    """Step 3: Gather Context — present curated briefing."""
+    git = context.get("git", {})
+    situation = []
+    actions = []
+    handoff = None
+
+    # Git range
+    git_range = git.get("git_range", "")
+    if git_range:
+        situation.append(f"**Git range:** `{git_range}`")
+
+    # Commit count
+    commit_count = git.get("commit_count", 0)
+    if commit_count:
+        situation.append(f"**Commits:** {commit_count}")
+
+    # Size
+    if context.get("pr_size"):
+        situation.append(_format_size(context))
+
+    # PR metadata (PR mode only)
+    if mode == "pr":
+        situation.extend(_format_pr_metadata(context))
+
+    # Reviews summary (PR mode only)
+    if mode == "pr" and context.get("reviews"):
+        situation.extend(_format_reviews_summary(context))
+
+    # Staleness
+    situation.extend(_format_staleness(context))
+
+    # Domain counts
+    situation.extend(_format_domain_counts(context))
+
+    # Linked issues
+    issue_top, issue_bottom = _format_linked_issues(context)
+    situation.extend(issue_top)
+    if issue_bottom:
+        situation.append("")
+        situation.extend(issue_bottom)
+
+    # Diff stats
+    diff_stats = git.get("diff_stats", "")
+    if diff_stats:
+        situation.append(f"**Diff stats:**\n```\n{diff_stats}\n```")
+
+    # Actions
+    actions.append("Review the context above. The pipeline has gathered all available data.")
+    if not git_range:
+        actions.append("The git range will be determined by gather-review-context.py.")
+
+    # Change-purpose handoff — only when no unfetched issues
+    has_unfetched = state.get("resolved_params", {}).get("has_unfetched_issues", False)
+    if not has_unfetched:
+        handoff = [
+            f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`",
+            "Include: what the change does, why it's being made, and what to focus on during review.",
+        ]
+
+    return {
+        "phase": "SETUP",
+        "title": "Gather Context",
+        "situation": situation,
+        "actions": actions,
+        "handoff": handoff,
+    }
 
 
 # ---------------------------------------------------------------------------
