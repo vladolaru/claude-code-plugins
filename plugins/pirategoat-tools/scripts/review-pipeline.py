@@ -686,7 +686,7 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
     """Step 5: Dispatch Plan + Triage — present human-readable summary, allow overrides."""
     od = output_dir or "<OUTPUT_DIR>"
 
-    situation = []
+    situation = [_PHASE_TRANSITIONS["EXECUTION"], ""]
     actions = []
 
     plan_summary = state.get("dispatch_plan_summary", {})
@@ -891,6 +891,8 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     commit_messages = state.get("commit_messages", [])
 
     situation = [
+        _PHASE_TRANSITIONS["SYNTHESIS"],
+        "",
         f"**Agents dispatched:** {', '.join(dispatched) if dispatched else 'see dispatch plan'}",
         f"**Agents completed:** {', '.join(completed) if completed else 'check status'}",
     ]
@@ -1058,7 +1060,7 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     od = output_dir or "<OUTPUT_DIR>"
     degradation = state.get("degradation", {})
 
-    situation = []
+    situation = [_PHASE_TRANSITIONS["VALIDATION"]]
     actions = []
 
     # Determine which file the critic should review
@@ -1118,7 +1120,7 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     forced_verdict = state.get("forced_verdict")
     review_verdict = state.get("review_verdict")
 
-    situation = []
+    situation = [_PHASE_TRANSITIONS["OUTPUT"]]
     actions = []
 
     if is_interactive:

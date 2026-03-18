@@ -976,6 +976,52 @@ class TestStep1ParseInput:
             assert "orchestrator" in text.lower()
 
 
+class TestPhaseTransitions:
+    """Phase-transition anchoring at phase entry steps."""
+
+    def test_step_5_has_execution_transition(self, mod, tmp_path):
+        """Step 5 (first EXECUTION step) should anchor on precision and dispatch."""
+        state = {
+            "completed_steps": [1, 3],
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "dispatch_plan_summary": {"dispatched": 5, "skipped": 2, "conditional": 1},
+            "dispatch_plan_agents": [],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(5, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        assert "specialist" in text.lower() or "precision" in text.lower()
+
+    def test_step_8_has_synthesis_transition(self, mod, tmp_path):
+        """Step 8 (first SYNTHESIS step) should anchor on faithful synthesis."""
+        state = {
+            "completed_steps": [1, 3, 5, 6, 7],
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "agents": {"dispatched": ["pr-reviewer"], "completed": ["pr-reviewer"], "failed": []},
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"])
+        assert "synthesis" in text.lower() or "source of truth" in text.lower()
+
+    def test_step_10_has_validation_transition(self, mod, tmp_path):
+        """Step 10 (first VALIDATION step) should anchor on stress-testing."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"])
+        assert "critic" in text.lower() or "trust" in text.lower()
+
+    def test_step_11_has_output_transition(self, mod, tmp_path):
+        """Step 11 (first OUTPUT step) should anchor on completeness."""
+        config = {"mode": "pr", "interactive": True}
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
+        text = "\n".join(g["situation"])
+        assert "validated" in text.lower() or "nothing is missing" in text.lower()
+
+
 class TestStep2RepoSetup:
     """Step 2: Repo Setup — PR mode + interactive only."""
 
