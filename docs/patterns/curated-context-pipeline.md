@@ -4,72 +4,53 @@ A pattern for multi-step LLM workflows where a Python script acts as **context c
 
 Evolves the [step-by-step prompt injection](step-by-step-prompt-injection.md) pattern, which established the core mechanism (script injects one step at a time). This pattern adds context curation, file-based state, condition-driven step routing, and conversational output.
 
+**Running example.** Throughout this document, a multi-agent code review pipeline illustrates the principles. Examples from this reference implementation are marked with "> **Example:**" blocks. The principles themselves are general — they apply to any multi-step LLM workflow with shared modes and rich context.
+
 ## The Core Idea
 
-**The problem:** When an LLM workflow has multiple modes that share 80% of their logic (e.g., PR review, full branch review, incremental review), maintaining separate command files leads to drift. Improvements to one flow don't reach the others. Inline markdown instructions duplicate logic that should be centralized.
+**The problem:** When an LLM workflow has multiple modes that share 80% of their logic, maintaining separate command files leads to drift. Improvements to one flow don't reach the others. Inline markdown instructions duplicate logic that should be centralized.
 
 **The mechanism:** A single Python script owns the universal step sequence. Each step's guidance adapts to the current mode. The script reads all state files, extracts what's relevant, and presents it as a briefing. The LLM never reads structured files to extract values — the script does that and presents the values inline.
 
 ```
-LLM calls: script --step 3 --mode pr --output-dir /tmp/review-42
-  ← script reads pipeline-state.json, review-context.json
-  ← script formats a briefing with exactly what step 3 needs
+LLM calls: script --step N --mode <mode> --output-dir /tmp/run-42
+  ← script reads pipeline-state.json, context files
+  ← script formats a briefing with exactly what step N needs
   ← script computes next step (may skip steps irrelevant to this mode/state)
   → LLM receives: situation + actions + handoff instructions
   → LLM executes, writes any requested handoff artifacts
-LLM calls: script --step 5 --mode pr --output-dir /tmp/review-42
-  (jumped from 3 to 5 because step 4 only activates when unfetched issues are detected)
+LLM calls: script --step M --mode <mode> --output-dir /tmp/run-42
+  (jumped from N to M because intermediate steps' conditions weren't met)
 ```
 
 ## Design Principles
 
 ### 1. Goal-Oriented Pipeline (Source Code)
 
-Every pipeline starts with a clear, stated goal. This goal is captured as an inline comment at the top of the script — the first thing any future editor reads. It anchors all step design, triage decisions, and tradeoff resolutions.
-
-```python
-#!/usr/bin/env python3
-# PIPELINE GOAL: Deliver a complete review of code changes that is comprehensive
-# in its analysis, contextual in its focus, accurate in its findings, and actionable
-# in its recommendations — maintaining a high quality bar for codebases so they can
-# deliver great business results and awesome user experiences.
-```
+Every pipeline starts with a clear, stated goal. This goal is captured as a docstring or inline comment at the top of the script — the first thing any future editor reads. It anchors all step design, triage decisions, and tradeoff resolutions.
 
 The goal isn't decorative. It's the tiebreaker:
 - When deciding whether to add a step: does it serve the goal?
 - When deciding whether to skip a step for efficiency: does skipping hurt the goal?
 - When designing a step's briefing: what does the LLM need to know to serve this goal at this moment?
 
-Each step's output can reference the goal implicitly through its framing. Early steps build understanding ("Here's what these changes are trying to accomplish..."), execution steps deploy resources toward the goal ("These 7 agents will examine the changes from different quality angles..."), synthesis steps connect findings back to it ("Two findings directly threaten the reliability of this payment flow...").
+Each step's output can reference the goal implicitly through its framing. Early steps build understanding, execution steps deploy resources toward the goal, synthesis steps connect findings back to it.
+
+> **Example:** A code review pipeline's goal: "Deliver a complete review of code changes that is comprehensive in its analysis, contextual in its focus, accurate in its findings, and actionable in its recommendations." This goal resolves questions like: should we add a linting step? (Only if linting serves accuracy. If CI already catches lint errors, no — it duplicates without serving the goal.)
 
 ### 2. Pipeline Identity Anchoring (Conversation)
 
 The goal comment (Principle 1) anchors editors reading the source — both human and LLM agents modifying the pipeline. But the LLM *executing* the pipeline never reads the source; it calls the script via subprocess and only sees its stdout. The pipeline's identity must live **in the conversation** (the briefing output), not just in the code.
 
-**Mission at step 1.** The first briefing states who the LLM is, what it's doing, and what quality means. This is the only place with the full mission. It sets the tone for every subsequent step.
+**Mission at step 1.** The first briefing states who the LLM is, what it's doing, and what quality means. This is the only place with the full mission. It sets the tone for every subsequent step. Store the mission as a constant in the script and prepend it to step 1's situation block — the LLM reads it before anything mode-specific.
 
-```python
-_PIPELINE_MISSION = (
-    "You are a code review orchestrator. Your mission: ensure the review "
-    "pipeline runs to completion with dedication, precision, and care — "
-    "producing a comprehensive, accurate, and actionable review..."
-)
-```
+**Phase-transition reminders.** In long pipelines, the mission from step 1 drifts deep in the context window. Rather than repeating it verbatim (which causes banner blindness), inject **contextual variations** at phase boundaries — moments where the work shifts character. Each variation connects the mission to what's about to happen, feeling like a natural thought at that moment rather than a bolted-on reminder.
 
-Step 1's situation block prepends this constant. The LLM reads it before anything mode-specific.
+The general pattern: pipelines have phases (setup, execution, synthesis, validation, output — or whatever phases your domain requires). At the first step of each new phase, prepend a one-sentence anchor that connects the mission to the upcoming work.
 
-**Phase-transition reminders.** By step 8, the mission from step 1 has drifted deep in the context window. Rather than repeating it verbatim (banner blindness), inject **contextual variations** at phase boundaries — moments where the work shifts character:
+**Mode-agnostic identity in commands.** When multiple modes share a pipeline, the command files share the same mission. Mode-specific context comes after. The identity is stable; the context varies.
 
-| Transition | Step | Anchoring |
-|------------|------|-----------|
-| SETUP → EXECUTION | First execution step | "You understand the changes. Execute precisely." |
-| EXECUTION → SYNTHESIS | First synthesis step | "Specialists are done. Bring it together faithfully." |
-| SYNTHESIS → VALIDATION | First validation step | "Before this reaches a human, stress-test it." |
-| VALIDATION → OUTPUT | First output step | "Deliver completely. Nothing missing." |
-
-Each variation connects the mission to what's about to happen. They feel like natural thoughts at that moment, not bolted-on reminders.
-
-**Mode-agnostic identity in commands.** When multiple modes share a pipeline, the command files share the same mission. Mode-specific context comes after: "This run reviews a **pull request**..." or "This run reviews **all changes on the current branch**..." The identity is stable; the context varies.
+> **Example:** A code review pipeline defines its mission: "You are a code review orchestrator. Your mission: ensure the review pipeline runs to completion with dedication, precision, and care — producing a comprehensive, accurate, and actionable review..." The four phase transitions anchor on: precision in dispatch (EXECUTION), faithful synthesis (SYNTHESIS), stress-testing before it reaches a human (VALIDATION), and complete delivery (OUTPUT). Command files share the mission; PR mode adds "This run reviews a **pull request**...", branch mode adds "This run reviews **all changes on the current branch**..."
 
 ### 3. Script as Context Curator
 
@@ -77,19 +58,17 @@ The script's primary job is **reading files and presenting their contents** — 
 
 **Wrong — scavenger hunt:**
 ```
-Read review-context.json for GIT_RANGE, MERGE_BASE, and changed files.
-Then read dispatch-plan.json to determine which agents completed.
+Read context.json for the input parameters and changed files.
+Then read plan.json to determine which workers completed.
 ```
 
 **Right — curated briefing:**
 ```
-Git range: abc123..def456 (14 commits, 23 files, medium PR).
-Changed domains: code (18), security (3), php-tests (5).
-7 of 9 dispatched agents completed. Missing: dead-code-reviewer, go-tests-reviewer.
-Build the reconciliator prompt with these review files:
-  - /tmp/review-42/pr-review.json
-  - /tmp/review-42/security-review.json
-  ...
+Input range: abc123..def456 (14 items, 23 files).
+7 of 9 dispatched workers completed. Missing: worker-A, worker-B.
+Completed output files:
+  - /tmp/run-42/worker-C-output.json
+  - /tmp/run-42/worker-D-output.json
 ```
 
 The LLM should only read files when it needs to deeply understand content the script can't summarize (e.g., reading actual code, using MCP tools). If the script can read it and present it, it should.
@@ -101,10 +80,10 @@ Structured data lives in files. The LLM's conversation context handles qualitati
 | State type | Owned by | Mechanism |
 |------------|----------|-----------|
 | Caller config (mode, identifiers, feature flags) | Caller → script | `run-config.json` — written once, read-only during run |
-| Execution state (step history, resolved params, agent status) | Script | `pipeline-state.json` — updated at each step |
-| Gathered context (metadata, reviews, changed files, size) | Script | `review-context.json` (or domain equivalent) |
+| Execution state (step history, resolved params, worker status) | Script | `pipeline-state.json` — updated at each step |
+| Gathered context (domain-specific input data) | Script | Context file (e.g., `context.json`) |
 | Qualitative reasoning ("this change fixes a payment flow bug") | LLM | Conversation context (free — already there) |
-| LLM synthesis needed downstream ("change purpose summary") | LLM → file | Explicit handoff artifact (e.g., `change-purpose.md`) |
+| LLM synthesis needed downstream ("purpose summary") | LLM → file | Explicit handoff artifact (e.g., `change-purpose.md`) |
 
 **Why not `--thoughts`:**
 - LLMs are good at reasoning, bad at bookkeeping. Asking them to faithfully maintain `STASH_REF=abc123` across 12 steps is asking them to do what scripts do better.
@@ -119,22 +98,22 @@ Multiple modes of the same workflow share a single step sequence. Each step decl
 ```python
 STEP_SEQUENCE = [
     {"step": 1,  "title": "Parse Input",           "phase": "SETUP",     "condition": "always"},
-    {"step": 2,  "title": "Repo Setup",             "phase": "SETUP",     "condition": "needs_workspace_setup"},
+    {"step": 2,  "title": "Workspace Setup",        "phase": "SETUP",     "condition": "needs_workspace_setup"},
     {"step": 3,  "title": "Gather Context",          "phase": "SETUP",     "condition": "always"},
-    {"step": 4,  "title": "Fetch Issue Context",     "phase": "SETUP",     "condition": "has_unfetched_issues"},
-    {"step": 5,  "title": "Dispatch Plan + Triage",  "phase": "EXECUTION", "condition": "always"},
+    {"step": 4,  "title": "Fetch Extra Context",     "phase": "SETUP",     "condition": "has_pending_items"},
+    {"step": 5,  "title": "Plan + Triage",           "phase": "EXECUTION", "condition": "always"},
     ...
 ]
 ```
 
-Conditions can be static (`"always"`), mode-dependent (`"needs_workspace_setup"` — true for interactive PR mode), or data-driven (`"has_unfetched_issues"` — true when the script detects unresolved issue references). A condition evaluator function maps condition strings to boolean checks against the current state. Data-driven conditions let any mode activate a step when the data warrants it.
+Conditions can be static (`"always"`), mode-dependent (`"needs_workspace_setup"` — true only for certain modes), or data-driven (`"has_unfetched_issues"` — true when the script detects unresolved items in context). A condition evaluator function maps condition strings to boolean checks against the current state. Data-driven conditions let any mode activate a step when the data warrants it.
 
 **Step skipping is transparent.** When a step is skipped, the previous step's output explains why:
 
 ```
-NEXT: Step 5 — Dispatch Plan + Triage.
-(Skipping steps 3-4: Repo Setup is PR-only; no unfetched issues detected.)
-Call <pipeline>.py with --step 5.
+NEXT: Step 5 — Plan + Triage.
+(Skipping steps 3-4: Workspace Setup is mode-A only; no pending items detected.)
+Run: <pipeline>.py --step 5
 ```
 
 This keeps the LLM oriented when step numbers aren't consecutive.
@@ -145,29 +124,28 @@ The script's output is language, not machine code. LLMs are language-native — 
 
 **Wrong — robotic repetition:**
 ```
-You are a thorough PR reviewer. Running the full review pipeline.
-You are a thorough PR reviewer. Dispatch all agents in parallel.
-You are a thorough PR reviewer. Write the review report.
+You are a thorough analyst. Running the full pipeline.
+You are a thorough analyst. Dispatch all workers in parallel.
+You are a thorough analyst. Write the final report.
 ```
 
 **Right — adapted to the moment:**
 ```
-Step 3: "This PR touches 23 files across 3 domains. The payment gateway
-changes are the most sensitive — that's where review focus should land."
+Step 3: "23 files across 3 domains. The payment gateway changes are the
+most sensitive — that's where focus should land."
 
-Step 6: "7 agents are ready to dispatch. Security and reliability reviewers
-are especially relevant given the new API endpoint in src/api/payments.ts."
+Step 6: "7 workers ready to dispatch. Security and reliability are
+especially relevant given the new API endpoint."
 
-Step 9: "The reconciliator found 4 issues. Connect them to what this PR
-is trying to accomplish — a migration to the v3 payment API — and frame
-recommendations the developer can act on."
+Step 9: "4 findings from reconciliation. Connect them to what this change
+is trying to accomplish and frame recommendations the author can act on."
 ```
 
 Each step's output adapts its framing to the phase:
 - **Setup steps** build understanding: "Here's what we know..."
-- **Execution steps** are directive: "Dispatch these agents..."
+- **Execution steps** are directive: "Dispatch these workers..."
 - **Synthesis steps** frame the task: "Connect these findings to..."
-- **Validation steps** invite scrutiny: "The critic will stress-test whether..."
+- **Validation steps** invite scrutiny: "Stress-test whether..."
 
 **Structure of each step's output:**
 
@@ -176,7 +154,7 @@ Each step's output adapts its framing to the phase:
 3. **Handoff** — what must be true before proceeding (explicit file to write, or nothing)
 4. **Next** — which step comes next and why (with skip explanations if non-consecutive)
 
-**Tone:** direct, information-dense, no filler. Present facts the LLM needs to act on, not instructions to go find facts. But write as a colleague briefing a colleague, not a machine printing instructions. The script has access to all the context — use it to write output that's specific to this particular review, not generic boilerplate.
+**Tone:** direct, information-dense, no filler. Present facts the LLM needs to act on, not instructions to go find facts. But write as a colleague briefing a colleague, not a machine printing instructions. The script has access to all the context — use it to write output that's specific to this particular run, not generic boilerplate.
 
 **Voice design.** Choose a specific voice for the script's personality and maintain it across all steps. The voice lives *within* the structural headers (Situation, Actions, Handoff) — don't soften the headers themselves, as they're machine-readable landmarks that help the LLM parse the briefing.
 
@@ -184,30 +162,11 @@ Good voice choices create a natural dynamic between the script and the LLM. For 
 
 ### 7. Explicit Handoff Points
 
-At specific steps where the LLM produces synthesis needed by later steps, the script names the exact artifact to write:
+At specific steps where the LLM produces synthesis needed by later steps, the script names the exact artifact to write — the file path, the expected content, and why it matters downstream.
 
-```
-HANDOFF: Write a 1-3 sentence change purpose summary to:
-  /tmp/review-42/change-purpose.txt
+The consuming step's script reads the handoff file and presents its contents inline. If the file is missing, the script provides a fallback. The pipeline degrades gracefully rather than breaking.
 
-This will be used by the reconciliator at Step 8 to anchor findings
-against the developer's intent. Derive it from the commit messages
-and context presented above.
-```
-
-The consuming step's script reads the handoff file and presents its contents inline. If the file is missing, the script provides a fallback:
-
-```
-Change purpose (from change-purpose.txt): "Refactors the payment gateway
-to support multi-currency checkout."
-
--- or, if the file is missing --
-
-Change purpose: Not available (change-purpose.txt not found).
-Derive from commit messages: <script presents commit message summary here>.
-```
-
-This is resilient — the pipeline doesn't break if a handoff is missed, it degrades gracefully.
+> **Example:** A code review pipeline asks the LLM to write a change-purpose summary at step 3. At step 8, the reconciliation step reads `change-purpose.md` and presents it inline: "Change purpose: Refactors the payment gateway to support multi-currency checkout." If the file is missing, the script falls back to commit messages: "Change purpose (from commits): feat: add multi-currency support; test: add currency conversion tests."
 
 ### 8. Artifact Discipline
 
@@ -250,35 +209,30 @@ No `--total-steps` (the script knows its own sequence). No `--thoughts` (state l
 
 Two files with distinct ownership:
 
-**`run-config.json`** — Caller-provided configuration. Written once before or at step 1 (from CLI args or a pre-existing config). Read-only during the run. Contains mode, identifiers (e.g., PR number), feature flags (interactive, output instructions), and explicit overrides (git range).
+**`run-config.json`** — Caller-provided configuration. Written once before or at step 1 (from CLI args or a pre-existing config). Read-only during the run. Contains mode, identifiers, feature flags, and explicit overrides.
 
 **`pipeline-state.json`** — Execution state. Owned exclusively by the script. Updated after each step. The LLM never reads or writes this file directly.
 
 ```json
 {
-  "run_id": "20260318T150000-pr-42",
+  "run_id": "20260318T150000-modeA-42",
   "completed_steps": [1, 2, 3],
   "skipped_steps": [4],
   "resolved_params": {
-    "git_range": "abc123..def456",
-    "has_unfetched_issues": false
+    "input_range": "abc123..def456",
+    "has_pending_items": false
   },
-  "workspace": {
-    "original_branch": "feature/payments",
-    "stash_ref": null
-  },
-  "agents": {
-    "dispatched": ["pr-reviewer", "security-reviewer"],
-    "completed": ["pr-reviewer"],
+  "workers": {
+    "dispatched": ["worker-A", "worker-B"],
+    "completed": ["worker-A"],
     "failed": [],
-    "review_files": ["/tmp/review-42/pr-review.json"]
+    "output_files": ["/tmp/run-42/worker-A-output.json"]
   },
-  "change_purpose": "Refactors the payment gateway to support multi-currency checkout.",
   "verdict": null
 }
 ```
 
-**Why split:** Mode and caller config don't change during a run — they're input. Execution state (which steps completed, which agents finished) evolves at every step. Separating them prevents accidental mutation of config and makes it clear what the script owns vs. what the caller provides.
+**Why split:** Mode and caller config don't change during a run — they're input. Execution state (which steps completed, which workers finished) evolves at every step. Separating them prevents accidental mutation of config and makes it clear what the script owns vs. what the caller provides.
 
 ### Step Guidance Function
 
@@ -290,7 +244,7 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
         step: Step number.
         mode: Pipeline mode.
         state: Current pipeline-state.json contents.
-        context: Current context (gathered data, PR metadata, etc.).
+        context: Current domain context (gathered data, metadata, etc.).
         config: Run config (caller-provided, read-only).
         output_dir: Output directory path (for constructing file paths in briefings).
 
@@ -358,7 +312,7 @@ def format_output(step, guidance):
     return "\n".join(lines)
 ```
 
-Section headers (`## SITUATION`, `## ACTIONS`, `## HANDOFF`) are structural landmarks — the LLM uses them to parse the briefing. The conversational voice (Principle 6) lives *within* these sections, not in the headers themselves.
+Section headers are structural landmarks — the LLM uses them to parse the briefing. The conversational voice (Principle 6) lives *within* these sections, not in the headers themselves.
 
 ## Command File Structure
 
@@ -388,7 +342,7 @@ the file, verify it exists, then move on. Do not skip verification.
 ## Starting the Workflow
 
 **Parse arguments:** `$ARGUMENTS`
-- Extract PR number, branch name, or git range as appropriate
+- Extract mode-specific identifiers as appropriate
 
 **Construct output directory:**
 \```bash
@@ -426,7 +380,7 @@ All commands for the same pipeline use the same script. They differ only in `--m
 | Output tone | Task list | Conversational briefing |
 | Guidance functions | May have side effects | Pure formatting — no I/O (testable with plain dicts) |
 
-The step-by-step prompt injection pattern remains valid for simpler cases — single-mode workflows where epistemic boundaries are the primary concern (e.g., the decision critic). The curated context pipeline is for multi-mode operational workflows where context management and flow control matter as much as reasoning discipline.
+The step-by-step prompt injection pattern remains valid for simpler cases — single-mode workflows where epistemic boundaries are the primary concern (e.g., a validation step that must reason independently). The curated context pipeline is for multi-mode operational workflows where context management and flow control matter as much as reasoning discipline.
 
 ## When to Apply
 
