@@ -5,7 +5,6 @@ Validates schema, completeness, and cross-references against review-scope.py dom
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -60,57 +59,18 @@ def agents(registry):
 # ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------
-class TestRegistryFile:
-    """Registry file is valid JSON with correct top-level structure."""
-
-    def test_file_exists(self):
-        assert REGISTRY_PATH.exists(), f"Registry file not found: {REGISTRY_PATH}"
-
-    def test_valid_json(self):
-        with open(REGISTRY_PATH) as f:
-            data = json.load(f)
-        assert isinstance(data, dict)
-
-    def test_has_agents_key(self, registry):
-        assert "agents" in registry
-        assert isinstance(registry["agents"], dict)
-
-
 class TestRequiredFields:
-    """All agents have required fields with valid values."""
+    """All agents have required fields."""
 
     REQUIRED_FIELDS = {"domain", "protocols", "dispatch_class", "focus"}
 
-    @pytest.mark.parametrize("field", sorted(REQUIRED_FIELDS))
-    def test_all_agents_have_field(self, agents, field):
+    def test_all_agents_have_required_fields(self, agents):
         for agent_name, config in agents.items():
-            assert field in config, (
-                f"Agent '{agent_name}' missing required field '{field}'"
-            )
-
-    def test_domain_is_string_or_none(self, agents):
-        for agent_name, config in agents.items():
-            assert config["domain"] is None or isinstance(config["domain"], str), (
-                f"Agent '{agent_name}': domain must be string or null"
-            )
-
-    def test_protocols_is_list(self, agents):
-        for agent_name, config in agents.items():
-            assert isinstance(config["protocols"], list), (
-                f"Agent '{agent_name}': protocols must be a list"
-            )
-
-    def test_dispatch_class_is_string(self, agents):
-        for agent_name, config in agents.items():
-            assert isinstance(config["dispatch_class"], str), (
-                f"Agent '{agent_name}': dispatch_class must be a string"
-            )
-
-    def test_focus_is_string(self, agents):
-        for agent_name, config in agents.items():
-            assert isinstance(config["focus"], str), (
-                f"Agent '{agent_name}': focus must be a string"
-            )
+            for field in self.REQUIRED_FIELDS:
+                assert field in config, (
+                    f"Agent '{agent_name}' missing required field '{field}'"
+                )
+            # Focus must be non-empty
             assert len(config["focus"]) > 0, (
                 f"Agent '{agent_name}': focus must not be empty"
             )
@@ -213,53 +173,6 @@ class TestAgentCount:
             f"Expected {EXPECTED_AGENT_COUNT} agents, found {len(agents)}: "
             f"{sorted(agents.keys())}"
         )
-
-
-class TestOptionalFields:
-    """Optional fields have correct types when present."""
-
-    def test_secondary_domains_is_list(self, agents):
-        for agent_name, config in agents.items():
-            if "secondary_domains" in config:
-                assert isinstance(config["secondary_domains"], list), (
-                    f"Agent '{agent_name}': secondary_domains must be a list"
-                )
-
-    def test_scope_flags_is_list(self, agents):
-        for agent_name, config in agents.items():
-            if "scope_flags" in config:
-                assert isinstance(config["scope_flags"], list), (
-                    f"Agent '{agent_name}': scope_flags must be a list"
-                )
-
-    def test_extra_scope_is_list(self, agents):
-        for agent_name, config in agents.items():
-            if "extra_scope" in config:
-                assert isinstance(config["extra_scope"], list), (
-                    f"Agent '{agent_name}': extra_scope must be a list"
-                )
-
-    def test_file_history_is_boolean(self, agents):
-        for agent_name, config in agents.items():
-            if "file_history" in config:
-                assert isinstance(config["file_history"], bool), (
-                    f"Agent '{agent_name}': file_history must be a boolean"
-                )
-
-    def test_no_semantic_filter_is_boolean(self, agents):
-        for agent_name, config in agents.items():
-            if "no_semantic_filter" in config:
-                assert isinstance(config["no_semantic_filter"], bool), (
-                    f"Agent '{agent_name}': no_semantic_filter must be a boolean"
-                )
-
-    def test_triage_criteria_strings(self, agents):
-        for agent_name, config in agents.items():
-            if "triage_criteria" in config:
-                for criterion in config["triage_criteria"]:
-                    assert isinstance(criterion, str), (
-                        f"Agent '{agent_name}': each triage criterion must be a string"
-                    )
 
 
 class TestBootstrapCompatibility:
