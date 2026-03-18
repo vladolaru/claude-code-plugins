@@ -19,6 +19,7 @@ from test_commands_helpers import (
     load_marketplace_skills,
     load_marketplace_commands,
     ALL_REVIEW_COMMANDS,
+    ALL_COMMANDS,
     ORCHESTRATOR_COMMANDS,
     COMMANDS_DIR,
     SCRIPTS_DIR,
@@ -83,6 +84,44 @@ class TestFrontmatter:
         fm = parse_frontmatter(content)
         assert "description" in fm, f"{command}: frontmatter missing 'description'"
         assert len(fm["description"]) > 10, f"{command}: description too short"
+
+
+# =============================================================================
+# Structural Tests — All Commands (review + non-review)
+# =============================================================================
+
+
+NON_REVIEW_COMMANDS = [c for c in ALL_COMMANDS if c not in ALL_REVIEW_COMMANDS]
+
+
+class TestAllCommandsStructural:
+    """Every command file exists, has valid frontmatter, and is registered."""
+
+    @pytest.mark.parametrize("command", ALL_COMMANDS)
+    def test_command_file_exists(self, command):
+        path = COMMANDS_DIR / command
+        assert path.is_file(), f"Command file not found: {path}"
+
+    @pytest.mark.parametrize("command", ALL_COMMANDS)
+    def test_has_frontmatter_with_description(self, command):
+        content = read_command(command)
+        assert content.startswith("---"), f"{command}: missing frontmatter delimiter"
+        fm = parse_frontmatter(content)
+        assert "description" in fm, f"{command}: frontmatter missing 'description'"
+        assert len(fm["description"]) > 10, f"{command}: description too short"
+
+    @pytest.mark.parametrize("command", ALL_COMMANDS)
+    def test_registered_in_marketplace(self, command, marketplace_commands):
+        assert command in marketplace_commands, (
+            f"{command}: not registered in marketplace.json commands: {marketplace_commands}"
+        )
+
+    @pytest.mark.parametrize("command", NON_REVIEW_COMMANDS)
+    def test_non_review_commands_not_in_review_list(self, command):
+        """Non-review commands must NOT appear in ALL_REVIEW_COMMANDS."""
+        assert command not in ALL_REVIEW_COMMANDS, (
+            f"{command}: should not be in ALL_REVIEW_COMMANDS"
+        )
 
 
 # =============================================================================

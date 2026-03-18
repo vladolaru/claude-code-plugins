@@ -19,6 +19,13 @@ ORCHESTRATOR_COMMANDS = [
 
 ALL_REVIEW_COMMANDS = ORCHESTRATOR_COMMANDS
 
+# Every command file in the plugin (review + non-review).
+ALL_COMMANDS = ALL_REVIEW_COMMANDS + [
+    "pr-update.md",
+    "switch-to.md",
+    "copy-as.md",
+]
+
 AGENT_REF_PATTERN = re.compile(r"`pirategoat-tools:([\w-]+)`")
 SCRIPT_REF_PATTERN = re.compile(r"(?:scripts/|/)(\w[\w-]*\.py)")
 
