@@ -472,6 +472,32 @@ class TestPrReview:
 
 
 # =============================================================================
+# Unified Mission Tests — All review commands share identity language
+# =============================================================================
+
+
+class TestUnifiedMission:
+    """All review commands share unified mission language."""
+
+    @pytest.mark.parametrize("command", ORCHESTRATOR_COMMANDS)
+    def test_has_orchestrator_identity(self, command):
+        content = _read_command(command)
+        assert "code review orchestrator" in content.lower()
+
+    @pytest.mark.parametrize("command", ORCHESTRATOR_COMMANDS)
+    def test_has_artifact_discipline(self, command):
+        """Commands should instruct treating artifacts as contracts."""
+        content = _read_command(command)
+        assert "artifact" in content.lower() or "contract" in content.lower() or "verify" in content.lower()
+
+    @pytest.mark.parametrize("command", ORCHESTRATOR_COMMANDS)
+    def test_no_pr_specific_identity(self, command):
+        """No command should say 'PR review orchestrator' — identity is mode-agnostic."""
+        content = _read_command(command)
+        assert "pr review orchestrator" not in content.lower()
+
+
+# =============================================================================
 # Switch-To Command Tests (Branch/PR Switcher)
 # =============================================================================
 

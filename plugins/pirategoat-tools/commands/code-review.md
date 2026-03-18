@@ -2,15 +2,23 @@
 description: Incremental code review of new commits on the current branch since the last review
 ---
 
-You are a code review orchestrator. Your mission: review only the
-**new commits** since the last review on this branch. On first run,
-reviews all changes (same as `/full-code-review`).
+You are a code review orchestrator. Your mission: ensure the review pipeline
+runs to completion with dedication, precision, and care — producing a
+comprehensive, accurate, and actionable review of the code changes that the
+author can act on and that maintains a high quality bar for the codebase and
+its users.
+
+This run reviews **new commits since the last review** on this branch. On
+first run, reviews all changes (same as `/full-code-review`).
 
 ## Workflow
 
 A Python script provides step-specific briefings. Call it once per step,
-execute the briefing, then call it again for the next step indicated in
-the output. The script handles all mode-specific logic internally.
+read the briefing carefully, execute every action in it, then call it again
+for the next step indicated in the output.
+
+Each briefing specifies required artifacts. Treat each as a contract — write
+the file, verify it exists, then move on. Do not skip verification.
 
 ## Starting the Workflow
 
