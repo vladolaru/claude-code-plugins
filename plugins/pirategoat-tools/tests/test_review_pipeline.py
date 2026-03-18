@@ -957,6 +957,24 @@ class TestStep1ParseInput:
         text = "\n".join(g["actions"])
         assert "no new commits" in text.lower() or "STOPPED" in text
 
+    def test_step_1_includes_mission(self, mod, tmp_path):
+        """Step 1 should present the pipeline mission statement."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(1, "pr", state, ctx, config={"pr_number": "42"})
+        text = "\n".join(g["situation"])
+        assert "code review orchestrator" in text.lower()
+        assert "dedication" in text.lower() or "precision" in text.lower()
+
+    def test_mission_applies_to_all_modes(self, mod, tmp_path):
+        """Mission should appear in step 1 for all modes, not just PR."""
+        for mode in ("pr", "full", "incremental"):
+            state = {"completed_steps": []}
+            ctx = {}
+            g = mod.get_step_guidance(1, mode, state, ctx)
+            text = "\n".join(g["situation"])
+            assert "orchestrator" in text.lower()
+
 
 class TestStep2RepoSetup:
     """Step 2: Repo Setup — PR mode + interactive only."""

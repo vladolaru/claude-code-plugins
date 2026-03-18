@@ -34,6 +34,49 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
+# Pipeline Identity
+# ---------------------------------------------------------------------------
+
+_PIPELINE_MISSION = (
+    "You are a code review orchestrator. Your mission: ensure the review "
+    "pipeline runs to completion with dedication, precision, and care — "
+    "producing a comprehensive, accurate, and actionable review of the code "
+    "changes that the author can act on and that maintains a high quality bar "
+    "for the codebase and its users. Every step has required artifacts; treat "
+    "each as a contract. Do not approximate, skip, or move on until the "
+    "step's outputs are verified."
+)
+
+_PHASE_TRANSITIONS = {
+    "EXECUTION": (
+        "You now understand what these changes do and why. The next phase "
+        "dispatches specialist reviewers — your job is to ensure every planned "
+        "agent launches correctly and nothing falls through the cracks. "
+        "Precision here determines the quality of everything downstream."
+    ),
+    "SYNTHESIS": (
+        "The specialist agents have produced their findings. Your job now "
+        "shifts to synthesis — deduplicating, reconciling, and producing a "
+        "coherent picture without losing signal or introducing bias. Every "
+        "finding that survives reconciliation must be traceable to an agent's "
+        "work. Write structured data cleanly; the files you produce are the "
+        "source of truth for the remaining steps."
+    ),
+    "VALIDATION": (
+        "The review report is written. Before it goes to the author, the "
+        "decision critic will challenge your conclusions. Take the critic's "
+        "verdict seriously — if it says REVISE, revise. Persist all verdicts "
+        "to their files precisely. The goal is a review the author can trust."
+    ),
+    "OUTPUT": (
+        "The review is validated. Present it clearly, confirm all artifacts "
+        "are written, and verify the pipeline result is complete. This is what "
+        "the author or the calling system receives — make sure nothing is "
+        "missing."
+    ),
+}
+
+# ---------------------------------------------------------------------------
 # Step Sequence
 # ---------------------------------------------------------------------------
 
@@ -315,7 +358,7 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
 
 def _step_1_parse_input(mode, state, context, config, output_dir):
     """Step 1: Parse Input — confirm parameters and mode."""
-    situation = []
+    situation = [_PIPELINE_MISSION, ""]
     actions = []
 
     if mode == "pr":
