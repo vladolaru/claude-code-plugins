@@ -15,10 +15,8 @@ tests/
 ├── test_pipeline_infrastructure.py   # Level 1: Pipeline infrastructure (step sequence, routing, state, CLI)
 ├── test_pipeline_orchestration.py    # Level 1: Pipeline orchestration (subprocess, telemetry, integration)
 ├── test_domain_routing.py            # Level 1: Domain routing evals (pytest)
-├── test_commands.py                  # Level 1: Shared structural + review command tests
+├── test_commands.py                  # Level 1: Structural + review command tests (incl. pr-update, switch-to)
 ├── test_commands_helpers.py          # Shared helpers for command tests
-├── test_commands_pr_update.py        # Level 1: pr-update.md content tests
-├── test_commands_switch_to.py        # Level 1: switch-to.md content tests
 ├── test_review_output.py             # Level 1: ReviewOutputBuilder unit tests (pytest)
 ├── test_review_api_contract.py       # Level 1: Cross-component contract tests (pytest)
 ├── graders.py                        # Shared grading functions
@@ -82,11 +80,9 @@ Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parame
 
 `OK` = STATUS: OK (domain matches files), `-` = STATUS: NO_DOMAIN_FILES (domain excludes all files)
 
-### Level 1: Command Structure Evals (`test_commands.py` + per-command files)
+### Level 1: Command Structure Evals (`test_commands.py`)
 
 Deterministic pytest suite that validates structural properties of command files. Shared helpers live in `test_commands_helpers.py`. No network or model calls.
-
-**Shared structural tests** (`test_commands.py`):
 
 | Class | What it verifies |
 |---|---|
@@ -99,13 +95,8 @@ Deterministic pytest suite that validates structural properties of command files
 | `TestBaselineFileGrading` | `.branch-review-baseline.json` round-trip: valid baseline files pass, incremented counts pass, explicit ranges pass |
 | `TestPrReview` | `pr-review.md` is a thin wrapper delegating to `review-pipeline.py` |
 | `TestUnifiedMission` | All review commands reference the unified pipeline mission |
-
-**Per-command tests:**
-
-| File | Class | What it verifies |
-|---|---|---|
-| `test_commands_pr_update.py` | `TestPrUpdate` | `pr-update.md` has PR detection, template detection, validation, approval gate, GHE fallback, size-based brevity |
-| `test_commands_switch_to.py` | `TestSwitchTo` | `switch-to.md` has argument parsing, dirty state handling, branch switching, remote sync, PR flow, post-switch context |
+| `TestPrUpdate` | `pr-update.md` structural validation: file exists, frontmatter, marketplace registration, not in review commands |
+| `TestSwitchTo` | `switch-to.md` structural validation: file exists, frontmatter, marketplace registration |
 
 ### Level 1: ReviewOutputBuilder Unit Tests (`test_review_output.py`)
 
