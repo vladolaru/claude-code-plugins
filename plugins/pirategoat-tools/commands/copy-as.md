@@ -95,6 +95,7 @@ Write as a fellow engineer talking to a peer. The PR author knows their own PR �
 - **Omit your review methodology** — "11 specialist agents", "browser testing with live Stripe data", review tool names, agent counts — these are internal process. The reader cares about findings, not how you found them.
 - **Omit finding IDs and internal references** — no "F1", "F3+F4", "F9". These are machine artifacts. Use descriptive headings instead ("No test covers the overrides mechanic").
 - **Omit label-like prefixes** — no "Verdict:", "Approach:", "Suggestion:". Write in prose. Instead of "Suggestion: add a test", write "Worth adding a test that..."
+- **Always pair line numbers with a file name** — "at `use-auto-refresh.ts:215`" not just "at line 215". A bare line number is meaningless without context; use a relative path when the file could be ambiguous.
 
 The voice is direct, specific, and trusting. Point out what matters; skip the ceremony. A human reviewer doesn't number their findings or explain their process — they just say what they noticed.
 
