@@ -44,7 +44,7 @@ Each step's output can reference the goal implicitly through its framing. Early 
 
 ### 1a. Pipeline Identity Anchoring
 
-The goal comment (Principle 1) is for human editors reading the source. The LLM never sees it — it sees briefings. The pipeline's identity must live **in the conversation**, not just in the code.
+The goal comment (Principle 1) anchors editors reading the source — both human and LLM agents modifying the pipeline. But the LLM *executing* the pipeline never reads the source; it calls the script via subprocess and only sees its stdout. The pipeline's identity must live **in the conversation** (the briefing output), not just in the code.
 
 **Mission at step 1.** The first briefing states who the LLM is, what it's doing, and what quality means. This is the only place with the full mission. It sets the tone for every subsequent step.
 
