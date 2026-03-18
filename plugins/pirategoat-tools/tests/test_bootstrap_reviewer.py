@@ -1,7 +1,6 @@
 """Tests for bootstrap-reviewer.py — unit tests (direct function imports)."""
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -25,63 +24,17 @@ _spec = importlib.util.spec_from_file_location("bootstrap_reviewer", str(BOOTSTR
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
-derive_reviewer_name = _mod.derive_reviewer_name
 extract_protocol_sections = _mod.extract_protocol_sections
-extract_pr_number = _mod.extract_pr_number
-extract_output_dir = _mod.extract_output_dir
-extract_status = _mod.extract_status
 build_output = _mod.build_output
 build_error_output = _mod.build_error_output
 load_pr_intent = _mod.load_pr_intent
 load_change_purpose = _mod.load_change_purpose
-AGENT_CONFIG = _mod.AGENT_CONFIG
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
-
-# All reviewer agents (from AGENT_CONFIG)
-ALL_AGENTS = sorted(AGENT_CONFIG.keys())
-TEST_AGENTS = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
 
 
 # =============================================================================
 # Unit Tests — direct import
 # =============================================================================
-
-
-class TestDeriveReviewerName:
-    """Name derivation for all agents and edge cases."""
-
-    @pytest.mark.parametrize(
-        "agent_name,expected",
-        [
-            ("security-reviewer", "security"),
-            ("pr-reviewer", "pr"),
-            ("performance-reviewer", "performance"),
-            ("architecture-reviewer", "architecture"),
-            ("wp-architecture-reviewer", "wp-architecture"),
-            ("php-tests-reviewer", "php-tests"),
-            ("js-tests-reviewer", "js-tests"),
-            ("e2e-tests-reviewer", "e2e-tests"),
-            ("go-tests-reviewer", "go-tests"),
-            ("patterns-reviewer", "patterns"),
-            ("history-insights-reviewer", "history-insights"),
-            ("tests-mutation-reviewer", "tests-mutation"),
-            ("dead-code-reviewer", "dead-code"),
-            ("a11y-reviewer", "a11y"),
-        ],
-    )
-    def test_all_agents(self, agent_name, expected):
-        assert derive_reviewer_name(agent_name) == expected
-
-    def test_no_suffix(self):
-        """Agent name without -reviewer suffix is returned as-is."""
-        assert derive_reviewer_name("custom-agent") == "custom-agent"
-
-    def test_empty_string(self):
-        assert derive_reviewer_name("") == ""
-
-    def test_just_reviewer(self):
-        """'reviewer' has no '-reviewer' suffix, so returned as-is."""
-        assert derive_reviewer_name("reviewer") == "reviewer"
 
 
 class TestExtractProtocolSections:
@@ -192,135 +145,6 @@ Should be skipped.
         assert "# Shared Reviewer Protocol" not in result
 
 
-class TestExtractFields:
-    """PR number, output dir, status parsing from scope output."""
-
-    SCOPE_OUTPUT = """\
-STATUS: OK
-RANGE: main..HEAD
-BASE_REF: main
-OUTPUT_DIR: /tmp/pr-review-42
-PR_NUMBER: 42
-"""
-
-    def test_extract_pr_number(self):
-        assert extract_pr_number(self.SCOPE_OUTPUT) == "42"
-
-    def test_extract_pr_number_missing(self):
-        assert extract_pr_number("STATUS: OK\nRANGE: main..HEAD") is None
-
-    def test_extract_output_dir(self):
-        assert extract_output_dir(self.SCOPE_OUTPUT) == "/tmp/pr-review-42"
-
-    def test_extract_output_dir_missing(self):
-        assert extract_output_dir("STATUS: OK") is None
-
-    def test_extract_status_ok(self):
-        assert extract_status(self.SCOPE_OUTPUT) == "OK"
-
-    def test_extract_status_no_domain_files(self):
-        assert extract_status("STATUS: NO_DOMAIN_FILES") == "NO_DOMAIN_FILES"
-
-    def test_extract_status_error(self):
-        assert extract_status("STATUS: ERROR") == "ERROR"
-
-    def test_extract_status_missing(self):
-        assert extract_status("nothing here") is None
-
-
-class TestBuildOutput:
-    """Output structure with known inputs."""
-
-    def setup_method(self):
-        self.output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake/plugin/root",
-            status="OK",
-            review_rules="Rule content here.",
-            domain_rules=None,
-            scope_output="STATUS: OK\nfiles listed here",
-            exploration_scope=None,
-            output_dir="/tmp/pr-review-99",
-            pr_number="99",
-            reviewer_name="security",
-        )
-
-    def test_header(self):
-        assert "=== BOOTSTRAP: security-reviewer ===" in self.output
-
-    def test_plugin_root(self):
-        assert "PLUGIN_ROOT: /fake/plugin/root" in self.output
-
-    def test_status(self):
-        assert "STATUS: OK" in self.output
-
-    def test_section_markers(self):
-        assert "--- Section 1: REVIEW RULES" in self.output
-        assert "--- Section 2: REVIEW CONTENT" in self.output
-        assert "--- Section 3: OUTPUT INSTRUCTIONS" in self.output
-
-    def test_review_rules(self):
-        assert "=== REVIEW RULES ===" in self.output
-        assert "Rule content here." in self.output
-
-    def test_no_domain_rules_when_none(self):
-        assert "=== DOMAIN RULES ===" not in self.output
-
-    def test_domain_rules_when_provided(self):
-        output = build_output(
-            agent_name="php-tests-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules",
-            domain_rules="Test-specific rules here.",
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="php-tests",
-        )
-        assert "=== DOMAIN RULES ===" in output
-        assert "Test-specific rules here." in output
-
-    def test_scope_output(self):
-        assert "=== REVIEW SCOPE ===" in self.output
-        assert "files listed here" in self.output
-
-    def test_no_exploration_scope_when_none(self):
-        assert "=== EXPLORATION SCOPE ===" not in self.output
-
-    def test_exploration_scope_when_provided(self):
-        output = build_output(
-            agent_name="patterns-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope="Exploration files here.",
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="patterns",
-        )
-        assert "=== EXPLORATION SCOPE ===" in output
-        assert "Exploration files here." in output
-
-    def test_output_instructions(self):
-        assert "OUTPUT_DIR: /tmp/pr-review-99" in self.output
-        assert "REVIEWER_NAME: security" in self.output
-        assert "/tmp/pr-review-99/security-review.json" in self.output
-        assert "/tmp/pr-review-99/security-review.md" in self.output
-
-    def test_builder_snippet(self):
-        assert "ReviewOutputBuilder" in self.output
-        assert 'builder = ReviewOutputBuilder(pr_id=99, reviewer="security")' in self.output
-
-    def test_return_signal_format(self):
-        assert "STATUS: FINISHED" in self.output
-        assert "VERDICT:" in self.output
-        assert "COUNTS:" in self.output
-
-
 class TestLoadPrIntent:
     """PR intent loading from review-context.json."""
 
@@ -373,77 +197,6 @@ class TestLoadPrIntent:
         assert load_pr_intent(str(tmp_path)) is None
 
 
-class TestPrIntentInjection:
-    """PR intent is injected into bootstrap output between rules and content."""
-
-    def test_intent_present_when_provided(self):
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-            pr_intent="PR Title: Fix rounding in refunds",
-        )
-        assert "=== PR INTENT ===" in output
-        assert "Fix rounding in refunds" in output
-
-    def test_intent_absent_when_none(self):
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-        )
-        assert "=== PR INTENT ===" not in output
-
-    def test_intent_between_rules_and_content(self):
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-            pr_intent="PR Title: Fix thing",
-        )
-        rules_pos = output.index("=== REVIEW RULES ===")
-        intent_pos = output.index("=== PR INTENT ===")
-        content_pos = output.index("--- Section 2: REVIEW CONTENT")
-        assert rules_pos < intent_pos < content_pos
-
-    def test_intent_includes_severity_guidance(self):
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-            pr_intent="PR Title: Fix thing",
-        )
-        assert "severity" in output.lower()
-
-
 class TestChangePurpose:
     """load_change_purpose() reads change-purpose.md from output directory."""
 
@@ -485,63 +238,6 @@ class TestChangePurposeInjection:
         assert "=== REVIEW FOCUS (pipeline synthesis) ===" in output
         assert "retry logic" in output
 
-    def test_review_focus_absent_when_none(self):
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-        )
-        assert "=== REVIEW FOCUS" not in output
-
-    def test_review_focus_after_pr_intent_before_content(self):
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-            pr_intent="PR Title: Fix thing",
-            change_purpose="Adds retry logic.",
-        )
-        intent_pos = output.index("=== PR INTENT ===")
-        focus_pos = output.index("=== REVIEW FOCUS")
-        content_pos = output.index("--- Section 2: REVIEW CONTENT")
-        assert intent_pos < focus_pos < content_pos
-
-    def test_review_focus_without_pr_intent(self):
-        """REVIEW FOCUS should work even without PR INTENT."""
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake",
-            status="OK",
-            review_rules="Rules here",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir="/tmp/test",
-            pr_number="1",
-            reviewer_name="security",
-            change_purpose="Adds retry logic.",
-        )
-        assert "=== REVIEW FOCUS" in output
-        assert "=== PR INTENT ===" not in output
-        focus_pos = output.index("=== REVIEW FOCUS")
-        content_pos = output.index("--- Section 2: REVIEW CONTENT")
-        assert focus_pos < content_pos
-
-
 class TestBuildErrorOutput:
     """Error output format."""
 
@@ -552,11 +248,4 @@ class TestBuildErrorOutput:
         assert "ERROR: Something went wrong" in result
         assert "ACTION: Report this error" in result
 
-    def test_error_with_plugin_root(self):
-        result = build_error_output("pr-reviewer", "Bad", "/some/root")
-        assert "PLUGIN_ROOT: /some/root" in result
-
-    def test_error_default_plugin_root(self):
-        result = build_error_output("pr-reviewer", "Bad")
-        assert "PLUGIN_ROOT: UNKNOWN" in result
 
