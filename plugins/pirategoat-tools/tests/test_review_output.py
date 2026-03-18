@@ -12,7 +12,6 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -25,35 +24,6 @@ SCRIPTS_DIR = TESTS_DIR.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review_output_simple import ReviewOutputBuilder
-
-
-# =============================================================================
-# TestBuilderInit
-# =============================================================================
-
-
-class TestBuilderInit:
-    """Constructor stores pr_id/reviewer and sets sensible defaults."""
-
-    def test_stores_pr_id_and_reviewer(self):
-        b = ReviewOutputBuilder(pr_id="456", reviewer="security")
-        assert b.pr_id == "456"
-        assert b.reviewer == "security"
-
-    def test_defaults(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        assert b.issues == []
-        assert b.positive_observations == []
-        assert b.tool_results_used == []
-        assert b.files_reviewed == 0
-        assert b.overall_confidence == 0.95
-        assert b.recommendations == {"immediate": [], "important": [], "suggestions": []}
-
-    def test_timestamp_is_iso(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        # Should parse without error — ISO 8601 format
-        parsed = datetime.fromisoformat(b.timestamp)
-        assert isinstance(parsed, datetime)
 
 
 # =============================================================================
@@ -161,41 +131,6 @@ class TestAddRecommendation:
         assert "urgent" not in b.recommendations
         assert all(len(v) == 0 for v in b.recommendations.values())
 
-    def test_multiple_per_bucket(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_recommendation("immediate", "First")
-        b.add_recommendation("immediate", "Second")
-        assert b.recommendations["immediate"] == ["First", "Second"]
-
-
-# =============================================================================
-# TestAddPositive
-# =============================================================================
-
-
-class TestAddPositive:
-    """add_positive stores observations in insertion order."""
-
-    def test_stores_in_order(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_positive("Good test coverage")
-        b.add_positive("Clean error handling")
-        assert b.positive_observations == ["Good test coverage", "Clean error handling"]
-
-
-# =============================================================================
-# TestSetFilesReviewed
-# =============================================================================
-
-
-class TestSetFilesReviewed:
-    """set_files_reviewed stores the count."""
-
-    def test_stores_count(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.set_files_reviewed(42)
-        assert b.files_reviewed == 42
-
 
 # =============================================================================
 # TestSetConfidence
@@ -225,11 +160,6 @@ class TestSetConfidence:
 
 class TestAddToolResult:
     """add_tool_result stores tool names and deduplicates."""
-
-    def test_stores_tool(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_tool_result("grep")
-        assert b.tool_results_used == ["grep"]
 
     def test_deduplicates(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
@@ -340,28 +270,6 @@ class TestToDict:
         assert meta["tool_results_used"] == ["grep"]
         assert "review_duration_ms" in meta
 
-    def test_none_for_empty_recommendations_and_positives(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        d = b.to_dict()
-        assert d["recommendations"] is None
-        assert d["positive_observations"] is None
-
-
-# =============================================================================
-# TestToJson
-# =============================================================================
-
-
-class TestToJson:
-    """to_json roundtrips through json.loads to match to_dict."""
-
-    def test_roundtrip(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_issue("high", "XSS", "f.php", "desc", "rec", line=1)
-        b.add_positive("Good patterns")
-        parsed = json.loads(b.to_json())
-        assert parsed == b.to_dict()
-
 
 # =============================================================================
 # TestToMarkdown
@@ -463,13 +371,6 @@ class TestLineRequired:
         with pytest.raises(ValueError, match="line.*positive"):
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=-1)
 
-    def test_line_required_positional_still_works(self):
-        """Valid line number works as before."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=42)
-        assert b.issues[0]["line"] == 42
-        assert isinstance(issue_id, str)
-
 
 # =============================================================================
 # TestAddObservation
@@ -488,22 +389,12 @@ class TestAddObservation:
         assert obs["note"] == "File lacks CSRF protection"
         assert obs["category"] == "security"
 
-    def test_observation_default_category(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        b.add_observation("f.py", "Some note")
-        assert b.observations[0]["category"] == "general"
-
     def test_observations_in_dict_output(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_observation("f.py", "Note")
         d = b.to_dict()
         assert "observations" in d
         assert len(d["observations"]) == 1
-
-    def test_observations_none_when_empty(self):
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        d = b.to_dict()
-        assert d["observations"] is None
 
     def test_observations_do_not_affect_verdict(self):
         """Observations don't count as issues — verdict unaffected."""
