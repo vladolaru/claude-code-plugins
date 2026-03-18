@@ -2,7 +2,7 @@
 
 A pattern for multi-step LLM workflows where a Python script acts as **context curator** — reading all state, pre-digesting information, and presenting exactly what the LLM needs at each step. The script controls flow, owns structured state, and speaks conversationally. The LLM acts on briefings, exercises judgment, and writes small handoff artifacts when synthesis is needed downstream.
 
-Evolves the [step-by-step prompt injection](step-by-step-prompt-injection.md) pattern, which established the core mechanism (script injects one step at a time). This pattern adds context curation, file-based state, mode-driven step routing, and conversational output.
+Evolves the [step-by-step prompt injection](step-by-step-prompt-injection.md) pattern, which established the core mechanism (script injects one step at a time). This pattern adds context curation, file-based state, condition-driven step routing, and conversational output.
 
 ## The Core Idea
 
@@ -11,19 +11,19 @@ Evolves the [step-by-step prompt injection](step-by-step-prompt-injection.md) pa
 **The mechanism:** A single Python script owns the universal step sequence. Each step's guidance adapts to the current mode. The script reads all state files, extracts what's relevant, and presents it as a briefing. The LLM never reads structured files to extract values — the script does that and presents the values inline.
 
 ```
-LLM calls: script --step 5 --mode pr --output-dir /tmp/review-42
-  ← script reads pipeline-state.json, review-context.json, dispatch-plan.json
-  ← script formats a briefing with exactly what step 5 needs
-  ← script computes next step (may skip steps irrelevant to this mode)
-  → LLM receives: situation + action + handoff instructions
+LLM calls: script --step 3 --mode pr --output-dir /tmp/review-42
+  ← script reads pipeline-state.json, review-context.json
+  ← script formats a briefing with exactly what step 3 needs
+  ← script computes next step (may skip steps irrelevant to this mode/state)
+  → LLM receives: situation + actions + handoff instructions
   → LLM executes, writes any requested handoff artifacts
-LLM calls: script --step 8 --mode pr --output-dir /tmp/review-42
-  (jumped from 5 to 8 because steps 6-7 don't apply in PR mode)
+LLM calls: script --step 5 --mode pr --output-dir /tmp/review-42
+  (jumped from 3 to 5 because step 4 only activates when unfetched issues are detected)
 ```
 
 ## Design Principles
 
-### 1. Goal-Oriented Pipeline
+### 1. Goal-Oriented Pipeline (Source Code)
 
 Every pipeline starts with a clear, stated goal. This goal is captured as an inline comment at the top of the script — the first thing any future editor reads. It anchors all step design, triage decisions, and tradeoff resolutions.
 
@@ -42,7 +42,7 @@ The goal isn't decorative. It's the tiebreaker:
 
 Each step's output can reference the goal implicitly through its framing. Early steps build understanding ("Here's what these changes are trying to accomplish..."), execution steps deploy resources toward the goal ("These 7 agents will examine the changes from different quality angles..."), synthesis steps connect findings back to it ("Two findings directly threaten the reliability of this payment flow...").
 
-### 1a. Pipeline Identity Anchoring
+### 2. Pipeline Identity Anchoring (Conversation)
 
 The goal comment (Principle 1) anchors editors reading the source — both human and LLM agents modifying the pipeline. But the LLM *executing* the pipeline never reads the source; it calls the script via subprocess and only sees its stdout. The pipeline's identity must live **in the conversation** (the briefing output), not just in the code.
 
@@ -71,7 +71,7 @@ Each variation connects the mission to what's about to happen. They feel like na
 
 **Mode-agnostic identity in commands.** When multiple modes share a pipeline, the command files share the same mission. Mode-specific context comes after: "This run reviews a **pull request**..." or "This run reviews **all changes on the current branch**..." The identity is stable; the context varies.
 
-### 2. Script as Context Curator
+### 3. Script as Context Curator
 
 The script's primary job is **reading files and presenting their contents** — not listing files for the LLM to read. At every step, the script loads all relevant state and presents exactly what the LLM needs to act.
 
@@ -94,16 +94,17 @@ Build the reconciliator prompt with these review files:
 
 The LLM should only read files when it needs to deeply understand content the script can't summarize (e.g., reading actual code, using MCP tools). If the script can read it and present it, it should.
 
-### 2. File-Based State, Not LLM Memory
+### 4. File-Based State, Not LLM Memory
 
 Structured data lives in files. The LLM's conversation context handles qualitative reasoning naturally — it doesn't need a `--thoughts` mechanism to remember what happened three steps ago.
 
 | State type | Owned by | Mechanism |
 |------------|----------|-----------|
-| Structured data (PR number, git range, mode, step history, flags) | Script | `pipeline-state.json` |
-| Context data (PR metadata, reviews, changed files, size) | Script | `review-context.json` (or domain equivalent) |
-| Qualitative reasoning ("this PR fixes a payment flow bug") | LLM | Conversation context (free — already there) |
-| LLM synthesis needed downstream ("change purpose summary") | LLM → file | Explicit handoff artifact (e.g., `change-purpose.txt`) |
+| Caller config (mode, identifiers, feature flags) | Caller → script | `run-config.json` — written once, read-only during run |
+| Execution state (step history, resolved params, agent status) | Script | `pipeline-state.json` — updated at each step |
+| Gathered context (metadata, reviews, changed files, size) | Script | `review-context.json` (or domain equivalent) |
+| Qualitative reasoning ("this change fixes a payment flow bug") | LLM | Conversation context (free — already there) |
+| LLM synthesis needed downstream ("change purpose summary") | LLM → file | Explicit handoff artifact (e.g., `change-purpose.md`) |
 
 **Why not `--thoughts`:**
 - LLMs are good at reasoning, bad at bookkeeping. Asking them to faithfully maintain `STASH_REF=abc123` across 12 steps is asking them to do what scripts do better.
@@ -111,34 +112,34 @@ Structured data lives in files. The LLM's conversation context handles qualitati
 - The LLM's conversation history already contains everything it learned. Serializing it to a string and back is redundant.
 - Shell escaping of prose in CLI arguments is fragile.
 
-### 3. One Universal Step Sequence, Mode-Driven Routing
+### 5. One Universal Step Sequence, Condition-Driven Routing
 
-Multiple modes of the same workflow share a single step sequence. The script decides which steps apply to each mode. Steps that don't apply are skipped via the `next` field — the LLM never calls them.
+Multiple modes of the same workflow share a single step sequence. Each step declares its phase and a condition for when it runs. The script evaluates conditions against the current mode, state, and context. Steps whose conditions aren't met are skipped — the LLM never calls them.
 
 ```python
 STEP_SEQUENCE = [
-    {"step": 1,  "title": "Parse Input",            "modes": ["all"]},
-    {"step": 2,  "title": "Repo Setup",             "modes": ["pr"]},
-    {"step": 3,  "title": "Gather Context",          "modes": ["all"]},
-    {"step": 4,  "title": "Fetch Linear Issues",     "modes": ["data:has_linear_issues"]},
-    {"step": 5,  "title": "Dispatch Plan + Triage",  "modes": ["all"]},
+    {"step": 1,  "title": "Parse Input",           "phase": "SETUP",     "condition": "always"},
+    {"step": 2,  "title": "Repo Setup",             "phase": "SETUP",     "condition": "needs_workspace_setup"},
+    {"step": 3,  "title": "Gather Context",          "phase": "SETUP",     "condition": "always"},
+    {"step": 4,  "title": "Fetch Issue Context",     "phase": "SETUP",     "condition": "has_unfetched_issues"},
+    {"step": 5,  "title": "Dispatch Plan + Triage",  "phase": "EXECUTION", "condition": "always"},
     ...
 ]
 ```
 
-Conditions can be mode-based (`"pr"`, `"full"`, `"incremental"`) or data-driven (`"data:has_linear_issues"` — true when the script detects Linear issue IDs in context). Data-driven conditions let any mode activate a step when the data warrants it.
+Conditions can be static (`"always"`), mode-dependent (`"needs_workspace_setup"` — true for interactive PR mode), or data-driven (`"has_unfetched_issues"` — true when the script detects unresolved issue references). A condition evaluator function maps condition strings to boolean checks against the current state. Data-driven conditions let any mode activate a step when the data warrants it.
 
 **Step skipping is transparent.** When a step is skipped, the previous step's output explains why:
 
 ```
 NEXT: Step 5 — Dispatch Plan + Triage.
-(Skipping steps 3-4: Repo Setup is PR-only; no Linear issues detected for issue fetching.)
-Call review-pipeline.py with --step 5.
+(Skipping steps 3-4: Repo Setup is PR-only; no unfetched issues detected.)
+Call <pipeline>.py with --step 5.
 ```
 
 This keeps the LLM oriented when step numbers aren't consecutive.
 
-### 5. Conversational Output
+### 6. Conversational Output
 
 The script's output is language, not machine code. LLMs are language-native — they reason better when guided by natural, contextually adapted prose than by repetitive instruction templates.
 
@@ -171,8 +172,8 @@ Each step's output adapts its framing to the phase:
 **Structure of each step's output:**
 
 1. **Situation** — what you need to know right now (pre-read, pre-formatted, relevant to this step only)
-2. **Action** — what to do with it (specific commands, tool calls, or judgments to make)
-3. **Handoff** — what to produce for the next step, if anything (explicit file to write, or nothing)
+2. **Actions** — what to do with it (specific commands, tool calls, or judgments to make)
+3. **Handoff** — what must be true before proceeding (explicit file to write, or nothing)
 4. **Next** — which step comes next and why (with skip explanations if non-consecutive)
 
 **Tone:** direct, information-dense, no filler. Present facts the LLM needs to act on, not instructions to go find facts. But write as a colleague briefing a colleague, not a machine printing instructions. The script has access to all the context — use it to write output that's specific to this particular review, not generic boilerplate.
@@ -181,7 +182,7 @@ Each step's output adapts its framing to the phase:
 
 Good voice choices create a natural dynamic between the script and the LLM. For example: "senior reviewer briefing the orchestrator" gives the script authority on process while trusting the LLM on execution. The voice should feel like one side of a dialogue, not a specification document or a numbered checklist.
 
-### 6. Explicit Handoff Points
+### 7. Explicit Handoff Points
 
 At specific steps where the LLM produces synthesis needed by later steps, the script names the exact artifact to write:
 
@@ -208,9 +209,9 @@ Derive from commit messages: <script presents commit message summary here>.
 
 This is resilient — the pipeline doesn't break if a handoff is missed, it degrades gracefully.
 
-### 7. Artifact Discipline
+### 8. Artifact Discipline
 
-Handoff points (Principle 6) define *what* to write. Artifact discipline defines *the contract around writing it*. The biggest failure mode in multi-step LLM pipelines isn't bad judgment — it's sloppy execution: files half-written, verification skipped, the LLM moving on without confirming its own work.
+Handoff points (Principle 7) define *what* to write. Artifact discipline defines *the contract around writing it*. The biggest failure mode in multi-step LLM pipelines isn't bad judgment — it's sloppy execution: files half-written, verification skipped, the LLM moving on without confirming its own work.
 
 **Write → Verify → Proceed.** Every step that asks the LLM to produce a file follows this rhythm. The briefing says what to write, then says to verify the file exists, then the `handoff` section gates the next step. The LLM cannot proceed until the artifact is confirmed.
 
@@ -234,101 +235,130 @@ This eliminates a class of errors where the LLM fills in the template instead of
 ### CLI Interface
 
 ```bash
-python3 review-pipeline.py \
+python3 <pipeline>.py \
   --step <N> \
-  --mode <pr|full|incremental> \
-  --output-dir /tmp/review-42 \
-  [--pr-number 123]              # PR mode only, step 1 only
-  [--git-range "main..HEAD"]     # explicit range override
+  --mode <mode> \
+  --output-dir /tmp/<pipeline>-<id> \
+  [--mode-specific-args]           # e.g., --pr-number 123
 ```
 
 Minimal arguments. The script reads everything else from files in `--output-dir`.
 
-No `--total-steps` (the script knows its own sequence). No `--thoughts` (state lives in files and conversation context).
+No `--total-steps` (the script knows its own sequence). No `--thoughts` (state lives in files and conversation context). The `--mode` flag is required at step 1; for subsequent steps, the script reads it from `run-config.json`.
 
-### State File: `pipeline-state.json`
+### Split State Model
 
-Written by the script at each step. Read by the script at the next step.
+Two files with distinct ownership:
+
+**`run-config.json`** — Caller-provided configuration. Written once before or at step 1 (from CLI args or a pre-existing config). Read-only during the run. Contains mode, identifiers (e.g., PR number), feature flags (interactive, output instructions), and explicit overrides (git range).
+
+**`pipeline-state.json`** — Execution state. Owned exclusively by the script. Updated after each step. The LLM never reads or writes this file directly.
 
 ```json
 {
-  "mode": "pr",
-  "current_step": 5,
+  "run_id": "20260318T150000-pr-42",
   "completed_steps": [1, 2, 3],
   "skipped_steps": [4],
-  "skip_reasons": {"4": "no Linear issues detected"},
-  "pr_number": "123",
-  "git_range": "abc123..def456",
-  "has_linear_issues": false,
-  "dispatched_agents": ["pr-reviewer", "security-reviewer", "..."],
-  "completed_agents": [],
+  "resolved_params": {
+    "git_range": "abc123..def456",
+    "has_unfetched_issues": false
+  },
+  "workspace": {
+    "original_branch": "feature/payments",
+    "stash_ref": null
+  },
+  "agents": {
+    "dispatched": ["pr-reviewer", "security-reviewer"],
+    "completed": ["pr-reviewer"],
+    "failed": [],
+    "review_files": ["/tmp/review-42/pr-review.json"]
+  },
+  "change_purpose": "Refactors the payment gateway to support multi-currency checkout.",
   "verdict": null
 }
 ```
 
-The script updates this file after computing each step's guidance. The LLM never reads or writes this file directly — the script handles it.
+**Why split:** Mode and caller config don't change during a run — they're input. Execution state (which steps completed, which agents finished) evolves at every step. Separating them prevents accidental mutation of config and makes it clear what the script owns vs. what the caller provides.
 
 ### Step Guidance Function
 
 ```python
-def get_step_guidance(step: int, mode: str, state: dict, context: dict) -> dict:
-    """Return guidance for a step, or None if the step is skipped in this mode.
+def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
+    """Return guidance for a step. Pure formatting — no I/O.
 
     Args:
         step: Step number.
-        mode: Pipeline mode (pr, full, incremental).
+        mode: Pipeline mode.
         state: Current pipeline-state.json contents.
-        context: Current review-context.json contents.
+        context: Current context (gathered data, PR metadata, etc.).
+        config: Run config (caller-provided, read-only).
+        output_dir: Output directory path (for constructing file paths in briefings).
 
     Returns:
-        Dict with keys: phase, title, situation, actions, handoff, next_step, skip_reason.
-        next_step is computed by scanning forward for the next applicable step.
+        Dict with keys: phase, title, situation, actions, handoff.
     """
 ```
 
-The function computes `next_step` by scanning forward through the step sequence, skipping steps that don't apply to the current mode/state. This is where the routing logic lives.
+**Critical constraint: `get_step_guidance()` is a pure formatting function.** It reads its arguments and returns a dict. No file I/O, no subprocess calls, no side effects. All orchestration — running scripts, reading files into state, writing state — happens in a separate `_orchestrate_step()` function that runs *before* `get_step_guidance()` is called. This makes every step's briefing testable with plain dicts, no filesystem needed.
+
+```
+main() for each step:
+  1. _orchestrate_step() — reads files, runs subprocesses, updates state (I/O here)
+  2. get_step_guidance() — formats state into a briefing (pure function, no I/O)
+  3. format_output() — renders the briefing as text for stdout
+```
+
+Routing logic (computing the next step) lives in `main()` using `compute_next_step()`, which scans forward through the step sequence, skipping steps whose conditions aren't met.
 
 ### Output Formatting
 
 ```python
-def format_output(step: int, guidance: dict) -> str:
+def format_output(step, guidance):
     lines = []
-    lines.append(f"═══ REVIEW PIPELINE Step {step}: {guidance['title']} ({guidance['phase']}) ═══")
+
+    # Header — rigid structure, machine-readable
+    lines.append(f"{'═' * 60}")
+    lines.append(f"PIPELINE Step {step} — {guidance['phase']}: {guidance['title']}")
+    lines.append(f"{'═' * 60}")
     lines.append("")
 
     # Situation: pre-digested context
     if guidance.get("situation"):
+        lines.append("## SITUATION")
+        lines.append("")
         for line in guidance["situation"]:
             lines.append(line)
         lines.append("")
 
     # Actions: what to do
-    for action in guidance["actions"]:
-        lines.append(action)
-    lines.append("")
-
-    # Handoff: what to produce
-    if guidance.get("handoff"):
-        lines.append("HANDOFF:")
-        for line in guidance["handoff"]:
-            lines.append(f"  {line}")
+    if guidance.get("actions"):
+        lines.append("## ACTIONS")
+        lines.append("")
+        for action in guidance["actions"]:
+            lines.append(action)
         lines.append("")
 
-    # Next step with skip explanation
-    if guidance["next_step"]:
-        next_s = guidance["next_step"]
-        skip_msg = ""
-        if guidance.get("skip_reason"):
-            skip_msg = f"\n(Skipping: {guidance['skip_reason']})"
-        lines.append(
-            f"NEXT: Step {next_s['step']} — {next_s['title']}.{skip_msg}\n"
-            f"Call review-pipeline.py with --step {next_s['step']}."
-        )
+    # Handoff: required before proceeding
+    if guidance.get("handoff"):
+        lines.append("## HANDOFF — Required before proceeding")
+        lines.append("")
+        for line in guidance["handoff"]:
+            lines.append(f"- {line}")
+        lines.append("")
+
+    # Next step pointer
+    next_step = guidance.get("next_step")
+    if next_step:
+        lines.append(f"{'─' * 60}")
+        lines.append(f"Next: Step {next_step['step']} — {next_step['title']}")
     else:
-        lines.append("PIPELINE COMPLETE — Present results to user.")
+        lines.append(f"{'─' * 60}")
+        lines.append("PIPELINE COMPLETE")
 
     return "\n".join(lines)
 ```
+
+Section headers (`## SITUATION`, `## ACTIONS`, `## HANDOFF`) are structural landmarks — the LLM uses them to parse the briefing. The conversational voice (Principle 6) lives *within* these sections, not in the headers themselves.
 
 ## Command File Structure
 
@@ -387,13 +417,14 @@ All commands for the same pipeline use the same script. They differ only in `--m
 
 | Aspect | Step-by-Step Prompt Injection | Curated Context Pipeline |
 |--------|-------------------------------|--------------------------|
-| State mechanism | `--thoughts` (LLM carries all state) | File-based (`pipeline-state.json`) |
+| State mechanism | `--thoughts` (LLM carries all state) | Split files (`run-config.json` + `pipeline-state.json`) |
 | Context delivery | Instructions to read files | Pre-digested briefings |
-| Step routing | Always sequential (step N → N+1) | Mode-driven skipping via `next` |
+| Step routing | Always sequential (step N → N+1) | Condition-driven skipping (mode + data-driven) |
 | Multi-mode support | Not addressed | Core feature — one sequence, many modes |
 | Script role | Instruction injector | Context curator + state manager + flow controller |
 | LLM file reads | Frequent (extract values from JSON) | Rare (only for deep content understanding) |
 | Output tone | Task list | Conversational briefing |
+| Guidance functions | May have side effects | Pure formatting — no I/O (testable with plain dicts) |
 
 The step-by-step prompt injection pattern remains valid for simpler cases — single-mode workflows where epistemic boundaries are the primary concern (e.g., the decision critic). The curated context pipeline is for multi-mode operational workflows where context management and flow control matter as much as reasoning discipline.
 
@@ -421,8 +452,9 @@ The step-by-step prompt injection pattern remains valid for simpler cases — si
 - [ ] Choose a voice for the script's briefings
 
 **Script**
-- [ ] `get_step_guidance()` returns guidance or `None` (skipped) for each step/mode combination
-- [ ] `next_step` is computed by scanning forward, not hardcoded
+- [ ] `get_step_guidance()` is a pure formatting function — no I/O, no subprocess calls
+- [ ] Orchestration (file reads, subprocess calls) in a separate function, called before guidance
+- [ ] `get_step_guidance()` returns guidance for each step/mode combination
 - [ ] Skip reasons are human-readable and included in output
 - [ ] Every step's situation section pre-digests all relevant state from files
 - [ ] Handoff instructions name exact file paths and describe what to write
@@ -459,3 +491,5 @@ The step-by-step prompt injection pattern remains valid for simpler cases — si
 | Stale `pipeline-state.json` from crashed run | Script checks timestamps or clears state at step 1 for fresh runs. |
 | Mode proliferation — too many conditions | Keep modes to 3-5. Prefer data-driven conditions over new mode flags. |
 | Step sequence changes require updating tests | Parameterize tests over the step sequence, don't hardcode step numbers. |
+| I/O leaking into guidance functions | Enforce the pure formatting constraint. If a guidance function needs data, the orchestration function must read it into state first. |
+| Mission and phase transitions cause banner blindness | Use contextual variations, not verbatim repetition. Phase transitions connect the mission to the upcoming work. |
