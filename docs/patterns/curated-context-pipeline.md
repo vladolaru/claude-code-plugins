@@ -42,6 +42,35 @@ The goal isn't decorative. It's the tiebreaker:
 
 Each step's output can reference the goal implicitly through its framing. Early steps build understanding ("Here's what these changes are trying to accomplish..."), execution steps deploy resources toward the goal ("These 7 agents will examine the changes from different quality angles..."), synthesis steps connect findings back to it ("Two findings directly threaten the reliability of this payment flow...").
 
+### 1a. Pipeline Identity Anchoring
+
+The goal comment (Principle 1) is for human editors reading the source. The LLM never sees it — it sees briefings. The pipeline's identity must live **in the conversation**, not just in the code.
+
+**Mission at step 1.** The first briefing states who the LLM is, what it's doing, and what quality means. This is the only place with the full mission. It sets the tone for every subsequent step.
+
+```python
+_PIPELINE_MISSION = (
+    "You are a code review orchestrator. Your mission: ensure the review "
+    "pipeline runs to completion with dedication, precision, and care — "
+    "producing a comprehensive, accurate, and actionable review..."
+)
+```
+
+Step 1's situation block prepends this constant. The LLM reads it before anything mode-specific.
+
+**Phase-transition reminders.** By step 8, the mission from step 1 has drifted deep in the context window. Rather than repeating it verbatim (banner blindness), inject **contextual variations** at phase boundaries — moments where the work shifts character:
+
+| Transition | Step | Anchoring |
+|------------|------|-----------|
+| SETUP → EXECUTION | First execution step | "You understand the changes. Execute precisely." |
+| EXECUTION → SYNTHESIS | First synthesis step | "Specialists are done. Bring it together faithfully." |
+| SYNTHESIS → VALIDATION | First validation step | "Before this reaches a human, stress-test it." |
+| VALIDATION → OUTPUT | First output step | "Deliver completely. Nothing missing." |
+
+Each variation connects the mission to what's about to happen. They feel like natural thoughts at that moment, not bolted-on reminders.
+
+**Mode-agnostic identity in commands.** When multiple modes share a pipeline, the command files share the same mission. Mode-specific context comes after: "This run reviews a **pull request**..." or "This run reviews **all changes on the current branch**..." The identity is stable; the context varies.
+
 ### 2. Script as Context Curator
 
 The script's primary job is **reading files and presenting their contents** — not listing files for the LLM to read. At every step, the script loads all relevant state and presents exactly what the LLM needs to act.
@@ -148,6 +177,10 @@ Each step's output adapts its framing to the phase:
 
 **Tone:** direct, information-dense, no filler. Present facts the LLM needs to act on, not instructions to go find facts. But write as a colleague briefing a colleague, not a machine printing instructions. The script has access to all the context — use it to write output that's specific to this particular review, not generic boilerplate.
 
+**Voice design.** Choose a specific voice for the script's personality and maintain it across all steps. The voice lives *within* the structural headers (Situation, Actions, Handoff) — don't soften the headers themselves, as they're machine-readable landmarks that help the LLM parse the briefing.
+
+Good voice choices create a natural dynamic between the script and the LLM. For example: "senior reviewer briefing the orchestrator" gives the script authority on process while trusting the LLM on execution. The voice should feel like one side of a dialogue, not a specification document or a numbered checklist.
+
 ### 6. Explicit Handoff Points
 
 At specific steps where the LLM produces synthesis needed by later steps, the script names the exact artifact to write:
@@ -174,6 +207,27 @@ Derive from commit messages: <script presents commit message summary here>.
 ```
 
 This is resilient — the pipeline doesn't break if a handoff is missed, it degrades gracefully.
+
+### 7. Artifact Discipline
+
+Handoff points (Principle 6) define *what* to write. Artifact discipline defines *the contract around writing it*. The biggest failure mode in multi-step LLM pipelines isn't bad judgment — it's sloppy execution: files half-written, verification skipped, the LLM moving on without confirming its own work.
+
+**Write → Verify → Proceed.** Every step that asks the LLM to produce a file follows this rhythm. The briefing says what to write, then says to verify the file exists, then the `handoff` section gates the next step. The LLM cannot proceed until the artifact is confirmed.
+
+**`handoff` is the sole gate.** Requirements for "must exist before proceeding" belong in the `handoff` section, not buried in `actions`. Actions are what to do; handoff is what must be true. This structural separation makes gates scannable — the LLM always knows where to look for blocking requirements.
+
+**Schema-not-placeholders for structured data.** When a step shows a JSON example the LLM should write, use schema format with explicit options instead of a copyable default value:
+
+```
+Wrong — the LLM copies "REQUEST_CHANGES" as the literal value:
+{"verdict": "REQUEST_CHANGES"}
+Valid values: APPROVE, REQUEST_CHANGES, COMMENT
+
+Right — the LLM must choose:
+{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}
+```
+
+This eliminates a class of errors where the LLM fills in the template instead of making a decision.
 
 ## Script Architecture
 
@@ -278,26 +332,28 @@ def format_output(step: int, guidance: dict) -> str:
 
 ## Command File Structure
 
-Each command file becomes a thin wrapper — parse arguments, construct the output directory, call step 1.
+Each command file becomes a thin wrapper — parse arguments, construct the output directory, call step 1. The command states the pipeline's mission (mode-agnostic identity), then adds mode-specific context. All modes share the same mission; the specialization comes from the `--mode` flag, not from the identity.
 
 ```markdown
 ---
 description: <what this mode does>
 ---
 
-You are a review orchestrator. A Python script provides step-specific
-briefings. Call it once per step, execute what it describes, then call
-it again for the next step.
+You are a <domain> orchestrator. Your mission: ensure the pipeline runs to
+completion with dedication, precision, and care — producing <quality goal>.
+Every step has required artifacts; treat each as a contract. Do not
+approximate, skip, or move on until the step's outputs are verified.
 
-## Phases
+This run <mode-specific context>.
 
-| Phase | What happens |
-|-------|-------------|
-| SETUP | Parse input, prepare workspace and context |
-| EXECUTION | Dispatch plan, triage, parallel agents |
-| SYNTHESIS | Reconcile findings, generate report |
-| VALIDATION | Decision critic stress-test |
-| OUTPUT | Present results, clean up |
+## Workflow
+
+A Python script provides step-specific briefings. Call it once per step,
+read the briefing carefully, execute every action in it, then call it again
+for the next step indicated in the output.
+
+Each briefing specifies required artifacts. Treat each as a contract — write
+the file, verify it exists, then move on. Do not skip verification.
 
 ## Starting the Workflow
 
@@ -308,24 +364,24 @@ it again for the next step.
 \```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
 SAFE_REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//')
-OUTPUT_DIR="/tmp/review-${SAFE_REPO_PATH}-<identifier>"
+OUTPUT_DIR="/tmp/<pipeline>-${SAFE_REPO_PATH}-<identifier>"
 mkdir -p "$OUTPUT_DIR"
 \```
 
 **Run Step 1:**
 \```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-pipeline.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/<pipeline>.py \
   --step 1 \
-  --mode <pr|full|incremental> \
+  --mode <mode> \
   --output-dir "$OUTPUT_DIR" \
-  [--pr-number "<PR_NUMBER>"]
+  [--mode-specific-args]
 \```
 
 Execute the briefing. Then call with `--step N` where N is the next step
 indicated in the output. Continue until the script signals PIPELINE COMPLETE.
 ```
 
-All three commands (pr-review, full-code-review, code-review) use the same script. They differ only in `--mode` and which CLI arguments they pass.
+All commands for the same pipeline use the same script. They differ only in `--mode` and which CLI arguments they pass.
 
 ## Comparison with Step-by-Step Prompt Injection
 
@@ -361,6 +417,8 @@ The step-by-step prompt injection pattern remains valid for simpler cases — si
 - [ ] For each step, define: which modes it applies to, what data-driven conditions activate it
 - [ ] Identify handoff points — which steps produce LLM synthesis needed by later steps
 - [ ] Identify what state the script needs to track in `pipeline-state.json`
+- [ ] Define pipeline mission statement and phase-transition texts
+- [ ] Choose a voice for the script's briefings
 
 **Script**
 - [ ] `get_step_guidance()` returns guidance or `None` (skipped) for each step/mode combination
@@ -371,11 +429,15 @@ The step-by-step prompt injection pattern remains valid for simpler cases — si
 - [ ] Fallback behavior when handoff files are missing
 - [ ] `pipeline-state.json` updated at each step
 - [ ] Stale state detection (e.g., output dir from a previous run)
+- [ ] Mission injected at step 1, phase transitions at phase-entry steps
+- [ ] File-producing steps: verification checkpoint + `handoff` gate
+- [ ] JSON examples use schema format, not copyable placeholder values
 
 **Command files**
 - [ ] Thin wrappers — parse arguments, construct output dir, call step 1
 - [ ] All modes reference the same script
 - [ ] No duplicated logic between command files
+- [ ] Unified mission language across all mode commands
 
 **Testing**
 - [ ] Each step's guidance tested for each mode (including skip behavior)
@@ -383,6 +445,10 @@ The step-by-step prompt injection pattern remains valid for simpler cases — si
 - [ ] State file read/write round-trip tested
 - [ ] Handoff file missing → fallback behavior tested
 - [ ] CLI integration: each mode runs step 1 successfully
+- [ ] Mission present in step 1 output for all modes
+- [ ] Phase-transition text present at each phase-entry step
+- [ ] File-producing steps have `handoff` (not None)
+- [ ] No copyable placeholder values in JSON examples
 
 ## Risks
 

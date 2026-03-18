@@ -49,6 +49,32 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
       └─ Produces decision-critic-findings.md with STAND/REVISE/ESCALATE verdict
 ```
 
+### Pipeline Briefing Design
+
+The step briefings in `review-pipeline.py` follow deliberate design patterns. These are inline rules — see `docs/patterns/curated-context-pipeline.md` for the general principles and rationale behind them.
+
+**Identity anchoring.** `_PIPELINE_MISSION` constant holds the orchestrator's mission statement. Step 1 prepends it to `situation`. Do not modify the mission text without reviewing the pattern doc's "Pipeline Identity Anchoring" principle — it was designed to anchor the LLM on dedication, precision, and artifact discipline.
+
+**Phase transitions.** `_PHASE_TRANSITIONS` dict maps phase names to contextual reminders injected at phase-entry steps:
+
+| Phase | Injected at | Focus |
+|-------|------------|-------|
+| EXECUTION | Step 5 | Precision in dispatch |
+| SYNTHESIS | Step 8 | Faithful synthesis, no bias |
+| VALIDATION | Step 10 | Stress-test before it reaches a human |
+| OUTPUT | Step 11 | Complete delivery, nothing missing |
+
+These are variations on the mission, not repetitions. Each connects the mission to what's about to happen.
+
+**Artifact discipline.** File-producing steps follow Write → Verify → Proceed:
+- `handoff` is the sole gate mechanism. If a step requires an artifact before the next step can proceed, it goes in `handoff`, not buried in `actions`.
+- JSON examples use schema format: `{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}` — never copyable placeholder values.
+- Steps 3/4, 8, 9, and 10 have `handoff` gates on their output files.
+
+**Voice.** Senior reviewer briefing the orchestrator — authority on process, trust on execution. The voice lives within the structural section headers (SITUATION / ACTIONS / HANDOFF). The headers themselves stay rigid as machine-readable landmarks.
+
+**Modifying briefings.** Tests check for keywords in briefing text (e.g., `"review-reconciliator" in text`, `"STAND" in text`). When rewriting briefing prose, preserve these keywords. Run the relevant `TestStep*` class after any text change.
+
 ### Shared Protocols
 
 **reviewer-protocol.md** provides behavioral rules for all agents. Bootstrap extracts it via a **skip-list** — sections the bootstrap already handles are excluded, everything else is included automatically. New sections added to the protocol are picked up without code changes.
