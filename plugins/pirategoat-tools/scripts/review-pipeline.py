@@ -626,8 +626,9 @@ def _step_3_gather_context(mode, state, context, config, output_dir):
     has_unfetched = state.get("resolved_params", {}).get("has_unfetched_issues", False)
     if not has_unfetched:
         handoff = [
-            f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`",
+            f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`.",
             "Include: what the change does, why it's being made, and what to focus on during review.",
+            "Verify the file exists before proceeding.",
         ]
 
     return {
@@ -665,8 +666,9 @@ def _step_4_fetch_issues(mode, state, context, config, output_dir):
     actions.append("After fetching, you'll have enough context to write the change purpose.")
 
     handoff = [
-        f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`",
+        f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`.",
         "Include: what the change does, why it's being made, and what to focus on during review.",
+        "Verify the file exists before proceeding.",
     ]
 
     return {
@@ -939,12 +941,16 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     actions.append(f"- `{od}/review-findings.json` — structured findings")
     actions.append(f"- `{od}/review-findings.md` — human-readable findings")
 
+    handoff = [
+        f"Verify `{od}/review-findings.json` and `{od}/review-findings.md` both exist before proceeding.",
+    ]
+
     return {
         "phase": "SYNTHESIS",
         "title": "Reconcile + Verify",
         "situation": situation,
         "actions": actions,
-        "handoff": None,
+        "handoff": handoff,
     }
 
 
@@ -1042,12 +1048,16 @@ def _step_9_review_report(mode, state, context, config, output_dir):
     actions.append(f"Reference `{od}/review-findings.json` and `{od}/review-findings.md` "
                    "for the consolidated findings from the reconciliator.")
 
+    handoff = [
+        f"Verify `{od}/review-report.md` exists before proceeding.",
+    ]
+
     return {
         "phase": "SYNTHESIS",
         "title": "Review Report Synthesis",
         "situation": situation,
         "actions": actions,
-        "handoff": None,
+        "handoff": handoff,
     }
 
 
@@ -1084,26 +1094,30 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("- **REVISE** — Apply recommended adjustments (spot-check factual claims first).")
     actions.append("- **ESCALATE** — Flag validity concerns, override verdict to COMMENT.")
     actions.append("")
-    actions.append("Also write the critic's own verdict (before any adjustments):")
+    actions.append("Write the critic's own verdict (before any adjustments):")
     actions.append(f"```json")
-    actions.append(f'// Write to {od}/decision-critic-verdict.json')
-    actions.append(f'{{"verdict": "STAND"}}')
+    actions.append(f'// Save to: {od}/decision-critic-verdict.json')
+    actions.append(f'{{"verdict": "<STAND | REVISE | ESCALATE>"}}')
     actions.append(f"```")
-    actions.append(f"Valid values: STAND, REVISE, ESCALATE")
     actions.append("")
-    actions.append("After acting on the critic's verdict, write the final verdict:")
+    actions.append("After acting on the critic's verdict, write the final review verdict:")
     actions.append(f"```json")
-    actions.append(f'// Write to {od}/review-verdict.json')
-    actions.append(f'{{"verdict": "REQUEST_CHANGES"}}')
+    actions.append(f'// Save to: {od}/review-verdict.json')
+    actions.append(f'{{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}}')
     actions.append(f"```")
-    actions.append(f"Valid values: APPROVE, REQUEST_CHANGES, COMMENT")
+    actions.append("")
+    actions.append("Before proceeding, verify both files exist and contain valid JSON.")
+
+    handoff = [
+        f"`{od}/decision-critic-verdict.json` and `{od}/review-verdict.json` must both exist with valid JSON.",
+    ]
 
     return {
         "phase": "VALIDATION",
         "title": "Decision Critic",
         "situation": situation,
         "actions": actions,
-        "handoff": None,
+        "handoff": handoff,
     }
 
 

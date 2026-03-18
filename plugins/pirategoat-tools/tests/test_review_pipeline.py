@@ -1022,6 +1022,77 @@ class TestPhaseTransitions:
         assert "validated" in text.lower() or "nothing is missing" in text.lower()
 
 
+class TestStructuredDataDiscipline:
+    """Artifact discipline: verification checkpoints, handoff gates, schema-not-placeholders."""
+
+    def test_step_3_handoff_has_verification(self, mod, tmp_path):
+        """Step 3 handoff should instruct verifying change-purpose.md exists."""
+        state = {"completed_steps": [], "resolved_params": {"has_unfetched_issues": False}}
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(3, "pr", state, ctx, output_dir=str(tmp_path))
+        assert g.get("handoff") is not None
+        handoff_text = "\n".join(g["handoff"])
+        assert "verify" in handoff_text.lower() or "confirm" in handoff_text.lower() or "exists" in handoff_text.lower()
+
+    def test_step_4_handoff_has_verification(self, mod, tmp_path):
+        """Step 4 handoff should instruct verifying change-purpose.md exists."""
+        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
+        ctx = COMPLETE_CONTEXT
+        g = mod.get_step_guidance(4, "pr", state, ctx, output_dir=str(tmp_path))
+        assert g.get("handoff") is not None
+        handoff_text = "\n".join(g["handoff"])
+        assert "verify" in handoff_text.lower() or "confirm" in handoff_text.lower() or "exists" in handoff_text.lower()
+
+    def test_step_8_has_handoff(self, mod, tmp_path):
+        """Step 8 should gate on reconciliation output files."""
+        state = {
+            "completed_steps": [1, 3, 5, 6, 7],
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "agents": {"dispatched": ["pr-reviewer"], "completed": ["pr-reviewer"], "failed": []},
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert g.get("handoff") is not None
+        handoff_text = "\n".join(g["handoff"])
+        assert "review-findings.json" in handoff_text
+
+    def test_step_9_has_handoff(self, mod, tmp_path):
+        """Step 9 should gate on review-report.md."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(9, "pr", state, ctx, output_dir=str(tmp_path))
+        assert g.get("handoff") is not None
+        handoff_text = "\n".join(g["handoff"])
+        assert "review-report.md" in handoff_text
+
+    def test_step_10_has_handoff(self, mod, tmp_path):
+        """Step 10 should gate on both verdict files."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        assert g.get("handoff") is not None
+        handoff_text = "\n".join(g["handoff"])
+        assert "decision-critic-verdict.json" in handoff_text
+        assert "review-verdict.json" in handoff_text
+
+    def test_step_10_uses_schema_not_placeholders(self, mod, tmp_path):
+        """Step 10 JSON examples should show options, not copyable defaults."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        # Should have schema-style options
+        assert "STAND" in text and "REVISE" in text and "ESCALATE" in text
+        assert "APPROVE" in text and "REQUEST_CHANGES" in text and "COMMENT" in text
+        # Should NOT have a bare {"verdict": "STAND"} (literal copyable value)
+        # The schema format like <STAND | REVISE | ESCALATE> is acceptable
+        import re
+        bare_stand = re.search(r'"verdict":\s*"STAND"', text)
+        bare_rc = re.search(r'"verdict":\s*"REQUEST_CHANGES"', text)
+        assert bare_stand is None, "Found copyable placeholder: STAND"
+        assert bare_rc is None, "Found copyable placeholder: REQUEST_CHANGES"
+
+
 class TestStep2RepoSetup:
     """Step 2: Repo Setup — PR mode + interactive only."""
 
