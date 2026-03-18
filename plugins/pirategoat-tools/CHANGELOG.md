@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Test file splitting** — split `test_review_pipeline.py` (1915 lines) into three focused files: infrastructure (routing, state, CLI), orchestration (subprocess, telemetry), and briefings (step guidance output); split `test_bootstrap_reviewer.py` (1043 lines) into unit and integration files; split `test_commands.py` (713 lines) by extracting per-command tests into own files with shared helpers module
+
+## [1.65.0]
+
 ### Added
 
 - **Pipeline mission statement** — step 1 briefing now anchors the orchestrator on its identity, quality goals, and artifact discipline
