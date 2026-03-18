@@ -71,6 +71,34 @@ class TestTelemetryIntegration:
         assert json.loads(lines[1])["event"] == "step"
 
 
+
+class TestStep2Orchestration:
+    """Step 2 main() runs setup-workspace.py and persists workspace state."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_2_completes_without_crash(self, tmp_path):
+        """Step 2 should complete even when setup-workspace.py fails (no git repo)."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = self._run("--step", "2", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert 2 in state["completed_steps"]
+
+    def test_step_2_stores_workspace_setup_result(self, tmp_path):
+        """Step 2 should store workspace_setup_result in state."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        self._run("--step", "2", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert "workspace_setup_result" in state
+
+
 class TestStep3Orchestration:
     """Step 3 main() runs gather-review-context.py and hydrates state."""
 

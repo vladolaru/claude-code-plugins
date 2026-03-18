@@ -414,21 +414,50 @@ def _step_2_repo_setup(mode, state, context, config, output_dir):
     """Step 2: Repo Setup — checkout PR branch, stash changes."""
     pr_number = config.get("pr_number", "")
     gh_cmd = context.get("github_cli_command", "gh")
+    ws_result = state.get("workspace_setup_result")
 
-    situation = [
-        f"Setting up workspace for PR #{pr_number} review.",
-        "Need to checkout the PR branch and stash any uncommitted changes.",
-    ]
+    if ws_result and ws_result.get("checkout_ok"):
+        # Success path
+        original_branch = ws_result.get("original_branch", "unknown")
+        situation = [
+            f"Workspace successfully set up for PR #{pr_number} review.",
+            f"Was on branch `{original_branch}`, now on PR branch.",
+        ]
+        stash_ref = ws_result.get("stash_ref")
+        if stash_ref:
+            situation.append(f"Stashed uncommitted changes (stash ref: `{stash_ref}`).")
 
-    actions = [
-        "1. Check for uncommitted changes with `git status`",
-        "2. If dirty: run `git stash push -u -m 'pr-review-auto-stash'`",
-        "3. Record the current branch name with `git branch --show-current`",
-        f"4. Checkout the PR branch: `{gh_cmd} pr checkout {pr_number}`",
-        "",
-        "Pass the workspace state on the next pipeline call:",
-        f"    --original-branch <CURRENT_BRANCH> --stash-ref <STASH_REF_IF_STASHED>",
-    ]
+        actions = [
+            "Workspace is ready. Proceed to the next step.",
+        ]
+
+    elif ws_result and ws_result.get("error"):
+        # Failure path
+        error_msg = ws_result["error"]
+        situation = [
+            f"Automatic workspace setup for PR #{pr_number} failed.",
+            f"Error: {error_msg}",
+        ]
+        actions = [
+            "Manual fallback — run these commands:",
+            "1. Check for uncommitted changes with `git status`",
+            "2. If dirty: run `git stash push -u -m 'pr-review-auto-stash'`",
+            "3. Record the current branch name with `git branch --show-current`",
+            f"4. Checkout the PR branch: `{gh_cmd} pr checkout {pr_number}`",
+        ]
+
+    else:
+        # No result path
+        situation = [
+            f"Setting up workspace for PR #{pr_number} review.",
+            "Automatic setup did not run. Manual steps required.",
+        ]
+        actions = [
+            "1. Check for uncommitted changes with `git status`",
+            "2. If dirty: run `git stash push -u -m 'pr-review-auto-stash'`",
+            "3. Record the current branch name with `git branch --show-current`",
+            f"4. Checkout the PR branch: `{gh_cmd} pr checkout {pr_number}`",
+        ]
 
     return {
         "phase": "SETUP",
@@ -1336,6 +1365,29 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
     in place. Returns the (possibly updated) context dict.
     """
     context_path = os.path.join(output_dir, "review-context.json")
+
+    if step == 2:
+        # Run setup-workspace.py to stash, record branch, checkout PR
+        pr_number = config.get("pr_number", "")
+        if pr_number:
+            setup_cmd = [
+                sys.executable, str(SCRIPTS_DIR / "setup-workspace.py"),
+                "--pr-number", str(pr_number),
+            ]
+            stdout, ok = _run_subprocess(setup_cmd, timeout=60)
+            if ok and stdout:
+                try:
+                    ws_result = json.loads(stdout)
+                    state["workspace"]["original_branch"] = ws_result.get("original_branch")
+                    state["workspace"]["stash_ref"] = ws_result.get("stash_ref")
+                    state["workspace_setup_result"] = ws_result
+                except (json.JSONDecodeError, KeyError):
+                    state["workspace_setup_result"] = {"error": "Failed to parse script output"}
+            else:
+                state["workspace_setup_result"] = {
+                    "error": "setup-workspace.py failed or produced no output",
+                    "checkout_ok": False,
+                }
 
     if step == 3:
         # Run gather-review-context.py to collect git context, PR metadata, etc.
