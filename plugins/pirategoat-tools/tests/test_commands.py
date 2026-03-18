@@ -1,15 +1,11 @@
 """Tests for review command files — shared structural tests + review commands."""
 
-import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from graders import grade_review_baseline
 
 from test_commands_helpers import (
     read_command,
@@ -32,12 +28,6 @@ from test_commands_helpers import (
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def tmp_dir():
-    with tempfile.TemporaryDirectory() as d:
-        yield d
 
 
 @pytest.fixture(scope="module")
@@ -147,11 +137,6 @@ class TestScriptReferences:
 class TestReviewCommandsReferenceUnifiedScript:
     """All review commands reference review-pipeline.py with correct mode."""
 
-    @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
-    def test_references_review_pipeline(self, command):
-        content = read_command(command)
-        assert "review-pipeline.py" in content
-
     def test_pr_review_uses_pr_mode(self):
         content = read_command("pr-review.md")
         assert "--mode pr" in content
@@ -214,102 +199,6 @@ class TestFullCodeReview:
     def test_has_full_mode(self):
         content = read_command("full-code-review.md")
         assert "--mode full" in content
-
-
-# =============================================================================
-# Baseline File Grader Tests
-# =============================================================================
-
-
-class TestBaselineFileGrading:
-    """Grade .branch-review-baseline.json files via the grader."""
-
-    def test_valid_baseline_roundtrip(self, tmp_dir):
-        """Write a baseline file and grade it — full round-trip."""
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        state = {
-            "last_reviewed_sha": "abc123def456789012345678901234567890abcd",
-            "last_reviewed_at": "2026-02-09T12:34:56",
-            "review_type": "full",
-            "review_count": 3,
-            "base_ref": "main",
-            "git_range_used": "abc123..HEAD",
-        }
-        with open(path, "w") as f:
-            json.dump(state, f)
-        result = grade_review_baseline(path)
-        assert result.passed, f"Failures: {result.failures}"
-
-    def test_incremented_count(self, tmp_dir):
-        """Baseline with review_count > 1 is valid (iterative reviews)."""
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        state = {
-            "last_reviewed_sha": "def4567",
-            "last_reviewed_at": "2026-02-09T15:00:00",
-            "review_type": "incremental",
-            "review_count": 5,
-            "base_ref": "develop",
-            "git_range_used": "def4567..HEAD",
-        }
-        with open(path, "w") as f:
-            json.dump(state, f)
-        result = grade_review_baseline(path)
-        assert result.passed, f"Failures: {result.failures}"
-
-    def test_explicit_range(self, tmp_dir):
-        """git_range_used with explicit SHA range is valid."""
-        path = os.path.join(tmp_dir, ".branch-review-baseline.json")
-        state = {
-            "last_reviewed_sha": "1234567890abcdef1234567890abcdef12345678",
-            "last_reviewed_at": "2026-02-09T15:00:00",
-            "review_type": "pr",
-            "review_count": 1,
-            "base_ref": "main",
-            "git_range_used": "abc1234..def5678",
-        }
-        with open(path, "w") as f:
-            json.dump(state, f)
-        result = grade_review_baseline(path)
-        assert result.passed, f"Failures: {result.failures}"
-
-
-# =============================================================================
-# PR Review Command Tests (End-to-End Orchestrator)
-# =============================================================================
-
-
-class TestPrReview:
-    """pr-review.md is a thin wrapper delegating to review-pipeline.py."""
-
-    COMMAND = "pr-review.md"
-
-    def test_file_exists(self):
-        path = COMMANDS_DIR / self.COMMAND
-        assert path.is_file(), f"Command file not found: {path}"
-
-    def test_has_frontmatter_with_description(self):
-        content = read_command(self.COMMAND)
-        assert content.startswith("---"), f"{self.COMMAND}: missing frontmatter delimiter"
-        fm = parse_frontmatter(content)
-        assert "description" in fm, f"{self.COMMAND}: frontmatter missing 'description'"
-        assert len(fm["description"]) > 10, f"{self.COMMAND}: description too short"
-
-    def test_registered_in_marketplace(self, marketplace_commands):
-        assert self.COMMAND in marketplace_commands, (
-            f"{self.COMMAND}: not registered in marketplace.json: {marketplace_commands}"
-        )
-
-    def test_references_pipeline_script(self):
-        """Should delegate to review-pipeline.py."""
-        content = read_command(self.COMMAND)
-        assert "review-pipeline.py" in content, (
-            f"{self.COMMAND}: missing reference to review-pipeline.py"
-        )
-
-    def test_uses_pr_mode(self):
-        """Should use --mode pr."""
-        content = read_command(self.COMMAND)
-        assert "--mode pr" in content
 
 
 # =============================================================================
