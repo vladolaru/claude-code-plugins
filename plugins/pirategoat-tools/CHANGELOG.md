@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.65.3] - 2026-03-18
+
+### Fixed
+
+- **`decision-reviewer` and `tests-mutation-reviewer` excluded from dispatch plan** — `plan-review-dispatch.py` now skips agents with `dispatch_class: "special"` or `"manual"` before building the plan, so they never appear in `dispatch-plan.json`, the agent status report, or the step 5 triage list. Previously they appeared as `SKIPPED (special only)` / `SKIPPED (manual only)`, adding noise and risking unintended LLM triage overrides.
+
 ## [1.65.2] - 2026-03-18
 
 ### Changed

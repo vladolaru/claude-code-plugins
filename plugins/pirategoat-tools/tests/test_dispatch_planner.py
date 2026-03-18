@@ -264,15 +264,6 @@ class TestDecideAgentDispatch:
         assert status == "SKIPPED"
         assert "no files" in reason
 
-    # --- Manual agents ---
-
-    def test_manual_agent_always_skipped(self):
-        config = {"dispatch_class": "manual", "domain": None}
-        counts = self._make_counts(code=10)
-        status, reason = decide_agent_dispatch("tests-mutation-reviewer", config, counts)
-        assert status == "SKIPPED"
-        assert "manual" in reason
-
     # --- Secondary domains ---
 
     def test_secondary_domain_triggers_dispatch(self):
@@ -335,7 +326,7 @@ class TestBuildDispatchPlan:
             assert plan["mode"] == mode
 
     def test_all_agents_in_dispatch(self, registry):
-        """Every agent in the registry appears in the dispatch list."""
+        """Every cohort agent (non-manual, non-special) appears in the dispatch list."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -344,8 +335,11 @@ class TestBuildDispatchPlan:
             registry=registry,
         )
         agent_names_in_plan = {d["name"] for d in plan["agents"]}
-        registry_agents = set(registry["agents"].keys())
-        assert agent_names_in_plan == registry_agents
+        cohort_agents = {
+            name for name, cfg in registry["agents"].items()
+            if cfg.get("dispatch_class") not in ("manual", "special")
+        }
+        assert agent_names_in_plan == cohort_agents
 
     def test_dispatch_entry_format(self, registry):
         """Each dispatch entry has agent, domain, status, reason."""
@@ -465,10 +459,10 @@ class TestAlwaysDispatchAgents:
 # Integration Tests — Manual agents
 # =============================================================================
 
-class TestManualAgents:
-    """Manual agents are always skipped."""
+class TestNonCohortAgents:
+    """Manual and special agents are excluded from the dispatch plan entirely."""
 
-    def test_tests_mutation_reviewer_skipped(self, registry):
+    def test_tests_mutation_reviewer_not_in_plan(self, registry):
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -476,13 +470,22 @@ class TestManualAgents:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-        entry = dispatch_map["tests-mutation-reviewer"]
-        assert entry["status"] == "SKIPPED"
-        assert "manual" in entry["reason"]
+        agent_names = {d["name"] for d in plan["agents"]}
+        assert "tests-mutation-reviewer" not in agent_names
 
-    def test_tests_mutation_reviewer_skipped_even_with_many_files(self, registry):
-        """Manual agents skip regardless of file coverage."""
+    def test_decision_reviewer_not_in_plan(self, registry):
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=SAMPLE_MIXED_FILES,
+            registry=registry,
+        )
+        agent_names = {d["name"] for d in plan["agents"]}
+        assert "decision-reviewer" not in agent_names
+
+    def test_exclusion_holds_regardless_of_file_coverage(self, registry):
+        """Non-cohort agents stay excluded even with maximum file coverage."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -490,8 +493,9 @@ class TestManualAgents:
             changed_files=SAMPLE_MIXED_FILES * 10,
             registry=registry,
         )
-        dispatch_map = {d["name"]: d for d in plan["agents"]}
-        assert dispatch_map["tests-mutation-reviewer"]["status"] == "SKIPPED"
+        agent_names = {d["name"] for d in plan["agents"]}
+        assert "tests-mutation-reviewer" not in agent_names
+        assert "decision-reviewer" not in agent_names
 
 
 # =============================================================================
@@ -545,9 +549,15 @@ class TestConditionalAgentsDomainGating:
 # =============================================================================
 
 class TestRegistryConsistency:
-    """Dispatch planner handles all agents in the real registry."""
+    """Dispatch planner handles all cohort agents in the real registry."""
 
-    def test_signal_count_matches_agent_count(self, registry):
+    def _cohort_count(self, registry):
+        return sum(
+            1 for cfg in registry["agents"].values()
+            if cfg.get("dispatch_class") not in ("manual", "special")
+        )
+
+    def test_signal_count_matches_cohort_agent_count(self, registry):
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -555,9 +565,9 @@ class TestRegistryConsistency:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        assert len(plan["agent_signals"]) == len(registry["agents"])
+        assert len(plan["agent_signals"]) == self._cohort_count(registry)
 
-    def test_dispatch_count_matches_agent_count(self, registry):
+    def test_dispatch_count_matches_cohort_agent_count(self, registry):
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -565,7 +575,7 @@ class TestRegistryConsistency:
             changed_files=SAMPLE_MIXED_FILES,
             registry=registry,
         )
-        assert len(plan["agents"]) == len(registry["agents"])
+        assert len(plan["agents"]) == self._cohort_count(registry)
 
 
 # =============================================================================

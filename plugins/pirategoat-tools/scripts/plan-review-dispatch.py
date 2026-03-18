@@ -368,10 +368,6 @@ def decide_agent_dispatch(
     dispatch_class = config.get("dispatch_class", "conditional")
     domain = config.get("domain")
 
-    # Manual and special agents are always skipped by the planner.
-    if dispatch_class in ("manual", "special"):
-        return "SKIPPED", f"{dispatch_class} only"
-
     # Check if the agent's domain has files
     has_domain_files = False
     if domain is None:
@@ -469,6 +465,11 @@ def build_dispatch_plan(
 
     for agent_name in sorted(agents.keys()):
         config = agents[agent_name]
+        # Exclude agents that are never part of the review cohort.
+        # special = synthesis/orchestration agents dispatched outside the plan.
+        # manual = opt-in only, never auto-dispatched.
+        if config.get("dispatch_class") in ("manual", "special"):
+            continue
         status, reason = decide_agent_dispatch(
             agent_name, config, domain_counts,
             clean_files=clean_files,
