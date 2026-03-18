@@ -776,9 +776,11 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
     actions.append(f"```")
     actions.append(f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
     actions.append(f"```")
-    actions.append("- Exit code 0 → all agents finished or timed out — proceed to step 8.")
+    actions.append("- Exit code 0 → nothing left to wait for — but check output for NOT_DISPATCHED agents.")
+    actions.append("  - If any agents are NOT_DISPATCHED: dispatch them now, then re-check.")
+    actions.append("  - If all agents are FINISHED or TIMED_OUT: proceed to step 8.")
     actions.append("- Exit code 2 → agents still running — wait 30 seconds, re-check.")
-    actions.append("- Only proceed to step 8 when ALL agents are done or timed out.")
+    actions.append("- Only proceed to step 8 when ALL planned agents are FINISHED or TIMED_OUT.")
 
     return {
         "phase": "EXECUTION",

@@ -1258,6 +1258,14 @@ class TestStep7SaveReviewBaseline:
         text = "\n".join(g["actions"])
         assert "check-reviewer-agent-status" in text or "agent status" in text.lower()
 
+    def test_step_7_surfaces_not_dispatched_agents(self, mod, tmp_path):
+        """Step 7 should warn about NOT_DISPATCHED agents so missed dispatches don't silently pass."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "NOT_DISPATCHED" in text
+
 
 class TestStep8Reconcile:
     """Step 8: Reconcile + Verify. main() reads dispatch-plan.json + review files, passes to get_step_guidance()."""
