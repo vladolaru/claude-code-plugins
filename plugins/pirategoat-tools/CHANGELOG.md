@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pipeline mission statement** — step 1 briefing now anchors the orchestrator on its identity, quality goals, and artifact discipline
+- **Phase-transition anchoring** — contextual reminders at phase boundaries (SETUP→EXECUTION, EXECUTION→SYNTHESIS, SYNTHESIS→VALIDATION, VALIDATION→OUTPUT) keep the orchestrator aligned as work shifts character
+- **Structured data discipline** — file-producing steps (3, 4, 8, 9, 10) now have verification checkpoints and `handoff` gates; step 10 uses schema format instead of copyable placeholder values
+- **Unified command mission** — all three review commands (pr-review, full-code-review, code-review) share identical mission language with mode-specific context
+
 - **Change-purpose propagation to specialist reviewers** — `bootstrap-reviewer.py` now reads `change-purpose.md` (the main session's distilled PR synthesis) and injects it as a `=== REVIEW FOCUS (pipeline synthesis) ===` section after PR INTENT, giving specialist agents richer context than raw PR metadata alone
 - **Hard readiness gate at step 8** — `review-pipeline.py` now runs `check-reviewer-agent-status.py` before generating the reconciliation briefing; if agents are still RUNNING, step 8 returns a "BLOCKED" briefing instead of proceeding with incomplete data
 - **Human-readable step 5 dispatch summary** — step 5 now presents dispatched/skipped agents as a readable list with focus descriptions instead of injecting the raw JSON plan output; the override mechanism still references `dispatch-plan.json` by path
