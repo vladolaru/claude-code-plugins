@@ -1,6 +1,5 @@
 """Tests for review-pipeline.py — unified review pipeline."""
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -12,21 +11,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context_fixtures import COMPLETE_CONTEXT
-
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review-pipeline.py"
-TOTAL_STEPS = 12
-
-
-def _load_module():
-    spec = importlib.util.spec_from_file_location("review_pipeline", SCRIPT_PATH)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH, PIPELINE_TOTAL_STEPS as TOTAL_STEPS
 
 
 @pytest.fixture(scope="module")
-def mod():
-    return _load_module()
+def mod(pipeline_mod):
+    """Module-scoped alias — delegates to session-scoped pipeline_mod."""
+    return pipeline_mod
 
 
 class TestStepSequence:

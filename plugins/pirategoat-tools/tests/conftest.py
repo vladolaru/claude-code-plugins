@@ -1,5 +1,6 @@
 """Shared test fixtures and helpers for pirategoat-tools tests."""
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -10,6 +11,22 @@ import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 FIXTURES_DIR = TESTS_DIR / "fixtures"
+
+PIPELINE_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review-pipeline.py"
+PIPELINE_TOTAL_STEPS = 12
+
+
+def _load_pipeline_module():
+    spec = importlib.util.spec_from_file_location("review_pipeline", PIPELINE_SCRIPT_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="session")
+def pipeline_mod():
+    """Session-scoped pipeline module — shared across all pipeline test files."""
+    return _load_pipeline_module()
 
 
 def setup_temp_git_repo(diff_file: str) -> str:
