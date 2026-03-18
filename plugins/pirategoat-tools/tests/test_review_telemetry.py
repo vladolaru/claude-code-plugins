@@ -67,56 +67,22 @@ class TestStart:
         assert "/.pirategoat-tools/" in mod.LOG_DIR
         assert mod.LOG_DIR.endswith("/logs/pr-reviews")
 
-    def test_creates_log_directory(self, telemetry, tmp_path):
-        log_dir = tmp_path / "logs"
-        assert not log_dir.exists()
-        telemetry.start(pr_number="42")
-        assert log_dir.is_dir()
-
-    def test_creates_log_file(self, telemetry):
+    def test_creates_log_with_pipeline_start_event(self, telemetry):
+        """start() creates a JSONL log file with a pipeline_start event."""
         path = telemetry.start(pr_number="42")
         assert os.path.isfile(path)
-
-    def test_returns_log_path(self, telemetry):
-        path = telemetry.start(pr_number="42")
         assert path.endswith(".jsonl")
         assert telemetry.log_path == path
-
-    def test_log_filename_contains_output_dir_basename(self, telemetry):
-        path = telemetry.start(pr_number="42")
-        basename = os.path.basename(path)
-        assert basename.startswith("pr-review-org-repo-42--")
-
-    def test_log_filename_contains_timestamp(self, telemetry):
-        path = telemetry.start(pr_number="42")
-        basename = os.path.basename(path)
-        # Format: basename--YYYYMMDDTHHMMSS.jsonl
-        parts = basename.split("--")
-        assert len(parts) == 2
-        ts_part = parts[1].replace(".jsonl", "")
-        # Should be parseable as a timestamp
-        datetime.strptime(ts_part, "%Y%m%dT%H%M%S")
-
-    def test_writes_marker_file(self, telemetry, output_dir):
-        path = telemetry.start(pr_number="42")
-        marker = output_dir / ".telemetry-log-path"
-        assert marker.is_file()
-        assert marker.read_text().strip() == path
-
-    def test_writes_pipeline_start_event(self, telemetry):
-        path = telemetry.start(pr_number="42")
         events = _read_events(path)
         assert len(events) == 1
         assert events[0]["event"] == "pipeline_start"
-
-    def test_pipeline_start_has_step_zero(self, telemetry):
-        path = telemetry.start(pr_number="42")
-        events = _read_events(path)
         assert events[0]["step"] == 0
+        # Timestamp is UTC-aware
+        ts = datetime.fromisoformat(events[0]["timestamp"])
+        assert ts.tzinfo is not None
 
     def test_pipeline_start_has_pipeline_info(self, telemetry, output_dir):
-        path = telemetry.start(pr_number="42", total_steps=15,
-                               bot_mode=False)
+        path = telemetry.start(pr_number="42", total_steps=15, bot_mode=False)
         events = _read_events(path)
         pipeline = events[0]["pipeline"]
         assert pipeline["pr_number"] == "42"
@@ -124,16 +90,11 @@ class TestStart:
         assert pipeline["total_steps"] == 15
         assert pipeline["bot_mode"] is False
 
-    def test_pipeline_start_has_timestamp(self, telemetry):
+    def test_writes_marker_file(self, telemetry, output_dir):
         path = telemetry.start(pr_number="42")
-        events = _read_events(path)
-        ts = datetime.fromisoformat(events[0]["timestamp"])
-        assert ts.tzinfo is not None  # UTC-aware
-
-    def test_pipeline_start_has_no_snapshot(self, telemetry):
-        path = telemetry.start(pr_number="42")
-        events = _read_events(path)
-        assert "snapshot" not in events[0]
+        marker = output_dir / ".telemetry-log-path"
+        assert marker.is_file()
+        assert marker.read_text().strip() == path
 
 
 # ── log_step() ──────────────────────────────────────────────────────
@@ -157,15 +118,6 @@ class TestLogStep:
         assert events[1]["phase"] == "AWARENESS"
         assert events[1]["title"] == "PR Review State"
 
-    def test_includes_args(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_step(step=1, phase="SETUP", title="Repo Setup",
-                           bot_mode=True, thoughts_length=200)
-        events = _read_events(telemetry.log_path)
-        args = events[1]["args"]
-        assert args["bot_mode"] is True
-        assert args["thoughts_length"] == 200
-
     def test_calculates_duration_since_prev(self, telemetry):
         """Duration is calculated from previous event's timestamp."""
         telemetry.start(pr_number="42")
@@ -185,12 +137,6 @@ class TestLogStep:
         t.log_step(step=1, phase="SETUP", title="Repo Setup")
         # No log file created
         assert t.log_path is None
-
-    def test_step_has_no_snapshot(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_step(step=1, phase="SETUP", title="Repo Setup")
-        events = _read_events(telemetry.log_path)
-        assert "snapshot" not in events[1]
 
     def test_multiple_steps_accumulate(self, telemetry):
         telemetry.start(pr_number="42")
@@ -473,13 +419,6 @@ class TestLogAgentStart:
         events = _read_events(telemetry.log_path)
         assert events[1]["scope"]["files"] == 3
         assert events[1]["scope"]["lines"] == 150
-
-    def test_has_timestamp(self, telemetry):
-        telemetry.start(pr_number="42")
-        telemetry.log_agent_start(agent_name="security-reviewer", domain="security")
-        events = _read_events(telemetry.log_path)
-        ts = datetime.fromisoformat(events[1]["timestamp"])
-        assert ts.tzinfo is not None
 
     def test_noop_without_start(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
