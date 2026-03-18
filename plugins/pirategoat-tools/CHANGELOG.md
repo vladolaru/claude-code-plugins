@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.65.2] - 2026-03-18
+
+### Changed
+
+- **Test suite cleanup** — removed 126 tests (1036 → 910) that tested prose keywords, trivial operations (constructors, setters, list.append), or internal logic already covered by integration tests. Deleted `test_commands_pr_update.py` and `test_commands_switch_to.py` (prose-keyword tests); trimmed bootstrap unit tests superseded by `test_bootstrap_integration.py`; consolidated `TestStart` in telemetry (12 → 4 tests); removed JSON type-checking from agent registry tests; removed phase-transition keyword tests from pipeline briefing tests; deduplicated command/grader tests across files.
+
+## [1.65.1] - 2026-03-18
+
 ### Changed
 
 - **Test file splitting** — split `test_review_pipeline.py` (1915 lines) into three focused files: infrastructure (routing, state, CLI), orchestration (subprocess, telemetry), and briefings (step guidance output); split `test_bootstrap_reviewer.py` (1043 lines) into unit and integration files; split `test_commands.py` (713 lines) by extracting per-command tests into own files with shared helpers module
