@@ -33,7 +33,7 @@
         "csrf", "xss", "sql", "inject", "sanitiz", "escap",
         "permission", "privilege", "encrypt", "endpoint", "webhook"
       ],
-      "focus": "XSS, SQL injection, CSRF, sanitization",
+      "focus": "Sanitization, escaping, nonces, auth, SQL injection, XSS, CSRF, data exposure",
       "model_tier": "sonnet"
     },
     "performance-reviewer": {
@@ -52,7 +52,7 @@
         "performance", "optimiz", "cache", "query", "load time",
         "slow", "n+1", "lazy", "pagination", "bulk"
       ],
-      "focus": "N+1 queries, caching, optimization",
+      "focus": "Database query efficiency, caching, asset loading, N+1 detection, scalability",
       "model_tier": "sonnet"
     },
     "architecture-reviewer": {
@@ -74,7 +74,7 @@
         "module", "package"
       ],
       "triage_checks": ["large_pr"],
-      "focus": "SOLID, design patterns, coupling",
+      "focus": "SOLID principles, design patterns, coupling, cohesion, architectural decisions",
       "model_tier": "sonnet"
     },
     "wp-architecture-reviewer": {
@@ -94,7 +94,7 @@
         "hook", "filter", "backward", "deprecat", "i18n",
         "wordpress", "woocommerce", "wp_"
       ],
-      "focus": "Hooks, WPCS, backwards compatibility",
+      "focus": "WordPress hooks, coding standards, extensibility, backwards compatibility",
       "model_tier": "sonnet"
     },
     "php-tests-reviewer": {
@@ -102,7 +102,7 @@
       "protocols": ["reviewer", "tests-reviewer"],
       "scope_flags": [],
       "dispatch_class": "always",
-      "focus": "PHPUnit test quality",
+      "focus": "PHPUnit assertions, WP test utilities, WooCommerce patterns, Brain Monkey isolation",
       "model_tier": "sonnet"
     },
     "js-tests-reviewer": {
@@ -110,7 +110,7 @@
       "protocols": ["reviewer", "tests-reviewer"],
       "scope_flags": [],
       "dispatch_class": "always",
-      "focus": "Jest/Vitest test quality",
+      "focus": "Jest/Vitest assertions, React Testing Library, module mocking, async patterns",
       "model_tier": "sonnet"
     },
     "e2e-tests-reviewer": {
@@ -118,7 +118,7 @@
       "protocols": ["reviewer", "tests-reviewer"],
       "scope_flags": [],
       "dispatch_class": "always",
-      "focus": "Playwright E2E test quality",
+      "focus": "Playwright locators, Page Object Model, auto-waiting, network interception",
       "model_tier": "sonnet"
     },
     "go-tests-reviewer": {
@@ -126,7 +126,7 @@
       "protocols": ["reviewer", "tests-reviewer"],
       "scope_flags": [],
       "dispatch_class": "always",
-      "focus": "Go test quality",
+      "focus": "Table-driven tests, test helpers, httptest, benchmarks, interface mocking",
       "model_tier": "haiku"
     },
     "patterns-reviewer": {
@@ -136,7 +136,7 @@
       "no_semantic_filter": true,
       "extra_scope": ["--base-ref-only"],
       "dispatch_class": "always",
-      "focus": "Existing patterns, consolidation",
+      "focus": "Codebase pattern consistency, reinvention prevention, consolidation opportunities",
       "model_tier": "sonnet"
     },
     "history-insights-reviewer": {
@@ -174,7 +174,7 @@
         "rename", "consolidate", "unused", "dead code"
       ],
       "triage_checks": ["file_deletions", "net_removal"],
-      "focus": "Unused functions, orphaned imports, unreachable code",
+      "focus": "Unused functions, orphaned imports, unreachable paths, code obsoleted by refactors",
       "model_tier": "sonnet"
     },
     "a11y-reviewer": {
@@ -195,7 +195,7 @@
         "accessib", "a11y", "keyboard", "screen reader",
         "aria", "focus", "wcag"
       ],
-      "focus": "ARIA correctness, keyboard access, focus management, WCAG 2.2 AA",
+      "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA",
       "model_tier": "inherit"
     },
     "reliability-reviewer": {

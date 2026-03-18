@@ -80,7 +80,7 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `protocols` | yes | List of protocol files to include: `"reviewer"` (all agents), `"tests-reviewer"` (test agents). |
 | `scope_flags` | yes | Extra flags passed to `review-scope.py` (e.g., `["--max-lines", "500"]`). Empty list `[]` for defaults. |
 | `dispatch_class` | yes | When agent runs — see dispatch classes below. |
-| `focus` | yes | One-line description of the agent's review focus. |
+| `focus` | yes | One-line description of the agent's review focus. Surfaced in the step 5 dispatch summary for override decisions — see sync rule below. |
 | `model_tier` | yes | `"inherit"` (caller's model), `"sonnet"`, or `"haiku"`. Match reasoning depth needed. |
 | `triage_criteria` | conditional | Required for `dispatch_class: "conditional"`. List of conditions that trigger dispatch. |
 | `secondary_domains` | optional | Additional scope domains to include (e.g., `["config-ops"]`). |
@@ -98,6 +98,19 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `special` | Orchestration/synthesis agents, not dispatched by triage |
 
 Commands handle triage at the "Adaptive Agent Triage" step — they check each conditional agent's `triage_criteria` against the diffstat and commit messages.
+
+### Agent Name and Focus Sync
+
+The registry `focus` field is surfaced to the main session at step 5 so the LLM can make informed dispatch override decisions. The agent `.md` `description` field is loaded by Claude Code into the system prompt. These must stay aligned:
+
+| Source | Field | Purpose | Audience |
+|--------|-------|---------|----------|
+| `agent-registry.json` | `focus` | Dispatch summary in step 5 briefing | Main session LLM (during pipeline) |
+| `agents/<name>.md` | `description` (frontmatter) | Agent catalog in CC system prompt | Any session using the Agent tool |
+
+**Rule: When updating an agent's specialization, update both the registry `focus` and the agent `.md` `description` to reflect the same scope.** They don't need identical wording — `focus` is a concise keyword list, `description` is a full sentence — but they must cover the same capabilities. A `focus` that lists "XSS, SQL injection" while the `description` says "sanitization, escaping, nonces, auth" creates a misleading dispatch summary.
+
+**Calibration:** `focus` should be specific enough to inform override decisions (not just "test quality") but concise enough to scan in a list (not a full sentence). Aim for 5-10 keywords/phrases that distinguish this agent from others.
 
 ## Output Contract
 
