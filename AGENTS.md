@@ -284,7 +284,7 @@ All AI-generated artifacts (plans, analysis, research, decisions, learnings) go 
 | Pattern | When to use |
 |---|---|
 | [step-by-step-prompt-injection](docs/patterns/step-by-step-prompt-injection.md) | Multi-phase analytical workflows where later steps must be independent of earlier conclusions — e.g., verify before judge, gather before synthesize. Includes script template, skill file structure, testing checklist, and two reference implementations. |
-| [curated-context-pipeline](docs/patterns/curated-context-pipeline.md) | Multi-mode LLM pipelines where a script acts as context curator — reads all state, presents pre-digested briefings, controls flow via mode-driven step routing, and manages file-based state. Evolves step-by-step prompt injection for operational workflows with shared logic across modes. |
+| [curated-context-pipeline](docs/patterns/curated-context-pipeline.md) | Multi-mode LLM pipelines where a script acts as context curator — reads all state, presents pre-digested briefings, controls flow via condition-driven step routing, and manages split file-based state. Covers pipeline identity anchoring, artifact discipline, and conversational output. Evolves step-by-step prompt injection for operational workflows with shared logic across modes. |
 
 **Knowledge capture:** After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using `/dex:grok` to capture the knowledge.
 

@@ -41,6 +41,7 @@ The pattern pays off when **all three** of these hold:
 - No state to accumulate across steps (each step is self-contained)
 - The skill is a one-shot reference lookup
 - Already has external scripts doing the heavy lifting; adding another layer is redundant
+- Multiple modes sharing 80% of logic — see [curated-context-pipeline](curated-context-pipeline.md) for multi-mode workflows with rich context and file-based state
 
 ## Script Structure
 
