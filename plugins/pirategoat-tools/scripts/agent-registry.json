@@ -6,7 +6,7 @@
       "protocols": ["reviewer"],
       "scope_flags": [],
       "dispatch_class": "always",
-      "focus": "Goal alignment, bugs, code quality",
+      "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality",
       "model_tier": "inherit"
     },
     "security-reviewer": {

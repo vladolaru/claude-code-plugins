@@ -665,17 +665,21 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
             situation.append("")
             situation.append("**Dispatching:**")
             for a in dispatched:
+                focus = a.get("focus", "")
+                label = f"{a['name']} — {focus}" if focus else a['name']
                 reason = a["reason"]
                 if reason and reason != "always dispatch (domain has files)":
-                    situation.append(f"- {a['name']} ({reason})")
+                    situation.append(f"- {label} ({reason})")
                 else:
-                    situation.append(f"- {a['name']}")
+                    situation.append(f"- {label}")
 
         if skipped:
             situation.append("")
             situation.append("**Skipped:**")
             for a in skipped:
-                situation.append(f"- {a['name']} — {a['reason']}")
+                focus = a.get("focus", "")
+                label = f"{a['name']} — {focus}" if focus else a['name']
+                situation.append(f"- {label} | {a['reason']}")
     else:
         situation.append("(Dispatch plan will be computed by the script at runtime.)")
 
@@ -1338,7 +1342,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     }
                     # Store agent details for human-readable step 5 summary
                     state["dispatch_plan_agents"] = [
-                        {"name": a["name"], "status": a.get("status", ""), "reason": a.get("reason", "")}
+                        {
+                            "name": a["name"],
+                            "focus": a.get("focus", ""),
+                            "status": a.get("status", ""),
+                            "reason": a.get("reason", ""),
+                        }
                         for a in agents
                     ]
                 except (json.JSONDecodeError, OSError):

@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Change-purpose propagation to specialist reviewers** — `bootstrap-reviewer.py` now reads `change-purpose.md` (the main session's distilled PR synthesis) and injects it as a `=== REVIEW FOCUS (pipeline synthesis) ===` section after PR INTENT, giving specialist agents richer context than raw PR metadata alone
 - **Hard readiness gate at step 8** — `review-pipeline.py` now runs `check-reviewer-agent-status.py` before generating the reconciliation briefing; if agents are still RUNNING, step 8 returns a "BLOCKED" briefing instead of proceeding with incomplete data
-- **Human-readable step 5 dispatch summary** — step 5 now presents dispatched/skipped agents as a readable list instead of injecting the raw JSON plan output; the override mechanism still references `dispatch-plan.json` by path
+- **Human-readable step 5 dispatch summary** — step 5 now presents dispatched/skipped agents as a readable list with focus descriptions instead of injecting the raw JSON plan output; the override mechanism still references `dispatch-plan.json` by path
+- **Agent focus descriptions in dispatch plan** — `plan-review-dispatch.py` now includes the `focus` field from the agent registry in each dispatch plan entry, giving the main session concrete knowledge of what each agent reviews for informed override decisions
 
 - **`review-pipeline.py`** — unified pipeline script following the curated-context-pipeline pattern
 - **`run-config.json`** — caller-provided config, immutable during run (replaces config fields in old flat `pipeline-state.json`)

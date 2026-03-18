@@ -479,6 +479,7 @@ def build_dispatch_plan(
         entry = {
             "name": agent_name,
             "domain": config.get("domain"),
+            "focus": config.get("focus", ""),
             "status": status,
             "reason": reason,
         }

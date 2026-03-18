@@ -1129,9 +1129,9 @@ class TestStep5DispatchPlan:
             "dispatch_plan_output": "pr-reviewer: DISPATCH (domain: code)\nsecurity-reviewer: SKIPPED (no files in security domain)",
             "dispatch_plan_summary": {"dispatched": 7, "skipped": 3, "conditional": 2},
             "dispatch_plan_agents": [
-                {"name": "pr-reviewer", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
-                {"name": "security-reviewer", "status": "SKIPPED", "reason": "no files in security domain"},
-                {"name": "architecture-reviewer", "status": "DISPATCH", "reason": "conditional (large change)"},
+                {"name": "pr-reviewer", "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
+                {"name": "security-reviewer", "focus": "XSS, SQL injection, CSRF, sanitization", "status": "SKIPPED", "reason": "no files in security domain"},
+                {"name": "architecture-reviewer", "focus": "SOLID, design patterns, coupling", "status": "DISPATCH", "reason": "conditional (large change)"},
             ],
         }
 
@@ -1140,7 +1140,7 @@ class TestStep5DispatchPlan:
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(5, "pr", state, ctx)
         text = "\n".join(g["situation"])
-        # Human-readable summary lists dispatched and skipped agents
+        # Human-readable summary lists dispatched and skipped agents with focus
         assert "pr-reviewer" in text
         assert "security-reviewer" in text
         assert "Dispatching" in text
@@ -1148,6 +1148,17 @@ class TestStep5DispatchPlan:
         # Raw JSON should NOT be inlined
         full_text = "\n".join(g["actions"] + g["situation"])
         assert not ("python3" in full_text and "plan-review-dispatch.py" in full_text)
+
+    def test_shows_focus_for_agents(self, mod, tmp_path):
+        """Step 5 should show what each agent does so the LLM can make informed override decisions."""
+        state = self._make_state_with_plan()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(5, "pr", state, ctx)
+        text = "\n".join(g["situation"])
+        # Focus descriptions should be visible for both dispatched and skipped agents
+        assert "goal alignment" in text.lower()  # pr-reviewer's focus
+        assert "XSS" in text  # security-reviewer's focus
+        assert "SOLID" in text  # architecture-reviewer's focus
 
     def test_triage_authority(self, mod, tmp_path):
         """Triage model should be consistent: planner is authoritative."""
