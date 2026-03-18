@@ -140,26 +140,74 @@ class TestStructuredDataDiscipline:
 
 
 class TestStep2RepoSetup:
-    """Step 2: Repo Setup — PR mode + interactive only."""
+    """Step 2: Repo Setup — briefing reflects workspace setup result."""
 
-    def test_instructs_stash_and_checkout(self, mod, tmp_path):
+    def test_success_confirms_checkout(self, mod, tmp_path):
+        """On success, briefing confirms checkout, not instructs it."""
         config = {"mode": "pr", "pr_number": "42", "interactive": True}
-        state = {"completed_steps": [1]}
+        state = {
+            "completed_steps": [1],
+            "workspace": {"original_branch": "main", "stash_ref": None},
+            "workspace_setup_result": {
+                "original_branch": "main",
+                "stash_ref": None,
+                "was_dirty": False,
+                "checkout_ok": True,
+            },
+        }
+        ctx = {"git": {}}
+        g = mod.get_step_guidance(2, "pr", state, ctx, config=config)
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "successfully" in text.lower() or "ready" in text.lower()
+        assert "--original-branch" not in text
+
+    def test_success_with_stash(self, mod, tmp_path):
+        """Dirty workspace: briefing mentions stash was created."""
+        config = {"mode": "pr", "pr_number": "42", "interactive": True}
+        state = {
+            "completed_steps": [1],
+            "workspace": {"original_branch": "develop", "stash_ref": "stash@{0}"},
+            "workspace_setup_result": {
+                "original_branch": "develop",
+                "stash_ref": "stash@{0}",
+                "was_dirty": True,
+                "checkout_ok": True,
+            },
+        }
+        ctx = {"git": {}}
+        g = mod.get_step_guidance(2, "pr", state, ctx, config=config)
+        text = "\n".join(g["situation"])
+        assert "stash" in text.lower()
+        assert "develop" in text
+
+    def test_failure_falls_back_to_manual(self, mod, tmp_path):
+        """On failure, briefing provides manual instructions."""
+        config = {"mode": "pr", "pr_number": "42", "interactive": True}
+        state = {
+            "completed_steps": [1],
+            "workspace": {"original_branch": None, "stash_ref": None},
+            "workspace_setup_result": {
+                "error": "gh pr checkout 42 failed",
+                "checkout_ok": False,
+            },
+        }
         ctx = {"git": {}}
         g = mod.get_step_guidance(2, "pr", state, ctx, config=config)
         text = "\n".join(g["actions"])
-        assert "stash" in text.lower()
+        assert "git status" in text
         assert "checkout" in text.lower()
 
-    def test_instructs_passing_workspace_state(self, mod, tmp_path):
-        """Should tell LLM to pass --original-branch and --stash-ref."""
+    def test_no_result_falls_back_to_manual(self, mod, tmp_path):
+        """No workspace_setup_result at all: fall back to manual."""
         config = {"mode": "pr", "pr_number": "42", "interactive": True}
-        state = {"completed_steps": [1]}
+        state = {
+            "completed_steps": [1],
+            "workspace": {"original_branch": None, "stash_ref": None},
+        }
         ctx = {"git": {}}
         g = mod.get_step_guidance(2, "pr", state, ctx, config=config)
         text = "\n".join(g["actions"])
-        assert "--original-branch" in text
-        assert "--stash-ref" in text
+        assert "checkout" in text.lower()
 
 
 class TestStep3GatherContext:

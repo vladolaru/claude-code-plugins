@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.66.0] - 2026-03-18
+
+### Added
+
+- **Deterministic workspace setup** — new `scripts/setup-workspace.py` handles stash, branch recording, and PR checkout as a subprocess instead of 4 LLM tool calls. Outputs JSON for the pipeline to persist.
+
+### Changed
+
+- **Step 2 (Repo Setup) runs deterministically** — the pipeline's `_orchestrate_step` now calls `setup-workspace.py` before generating the briefing. On success, the briefing confirms what happened; on failure, it falls back to manual instructions.
+- **gh/ghe auto-detection in workspace setup** — fixes a latent bug where step 2 always defaulted to `gh` even for GitHub Enterprise repos.
+
 ## [1.65.3] - 2026-03-18
 
 ### Fixed
