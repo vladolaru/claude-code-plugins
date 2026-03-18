@@ -640,16 +640,14 @@ def _step_4_fetch_issues(mode, state, context, config, output_dir):
 # ---------------------------------------------------------------------------
 
 def _step_5_dispatch_plan(mode, state, context, config, output_dir):
-    """Step 5: Dispatch Plan + Triage — present planner output, allow overrides."""
-    git = context.get("git", {})
-    git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+    """Step 5: Dispatch Plan + Triage — present human-readable summary, allow overrides."""
+    od = output_dir or "<OUTPUT_DIR>"
 
     situation = []
     actions = []
 
-    # The script runs plan-review-dispatch.py internally and stores the output
-    plan_output = state.get("dispatch_plan_output", "")
     plan_summary = state.get("dispatch_plan_summary", {})
+    plan_agents = state.get("dispatch_plan_agents", [])
 
     if plan_summary:
         situation.append(
@@ -658,29 +656,37 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
             f"{plan_summary.get('conditional', 0)} conditional."
         )
 
+    # Build human-readable dispatch summary from agent details
+    if plan_agents:
+        dispatched = [a for a in plan_agents if a["status"] == "DISPATCH"]
+        skipped = [a for a in plan_agents if a["status"].startswith("SKIPPED")]
+
+        if dispatched:
+            situation.append("")
+            situation.append("**Dispatching:**")
+            for a in dispatched:
+                reason = a["reason"]
+                if reason and reason != "always dispatch (domain has files)":
+                    situation.append(f"- {a['name']} ({reason})")
+                else:
+                    situation.append(f"- {a['name']}")
+
+        if skipped:
+            situation.append("")
+            situation.append("**Skipped:**")
+            for a in skipped:
+                situation.append(f"- {a['name']} — {a['reason']}")
+    else:
+        situation.append("(Dispatch plan will be computed by the script at runtime.)")
+
     actions.append(
-        "The dispatch planner's decisions are authoritative. Review the plan below and override "
-        "only if you have specific domain knowledge that contradicts the planner's analysis."
+        "The dispatch planner's decisions are authoritative. Override only if you have "
+        "specific domain knowledge that contradicts the planner's analysis."
     )
     actions.append("")
-
-    if plan_output:
-        actions.append("--- DISPATCH PLAN ---")
-        actions.append(plan_output)
-        actions.append("--- END DISPATCH PLAN ---")
-    else:
-        actions.append("(Dispatch plan output will be provided by the script at runtime.)")
-
-    actions.append("")
-    actions.append("To override an agent's status, edit `dispatch-plan.json` in the output directory:")
-    actions.append('- To force-dispatch a skipped agent: set status to `"DISPATCH_OVERRIDE"` with `"override_reason": "..."`')
-    actions.append('- To force-skip a dispatched agent: set status to `"SKIPPED_OVERRIDE"` with `"override_reason": "..."`')
-    actions.append("")
-    actions.append("Example overrides in dispatch-plan.json:")
-    actions.append('```json')
-    actions.append('{"name": "dead-code-reviewer", "status": "DISPATCH_OVERRIDE", "override_reason": "Large refactor with deletions"}')
-    actions.append('{"name": "go-tests-reviewer", "status": "SKIPPED_OVERRIDE", "override_reason": "No Go code in this repo"}')
-    actions.append('```')
+    actions.append(f"To override, edit `{od}/dispatch-plan.json`:")
+    actions.append('- Force-dispatch a skipped agent: set status to `"DISPATCH_OVERRIDE"` with `"override_reason": "..."`')
+    actions.append('- Force-skip a dispatched agent: set status to `"SKIPPED_OVERRIDE"` with `"override_reason": "..."`')
 
     return {
         "phase": "EXECUTION",
@@ -797,6 +803,35 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
 
 def _step_8_reconcile(mode, state, context, config, output_dir):
     """Step 8: Reconcile + Verify — dispatch reconciliator with all context."""
+    # Hard readiness gate: if agents are still running, block reconciliation
+    blocked = state.get("agents_blocked")
+    if blocked and blocked.get("running"):
+        running = blocked["running"]
+        od = output_dir or "<OUTPUT_DIR>"
+        situation = [
+            f"**Blocked:** {len(running)} agent(s) still running: {', '.join(running)}",
+            "Reconciliation cannot start until all dispatched agents have finished.",
+        ]
+        not_dispatched = blocked.get("not_dispatched", [])
+        if not_dispatched:
+            situation.append(
+                f"**Also not dispatched:** {', '.join(not_dispatched)} — dispatch these first."
+            )
+        actions = [
+            "Wait for running agents to finish, then re-run this step:",
+            f"```",
+            f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{od}\"",
+            f"```",
+            "When ALL_DONE is true, re-run step 8.",
+        ]
+        return {
+            "phase": "SYNTHESIS",
+            "title": "Reconcile + Verify — BLOCKED",
+            "situation": situation,
+            "actions": actions,
+            "handoff": None,
+        }
+
     git = context.get("git", {})
     git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
     changed_files_csv = git.get("changed_files_csv", "")
@@ -1301,11 +1336,18 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                         "skipped": sum(1 for a in agents if a.get("status", "").startswith("SKIPPED")),
                         "conditional": sum(1 for a in agents if a.get("status") == "DISPATCH" and "conditional" in a.get("reason", "").lower()),
                     }
+                    # Store agent details for human-readable step 5 summary
+                    state["dispatch_plan_agents"] = [
+                        {"name": a["name"], "status": a.get("status", ""), "reason": a.get("reason", "")}
+                        for a in agents
+                    ]
                 except (json.JSONDecodeError, OSError):
                     state["dispatch_plan_summary"] = {}
+                    state["dispatch_plan_agents"] = []
         else:
             state["dispatch_plan_output"] = ""
             state["dispatch_plan_summary"] = {}
+            state["dispatch_plan_agents"] = []
 
     if step == 6:
         plan_path = os.path.join(output_dir, "dispatch-plan.json")
@@ -1355,6 +1397,36 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             json.dump(baseline, f, indent=2)
 
     if step == 8:
+        # Hard readiness gate: check if all dispatched agents have finished
+        # before allowing reconciliation to proceed.
+        # Exit code 0 = all done, 2 = agents still running, 1 = error.
+        status_cmd = [
+            sys.executable, str(SCRIPTS_DIR / "check-reviewer-agent-status.py"),
+            "--output-dir", output_dir,
+        ]
+        try:
+            r = subprocess.run(status_cmd, capture_output=True, text=True, timeout=30)
+            if r.returncode == 2:
+                # Agents still running — parse text output for names
+                running = []
+                not_dispatched = []
+                for line in r.stdout.splitlines():
+                    stripped = line.strip()
+                    if "RUNNING" in stripped and "NOT_DISPATCHED" not in stripped:
+                        # Lines look like: "agent-name           RUNNING   (3m 42s)"
+                        name = stripped.split()[0]
+                        running.append(name)
+                    elif "NOT_DISPATCHED" in stripped:
+                        name = stripped.split()[0]
+                        not_dispatched.append(name)
+                state["agents_blocked"] = {
+                    "running": running,
+                    "not_dispatched": not_dispatched,
+                    "status_output": r.stdout.strip(),
+                }
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass  # Gate is best-effort; if checker fails, proceed normally
+
         cp_path = os.path.join(output_dir, "change-purpose.md")
         if os.path.isfile(cp_path):
             try:

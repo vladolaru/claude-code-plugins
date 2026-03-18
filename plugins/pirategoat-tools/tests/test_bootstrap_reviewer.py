@@ -38,6 +38,7 @@ extract_status = _mod.extract_status
 build_output = _mod.build_output
 build_error_output = _mod.build_error_output
 load_pr_intent = _mod.load_pr_intent
+load_change_purpose = _mod.load_change_purpose
 AGENT_CONFIG = _mod.AGENT_CONFIG
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
@@ -446,6 +447,104 @@ class TestPrIntentInjection:
             pr_intent="PR Title: Fix thing",
         )
         assert "severity" in output.lower()
+
+
+class TestChangePurpose:
+    """load_change_purpose() reads change-purpose.md from output directory."""
+
+    def test_returns_none_when_missing(self, tmp_path):
+        assert load_change_purpose(str(tmp_path)) is None
+
+    def test_returns_none_when_empty(self, tmp_path):
+        (tmp_path / "change-purpose.md").write_text("")
+        assert load_change_purpose(str(tmp_path)) is None
+
+    def test_returns_content_when_present(self, tmp_path):
+        (tmp_path / "change-purpose.md").write_text("Adds retry logic to payments.")
+        result = load_change_purpose(str(tmp_path))
+        assert result == "Adds retry logic to payments."
+
+    def test_strips_whitespace(self, tmp_path):
+        (tmp_path / "change-purpose.md").write_text("  Content with spaces.  \n\n")
+        result = load_change_purpose(str(tmp_path))
+        assert result == "Content with spaces."
+
+
+class TestChangePurposeInjection:
+    """change-purpose.md content is injected as REVIEW FOCUS in bootstrap output."""
+
+    def test_review_focus_present_when_provided(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            change_purpose="Adds retry logic to the payment gateway.",
+        )
+        assert "=== REVIEW FOCUS (pipeline synthesis) ===" in output
+        assert "retry logic" in output
+
+    def test_review_focus_absent_when_none(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+        )
+        assert "=== REVIEW FOCUS" not in output
+
+    def test_review_focus_after_pr_intent_before_content(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            pr_intent="PR Title: Fix thing",
+            change_purpose="Adds retry logic.",
+        )
+        intent_pos = output.index("=== PR INTENT ===")
+        focus_pos = output.index("=== REVIEW FOCUS")
+        content_pos = output.index("--- Section 2: REVIEW CONTENT")
+        assert intent_pos < focus_pos < content_pos
+
+    def test_review_focus_without_pr_intent(self):
+        """REVIEW FOCUS should work even without PR INTENT."""
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            change_purpose="Adds retry logic.",
+        )
+        assert "=== REVIEW FOCUS" in output
+        assert "=== PR INTENT ===" not in output
+        focus_pos = output.index("=== REVIEW FOCUS")
+        content_pos = output.index("--- Section 2: REVIEW CONTENT")
+        assert focus_pos < content_pos
 
 
 class TestBuildErrorOutput:

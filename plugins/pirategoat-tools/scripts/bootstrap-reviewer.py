@@ -366,6 +366,27 @@ def load_pr_intent(output_dir: str) -> Optional[str]:
     return "\n".join(parts)
 
 
+def load_change_purpose(output_dir: str) -> Optional[str]:
+    """Load the main session's change-purpose synthesis from the output directory.
+
+    change-purpose.md is written by the main session at step 3/4 as a distilled
+    summary of what changed, why, and what to focus on during review. It provides
+    richer context than the raw PR metadata in review-context.json.
+
+    Returns the file content stripped, or None if not available.
+    """
+    cp_path = os.path.join(output_dir, "change-purpose.md")
+    if not os.path.isfile(cp_path):
+        return None
+
+    try:
+        with open(cp_path) as f:
+            content = f.read().strip()
+        return content if content else None
+    except OSError:
+        return None
+
+
 def build_output(
     agent_name: str,
     plugin_root: str,
@@ -379,6 +400,7 @@ def build_output(
     reviewer_name: str,
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
+    change_purpose: Optional[str] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
     lines = []
@@ -410,6 +432,17 @@ def build_output(
         lines.append("tangentially touched code.")
         lines.append("")
         lines.append(pr_intent)
+        lines.append("")
+
+    # Review Focus — the main session's distilled understanding of the change.
+    # Supplements PR INTENT (author's raw metadata) with richer synthesis:
+    # what changed, why, and what to focus on during review.
+    if change_purpose:
+        lines.append("=== REVIEW FOCUS (pipeline synthesis) ===")
+        lines.append("The review pipeline analyzed the full PR context and produced")
+        lines.append("this summary. Use it alongside PR INTENT to focus your review.")
+        lines.append("")
+        lines.append(change_purpose)
         lines.append("")
 
     # Section 2: Review Content (middle position — processing zone)
@@ -738,6 +771,9 @@ def main():
     # Load PR intent from review-context.json (if available)
     pr_intent = load_pr_intent(output_dir)
 
+    # Load change-purpose.md (main session's distilled synthesis, if available)
+    change_purpose = load_change_purpose(output_dir)
+
     # Determine overall status
     overall_status = scope_status
     if config["domain"] is None:
@@ -756,6 +792,7 @@ def main():
         reviewer_name=reviewer_name,
         file_history=file_history_output,
         pr_intent=pr_intent,
+        change_purpose=change_purpose,
     )
 
     print(output)

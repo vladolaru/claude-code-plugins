@@ -1128,17 +1128,26 @@ class TestStep5DispatchPlan:
             "completed_steps": [1, 2, 3],
             "dispatch_plan_output": "pr-reviewer: DISPATCH (domain: code)\nsecurity-reviewer: SKIPPED (no files in security domain)",
             "dispatch_plan_summary": {"dispatched": 7, "skipped": 3, "conditional": 2},
+            "dispatch_plan_agents": [
+                {"name": "pr-reviewer", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
+                {"name": "security-reviewer", "status": "SKIPPED", "reason": "no files in security domain"},
+                {"name": "architecture-reviewer", "status": "DISPATCH", "reason": "conditional (large change)"},
+            ],
         }
 
-    def test_presents_dispatch_plan_output(self, mod, tmp_path):
+    def test_presents_dispatch_plan_summary(self, mod, tmp_path):
         state = self._make_state_with_plan()
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(5, "pr", state, ctx)
-        text = "\n".join(g["actions"] + g["situation"])
-        # Script presents planner output in delimited section
-        assert "DISPATCH PLAN" in text
-        # Planner output should NOT instruct the LLM to run the command
-        assert not ("python3" in text and "plan-review-dispatch.py" in text)
+        text = "\n".join(g["situation"])
+        # Human-readable summary lists dispatched and skipped agents
+        assert "pr-reviewer" in text
+        assert "security-reviewer" in text
+        assert "Dispatching" in text
+        assert "Skipped" in text
+        # Raw JSON should NOT be inlined
+        full_text = "\n".join(g["actions"] + g["situation"])
+        assert not ("python3" in full_text and "plan-review-dispatch.py" in full_text)
 
     def test_triage_authority(self, mod, tmp_path):
         """Triage model should be consistent: planner is authoritative."""
@@ -1344,6 +1353,89 @@ class TestStep8Reconcile:
         text = "\n".join(g["actions"])
         assert "pr-review.json" in text
         assert "security-review.json" in text
+
+
+class TestStep8ReadinessGate:
+    """Step 8 readiness gate: blocks reconciliation when agents are still running."""
+
+    def test_blocked_when_agents_running(self, mod, tmp_path):
+        """Step 8 should return a blocked briefing when agents_blocked has running agents."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents_blocked": {
+                "running": ["security-reviewer", "performance-reviewer"],
+                "not_dispatched": [],
+            },
+            "agents": {
+                "dispatched": ["pr-reviewer", "security-reviewer", "performance-reviewer"],
+                "completed": ["pr-reviewer"],
+                "failed": [],
+            },
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert "BLOCKED" in g["title"]
+        text = "\n".join(g["situation"])
+        assert "security-reviewer" in text
+        assert "performance-reviewer" in text
+        # Should instruct re-running status check
+        actions_text = "\n".join(g["actions"])
+        assert "check-reviewer-agent-status.py" in actions_text
+
+    def test_blocked_shows_not_dispatched(self, mod, tmp_path):
+        """Blocked briefing should mention NOT_DISPATCHED agents too."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents_blocked": {
+                "running": ["security-reviewer"],
+                "not_dispatched": ["dead-code-reviewer"],
+            },
+            "agents": {"dispatched": [], "completed": [], "failed": []},
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"])
+        assert "dead-code-reviewer" in text
+
+    def test_not_blocked_when_no_running_agents(self, mod, tmp_path):
+        """Step 8 should proceed normally when agents_blocked is absent or empty."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["pr-reviewer"],
+                "completed": ["pr-reviewer"],
+                "failed": [],
+            },
+            "change_purpose": "Test change.",
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert "BLOCKED" not in g["title"]
+        text = "\n".join(g["actions"])
+        assert "review-reconciliator" in text
+
+    def test_not_blocked_when_only_not_dispatched(self, mod, tmp_path):
+        """NOT_DISPATCHED alone should not block — only RUNNING agents block."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents_blocked": {
+                "running": [],
+                "not_dispatched": ["dead-code-reviewer"],
+            },
+            "agents": {
+                "dispatched": ["pr-reviewer"],
+                "completed": ["pr-reviewer"],
+                "failed": [],
+            },
+            "change_purpose": "Test change.",
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert "BLOCKED" not in g["title"]
 
 
 class TestStep9ReviewReport:
