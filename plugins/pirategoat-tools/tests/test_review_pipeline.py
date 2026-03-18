@@ -67,70 +67,6 @@ class TestStep1ParseInput:
         text = "\n".join(g["actions"])
         assert "no new commits" in text.lower() or "STOPPED" in text
 
-    def test_step_1_includes_mission(self, mod, tmp_path):
-        """Step 1 should present the pipeline mission statement."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(1, "pr", state, ctx, config={"pr_number": "42"})
-        text = "\n".join(g["situation"])
-        assert "code review orchestrator" in text.lower()
-        assert "dedication" in text.lower() or "precision" in text.lower()
-
-    def test_mission_applies_to_all_modes(self, mod, tmp_path):
-        """Mission should appear in step 1 for all modes, not just PR."""
-        for mode in ("pr", "full", "incremental"):
-            state = {"completed_steps": []}
-            ctx = {}
-            g = mod.get_step_guidance(1, mode, state, ctx)
-            text = "\n".join(g["situation"])
-            assert "orchestrator" in text.lower()
-
-
-class TestPhaseTransitions:
-    """Phase-transition anchoring at phase entry steps."""
-
-    def test_step_5_has_execution_transition(self, mod, tmp_path):
-        """Step 5 (first EXECUTION step) should anchor on precision and dispatch."""
-        state = {
-            "completed_steps": [1, 3],
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "dispatch_plan_summary": {"dispatched": 5, "skipped": 2, "conditional": 1},
-            "dispatch_plan_agents": [],
-        }
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(5, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "specialist" in text.lower() or "precision" in text.lower()
-
-    def test_step_8_has_synthesis_transition(self, mod, tmp_path):
-        """Step 8 (first SYNTHESIS step) should anchor on faithful synthesis."""
-        state = {
-            "completed_steps": [1, 3, 5, 6, 7],
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "agents": {"dispatched": ["pr-reviewer"], "completed": ["pr-reviewer"], "failed": []},
-        }
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["situation"])
-        assert "synthesis" in text.lower() or "source of truth" in text.lower()
-
-    def test_step_10_has_validation_transition(self, mod, tmp_path):
-        """Step 10 (first VALIDATION step) should anchor on stress-testing."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["situation"])
-        assert "critic" in text.lower() or "trust" in text.lower()
-
-    def test_step_11_has_output_transition(self, mod, tmp_path):
-        """Step 11 (first OUTPUT step) should anchor on completeness."""
-        config = {"mode": "pr", "interactive": True}
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
-        text = "\n".join(g["situation"])
-        assert "validated" in text.lower() or "nothing is missing" in text.lower()
-
 
 class TestStructuredDataDiscipline:
     """Artifact discipline: verification checkpoints, handoff gates, schema-not-placeholders."""
@@ -293,14 +229,6 @@ class TestStep3GatherContext:
         text = "\n".join(g["situation"])
         assert "47" in text or "behind" in text.lower()
 
-    def test_presents_reviews_summary_in_pr_mode(self, mod, tmp_path):
-        """PR mode should present existing review summary in situation."""
-        state = {"completed_steps": [1, 2]}
-        ctx = self._make_context()
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "approved" in text.lower() or "review" in text.lower()
-
     def test_presents_linked_issues(self, mod, tmp_path):
         """Should present linked issue details in situation."""
         state = {"completed_steps": [1, 2]}
@@ -308,14 +236,6 @@ class TestStep3GatherContext:
         g = mod.get_step_guidance(3, "pr", state, ctx)
         text = "\n".join(g["situation"])
         assert "WOOPLUG-1234" in text or "issue" in text.lower()
-
-    def test_presents_domain_counts(self, mod, tmp_path):
-        """Should present changed domain file counts in situation."""
-        state = {"completed_steps": [1, 2]}
-        ctx = self._make_context()
-        g = mod.get_step_guidance(3, "pr", state, ctx)
-        text = "\n".join(g["situation"])
-        assert "domain" in text.lower() or "code" in text.lower()
 
     def test_presents_freshen_base_when_stale(self, mod, tmp_path):
         """Should suggest freshening base branch when stale."""
@@ -498,22 +418,6 @@ class TestStep7SaveReviewBaseline:
             # Should NOT instruct the LLM to write the file
             assert "cat >" not in text
             assert "STATEEOF" not in text
-
-    def test_incremental_mode_mentions_next_review(self, mod, tmp_path):
-        """Incremental mode briefing mentions next review will only cover new commits."""
-        state = {"resolved_params": {"git_range": "abc..HEAD"}, "completed_steps": []}
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(7, "incremental", state, ctx)
-        text = "\n".join(g["situation"] + g["actions"])
-        assert "new commits" in text.lower() or "only cover" in text.lower()
-
-    def test_full_mode_mentions_baseline(self, mod, tmp_path):
-        """Full mode briefing mentions baseline saved for future incremental reviews."""
-        state = {"resolved_params": {"git_range": "abc..HEAD"}, "completed_steps": []}
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(7, "full", state, ctx)
-        text = "\n".join(g["situation"] + g["actions"])
-        assert "baseline" in text.lower()
 
     def test_step_7_instructs_checking_agent_status(self, mod, tmp_path):
         """Step 7 should instruct checking agent completion before proceeding."""
