@@ -6,34 +6,39 @@ Testing for pirategoat-tools follows a two-level eval architecture: fast determi
 
 ```
 tests/
-├── TESTING.md                      # This file
-├── __init__.py                     # Package marker
-├── conftest.py                     # Shared fixtures (setup_temp_git_repo, bootstrap_repo)
-├── test_bootstrap_reviewer.py      # Level 1: Script evals (pytest)
-├── test_domain_routing.py          # Level 1: Domain routing evals (pytest)
-├── test_commands.py                # Level 1: Command structure evals (pytest)
-├── test_review_output.py           # Level 1: ReviewOutputBuilder unit tests (pytest)
-├── test_review_api_contract.py     # Level 1: Cross-component contract tests (pytest)
-├── graders.py                      # Shared grading functions
-├── test_graders.py                 # Tests for the graders themselves
-├── eval_agent_compliance.py        # Level 2: Agent compliance evals
+├── TESTING.md                        # This file
+├── __init__.py                       # Package marker
+├── conftest.py                       # Shared fixtures (setup_temp_git_repo, bootstrap_repo, pipeline_mod)
+├── test_bootstrap_reviewer.py        # Level 1: Bootstrap unit tests (direct imports)
+├── test_bootstrap_integration.py     # Level 1: Bootstrap integration tests (subprocess)
+├── test_review_pipeline.py           # Level 1: Pipeline briefing tests (get_step_guidance)
+├── test_pipeline_infrastructure.py   # Level 1: Pipeline infrastructure (step sequence, routing, state, CLI)
+├── test_pipeline_orchestration.py    # Level 1: Pipeline orchestration (subprocess, telemetry, integration)
+├── test_domain_routing.py            # Level 1: Domain routing evals (pytest)
+├── test_commands.py                  # Level 1: Shared structural + review command tests
+├── test_commands_helpers.py          # Shared helpers for command tests
+├── test_commands_pr_update.py        # Level 1: pr-update.md content tests
+├── test_commands_switch_to.py        # Level 1: switch-to.md content tests
+├── test_review_output.py             # Level 1: ReviewOutputBuilder unit tests (pytest)
+├── test_review_api_contract.py       # Level 1: Cross-component contract tests (pytest)
+├── graders.py                        # Shared grading functions
+├── test_graders.py                   # Tests for the graders themselves
+├── eval_agent_compliance.py          # Level 2: Agent compliance evals
 └── fixtures/
-    ├── no-code-changes.diff        # Docs-only diff for NO_DOMAIN_FILES tests
-    ├── php-source.diff             # PHP source: SQL injection, tight coupling
-    ├── js-ts-source.diff           # JS/TS source: XSS, hardcoded API key
-    ├── php-test-only.diff          # PHP tests: missing assertions, over-mocking
-    ├── js-test-only.diff           # JS tests: snapshot overuse, weak assertions
-    ├── e2e-test-only.diff          # E2E tests: hard-coded waits
-    ├── mixed-code-and-tests.diff   # Cart logic + PHP/JS tests
-    ├── wp-hooks-and-i18n.diff      # WP plugin: hooks, i18n, escaping, $wpdb
-    └── multi-file-realistic.diff   # 7 files across all 9 domains
+    ├── no-code-changes.diff          # Docs-only diff for NO_DOMAIN_FILES tests
+    ├── php-source.diff               # PHP source: SQL injection, tight coupling
+    ├── js-ts-source.diff             # JS/TS source: XSS, hardcoded API key
+    ├── php-test-only.diff            # PHP tests: missing assertions, over-mocking
+    ├── js-test-only.diff             # JS tests: snapshot overuse, weak assertions
+    ├── e2e-test-only.diff            # E2E tests: hard-coded waits
+    ├── mixed-code-and-tests.diff     # Cart logic + PHP/JS tests
+    ├── wp-hooks-and-i18n.diff        # WP plugin: hooks, i18n, escaping, $wpdb
+    └── multi-file-realistic.diff     # 7 files across all 9 domains
 ```
 
-### Level 1: Script Evals (`test_bootstrap_reviewer.py`)
+### Level 1: Bootstrap Unit Tests (`test_bootstrap_reviewer.py`)
 
-Deterministic pytest suite. Tests `bootstrap-reviewer.py` by importing its functions directly (unit tests) and by running it as a subprocess (integration tests). Runs in ~15 seconds, no network or model calls.
-
-**Unit test classes** test individual functions with synthetic inputs:
+Deterministic pytest suite. Tests `bootstrap-reviewer.py` by importing its functions directly. No network or model calls.
 
 | Class | Functions under test | What it verifies |
 |---|---|---|
@@ -43,7 +48,9 @@ Deterministic pytest suite. Tests `bootstrap-reviewer.py` by importing its funct
 | `TestBuildOutput` | `build_output()` | Section markers, conditional sections (domain rules, exploration scope), output paths, builder snippet |
 | `TestBuildErrorOutput` | `build_error_output()` | Error structure, plugin root, action directive |
 
-**Integration test classes** run the full script via subprocess for all agents against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state):
+### Level 1: Bootstrap Integration Tests (`test_bootstrap_integration.py`)
+
+Integration tests that run the full `bootstrap-reviewer.py` script via subprocess for all agents against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state):
 
 | Class | What it verifies |
 |---|---|
@@ -75,19 +82,30 @@ Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parame
 
 `OK` = STATUS: OK (domain matches files), `-` = STATUS: NO_DOMAIN_FILES (domain excludes all files)
 
-### Level 1: Command Structure Evals (`test_commands.py`)
+### Level 1: Command Structure Evals (`test_commands.py` + per-command files)
 
-Deterministic pytest suite that validates structural properties of review command files (`full-code-review.md`, `code-review.md`). No network or model calls.
+Deterministic pytest suite that validates structural properties of command files. Shared helpers live in `test_commands_helpers.py`. No network or model calls.
+
+**Shared structural tests** (`test_commands.py`):
 
 | Class | What it verifies |
 |---|---|
 | `TestFrontmatter` | All commands exist, have valid YAML frontmatter with `description` field |
-| `TestAgentReferences` | Agent names in dispatch tables exist in `marketplace.json`; both dispatch commands reference the same agents |
-| `TestScriptReferences` | Scripts referenced in commands (`bootstrap-reviewer.py`, `review-scope.py`) exist on disk |
+| `TestScriptReferences` | Scripts referenced in commands (`review-pipeline.py`) exist on disk |
+| `TestReviewCommandsReferenceUnifiedScript` | All review commands reference `review-pipeline.py` with correct mode |
 | `TestMarketplaceRegistration` | All review commands are registered in `marketplace.json` |
-| `TestCodeReviewIterative` | `code-review.md` has state file reference, incremental mode, full/reset option, rebase detection, no-new-commits guard |
-| `TestFullCodeReview` | `full-code-review.md` has default branch guard, reconciliator dispatch, no state file reference |
+| `TestCodeReviewIterative` | `code-review.md` has incremental mode, full/reset option, baseline reference |
+| `TestFullCodeReview` | `full-code-review.md` has full mode |
 | `TestBaselineFileGrading` | `.branch-review-baseline.json` round-trip: valid baseline files pass, incremented counts pass, explicit ranges pass |
+| `TestPrReview` | `pr-review.md` is a thin wrapper delegating to `review-pipeline.py` |
+| `TestUnifiedMission` | All review commands reference the unified pipeline mission |
+
+**Per-command tests:**
+
+| File | Class | What it verifies |
+|---|---|---|
+| `test_commands_pr_update.py` | `TestPrUpdate` | `pr-update.md` has PR detection, template detection, validation, approval gate, GHE fallback, size-based brevity |
+| `test_commands_switch_to.py` | `TestSwitchTo` | `switch-to.md` has argument parsing, dirty state handling, branch switching, remote sync, PR flow, post-switch context |
 
 ### Level 1: ReviewOutputBuilder Unit Tests (`test_review_output.py`)
 

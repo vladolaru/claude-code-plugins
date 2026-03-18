@@ -194,16 +194,21 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 
 | Changed file | Run |
 |---|---|
-| `scripts/bootstrap-reviewer.py` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
-| `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
-| `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` |
+| `scripts/bootstrap-reviewer.py` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` |
+| `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` |
+| `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` |
+| `scripts/review-pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_pipeline_infrastructure.py -v` |
+| `scripts/review-pipeline.py` (orchestration, subprocess) | `pytest plugins/pirategoat-tools/tests/test_pipeline_orchestration.py -v` |
+| `scripts/review-pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_review_pipeline.py -v` |
 | `scripts/semantic-filter.py` | `pytest plugins/pirategoat-tools/tests/test_semantic_filter.py -v` |
 | `scripts/review_output_simple.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | `scripts/review-telemetry.py` | `pytest plugins/pirategoat-tools/tests/test_review_telemetry.py -v` |
 | `tests/graders.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
-| Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (verifies agent config still works) |
-| New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v` (auto-included in all parameterized tests) |
+| Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` (verifies agent config still works) |
+| New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` (auto-included in all parameterized tests) |
 | Any review command `.md` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` (validates structure, agent refs, script refs) |
+| `commands/pr-update.md` | `pytest plugins/pirategoat-tools/tests/test_commands_pr_update.py -v` |
+| `commands/switch-to.md` | `pytest plugins/pirategoat-tools/tests/test_commands_switch_to.py -v` |
 | `.claude-plugin/marketplace.json` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` (validates command registration, agent cross-refs) |
 
 **Run all deterministic tests:** `pytest plugins/pirategoat-tools/tests/ -v --ignore=plugins/pirategoat-tools/tests/e2e 2>&1 | tail -30`
