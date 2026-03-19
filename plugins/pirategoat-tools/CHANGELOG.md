@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.73.2] - 2026-03-19
+
+### Fixed
+
+- **Step 2 tests silently stashed uncommitted edits** — `TestStep2Orchestration` ran `setup-workspace.py` via subprocess without `cwd` isolation. The script detected dirty working tree state in the real repo, ran `git stash push -u`, and silently stashed uncommitted changes. Now tests initialize a temp git repo and pass `cwd=tmp_path`.
+- **File history test hardcoded single agent** — `TestFileHistory` excluded only `history-insights-reviewer` but `api-contract-reviewer` also has `file_history: true`. Now reads the registry dynamically.
+
 ## [1.73.1] - 2026-03-19
 
 ### Fixed
