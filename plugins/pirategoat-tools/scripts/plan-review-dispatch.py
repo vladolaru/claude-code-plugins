@@ -276,18 +276,59 @@ def get_diffstat(git_range: str) -> Dict:
 # =============================================================================
 
 
+def _build_file_paths_text(file_paths: List[str]) -> str:
+    """Convert file paths into matchable text for keyword triage.
+
+    Replaces path separators, hyphens, and underscores with spaces so that
+    path segments like 'payment-gateway' match keywords like 'payment'.
+
+    Returns lowercased text. Empty string if no paths.
+    """
+    if not file_paths:
+        return ""
+    return " ".join(
+        f.replace("/", " ").replace("-", " ").replace("_", " ")
+        for f in file_paths
+    ).lower()
+
+
+def _match_keywords_multi_source(
+    keywords: List[str],
+    sources: List[Tuple[str, str]],
+) -> List[Tuple[str, str]]:
+    """Match keywords against multiple named text sources.
+
+    Args:
+        keywords: Keyword strings to search for (substring match).
+        sources: List of (source_name, text) tuples to search in.
+
+    Returns:
+        List of (keyword, source_name) for each match. Each keyword
+        is reported from the first source it matches.
+    """
+    matches = []
+    for kw in keywords:
+        for name, text in sources:
+            if text and kw in text:
+                matches.append((kw, name))
+                break  # first source wins per keyword
+    return matches
+
+
 def triage_conditional_agent(
     agent_name: str,
     config: dict,
     domain_files: List[str],
     commit_messages: str,
     diffstat: Dict,
+    pr_text: str = "",
 ) -> Tuple[str, str]:
     """Apply deterministic triage for a conditional agent.
 
     Triage layers (first match wins):
     1. Test-only filter: if ALL domain files are test files → SKIPPED_TRIAGE
-    2. Keyword match: if triage_keywords match commit messages → DISPATCH
+    2. Keyword match: if triage_keywords match any signal source → DISPATCH
+       Signal sources (checked in order): commit messages, file paths, PR title/body
     3. Agent-specific checks (dead-code: deletions, net removal) → DISPATCH
     4. Default: DISPATCH (conservative — when in doubt, dispatch)
 
@@ -297,6 +338,7 @@ def triage_conditional_agent(
         domain_files: Files matching the agent's domain(s).
         commit_messages: Lowercased combined commit messages.
         diffstat: Diffstat summary dict.
+        pr_text: Lowercased PR title + body (empty if unavailable).
 
     Returns:
         (status, reason) where status is DISPATCH or SKIPPED_TRIAGE.
@@ -308,12 +350,25 @@ def triage_conditional_agent(
     if domain_files and all(is_test_file(f) for f in domain_files):
         return "SKIPPED_TRIAGE", "all matching files are test files"
 
-    # Layer 2: Keyword match from triage_keywords
+    # Layer 2: Keyword match from triage_keywords against all signal sources
     keywords = config.get("triage_keywords", [])
-    if keywords and commit_messages:
-        matched_kw = [kw for kw in keywords if kw in commit_messages]
-        if matched_kw:
-            return "DISPATCH", f"commit keywords matched: {', '.join(matched_kw[:3])}"
+    if keywords:
+        file_paths_text = _build_file_paths_text(domain_files)
+        sources = [
+            ("commits", commit_messages),
+            ("files", file_paths_text),
+            ("pr", pr_text),
+        ]
+        matches = _match_keywords_multi_source(keywords, sources)
+        if matches:
+            # Group by source for a readable reason
+            by_source: Dict[str, List[str]] = {}
+            for kw, src in matches[:5]:
+                by_source.setdefault(src, []).append(kw)
+            reason_parts = []
+            for src, kws in by_source.items():
+                reason_parts.append(f"{src}: {', '.join(kws[:3])}")
+            return "DISPATCH", f"keywords matched ({'; '.join(reason_parts)})"
 
     # Layer 3: Agent-specific checks
     triage_checks = config.get("triage_checks", [])
@@ -346,12 +401,13 @@ def decide_agent_dispatch(
     clean_files: Optional[List[str]] = None,
     commit_messages: str = "",
     diffstat: Optional[Dict] = None,
+    pr_text: str = "",
 ) -> Tuple[str, str]:
     """Decide whether to dispatch a single agent.
 
     For always-dispatch and manual/special agents, only domain file counts
     matter. For conditional agents, deterministic triage is applied using
-    commit messages, diffstat, and test-file detection.
+    commit messages, file paths, PR metadata, diffstat, and test-file detection.
 
     Args:
         agent_name: Name of the agent.
@@ -360,6 +416,7 @@ def decide_agent_dispatch(
         clean_files: Full list of reviewable files (for domain matching).
         commit_messages: Lowercased combined commit messages.
         diffstat: Diffstat summary dict.
+        pr_text: Lowercased PR title + body + labels + branch + issue titles.
 
     Returns:
         (status, reason) tuple where status is "DISPATCH", "SKIPPED",
@@ -406,6 +463,7 @@ def decide_agent_dispatch(
         return triage_conditional_agent(
             agent_name, config, domain_files,
             commit_messages, diffstat or {},
+            pr_text=pr_text,
         )
 
     # Conditional agents without triage context: dispatch by default
@@ -416,6 +474,53 @@ def decide_agent_dispatch(
     return "DISPATCH", "default"
 
 
+def _build_pr_text(review_context: Optional[dict]) -> str:
+    """Build lowercased text from PR metadata for keyword triage.
+
+    Combines PR title, body, labels, branch name, and linked issue titles
+    into a single searchable text block.
+
+    Args:
+        review_context: Parsed review-context.json dict, or None.
+
+    Returns:
+        Lowercased combined text. Empty string if no context.
+    """
+    if not review_context:
+        return ""
+    parts = []
+    pr = review_context.get("pr", {})
+    if pr.get("title"):
+        parts.append(pr["title"])
+    if pr.get("body"):
+        parts.append(pr["body"])
+    # Labels are high-signal explicit categorization
+    for label in pr.get("labels", []):
+        if isinstance(label, str):
+            parts.append(label)
+    # Branch name often has descriptive slugs
+    branch = review_context.get("git", {}).get("head_ref", "")
+    if branch:
+        # Convert separators so "fix/WOOPLUG-5988-payment-gateway" becomes matchable
+        parts.append(branch.replace("/", " ").replace("-", " ").replace("_", " "))
+    # Linked issue titles
+    for issue in review_context.get("linked_issues_details", []):
+        if issue.get("title"):
+            parts.append(issue["title"])
+    return "\n".join(parts).lower()
+
+
+def _load_review_context(path: Optional[str]) -> Optional[dict]:
+    """Load review-context.json from disk. Returns None on any failure."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def build_dispatch_plan(
     mode: str,
     git_range: str,
@@ -424,6 +529,7 @@ def build_dispatch_plan(
     registry: Optional[dict] = None,
     commit_messages: Optional[str] = None,
     diffstat: Optional[Dict] = None,
+    review_context: Optional[dict] = None,
 ) -> dict:
     """Build the complete dispatch plan.
 
@@ -435,6 +541,7 @@ def build_dispatch_plan(
         registry: Agent registry dict. Loaded from default path if None.
         commit_messages: Pre-fetched commit messages (fetched from git if None).
         diffstat: Pre-fetched diffstat (fetched from git if None).
+        review_context: Parsed review-context.json dict (for PR metadata triage).
 
     Returns:
         Dispatch plan dict with mode, dispatch array, scope_summary, etc.
@@ -459,6 +566,9 @@ def build_dispatch_plan(
     if diffstat is None:
         diffstat = get_diffstat(git_range)
 
+    # Build PR text for keyword matching (fault-tolerant)
+    pr_text = _build_pr_text(review_context)
+
     # Build dispatch decisions
     dispatch_list = []
     agent_signals = []
@@ -475,6 +585,7 @@ def build_dispatch_plan(
             clean_files=clean_files,
             commit_messages=commit_messages,
             diffstat=diffstat,
+            pr_text=pr_text,
         )
 
         entry = {
@@ -546,6 +657,11 @@ def main():
         default=None,
         help="Optional comma-separated list of changed files (overrides git diff).",
     )
+    parser.add_argument(
+        "--review-context",
+        default=None,
+        help="Path to review-context.json for PR metadata triage (title, body, labels, branch, issues).",
+    )
 
     args = parser.parse_args()
 
@@ -555,12 +671,16 @@ def main():
     else:
         changed_files = get_changed_files_from_git(args.git_range)
 
+    # Load review context for PR metadata triage
+    review_context = _load_review_context(args.review_context)
+
     # Build plan
     plan = build_dispatch_plan(
         mode=args.mode,
         git_range=args.git_range,
         output_dir=args.output_dir,
         changed_files=changed_files,
+        review_context=review_context,
     )
 
     # Output JSON to stdout (for inline parsing by commands)

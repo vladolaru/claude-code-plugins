@@ -1436,6 +1436,10 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             changed_csv = git.get("changed_files_csv", "")
             if changed_csv:
                 planner_cmd.extend(["--changed-files-list", changed_csv])
+            # Pass review context for PR metadata triage (title, body, labels, branch, issues)
+            ctx_path = os.path.join(output_dir, "review-context.json")
+            if os.path.isfile(ctx_path):
+                planner_cmd.extend(["--review-context", ctx_path])
 
             stdout, ok = _run_subprocess(planner_cmd, timeout=60)
             state["dispatch_plan_output"] = stdout if ok else ""

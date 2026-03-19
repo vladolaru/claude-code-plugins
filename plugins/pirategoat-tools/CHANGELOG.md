@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.0] - 2026-03-19
+
+### Added
+
+- **Multi-source keyword triage** — dispatch planner now matches `triage_keywords` against commit messages, file paths, PR title, PR body, PR labels, branch name, and linked issue titles. Each keyword match reports which source triggered it (e.g., `keywords matched (files: payment; pr: security)`).
+
+### Changed
+
+- **Dispatch reason messages** — keyword match reasons now indicate the signal source (commits/files/pr) instead of always saying "commit keywords matched".
+
 ## [1.69.0] - 2026-03-19
 
 ### Added
