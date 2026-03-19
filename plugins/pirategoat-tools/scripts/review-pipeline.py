@@ -1510,6 +1510,23 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
                 ]
                 state["dispatched_agents"] = dispatched
+                # Recompute dispatch_plan_summary from final plan (post-override)
+                all_agents = plan.get("agents", [])
+                state["dispatch_plan_summary"] = {
+                    "dispatched": sum(
+                        1 for a in all_agents
+                        if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                    ),
+                    "skipped": sum(
+                        1 for a in all_agents
+                        if a.get("status") not in ("DISPATCH", "DISPATCH_OVERRIDE")
+                    ),
+                    "conditional": sum(
+                        1 for a in all_agents
+                        if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                        and "conditional" in a.get("reason", "").lower()
+                    ),
+                }
             except (json.JSONDecodeError, OSError):
                 state["dispatched_agents"] = []
         else:

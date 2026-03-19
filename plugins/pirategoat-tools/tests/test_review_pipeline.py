@@ -446,6 +446,37 @@ class TestStep6DispatchAgents:
         text = "\n".join(g["actions"])
         assert "check-reviewer-agent-status.py" in text
 
+    def test_step6_recomputes_dispatch_plan_summary(self, mod, tmp_path):
+        """Step 6 orchestration must recompute summary from final dispatch-plan.json (post-override)."""
+        import json
+
+        # Write a dispatch plan with overrides applied
+        plan = {
+            "agents": [
+                {"name": "pr-reviewer", "status": "DISPATCH", "reason": "always"},
+                {"name": "security-reviewer", "status": "DISPATCH", "reason": "keywords"},
+                {"name": "concurrency-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "conditional", "override_reason": "test"},
+                {"name": "a11y-reviewer", "status": "SKIPPED", "reason": "no files"},
+            ]
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            # Pre-override summary (stale — should be overwritten)
+            "dispatch_plan_summary": {"dispatched": 3, "skipped": 1, "conditional": 1},
+        }
+        config = {"mode": "pr", "interactive": True}
+        context = {"git": {"git_range": "abc..HEAD"}}
+
+        mod._orchestrate_step(6, "pr", config, state, context, str(tmp_path))
+
+        # Summary should reflect post-override counts
+        summary = state["dispatch_plan_summary"]
+        assert summary["dispatched"] == 2  # pr-reviewer + security-reviewer
+        assert summary["skipped"] == 2  # SKIPPED + SKIPPED_OVERRIDE
+
 
 # ===================================================================
 # SYNTHESIS Phase Tests (Steps 7-9)
