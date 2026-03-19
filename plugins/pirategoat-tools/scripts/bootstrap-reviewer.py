@@ -366,6 +366,23 @@ def load_pr_intent(output_dir: str) -> Optional[str]:
     return "\n".join(parts)
 
 
+def load_pr_number_from_context(output_dir: str) -> Optional[str]:
+    """Load PR number from review-context.json in the output directory.
+
+    Returns PR number as a string, or None if unavailable.
+    """
+    ctx_path = os.path.join(output_dir, "review-context.json")
+    if not os.path.isfile(ctx_path):
+        return None
+    try:
+        with open(ctx_path) as f:
+            ctx = json.load(f)
+        number = ctx.get("pr", {}).get("number")
+        return str(number) if number else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def load_change_purpose(output_dir: str) -> Optional[str]:
     """Load the main session's change-purpose synthesis from the output directory.
 
@@ -686,6 +703,10 @@ def main():
 
         pr_number = extract_pr_number(scope_output)
 
+        # Fallback: read PR number from review-context.json
+        if not pr_number:
+            pr_number = load_pr_number_from_context(output_dir)
+
         # Run extra scope for patterns-reviewer (exploration scope)
         if "extra_scope" in config:
             extra_flags = config["extra_scope"]
@@ -728,6 +749,10 @@ def main():
                     output_dir = f"/tmp/pr-review-{pr_number}"
                     os.makedirs(output_dir, exist_ok=True)
                 break
+
+        # Fallback: read PR number from review-context.json
+        if not pr_number:
+            pr_number = load_pr_number_from_context(output_dir)
 
     # Apply output dir override
     if args.output_dir:

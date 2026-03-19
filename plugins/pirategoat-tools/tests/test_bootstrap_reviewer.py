@@ -28,6 +28,7 @@ extract_protocol_sections = _mod.extract_protocol_sections
 build_output = _mod.build_output
 build_error_output = _mod.build_error_output
 load_pr_intent = _mod.load_pr_intent
+load_pr_number_from_context = _mod.load_pr_number_from_context
 load_change_purpose = _mod.load_change_purpose
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
@@ -237,6 +238,29 @@ class TestChangePurposeInjection:
         )
         assert "=== REVIEW FOCUS (pipeline synthesis) ===" in output
         assert "retry logic" in output
+
+class TestLoadPrNumberFromContext:
+    """PR number loading from review-context.json."""
+
+    def test_pr_number_from_review_context(self, tmp_path):
+        """Bootstrap should read PR number from review-context.json when scope doesn't provide it."""
+        ctx = {"pr": {"number": 11453}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        result = load_pr_number_from_context(str(tmp_path))
+        assert result == "11453"
+
+    def test_pr_number_from_review_context_missing(self, tmp_path):
+        """Should return None when review-context.json doesn't exist."""
+        result = load_pr_number_from_context(str(tmp_path))
+        assert result is None
+
+    def test_pr_number_from_review_context_no_pr_key(self, tmp_path):
+        """Should return None when pr.number is missing from context."""
+        ctx = {"git": {"base_ref": "main"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        result = load_pr_number_from_context(str(tmp_path))
+        assert result is None
+
 
 class TestBuildErrorOutput:
     """Error output format."""
