@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.73.0] - 2026-03-19
+
+### Fixed
+
+- **Stale dispatch_plan_summary after overrides** — summary was computed at step 5 from the initial plan, never updated after SKIPPED_OVERRIDE edits. Now recomputed at step 6 from the final dispatch-plan.json on disk.
+- **Pipeline state verdict: null** — `pipeline-state.json` had `verdict: null` despite the review completing successfully. Step 11 now writes the verdict from `review-verdict.json` into state.
+- **Agent outputs with pr_id: 0** — bootstrap now reads PR number from `review-context.json` as fallback when scope discovery doesn't provide it.
+
+### Added
+
+- **Scope-proportionate budget hints** — bootstrap injects a calibrated tool call budget (15 + changed_lines/10, capped at 80) with reinforcement on why staying on budget matters: critical path bottleneck, diminishing returns, and depth matching complexity.
+- **Decision critic evidence anchors** — step 10 briefing now provides an exact dispatch template including `review-findings.json` path, giving the critic targeted verification anchors instead of re-discovering evidence independently.
+
+### Removed
+
+- **`agent_signals_text` from dispatch plan** — redundant `"\n".join(agent_signals)` field. The `agent_signals` list remains.
+- **`dispatch_plan_output` from pipeline state** — full plan JSON was triple-stored (dispatch-plan.json, escaped string, parsed array). Removed the escaped string copy (~9KB per run).
+
 ## [1.72.2] - 2026-03-19
 
 ### Fixed
