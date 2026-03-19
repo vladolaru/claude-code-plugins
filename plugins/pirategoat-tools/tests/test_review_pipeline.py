@@ -867,6 +867,14 @@ class TestStep10DecisionCritic:
         text = "\n".join(g["actions"])
         assert "no changes" in text.lower() or "no action" in text.lower()
 
+    def test_includes_findings_json_for_critic(self, mod, tmp_path):
+        """Step 10 must include review-findings.json path so critic can target verification."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "review-findings.json" in text
+
     def test_escalate_instructs_override_to_comment(self, mod, tmp_path):
         """ESCALATE verdict instructions must say to override verdict to COMMENT."""
         state = {"completed_steps": []}

@@ -1129,11 +1129,22 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     else:
         critic_target = f"{od}/review-report.md"
 
+    findings_path = f"{od}/review-findings.json"
     actions.append(
         f"Dispatch the `decision-reviewer` agent to stress-test the review conclusions."
     )
     actions.append("")
-    actions.append(f"The critic should review: `{critic_target}`")
+    actions.append("Use this dispatch prompt:")
+    actions.append("```")
+    actions.append(f"Stress-test the conclusions in this review report: {critic_target}")
+    actions.append(f"Structured findings with per-issue evidence: {findings_path}")
+    actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
+    actions.append(f"Return STAND, REVISE, or ESCALATE with findings.")
+    actions.append("```")
+    actions.append("")
+    actions.append(f"The structured findings give the critic targeted verification anchors —")
+    actions.append(f"specific files, lines, agent sources, and confidence scores — so it can")
+    actions.append(f"verify claims directly rather than re-discovering evidence from scratch.")
     actions.append("")
     actions.append("**IMPORTANT:** Wait for the critic to finish — do NOT run in background.")
     actions.append("You need the critic's verdict before proceeding to the next step.")
