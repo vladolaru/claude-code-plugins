@@ -370,9 +370,11 @@ class ReviewTelemetry:
         if dispatch:
             summary["agents_total"] = dispatch["total_agents"]
             by_status = dispatch.get("by_status", {})
-            summary["agents_dispatched"] = len(by_status.get("DISPATCH", []))
+            summary["agents_dispatched"] = sum(
+                len(v) for k, v in by_status.items() if k.startswith("DISPATCH")
+            )
             summary["agents_skipped"] = sum(
-                len(v) for k, v in by_status.items() if k != "DISPATCH"
+                len(v) for k, v in by_status.items() if not k.startswith("DISPATCH")
             )
 
         agents = self._extract_agent_results()

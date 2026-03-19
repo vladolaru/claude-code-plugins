@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.72.2] - 2026-03-19
+
+### Fixed
+
+- **Telemetry summary override counting** — `_build_summary()` counted `DISPATCH_OVERRIDE` agents as skipped instead of dispatched. Switched from exact key match (`k != "DISPATCH"`) to prefix matching (`k.startswith("DISPATCH")`) so both `DISPATCH` and `DISPATCH_OVERRIDE` are counted as dispatched.
+
 ## [1.72.1] - 2026-03-19
 
 ### Fixed

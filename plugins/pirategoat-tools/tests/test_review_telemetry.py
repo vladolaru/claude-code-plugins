@@ -493,3 +493,31 @@ class TestLogAgentComplete:
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
         t.log_agent_complete(agent_name="security-reviewer", verdict="approve")
         assert t.log_path is None
+
+
+# ── _build_summary override counting ────────────────────────────
+
+
+class TestSummaryOverrideCounting:
+    """_build_summary must count DISPATCH_OVERRIDE as dispatched, not skipped."""
+
+    def test_dispatch_override_counted_as_dispatched(self, mod, output_dir, tmp_path):
+        plan = {
+            "agents": [
+                {"name": "pr-reviewer", "status": "DISPATCH"},
+                {"name": "perf-reviewer", "status": "DISPATCH_OVERRIDE"},
+                {"name": "a11y-reviewer", "status": "SKIPPED"},
+                {"name": "concurrency-reviewer", "status": "SKIPPED_OVERRIDE"},
+            ]
+        }
+        (output_dir / "dispatch-plan.json").write_text(json.dumps(plan))
+
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        summary = t._build_summary(total_duration_ms=10000)
+
+        assert summary["agents_total"] == 4
+        assert summary["agents_dispatched"] == 2, \
+            "DISPATCH_OVERRIDE should count as dispatched"
+        assert summary["agents_skipped"] == 2, \
+            "SKIPPED_OVERRIDE should count as skipped, DISPATCH_OVERRIDE should not"
