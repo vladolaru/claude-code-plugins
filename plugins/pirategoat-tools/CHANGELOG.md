@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.72.1] - 2026-03-19
+
+### Fixed
+
+- **Status check misclassified SKIPPED_OVERRIDE agents** — `check-reviewer-agent-status.py` used a hardcoded list of skip statuses (`SKIP`, `SKIPPED`, `SKIPPED_TRIAGE`) that missed `SKIPPED_OVERRIDE`. Agents overridden at step 5 fell through to the dispatch path and were reported as `NOT_DISPATCHED (never started)`, inflating the "never started" count. Switched to prefix matching (`status.startswith("SKIP")`) to handle all current and future skip variants.
+
 ## [1.72.0] - 2026-03-19
 
 ### Changed

@@ -72,7 +72,7 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
         name = agent["name"]
         status = agent.get("status", "SKIP")
 
-        if status in ("SKIP", "SKIPPED", "SKIPPED_TRIAGE"):
+        if status.startswith("SKIP"):
             skipped += 1
             agents.append({
                 "name": name, "status": status,
@@ -162,7 +162,7 @@ def format_output(result: dict) -> str:
     for a in result["agents"]:
         name = a["name"]
         st = a["status"]
-        if st in ("SKIP", "SKIPPED", "SKIPPED_TRIAGE"):
+        if st.startswith("SKIP"):
             lines.append(f"  {name:30s} {st}  ({a.get('reason', '')})")
         elif st == "FINISHED":
             counts = ", ".join(f"{k}={v}" for k, v in sorted(a.get("counts", {}).items()))

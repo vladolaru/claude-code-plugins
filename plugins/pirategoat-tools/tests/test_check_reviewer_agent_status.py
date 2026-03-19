@@ -285,3 +285,73 @@ class TestIssuesKey:
         assert agent["status"] == "FINISHED"
         assert agent["counts"]["critical"] == 1
         assert agent["counts"]["high"] == 1
+
+
+class TestOverrideStatuses:
+    """SKIPPED_OVERRIDE and DISPATCH_OVERRIDE must be handled correctly."""
+
+    def test_skipped_override_treated_as_skip(self, mod, tmp_path):
+        """SKIPPED_OVERRIDE agent should be counted as skipped, not dispatched."""
+        _write_plan(tmp_path, [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no UI changes"},
+        ])
+        _start_agent(tmp_path, "pr-reviewer")
+        _finish_agent(tmp_path, "pr-reviewer")
+
+        result = mod.check_status(str(tmp_path))
+        assert result["all_done"] is True
+        assert result["skipped"] == 1
+        assert result["dispatched"] == 1
+        assert result["not_dispatched"] == 0
+
+    def test_skipped_override_shown_in_output(self, mod, tmp_path):
+        """format_output should show SKIPPED_OVERRIDE with reason, not NOT_DISPATCHED."""
+        _write_plan(tmp_path, [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no UI changes"},
+        ])
+        _start_agent(tmp_path, "pr-reviewer")
+        _finish_agent(tmp_path, "pr-reviewer")
+
+        result = mod.check_status(str(tmp_path))
+        output = mod.format_output(result)
+        assert "SKIPPED_OVERRIDE" in output
+        assert "LLM override: no UI changes" in output
+        assert "NOT_DISPATCHED" not in output
+
+    def test_dispatch_override_treated_as_dispatch(self, mod, tmp_path):
+        """DISPATCH_OVERRIDE agent should be counted as dispatched and FINISHED when review file exists."""
+        _write_plan(tmp_path, [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "perf-reviewer", "status": "DISPATCH_OVERRIDE"},
+        ])
+        _start_agent(tmp_path, "pr-reviewer")
+        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "perf-reviewer")
+        _finish_agent(tmp_path, "perf-reviewer")
+
+        result = mod.check_status(str(tmp_path))
+        assert result["all_done"] is True
+        assert result["dispatched"] == 2
+        assert result["finished"] == 2
+
+    def test_multiple_override_statuses_mixed(self, mod, tmp_path):
+        """Mix of DISPATCH, SKIPPED, SKIPPED_OVERRIDE, DISPATCH_OVERRIDE all handled correctly."""
+        _write_plan(tmp_path, [
+            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "security-reviewer", "status": "SKIPPED", "reason": "no security-relevant files"},
+            {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no frontend"},
+            {"name": "perf-reviewer", "status": "DISPATCH_OVERRIDE"},
+        ])
+        _start_agent(tmp_path, "pr-reviewer")
+        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "perf-reviewer")
+        _finish_agent(tmp_path, "perf-reviewer")
+
+        result = mod.check_status(str(tmp_path))
+        assert result["all_done"] is True
+        assert result["dispatched"] == 2   # DISPATCH + DISPATCH_OVERRIDE
+        assert result["finished"] == 2
+        assert result["skipped"] == 2      # SKIPPED + SKIPPED_OVERRIDE
+        assert result["not_dispatched"] == 0
