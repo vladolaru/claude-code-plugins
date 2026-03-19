@@ -1,7 +1,7 @@
 ---
 name: review-reconciliator
 description: Reads all agent review JSON outputs, performs semantic deduplication, scope checking, and fact verification in one pass, then produces clean review findings. Replaces the old deterministic dedup script + separate ingest verification.
-model: inherit
+model: opus
 color: orange
 tools:
   - Read

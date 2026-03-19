@@ -9,7 +9,7 @@
       "scope_flags": [],
       "dispatch_class": "always",
       "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality",
-      "model_tier": "inherit"
+      "model_tier": "opus"
     },
     "security-reviewer": {
       "domain": "security",
@@ -217,7 +217,7 @@
       "max_history_commits": 5,
       "dispatch_class": "always",
       "focus": "Git history precedents, lessons learned",
-      "model_tier": "inherit"
+      "model_tier": "sonnet"
     },
     "tests-mutation-reviewer": {
       "domain": null,
@@ -287,7 +287,7 @@
         "wcag"
       ],
       "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA",
-      "model_tier": "inherit"
+      "model_tier": "opus"
     },
     "reliability-reviewer": {
       "domain": "reliability",
@@ -433,7 +433,7 @@
       "scope_flags": [],
       "dispatch_class": "special",
       "focus": "Stress-test review conclusions via structured criticism",
-      "model_tier": "inherit"
+      "model_tier": "opus"
     }
   }
 }
