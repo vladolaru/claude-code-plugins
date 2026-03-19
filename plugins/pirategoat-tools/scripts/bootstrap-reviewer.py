@@ -323,6 +323,18 @@ def extract_scope_line_count(scope_output: str) -> int:
     return total
 
 
+def compute_review_budget(changed_lines: int, file_count: int) -> int:
+    """Compute a tool call budget proportionate to PR scope.
+
+    Formula: base 15 + 1 call per 10 changed lines, capped at 80.
+    The budget is a calibration hint, not a hard cap.
+    """
+    budget = 15 + (changed_lines // 10)
+    budget = max(budget, 15)  # minimum viable budget
+    budget = min(budget, 80)  # cap for even the largest PRs
+    return budget
+
+
 def load_pr_intent(output_dir: str) -> Optional[str]:
     """Load PR intent from review-context.json in the output directory.
 
@@ -418,6 +430,7 @@ def build_output(
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
     change_purpose: Optional[str] = None,
+    review_budget: Optional[int] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
     lines = []
@@ -460,6 +473,24 @@ def build_output(
         lines.append("this summary. Use it alongside PR INTENT to focus your review.")
         lines.append("")
         lines.append(change_purpose)
+        lines.append("")
+
+    # Review Budget — scope-proportionate tool call calibration
+    if review_budget is not None:
+        lines.append("=== REVIEW BUDGET ===")
+        lines.append(f"Target: ~{review_budget} tool calls for this review.")
+        lines.append("")
+        lines.append("This budget is calibrated to the PR's size. It matters because:")
+        lines.append("- **You are on the critical path.** Other agents may finish faster;")
+        lines.append("  the pipeline waits for the slowest agent before reconciliation.")
+        lines.append("- **Diminishing returns are real.** After the first 15-20 calls on a")
+        lines.append("  small PR, each additional call is less likely to surface new findings.")
+        lines.append("- **Depth should match complexity.** A thorough review of a simple change")
+        lines.append("  is not more valuable — it just takes longer.")
+        lines.append("")
+        lines.append("If you hit the budget without findings, wrap up. If you're on a genuine")
+        lines.append("lead, continue — but check: am I exploring new territory or recycling")
+        lines.append("the same searches?")
         lines.append("")
 
     # Section 2: Review Content (middle position — processing zone)
@@ -782,6 +813,11 @@ def main():
         except Exception:
             pass
 
+    # Compute review budget from scope metrics
+    scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
+    scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
+    review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
+
     # Compute file history for agents that request it
     file_history_output = None
     if config.get("file_history") and scope_output:
@@ -818,6 +854,7 @@ def main():
         file_history=file_history_output,
         pr_intent=pr_intent,
         change_purpose=change_purpose,
+        review_budget=review_budget,
     )
 
     print(output)

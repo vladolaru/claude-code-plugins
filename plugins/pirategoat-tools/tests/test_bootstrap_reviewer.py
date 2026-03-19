@@ -30,6 +30,7 @@ build_error_output = _mod.build_error_output
 load_pr_intent = _mod.load_pr_intent
 load_pr_number_from_context = _mod.load_pr_number_from_context
 load_change_purpose = _mod.load_change_purpose
+compute_review_budget = _mod.compute_review_budget
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
 
@@ -260,6 +261,30 @@ class TestLoadPrNumberFromContext:
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         result = load_pr_number_from_context(str(tmp_path))
         assert result is None
+
+
+class TestComputeReviewBudget:
+    """Scope-proportionate review budget computation."""
+
+    def test_small_pr(self):
+        """Small PRs should get a tight budget."""
+        budget = compute_review_budget(changed_lines=130, file_count=8)
+        assert 20 <= budget <= 35
+
+    def test_large_pr(self):
+        """Large PRs should get a generous budget."""
+        budget = compute_review_budget(changed_lines=800, file_count=30)
+        assert 50 <= budget <= 80
+
+    def test_cap(self):
+        """Budget should cap at a maximum regardless of PR size."""
+        budget = compute_review_budget(changed_lines=5000, file_count=100)
+        assert budget <= 80
+
+    def test_minimum(self):
+        """Even tiny PRs should get a minimum viable budget."""
+        budget = compute_review_budget(changed_lines=5, file_count=1)
+        assert budget >= 15
 
 
 class TestBuildErrorOutput:

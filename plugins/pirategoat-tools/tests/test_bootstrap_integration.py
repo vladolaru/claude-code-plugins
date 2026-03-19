@@ -108,13 +108,13 @@ class TestContentIdentity:
     def test_review_rules_identical_across_agents(self, agent_outputs):
         """REVIEW RULES section should be identical for all agents.
 
-        End at whichever comes first: DOMAIN RULES (test agents) or Section 2.
+        End at whichever comes first: DOMAIN RULES, REVIEW BUDGET, or Section 2.
         """
         rules = {}
         for agent, output in agent_outputs.items():
             section = self._extract_section(
                 output, "=== REVIEW RULES ===",
-                "=== DOMAIN RULES ===", "--- Section 2:",
+                "=== DOMAIN RULES ===", "=== REVIEW BUDGET ===", "--- Section 2:",
             )
             rules[agent] = section
 
@@ -129,7 +129,7 @@ class TestContentIdentity:
         rules = {}
         for agent in TEST_AGENTS:
             output = agent_outputs[agent]
-            section = self._extract_section(output, "=== DOMAIN RULES ===", "--- Section 2:")
+            section = self._extract_section(output, "=== DOMAIN RULES ===", "=== REVIEW BUDGET ===", "--- Section 2:")
             rules[agent] = section
 
 
@@ -173,6 +173,14 @@ class TestConditionalSections:
     def test_mutation_reviewer_no_scope(self):
         result = run_bootstrap("--agent", "tests-mutation-reviewer", "--output-dir", "/tmp/test-bootstrap")
         assert "No scope discovery" in result.stdout
+
+    @pytest.mark.parametrize("agent_name", ALL_AGENTS)
+    def test_review_budget_present_for_all_agents(self, agent_name):
+        """Every agent should receive a REVIEW BUDGET section."""
+        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
+        assert "=== REVIEW BUDGET ===" in result.stdout
+        assert "Target: ~" in result.stdout
+        assert "tool calls for this review" in result.stdout
 
 
 class TestPersonalization:
