@@ -29,6 +29,7 @@ build_output = _mod.build_output
 build_error_output = _mod.build_error_output
 load_pr_intent = _mod.load_pr_intent
 load_pr_number_from_context = _mod.load_pr_number_from_context
+load_pr_size_from_context = _mod.load_pr_size_from_context
 load_change_purpose = _mod.load_change_purpose
 compute_review_budget = _mod.compute_review_budget
 extract_scope_files = _mod.extract_scope_files
@@ -262,6 +263,32 @@ class TestLoadPrNumberFromContext:
         ctx = {"git": {"base_ref": "main"}}
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         result = load_pr_number_from_context(str(tmp_path))
+        assert result is None
+
+
+class TestLoadPrSizeFromContext:
+    """PR size loading from review-context.json for budget computation."""
+
+    def test_returns_pr_size(self, tmp_path):
+        ctx = {"pr_size": {"lines": 130, "files": 8, "category": "small"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        result = load_pr_size_from_context(str(tmp_path))
+        assert result == {"lines": 130, "files": 8, "category": "small"}
+
+    def test_returns_none_when_missing(self, tmp_path):
+        result = load_pr_size_from_context(str(tmp_path))
+        assert result is None
+
+    def test_returns_none_when_no_pr_size_key(self, tmp_path):
+        ctx = {"pr": {"number": 42}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        result = load_pr_size_from_context(str(tmp_path))
+        assert result is None
+
+    def test_returns_none_when_lines_missing(self, tmp_path):
+        ctx = {"pr_size": {"category": "small"}}
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        result = load_pr_size_from_context(str(tmp_path))
         assert result is None
 
 

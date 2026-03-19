@@ -397,6 +397,26 @@ def load_pr_number_from_context(output_dir: str) -> Optional[str]:
         return None
 
 
+def load_pr_size_from_context(output_dir: str) -> Optional[dict]:
+    """Load PR size metrics from review-context.json in the output directory.
+
+    Returns dict with 'lines', 'files', 'category' keys, or None if unavailable.
+    Structured data — preferred over parsing scope output for budget computation.
+    """
+    ctx_path = os.path.join(output_dir, "review-context.json")
+    if not os.path.isfile(ctx_path):
+        return None
+    try:
+        with open(ctx_path) as f:
+            ctx = json.load(f)
+        pr_size = ctx.get("pr_size")
+        if pr_size and pr_size.get("lines") is not None:
+            return pr_size
+        return None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def load_change_purpose(output_dir: str) -> Optional[str]:
     """Load the main session's change-purpose synthesis from the output directory.
 
@@ -815,10 +835,15 @@ def main():
         except Exception:
             pass
 
-    # Compute review budget from scope metrics
-    scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
-    scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
-    review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
+    # Compute review budget from PR-level metrics (structured data, not prose parsing).
+    # Falls back to scope-based extraction when review-context.json is unavailable.
+    pr_size = load_pr_size_from_context(output_dir)
+    if pr_size:
+        review_budget = compute_review_budget(pr_size.get("lines", 0), pr_size.get("files", 0))
+    else:
+        scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
+        scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
+        review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
 
     # Compute file history for agents that request it
     file_history_output = None
