@@ -129,7 +129,22 @@ DOMAIN_CATALOG = {
     },
     "reliability": {
         "description": "Production code for operational resilience review",
-        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
+        "include": r"\.(php|js|ts|jsx|tsx|py|java|rb|go|sql)$",
+        "exclude": _TEST_EXCLUDE,
+    },
+    "api-contract": {
+        "description": "API surface files — endpoints, schemas, migrations, hook signatures",
+        "include": r"\.(php|js|ts|jsx|tsx|py|go|sql)$",
+        "exclude": _TEST_EXCLUDE,
+    },
+    "data-flow": {
+        "description": "Data handling files — logging, serialization, storage, privacy",
+        "include": r"\.(php|js|ts|jsx|tsx|py|rb|go|java|sql)$",
+        "exclude": _TEST_EXCLUDE,
+    },
+    "concurrency": {
+        "description": "Concurrency-relevant files — async, transactions, queues, cron",
+        "include": r"\.(php|js|ts|jsx|tsx|py|go|java|sql)$",
         "exclude": _TEST_EXCLUDE,
     },
     "config-ops": {

@@ -324,7 +324,7 @@
       "model_tier": "sonnet"
     },
     "api-contract-reviewer": {
-      "domain": "code",
+      "domain": "api-contract",
       "protocols": [
         "reviewer"
       ],
@@ -357,7 +357,7 @@
       "max_history_commits": 5
     },
     "data-flow-privacy-reviewer": {
-      "domain": "code",
+      "domain": "data-flow",
       "protocols": [
         "reviewer"
       ],
@@ -393,7 +393,7 @@
       "model_tier": "sonnet"
     },
     "concurrency-reviewer": {
-      "domain": "code",
+      "domain": "concurrency",
       "protocols": [
         "reviewer"
       ],

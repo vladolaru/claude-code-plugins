@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.69.0] - 2026-03-19
+
+### Added
+
+- **Domain-specific scoping** — new `api-contract`, `data-flow`, and `concurrency` domains in DOMAIN_CATALOG so those reviewers only see relevant file types instead of the catch-all `code` domain.
+
+### Changed
+
+- **api-contract-reviewer** — domain narrowed from `code` to `api-contract` (php/js/ts/py/go/sql, excludes CSS/SCSS and test files).
+- **data-flow-privacy-reviewer** — domain narrowed from `code` to `data-flow` (php/js/ts/py/rb/go/java/sql, excludes CSS/SCSS and test files).
+- **concurrency-reviewer** — domain narrowed from `code` to `concurrency` (php/js/ts/py/go/java/sql, excludes CSS/SCSS and test files).
+- **reliability-reviewer** — removed CSS/SCSS from domain (no operational resilience concerns in stylesheets).
+
 ## [1.68.0] - 2026-03-19
 
 ### Changed
