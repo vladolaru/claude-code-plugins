@@ -352,7 +352,9 @@
         "hook signature"
       ],
       "focus": "API contract stability, backwards-incompatible changes, response shape drift, hook/filter contract breaks, missing deprecation",
-      "model_tier": "sonnet"
+      "model_tier": "sonnet",
+      "file_history": true,
+      "max_history_commits": 5
     },
     "data-flow-privacy-reviewer": {
       "domain": "code",
