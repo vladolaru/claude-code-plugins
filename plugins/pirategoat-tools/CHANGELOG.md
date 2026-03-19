@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Telemetry summary override counting** — `_build_summary()` counted `DISPATCH_OVERRIDE` agents as skipped instead of dispatched. Switched from exact key match (`k != "DISPATCH"`) to prefix matching (`k.startswith("DISPATCH")`) so both `DISPATCH` and `DISPATCH_OVERRIDE` are counted as dispatched.
 - **Step 10 REVISE verdict too vague** — the REVISE instruction said "Apply recommended adjustments" without specifying what file to edit. In practice the LLM wrote verdict files but skipped editing `review-report.md`. Expanded all three verdict instructions with concrete per-verdict actions: REVISE now has a numbered checklist that explicitly names the report file, STAND clarifies to proceed directly, and ESCALATE spells out the COMMENT override.
+- **Step 7 polling replaced with notification-based waiting** — step 7 told the LLM to poll in a `sleep` loop, blocking the session for 9+ minutes. Now instructs to wait for background agent notifications and use the status check only as a safety confirmation. Step 8's existing `TaskStop` handles any stragglers.
 
 ## [1.72.1] - 2026-03-19
 

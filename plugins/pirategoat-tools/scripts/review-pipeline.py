@@ -870,15 +870,21 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
                    "timestamp, review type, and git range.")
 
     actions.append("")
-    actions.append("**Before proceeding to step 8:** Verify all review agents have finished.")
-    actions.append(f"```")
-    actions.append(f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
-    actions.append(f"```")
-    actions.append("- Exit code 0 → nothing left to wait for — but check output for NOT_DISPATCHED agents.")
-    actions.append("  - If any agents are NOT_DISPATCHED: dispatch them now, then re-check.")
-    actions.append("  - If all agents are FINISHED or TIMED_OUT: proceed to step 8.")
-    actions.append("- Exit code 2 → agents still running — wait 30 seconds, re-check.")
-    actions.append("- Only proceed to step 8 when ALL planned agents are FINISHED or TIMED_OUT.")
+    actions.append("**Before proceeding to step 8:** Wait for all review agents to complete.")
+    actions.append("")
+    actions.append("Agents were dispatched with `run_in_background: true` — you will receive automatic "
+                   "notifications as each finishes. **Do NOT poll in a sleep loop.** Instead:")
+    actions.append("")
+    actions.append("1. Wait for background agent notifications to arrive.")
+    actions.append("2. Once the first few agents report back, run the status check as a safety measure:")
+    actions.append(f"   ```")
+    actions.append(f"   python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
+    actions.append(f"   ```")
+    actions.append("3. If ALL_DONE is true (exit code 0): proceed to step 8 immediately.")
+    actions.append("   Step 8 will TaskStop any remaining background agents before reconciliation.")
+    actions.append("4. If agents are still running (exit code 2): wait for more notifications, then re-check.")
+    actions.append("")
+    actions.append("If any agents show NOT_DISPATCHED: dispatch them now, then re-check.")
 
     return {
         "phase": "EXECUTION",

@@ -483,6 +483,15 @@ class TestStep7SaveReviewBaseline:
         text = "\n".join(g["actions"])
         assert "NOT_DISPATCHED" in text
 
+    def test_step_7_discourages_sleep_polling(self, mod, tmp_path):
+        """Step 7 should tell the LLM to wait for notifications, not poll in a sleep loop."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "sleep" in text.lower() and "not" in text.lower() or "do not poll" in text.lower()
+        assert "notification" in text.lower() or "run_in_background" in text.lower()
+
 
 class TestStep8Reconcile:
     """Step 8: Reconcile + Verify. main() reads dispatch-plan.json + review files, passes to get_step_guidance()."""
