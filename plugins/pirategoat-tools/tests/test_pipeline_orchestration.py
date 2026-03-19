@@ -175,8 +175,8 @@ class TestStep5Orchestration:
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True)
 
-    def test_step_5_stores_dispatch_plan_output(self, tmp_path):
-        """Step 5 should store dispatch plan output in state."""
+    def test_step_5_stores_dispatch_plan_summary(self, tmp_path):
+        """Step 5 should store dispatch plan summary in state."""
         self._run("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path))
         ctx = {
@@ -190,8 +190,7 @@ class TestStep5Orchestration:
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert 5 in state["completed_steps"]
-        # dispatch_plan_output may be empty if planner fails, but key should exist
-        assert "dispatch_plan_output" in state or "dispatch_plan_summary" in state
+        assert "dispatch_plan_summary" in state
 
 
 class TestStep6Orchestration:

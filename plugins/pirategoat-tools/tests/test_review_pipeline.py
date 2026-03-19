@@ -339,7 +339,6 @@ class TestStep5DispatchPlan:
         return {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3],
-            "dispatch_plan_output": "pr-reviewer: DISPATCH (domain: code)\nsecurity-reviewer: SKIPPED (no files in security domain)",
             "dispatch_plan_summary": {"dispatched": 7, "skipped": 3, "conditional": 2},
             "dispatch_plan_agents": [
                 {"name": "pr-reviewer", "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},

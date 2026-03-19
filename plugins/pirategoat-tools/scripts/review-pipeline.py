@@ -1469,7 +1469,6 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 planner_cmd.extend(["--review-context", ctx_path])
 
             stdout, ok = _run_subprocess(planner_cmd, timeout=60)
-            state["dispatch_plan_output"] = stdout if ok else ""
 
             plan_path = os.path.join(output_dir, "dispatch-plan.json")
             if os.path.isfile(plan_path):
@@ -1496,7 +1495,6 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     state["dispatch_plan_summary"] = {}
                     state["dispatch_plan_agents"] = []
         else:
-            state["dispatch_plan_output"] = ""
             state["dispatch_plan_summary"] = {}
             state["dispatch_plan_agents"] = []
 
