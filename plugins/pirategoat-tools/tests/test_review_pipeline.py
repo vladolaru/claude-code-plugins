@@ -890,6 +890,22 @@ class TestStep10DecisionCritic:
             "ESCALATE instructions must mention overriding verdict to COMMENT"
         )
 
+    def test_omits_findings_json_when_reconciliation_failed(self, mod, tmp_path):
+        """When reconciliation failed, findings JSON doesn't exist -- don't reference it."""
+        state = {"completed_steps": [], "degradation": {"reconciliation_failed": True}}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "review-findings.json" not in text
+
+    def test_includes_findings_json_in_normal_flow(self, mod, tmp_path):
+        """In normal flow (no degradation), findings JSON should be referenced."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "review-findings.json" in text
+
 
 class TestCriticVerdictPersistence:
     """Critic verdict is persisted to file and read back by step 11."""

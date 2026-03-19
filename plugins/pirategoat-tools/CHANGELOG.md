@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.73.1] - 2026-03-19
+
+### Fixed
+
+- **Scope extraction stopped at first FILES block** — `extract_scope_files()` and `extract_scope_line_count()` broke out of the loop after the first `=== FILES ===` block, silently ignoring secondary domain scopes (e.g., config-ops appended for security/architecture/reliability reviewers). Budget, telemetry, and file history now accumulate across all scope blocks.
+- **Critic template referenced nonexistent findings JSON in degraded flow** — the step 10 decision critic dispatch template unconditionally included `review-findings.json`, which doesn't exist when reconciliation failed. Now conditionally included only when reconciliation succeeded.
+
 ## [1.73.0] - 2026-03-19
 
 ### Fixed
