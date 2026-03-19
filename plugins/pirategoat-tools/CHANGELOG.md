@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Scope extraction stopped at first FILES block** — `extract_scope_files()` and `extract_scope_line_count()` broke out of the loop after the first `=== FILES ===` block, silently ignoring secondary domain scopes (e.g., config-ops appended for security/architecture/reliability reviewers). Budget, telemetry, and file history now accumulate across all scope blocks.
 - **Critic template referenced nonexistent findings JSON in degraded flow** — the step 10 decision critic dispatch template unconditionally included `review-findings.json`, which doesn't exist when reconciliation failed. Now conditionally included only when reconciliation succeeded.
+- **Review budget derived from structured PR metrics** — budget computation now reads `pr_size` from `review-context.json` (PR-level lines/files/category) instead of parsing `=== FILES ===` sections from scope output. More accurate (reflects overall PR complexity, not domain-filtered subset) and avoids prose parsing. Falls back to scope extraction when context unavailable.
 
 ## [1.73.0] - 2026-03-19
 
