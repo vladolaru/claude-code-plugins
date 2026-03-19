@@ -1697,6 +1697,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         with open(result_path, "w") as f:
             json.dump(pipeline_result, f, indent=2)
 
+        state["verdict"] = verdict
         state["review_verdict"] = verdict
         state["pipeline_status"] = status
 

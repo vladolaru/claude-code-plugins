@@ -971,6 +971,25 @@ class TestStep11PresentResults:
         text = "\n".join(g["actions"])
         assert "focused" in text.lower() or "drill down" in text.lower()
 
+    def test_step11_reads_verdict_into_state(self, mod, tmp_path):
+        """Step 11 orchestration must read review-verdict.json into state['verdict']."""
+        import json
+        verdict_file = tmp_path / "review-verdict.json"
+        verdict_file.write_text(json.dumps({"verdict": "COMMENT"}))
+
+        state = {
+            "resolved_params": {},
+            "completed_steps": [1, 2, 3, 5, 6, 7, 8, 9, 10],
+            "verdict": None,
+            "agents": {"dispatched": [], "completed": [], "failed": [], "review_files": []},
+        }
+        config = {"mode": "pr", "interactive": True}
+        context = {}
+
+        mod._orchestrate_step(11, "pr", config, state, context, str(tmp_path))
+
+        assert state["verdict"] == "COMMENT"
+
     def test_incremental_mentions_next_code_review(self, mod, tmp_path):
         """Incremental should mention next /code-review scope."""
         config = {"mode": "incremental", "interactive": True}
