@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.72.0] - 2026-03-19
+
+### Changed
+
+- **Step 5 override briefing** — tightened the orchestrator's dispatch override guidance. Explains why the planner is trustworthy (5 signal sources + agent self-triage), sets a concrete override bar (structural gaps only), and frames force-dispatch as low-risk due to the quick relevance check backstop.
+
 ## [1.71.0] - 2026-03-19
 
 ### Added

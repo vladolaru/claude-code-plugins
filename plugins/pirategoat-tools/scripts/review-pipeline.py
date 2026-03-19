@@ -758,13 +758,27 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         situation.append("(Dispatch plan will be computed by the script at runtime.)")
 
     actions.append(
-        "The dispatch planner's decisions are authoritative. Override only if you have "
-        "specific domain knowledge that contradicts the planner's analysis."
+        "**Trust the planner.** The dispatch plan is the output of a deterministic triage "
+        "that checked domain file types, matched keywords against 5 signal sources "
+        "(commit messages, file paths, PR title/body, labels, branch name, linked issues), "
+        "and applied agent-specific checks. Dispatched agents will also run their own "
+        "quick relevance check on the actual diff before committing to deep review."
+    )
+    actions.append("")
+    actions.append(
+        "**Override bar:** Override only when you see something the planner structurally cannot — "
+        "e.g., you read the diff and know a skipped agent's domain IS relevant despite no keyword match, "
+        "or a dispatched agent's domain is clearly irrelevant despite a keyword false positive."
     )
     actions.append("")
     actions.append(f"To override, edit `{od}/dispatch-plan.json`:")
     actions.append('- Force-dispatch a skipped agent: set status to `"DISPATCH_OVERRIDE"` with `"override_reason": "..."`')
     actions.append('- Force-skip a dispatched agent: set status to `"SKIPPED_OVERRIDE"` with `"override_reason": "..."`')
+    actions.append("")
+    actions.append(
+        "Force-skip is low-cost (agent won't run). Force-dispatch is higher-cost but also low-risk — "
+        "the agent will self-triage via its relevance check if there's truly nothing to review."
+    )
 
     return {
         "phase": "EXECUTION",
