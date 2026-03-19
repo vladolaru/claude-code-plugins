@@ -31,6 +31,8 @@ load_pr_intent = _mod.load_pr_intent
 load_pr_number_from_context = _mod.load_pr_number_from_context
 load_change_purpose = _mod.load_change_purpose
 compute_review_budget = _mod.compute_review_budget
+extract_scope_files = _mod.extract_scope_files
+extract_scope_line_count = _mod.extract_scope_line_count
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
 
@@ -297,4 +299,35 @@ class TestBuildErrorOutput:
         assert "ERROR: Something went wrong" in result
         assert "ACTION: Report this error" in result
 
+class TestExtractScopeMultipleBlocks:
+    """extract_scope_files and extract_scope_line_count must accumulate across all === FILES === blocks."""
 
+    MULTI_BLOCK_SCOPE = (
+        "=== FILES ===\n"
+        "includes/class-account.php  (+10 -5)\n"
+        "includes/class-service.php  (+3 -2)\n"
+        "=== DIFFS ===\n"
+        "some diff content\n"
+        "=== SECONDARY SCOPE: config-ops ===\n"
+        "=== FILES ===\n"
+        "config/settings.php  (+7 -1)\n"
+        "=== DIFFS ===\n"
+        "more diff content\n"
+    )
+
+    def test_extract_files_across_blocks(self):
+        files = extract_scope_files(self.MULTI_BLOCK_SCOPE)
+        assert len(files) == 3
+        assert "includes/class-account.php" in files
+        assert "config/settings.php" in files
+
+    def test_extract_line_count_across_blocks(self):
+        total = extract_scope_line_count(self.MULTI_BLOCK_SCOPE)
+        # (10+5) + (3+2) + (7+1) = 28
+        assert total == 28
+
+    def test_single_block_still_works(self):
+        single = "=== FILES ===\nfoo.php  (+5 -3)\n=== DIFFS ===\n"
+        files = extract_scope_files(single)
+        assert files == ["foo.php"]
+        assert extract_scope_line_count(single) == 8

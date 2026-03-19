@@ -285,7 +285,7 @@ def get_file_history(files: List[str], max_commits: int = 15) -> str:
 
 
 def extract_scope_files(scope_output: str) -> List[str]:
-    """Extract file paths from the === FILES === section of scope output."""
+    """Extract file paths from all === FILES === sections of scope output."""
     files = []
     in_files = False
     for line in scope_output.splitlines():
@@ -293,7 +293,8 @@ def extract_scope_files(scope_output: str) -> List[str]:
             in_files = True
             continue
         if in_files and line.startswith("==="):
-            break
+            in_files = False
+            continue
         if in_files and line.strip():
             # File line format: "path/to/file  (+N -M)"
             file_path = line.split("  ")[0].strip()
@@ -303,7 +304,7 @@ def extract_scope_files(scope_output: str) -> List[str]:
 
 
 def extract_scope_line_count(scope_output: str) -> int:
-    """Extract total changed lines from the === FILES === section.
+    """Extract total changed lines from all === FILES === sections.
 
     Parses (+N -M) stats per file and sums additions + deletions.
     """
@@ -314,7 +315,8 @@ def extract_scope_line_count(scope_output: str) -> int:
             in_files = True
             continue
         if in_files and line.startswith("==="):
-            break
+            in_files = False
+            continue
         if in_files and line.strip():
             # Parse "(+N -M)" from "path/to/file  (+N -M)"
             match = re.search(r'\(\+(\d+)\s+-(\d+)\)', line)
