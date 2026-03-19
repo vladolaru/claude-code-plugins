@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.71.0] - 2026-03-19
+
+### Added
+
+- **Quick relevance check** — reviewer protocol now instructs agents to scan diff hunks for domain relevance before deep analysis. Agents that find no relevant changes exit immediately with APPROVE, saving minutes of wasted analysis on false-positive dispatches.
+
 ## [1.70.0] - 2026-03-19
 
 ### Added

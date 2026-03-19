@@ -64,6 +64,26 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted smallest-first (focused changes before large files). If many files exceed the budget, the `=== NOT DIFFED ===` section shows them with diffstat so you can selectively `git diff <range> -- <file>` the most important ones.
 
+### Quick Relevance Check (Do This BEFORE Deep Review)
+
+After reading the scope output, scan the diff hunks — the actual changed lines, not just file names. Ask yourself: **does anything in these changes relate to my domain?**
+
+- Security reviewer: any user input handling, auth logic, query construction, escaping, or trust boundaries?
+- Performance reviewer: any query patterns, loops over data, caching changes, or asset loading?
+- Architecture reviewer: any new abstractions, coupling changes, or layer boundary crossings?
+- (Apply the same principle for your specific domain.)
+
+**If nothing in the changed lines is relevant to your specialty**, do not force a review. Produce an APPROVE verdict immediately:
+
+```python
+builder.add_positive("Diff reviewed — no changes relevant to [your domain]")
+# Write output files and exit
+```
+
+This is a backstop against false-positive dispatch. The triage system matched on file paths or keywords, but the actual code changes may not warrant your review. A 30-second scan that exits early saves minutes of wasted deep analysis.
+
+**Do NOT use this to skip reviews that seem small or simple.** A one-line change in a security-sensitive function still warrants full review. The check is about domain relevance, not change size.
+
 **For large PRs (100+ matched files):** Use `--summary` to get a diffstat overview of ALL files without any diffs. Pick the most important files and read their diffs selectively. This is more context-efficient than the default mode for very large PRs.
 
 ### When You Need More Context
