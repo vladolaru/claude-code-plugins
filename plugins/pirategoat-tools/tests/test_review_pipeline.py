@@ -793,6 +793,56 @@ class TestStep10DecisionCritic:
         assert "review-verdict.json" in text
         assert "verdict" in text.lower()
 
+    def test_revise_instructs_report_edit(self, mod, tmp_path):
+        """REVISE verdict instructions must explicitly mention editing review-report.md."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        # Find the REVISE section specifically — lines between REVISE and ESCALATE
+        lines = text.split("\n")
+        revise_lines = []
+        in_revise = False
+        for line in lines:
+            if "REVISE" in line and "**" in line:
+                in_revise = True
+            elif "ESCALATE" in line and "**" in line:
+                in_revise = False
+            elif in_revise:
+                revise_lines.append(line)
+        revise_text = "\n".join(revise_lines)
+        # REVISE section must mention review-report.md with a concrete action verb
+        assert "review-report.md" in revise_text, (
+            "REVISE instructions must explicitly mention editing review-report.md"
+        )
+        lower = revise_text.lower()
+        assert any(verb in lower for verb in ["edit", "update", "fix", "correct", "reframe"]), (
+            "REVISE instructions must use a concrete action verb (edit/update/fix/correct/reframe)"
+        )
+
+    def test_stand_instructs_no_changes(self, mod, tmp_path):
+        """STAND verdict instructions must say no changes needed."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "no changes" in text.lower() or "no action" in text.lower()
+
+    def test_escalate_instructs_override_to_comment(self, mod, tmp_path):
+        """ESCALATE verdict instructions must say to override verdict to COMMENT."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        # Find the ESCALATE section — the line containing ESCALATE
+        escalate_lines = [l for l in text.split("\n") if "ESCALATE" in l and "**" in l]
+        assert escalate_lines, "Must have an ESCALATE verdict line"
+        escalate_text = escalate_lines[0]
+        # ESCALATE must mention overriding to COMMENT (not just COMMENT in a JSON example)
+        assert "COMMENT" in escalate_text, (
+            "ESCALATE instructions must mention overriding verdict to COMMENT"
+        )
+
 
 class TestCriticVerdictPersistence:
     """Critic verdict is persisted to file and read back by step 11."""
