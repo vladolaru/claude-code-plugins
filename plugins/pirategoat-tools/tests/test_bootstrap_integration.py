@@ -271,17 +271,24 @@ class TestNoSemanticFilter:
             assert config["domain"] is not None
 
 
-class TestFileHistory:
-    """File history section for history-insights-reviewer."""
+# Dynamically determine which agents have file_history from the registry
+_AGENTS_WITH_HISTORY = [
+    name for name, cfg in AGENT_CONFIG.items() if cfg.get("file_history")
+]
+_AGENTS_WITHOUT_HISTORY = [
+    name for name in ALL_AGENTS if name not in _AGENTS_WITH_HISTORY
+]
 
-    def test_file_history_present_for_history_insights(self):
-        result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-bootstrap")
+
+class TestFileHistory:
+    """File history section for agents with file_history enabled in registry."""
+
+    @pytest.mark.parametrize("agent_name", _AGENTS_WITH_HISTORY)
+    def test_file_history_present_for_enabled_agents(self, agent_name):
+        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
         assert "=== FILE HISTORY ===" in result.stdout
 
-    @pytest.mark.parametrize(
-        "agent_name",
-        [a for a in ALL_AGENTS if a != "history-insights-reviewer"],
-    )
+    @pytest.mark.parametrize("agent_name", _AGENTS_WITHOUT_HISTORY)
     def test_file_history_absent_for_other_agents(self, agent_name):
         result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
         assert "=== FILE HISTORY ===" not in result.stdout
@@ -505,5 +512,3 @@ class TestOutputFilenameConsistency:
         )
         assert "/tmp/pr-review-42/dead-code-review.json" in output
         assert "/tmp/pr-review-42/dead-code-review.md" in output
-
-

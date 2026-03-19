@@ -75,26 +75,40 @@ class TestTelemetryIntegration:
 class TestStep2Orchestration:
     """Step 2 main() runs setup-workspace.py and persists workspace state."""
 
-    def _run(self, *args):
+    def _run(self, *args, cwd=None):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+
+    @staticmethod
+    def _init_git_repo(path):
+        """Initialize a minimal git repo so setup-workspace.py doesn't touch the real repo."""
+        subprocess.run(["git", "init"], cwd=str(path), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(path), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), capture_output=True)
+        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=str(path), capture_output=True)
+        readme = path / "README.md"
+        readme.write_text("# test\n")
+        subprocess.run(["git", "add", "."], cwd=str(path), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(path), capture_output=True)
 
     def test_step_2_completes_without_crash(self, tmp_path):
         """Step 2 should complete even when setup-workspace.py fails (no git repo)."""
+        self._init_git_repo(tmp_path)
         self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=str(tmp_path))
         r = self._run("--step", "2", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+                       "--output-dir", str(tmp_path), cwd=str(tmp_path))
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert 2 in state["completed_steps"]
 
     def test_step_2_stores_workspace_setup_result(self, tmp_path):
         """Step 2 should store workspace_setup_result in state."""
+        self._init_git_repo(tmp_path)
         self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=str(tmp_path))
         self._run("--step", "2", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+                       "--output-dir", str(tmp_path), cwd=str(tmp_path))
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert "workspace_setup_result" in state
 
