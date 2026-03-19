@@ -66,7 +66,7 @@ Identify exploitable vulnerabilities -> Assess severity -> Provide WordPress-spe
 
 1. **Insecure File Operations** - File uploads without type validation, path traversal, including files based on user input
 
-2. **Sensitive Data Exposure** - Debug output in production, credentials in code/options, user data in publicly accessible locations
+2. **Sensitive Data Exposure** - Debug output in production, credentials in code/options, API keys or tokens in source. Focus on exposure that helps an attacker (reveals architecture, credentials, or attack surface). PII lifecycle concerns (PII in logs, GDPR erasure, payment data flow) are handled by the data-flow-privacy-reviewer.
 
 3. **Authentication Weaknesses** - Custom auth bypassing WordPress auth, weak password reset implementations
 

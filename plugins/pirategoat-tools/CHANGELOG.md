@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.67.0] - 2026-03-19
+
+### Added
+
+- **api-contract-reviewer** — new conditional agent that detects backwards-incompatible REST API changes, hook/filter argument breaks, response shape drift, and missing deprecation paths.
+- **data-flow-privacy-reviewer** — new conditional agent that traces PII through code paths, flags sensitive data in logs and API responses, identifies missing GDPR erasure handlers, and reviews payment data handling.
+- **concurrency-reviewer** — new conditional agent that identifies race conditions, TOCTOU patterns, missing database transactions, cache stampede, non-idempotent operations, and concurrent state corruption.
+
+### Changed
+
+- **wp-architecture-reviewer** — tightened backwards-compatibility scope to WordPress ecosystem contracts; REST API contract stability now deferred to api-contract-reviewer.
+- **security-reviewer** — tightened Sensitive Data Exposure to security-exploitable exposure; PII lifecycle and GDPR concerns now deferred to data-flow-privacy-reviewer.
+- **reliability-reviewer** — added explicit scope boundary: concurrency correctness now handled by concurrency-reviewer.
+
 ## [1.66.0] - 2026-03-18
 
 ### Added

@@ -1,9 +1,11 @@
 {
-  "$schema": "Agent registry — single source of truth for all reviewer agent configuration.",
+  "$schema": "Agent registry \u2014 single source of truth for all reviewer agent configuration.",
   "agents": {
     "pr-reviewer": {
       "domain": "code",
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "always",
       "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality",
@@ -11,8 +13,12 @@
     },
     "security-reviewer": {
       "domain": "security",
-      "secondary_domains": ["config-ops"],
-      "protocols": ["reviewer"],
+      "secondary_domains": [
+        "config-ops"
+      ],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
@@ -29,16 +35,32 @@
         "Infrastructure-as-code changes (Terraform, Helm, Docker)"
       ],
       "triage_keywords": [
-        "auth", "security", "login", "password", "token", "secret",
-        "csrf", "xss", "sql", "inject", "sanitiz", "escap",
-        "permission", "privilege", "encrypt", "endpoint", "webhook"
+        "auth",
+        "security",
+        "login",
+        "password",
+        "token",
+        "secret",
+        "csrf",
+        "xss",
+        "sql",
+        "inject",
+        "sanitiz",
+        "escap",
+        "permission",
+        "privilege",
+        "encrypt",
+        "endpoint",
+        "webhook"
       ],
       "focus": "Sanitization, escaping, nonces, auth, SQL injection, XSS, CSRF, data exposure",
       "model_tier": "sonnet"
     },
     "performance-reviewer": {
       "domain": "performance",
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
@@ -49,16 +71,28 @@
         "Commits mentioning performance, optimize, cache, query, load time"
       ],
       "triage_keywords": [
-        "performance", "optimiz", "cache", "query", "load time",
-        "slow", "n+1", "lazy", "pagination", "bulk"
+        "performance",
+        "optimiz",
+        "cache",
+        "query",
+        "load time",
+        "slow",
+        "n+1",
+        "lazy",
+        "pagination",
+        "bulk"
       ],
       "focus": "Database query efficiency, caching, asset loading, N+1 detection, scalability",
       "model_tier": "sonnet"
     },
     "architecture-reviewer": {
       "domain": "architecture",
-      "secondary_domains": ["config-ops"],
-      "protocols": ["reviewer"],
+      "secondary_domains": [
+        "config-ops"
+      ],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
@@ -70,16 +104,25 @@
         "Deployment or infrastructure architecture changes (Dockerfiles, Terraform, CI pipelines, Helm charts)"
       ],
       "triage_keywords": [
-        "architect", "refactor", "restructur", "decouple", "extract",
-        "module", "package"
+        "architect",
+        "refactor",
+        "restructur",
+        "decouple",
+        "extract",
+        "module",
+        "package"
       ],
-      "triage_checks": ["large_pr"],
+      "triage_checks": [
+        "large_pr"
+      ],
       "focus": "SOLID principles, design patterns, coupling, cohesion, architectural decisions",
       "model_tier": "sonnet"
     },
     "wp-architecture-reviewer": {
       "domain": "wp-architecture",
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "no_semantic_filter": true,
       "dispatch_class": "conditional",
@@ -91,15 +134,24 @@
         "Plugin bootstrap or activation/deactivation files"
       ],
       "triage_keywords": [
-        "hook", "filter", "backward", "deprecat", "i18n",
-        "wordpress", "woocommerce", "wp_"
+        "hook",
+        "filter",
+        "backward",
+        "deprecat",
+        "i18n",
+        "wordpress",
+        "woocommerce",
+        "wp_"
       ],
       "focus": "WordPress hooks, coding standards, extensibility, backwards compatibility",
       "model_tier": "sonnet"
     },
     "php-tests-reviewer": {
       "domain": "php-tests",
-      "protocols": ["reviewer", "tests-reviewer"],
+      "protocols": [
+        "reviewer",
+        "tests-reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "always",
       "focus": "PHPUnit assertions, WP test utilities, WooCommerce patterns, Brain Monkey isolation",
@@ -107,7 +159,10 @@
     },
     "js-tests-reviewer": {
       "domain": "js-tests",
-      "protocols": ["reviewer", "tests-reviewer"],
+      "protocols": [
+        "reviewer",
+        "tests-reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "always",
       "focus": "Jest/Vitest assertions, React Testing Library, module mocking, async patterns",
@@ -115,7 +170,10 @@
     },
     "e2e-tests-reviewer": {
       "domain": "e2e-tests",
-      "protocols": ["reviewer", "tests-reviewer"],
+      "protocols": [
+        "reviewer",
+        "tests-reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "always",
       "focus": "Playwright locators, Page Object Model, auto-waiting, network interception",
@@ -123,7 +181,10 @@
     },
     "go-tests-reviewer": {
       "domain": "go-tests",
-      "protocols": ["reviewer", "tests-reviewer"],
+      "protocols": [
+        "reviewer",
+        "tests-reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "always",
       "focus": "Table-driven tests, test helpers, httptest, benchmarks, interface mocking",
@@ -131,18 +192,27 @@
     },
     "patterns-reviewer": {
       "domain": "patterns",
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "no_semantic_filter": true,
-      "extra_scope": ["--base-ref-only"],
+      "extra_scope": [
+        "--base-ref-only"
+      ],
       "dispatch_class": "always",
       "focus": "Codebase pattern consistency, reinvention prevention, consolidation opportunities",
       "model_tier": "sonnet"
     },
     "history-insights-reviewer": {
       "domain": "code",
-      "protocols": ["reviewer"],
-      "scope_flags": ["--max-lines", "500"],
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [
+        "--max-lines",
+        "500"
+      ],
       "file_history": true,
       "max_history_commits": 5,
       "dispatch_class": "always",
@@ -151,7 +221,9 @@
     },
     "tests-mutation-reviewer": {
       "domain": null,
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "manual",
       "focus": "Adversarial mutation testing to verify test coverage",
@@ -159,7 +231,9 @@
     },
     "dead-code-reviewer": {
       "domain": "dead-code",
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
@@ -170,16 +244,28 @@
         "New files replacing or superseding existing ones"
       ],
       "triage_keywords": [
-        "remove", "delete", "refactor", "extract", "move",
-        "rename", "consolidate", "unused", "dead code"
+        "remove",
+        "delete",
+        "refactor",
+        "extract",
+        "move",
+        "rename",
+        "consolidate",
+        "unused",
+        "dead code"
       ],
-      "triage_checks": ["file_deletions", "net_removal"],
+      "triage_checks": [
+        "file_deletions",
+        "net_removal"
+      ],
       "focus": "Unused functions, orphaned imports, unreachable paths, code obsoleted by refactors",
       "model_tier": "sonnet"
     },
     "a11y-reviewer": {
       "domain": "a11y",
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
@@ -192,16 +278,25 @@
         "Commits mentioning accessibility, a11y, keyboard, screen reader, ARIA"
       ],
       "triage_keywords": [
-        "accessib", "a11y", "keyboard", "screen reader",
-        "aria", "focus", "wcag"
+        "accessib",
+        "a11y",
+        "keyboard",
+        "screen reader",
+        "aria",
+        "focus",
+        "wcag"
       ],
       "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA",
       "model_tier": "inherit"
     },
     "reliability-reviewer": {
       "domain": "reliability",
-      "secondary_domains": ["config-ops"],
-      "protocols": ["reviewer"],
+      "secondary_domains": [
+        "config-ops"
+      ],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
@@ -214,11 +309,120 @@
         "Caching layer modifications"
       ],
       "triage_keywords": [
-        "migration", "external", "retry", "error handling",
-        "feature flag", "kill-switch", "deploy", "background",
-        "queue", "caching"
+        "migration",
+        "external",
+        "retry",
+        "error handling",
+        "feature flag",
+        "kill-switch",
+        "deploy",
+        "background",
+        "queue",
+        "caching"
       ],
       "focus": "Logging, error handling, rollback safety, feature flags, failure-mode resilience",
+      "model_tier": "sonnet"
+    },
+    "api-contract-reviewer": {
+      "domain": "code",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "REST API endpoint additions or modifications",
+        "Hook/filter argument or return type changes",
+        "Response schema or DTO class modifications",
+        "Public function signature changes (parameters, return types)",
+        "Database migration files (schema contract)",
+        "Commits mentioning API, endpoint, contract, breaking, deprecate, backwards"
+      ],
+      "triage_keywords": [
+        "api",
+        "endpoint",
+        "rest",
+        "response",
+        "schema",
+        "contract",
+        "breaking",
+        "deprecat",
+        "backward",
+        "version",
+        "hook signature"
+      ],
+      "focus": "API contract stability, backwards-incompatible changes, response shape drift, hook/filter contract breaks, missing deprecation",
+      "model_tier": "sonnet"
+    },
+    "data-flow-privacy-reviewer": {
+      "domain": "code",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "Code handling user data (names, emails, addresses, IPs)",
+        "Logging or monitoring additions (error_log, WC_Logger, Sentry, New Relic)",
+        "API response construction or serialization",
+        "Database schema additions storing personal data",
+        "Payment or financial data processing",
+        "Data export, import, or migration handlers",
+        "GDPR/privacy-related erasure or consent handlers"
+      ],
+      "triage_keywords": [
+        "user",
+        "customer",
+        "email",
+        "personal",
+        "pii",
+        "gdpr",
+        "privacy",
+        "log",
+        "merchant",
+        "payment",
+        "card",
+        "address",
+        "erasure",
+        "consent",
+        "export"
+      ],
+      "focus": "PII in logs, data leakage in API responses, GDPR erasure gaps, payment data handling, cross-boundary data flow",
+      "model_tier": "sonnet"
+    },
+    "concurrency-reviewer": {
+      "domain": "code",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "Async/await or Promise patterns in JavaScript",
+        "Database transaction blocks or direct query sequences",
+        "Background job or queue handler code",
+        "WordPress cron or scheduled event handlers",
+        "Cache read-write sequences (transients, object cache)",
+        "Order or payment processing flows",
+        "Commits mentioning async, concurrent, race, transaction, lock, queue"
+      ],
+      "triage_keywords": [
+        "async",
+        "await",
+        "promise",
+        "transaction",
+        "lock",
+        "mutex",
+        "concurrent",
+        "parallel",
+        "cron",
+        "queue",
+        "race",
+        "atomic",
+        "idempoten",
+        "duplicate"
+      ],
+      "focus": "Race conditions, TOCTOU, missing transactions, cache stampede, idempotency, concurrent state corruption",
       "model_tier": "sonnet"
     },
     "decision-reviewer": {

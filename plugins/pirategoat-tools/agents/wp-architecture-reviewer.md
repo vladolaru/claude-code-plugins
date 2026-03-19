@@ -46,10 +46,9 @@ This agent reviews WordPress-specific architectural patterns (`--domain wp-archi
 - Namespace/prefix conventions
 - WordPress API usage over direct DB access
 
-**NOT in scope (handled by architecture-reviewer):**
-- General SOLID principles
-- GoF design patterns
-- General coupling/cohesion analysis
+**NOT in scope:**
+- General SOLID principles, GoF design patterns, coupling/cohesion (handled by architecture-reviewer)
+- REST API response contract stability, endpoint backwards compatibility for external consumers (handled by api-contract-reviewer)
 
 ## RULE 0 (MOST IMPORTANT): WordPress is an Ecosystem
 
@@ -137,6 +136,8 @@ Before reporting a finding, verify it doesn't fall into these known FP patterns:
 ```
 
 ## Backwards Compatibility
+
+**Scope:** WordPress ecosystem contracts — hooks, filters, WP API functions, class methods used by other plugins/themes. REST API response shape stability and endpoint contract changes are handled by the api-contract-reviewer.
 
 **The Deprecation Rule:** If something was public (used externally), it must be deprecated before removal:
 1. Add `_deprecated_function()` or `_deprecated_hook()`

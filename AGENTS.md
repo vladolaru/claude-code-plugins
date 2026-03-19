@@ -93,11 +93,11 @@ Claude Code docs live at `https://code.claude.com/docs/en/`. Every page has a `.
 
 ### pirategoat-tools
 
-Code review orchestration with 19 parallel review agents, 18 skills, and 6 commands covering security, architecture, testing, WordPress, accessibility, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
+Code review orchestration with 22 parallel review agents, 18 skills, and 6 commands covering security, architecture, testing, WordPress, accessibility, API contracts, data privacy, concurrency, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
 
 | Directory | Contents |
 |---|---|
-| `agents/` | 19 review agent definitions + 2 shared protocols in `agents/shared/` |
+| `agents/` | 22 review agent definitions + 2 shared protocols in `agents/shared/` |
 | `skills/` | 18 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, etc.) |
 | `commands/` | 6 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
 | `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, review output |
