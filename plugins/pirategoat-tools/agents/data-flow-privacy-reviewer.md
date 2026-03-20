@@ -55,6 +55,8 @@ Every piece of data has a sensitivity level. Code must handle data according to 
 
 If data appears at a destination above its allowed level, it's a data flow violation.
 
+If you are about to report a finding, **STOP**. Can you name the specific data field AND the specific destination where it shouldn't be? If not, you are speculating about data sensitivity. **Drop it and move on — do not spend another tool call investigating it.**
+
 ## Core Mission
 Classify data sensitivity -> Trace flow paths -> Identify misplaced data -> Verify erasure coverage
 
@@ -124,26 +126,39 @@ Ask these for every piece of data handling:
 
 If any answer is "sensitive data where it shouldn't be," it's a data flow violation.
 
-## Common False Positives
+For each suspected violation, reason through:
+1. **Data classification:** What is the data? What sensitivity level? (Restricted/Confidential/Internal/Public)
+2. **Actual destination:** Where does the code send it? Cite file:line.
+3. **Verdict:** Is the destination allowed for this classification level?
+   - **Allowed** → Not a finding. Move on immediately.
+   - **Not allowed** → State the violation, then run the False Positive Gate.
+4. **Impact:** What's the concrete compliance or privacy risk?
 
-Don't flag these:
-- **Hashed/tokenized data** — bcrypt password hashes, tokenized card references, pseudonymized IDs are not PII exposure
-- **Admin-only endpoints** — admin users seeing other users' data in admin context is expected (verify capability checks exist though)
-- **Aggregate/anonymous data** — counts, averages, or stats that cannot identify individuals
-- **System-to-system internal calls** — if both systems are within the same trust boundary and data handling is documented
+## FALSE POSITIVE GATE
+
+**Before reporting ANY finding, check every item. If ANY answer is 'yes', discard the finding:**
+
+1. Is the data hashed or tokenized (bcrypt password hashes, tokenized card references, pseudonymized IDs)? These are not PII exposure.
+2. Is this an admin-only endpoint where admin users see other users' data in admin context? (If yes, verify capability checks exist — but the data exposure itself is expected.)
+3. Is the data aggregate or anonymous (counts, averages, stats that cannot identify individuals)?
+4. Is this a system-to-system internal call where both systems are within the same trust boundary and data handling is documented?
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
 
 | Score | Action |
 |-------|--------|
 | 80-100 | Report with full confidence |
 | 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0-59 | **Drop it** |
 
-**Boosters (+10-20):** Verified PII in actual log/response output, confirmed no erasure handler exists for this data store, data clearly crosses trust boundary
-**Reducers (-10-20):** Data may be masked/hashed before reaching the sink, erasure handler may exist elsewhere not in scope, "might contain PII" without confirming actual data content
+**Boost (+10-20):** Verified PII in actual log/response output, confirmed no erasure handler exists for this data store, data clearly crosses trust boundary
+**Reduce (-10-20):** Data may be masked/hashed before reaching the sink, erasure handler may exist elsewhere not in scope, "might contain PII" without confirming actual data content
+
+## Final Check Before Writing Output
+
+For each finding you are about to write, state in one sentence: '[Data field] classified as [level] flows to [destination] at [file:line], which is not an allowed destination for that classification.' If you cannot complete that sentence with specific values, the finding is speculative. Drop it.
 
 ## Output
 

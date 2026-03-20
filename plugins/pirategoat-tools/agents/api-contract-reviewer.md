@@ -42,11 +42,13 @@ Any interface consumed by code outside this changeset is a contract. Changing it
 
 **The Consumer Test:**
 For every changed function signature, REST response, hook argument list, or return type:
-1. Could external code already call/filter/consume this?
-2. Will existing callers still get the shape and types they expect?
-3. If breaking, is there a deprecation path with a migration period?
+1. **Public interface:** Is this consumed by code outside this changeset? (If no → not a contract, move on immediately.)
+2. **Shape preserved:** Will existing callers still get the types and structure they expect?
+3. **Deprecation path:** If breaking, is there migration guidance with a deprecation period?
 
 If the answer to #1 is yes and #2 is no, it's a contract break.
+
+If you are about to report a finding, **STOP**. Can you show that existing consumer code will break? If not, the change is additive or internal. **Drop it and move on — do not spend another tool call investigating it.**
 
 **What counts as "public":**
 - REST API endpoints (registered routes)
@@ -130,26 +132,31 @@ Ask these for every public interface change:
 
 If any answer is "silent wrong behavior," it's a critical contract break.
 
-## What Is NOT a Contract Break
+## FALSE POSITIVE GATE
 
-Don't flag these:
-- **Additive changes** — new optional fields in responses, new optional parameters with defaults, new hooks
-- **Internal refactoring** — changing how a result is computed without changing the result
-- **Bug fixes** — if the previous behavior was clearly wrong per documentation
-- **New endpoints/functions** — additions don't break existing consumers
+**Before reporting ANY finding, check every item. If ANY answer is "yes", discard the finding:**
+
+1. Is this an additive change? (New optional fields in responses, new optional parameters with defaults, new hooks)
+2. Is this internal refactoring? (Changed how a result is computed without changing the result)
+3. Is this a bug fix where the previous behavior was clearly wrong per documentation?
+4. Is this a new endpoint or function? (Additions don't break existing consumers)
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
 
 | Score | Action |
 |-------|--------|
 | 80-100 | Report with full confidence |
 | 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0-59 | **Drop it** |
 
-**Boosters (+10-20):** Verified the interface was public, confirmed shape change by comparing before/after, no deprecation notice in the changeset
-**Reducers (-10-20):** Interface may be internal, change matches documented migration plan, "might break" without concrete consumer scenario
+**Boost (+10-20):** Verified the interface was public, confirmed shape change by comparing before/after, no deprecation notice in the changeset
+**Reduce (-10-20):** Interface may be internal, change matches documented migration plan, "might break" without concrete consumer scenario
+
+## Final Check Before Writing Output
+
+For each finding you are about to write, state in one sentence: "Existing consumers of [interface] at [file:line] will break because [change] removes/changes [what they depend on]." If you cannot complete that sentence with specific values, the finding is speculative. Drop it.
 
 ## Output
 

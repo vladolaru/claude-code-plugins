@@ -48,11 +48,15 @@ Any state that can be read and written by concurrent operations must be protecte
 
 **The Concurrency Test:**
 For every state mutation (database write, cache update, file write, in-memory update):
-1. Can two requests reach this code simultaneously?
-2. Do they read-then-write the same state?
-3. Is there a transaction, lock, or atomic operation protecting the sequence?
+1. **Concurrent access:** Can two requests reach this code simultaneously? (If no → not a concurrency concern, move on immediately.)
+2. **Shared mutable state:** Do they read-then-write the same state? Cite what state and where.
+3. **Synchronization:** Is there a transaction, lock, or atomic operation protecting the sequence?
+   - **Protected** → Not a finding. Move on immediately.
+   - **Unprotected** → Describe the race scenario, then run the False Positive Gate.
 
 If #1 and #2 are yes and #3 is no, it's a race condition.
+
+If you are about to report a finding, **STOP**. Can you describe the specific concurrent scenario — two requests doing what, in what order, producing what wrong result? If not, you are speculating about theoretical races. **Drop it and move on — do not spend another tool call investigating it.**
 
 ## Core Mission
 Identify shared mutable state -> Verify synchronization -> Assess concurrent correctness
@@ -149,26 +153,31 @@ Ask these for every state-mutating code path:
 
 If any answer is "duplicate records, lost data, or inconsistent state," it's a concurrency bug.
 
-## What Is NOT a Concurrency Issue
+## FALSE POSITIVE GATE
 
-Don't flag these:
-- **Inherently single-threaded operations** — WordPress processes HTTP requests single-threaded per process. Two *requests* can race, but code within a single request execution is sequential.
-- **Read-only operations** — Multiple concurrent readers without writers is safe.
-- **Atomic database operations** — Single `INSERT`, `UPDATE`, or `DELETE` statements are atomic in MySQL/InnoDB.
-- **Intentional eventual consistency** — Some systems accept brief inconsistency by design (documented as such).
+**Before reporting ANY finding, check every item. If ANY answer is "yes", discard the finding:**
+
+1. Is this a single-threaded operation within one request? (WordPress processes HTTP requests single-threaded per process. Two *requests* can race, but code within a single request execution is sequential.)
+2. Is this a read-only operation with no writers? (Multiple concurrent readers without writers is safe.)
+3. Is this an atomic database operation? (Single `INSERT`, `UPDATE`, or `DELETE` statements are atomic in MySQL/InnoDB.)
+4. Is this intentional eventual consistency documented as such? (Some systems accept brief inconsistency by design.)
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
 
 | Score | Action |
 |-------|--------|
 | 80-100 | Report with full confidence |
 | 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0-59 | **Drop it** |
 
-**Boosters (+10-20):** Verified read-modify-write without transaction in code, confirmed no idempotency check exists, identified concrete double-execution scenario
-**Reducers (-10-20):** External locking mechanism may exist outside scope, framework may provide implicit transactions, single-threaded execution context (WordPress admin-ajax within single request)
+**Boost (+10-20):** Verified read-modify-write without transaction in code, confirmed no idempotency check exists, identified concrete double-execution scenario
+**Reduce (-10-20):** External locking mechanism may exist outside scope, framework may provide implicit transactions, single-threaded execution context (WordPress admin-ajax within single request)
+
+## Final Check Before Writing Output
+
+For each finding you are about to write, state in one sentence: "If two requests execute [operation] at [file:line] simultaneously, [specific shared state] will be corrupted because [no synchronization mechanism]." If you cannot complete that sentence with specific values, the finding is a theoretical race without a concrete scenario. Drop it.
 
 ## Output
 

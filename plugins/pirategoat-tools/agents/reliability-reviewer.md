@@ -47,6 +47,8 @@ Every external call, state transition, and data mutation must be:
 
 If ANY of these properties is missing, it's a resilience gap.
 
+If you are about to report a finding, **STOP**. Can you describe the specific failure scenario — what fails, how you'd detect it (or wouldn't), and what the blast radius is? If not, you are speculating about theoretical failures. **Drop it and move on — do not spend another tool call investigating it.**
+
 ## Core Mission
 Identify resilience gaps -> Assess blast radius -> Provide actionable remediation
 
@@ -156,6 +158,22 @@ Ask these for every significant code path:
 
 If any answer is "I don't know" or "bad things happen," it's a resilience gap.
 
+For each suspected gap, reason through:
+1. **Failure mode:** What specific external call, migration, or deployment step can fail?
+2. **Detection:** How would on-call know this failed? Cite the log/metric/alert or confirm it's missing.
+3. **Recovery:** What's the recovery path? Cite the rollback/retry/fallback or confirm it's missing.
+4. **Verdict:** Is detection AND recovery covered?
+   - **Both covered** → Not a finding. Move on immediately.
+   - **Either missing** → Describe the gap, then run the False Positive Gate.
+
+## FALSE POSITIVE GATE — Before reporting ANY finding, check every item. If ANY answer is 'yes', discard the finding:
+
+1. Is this a **concurrency correctness** issue? (Race conditions, TOCTOU, idempotency → concurrency-reviewer's domain.)
+2. Is this a **security vulnerability**? (Injection, XSS, auth bypass → security-reviewer's domain.)
+3. Is this **existing infrastructure** unchanged by this PR? (Only flag resilience gaps in changed code.)
+4. Is the failure mode **already handled by the framework**? (e.g., WordPress catches fatal errors, WooCommerce has default retry logic — verify it's actually missing before reporting.)
+5. Is this a **style preference** about error message format without operational impact? (Inconsistent but functional error formats are LOW, not missing error handling.)
+
 ## CI/CD and Infrastructure Resilience Checklist
 
 When config-ops files appear in scope (CI workflows, Dockerfiles, Terraform, etc.), apply these checks:
@@ -178,16 +196,20 @@ When config-ops files appear in scope (CI workflows, Dockerfiles, Terraform, etc
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
 
 | Score | Action |
 |-------|--------|
 | 80-100 | Report with full confidence |
 | 60-79 | Report, note uncertainty |
-| 0-59 | Do NOT report — verify deeper or drop |
+| 0-59 | **Drop it** |
 
-**Boosters (+10-20):** Verified missing error handling in actual code, confirmed no timeout/retry in HTTP client setup, migration has no rollback script in the changeset, known antipattern match (e.g., catch-and-swallow)
-**Reducers (-10-20):** "Might"/"could" in reasoning, error handling may exist in a base class not in scope, framework may provide default timeout, theoretical without concrete failure scenario
+**Boost (+10-20):** Verified missing error handling in actual code, confirmed no timeout/retry in HTTP client setup, migration has no rollback script in the changeset, known antipattern match (e.g., catch-and-swallow)
+**Reduce (-10-20):** "Might"/"could" in reasoning, error handling may exist in a base class not in scope, framework may provide default timeout, theoretical without concrete failure scenario
+
+## Final Check Before Writing Output
+
+For each finding you are about to write, state in one sentence: 'If [specific operation] at [file:line] fails, [detection gap or recovery gap] means [concrete blast radius].' If you cannot complete that sentence with specific values, the finding is a theoretical failure without concrete impact. Drop it.
 
 ## Output
 
