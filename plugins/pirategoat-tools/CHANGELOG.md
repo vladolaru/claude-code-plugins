@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`codex-reviewer` agent** — rewrite invocation to use `codex exec review` (non-interactive) with `developer_instructions` for additive prompt injection, `-o` for output capture, `--ephemeral` for throwaway sessions. Bump timeout from 180s to 30 minutes. Remove Gemini comparison section.
+- **`codex-reviewer` agent** — rewrite invocation to use `codex exec review` (non-interactive) with `developer_instructions` for additive prompt injection, `-o` for output capture, `--ephemeral` for throwaway sessions. Bump timeout from 180s to 30 minutes. Remove Gemini comparison section. Prompt-optimized with research-backed patterns: numbered rule priority (RULE 0-4), contrastive examples for signal block output, affirmative directives, redundancy elimination (202→148 lines), error normalization at top for primacy effect.
 - **Prompt-optimized `code-clarity-reviewer` and `docs-drift-reviewer`** — applied 6 prompt engineering techniques: passive exclusion lists → active False Positive Gate checklists (Anticipatory Reflection + CoVe), recency reinforcement before output (sentence template forces proof articulation), structured reasoning templates in verification steps, compressed confidence scoring with hard cutoff, removed redundant bash examples (~210 token savings per agent), strengthened "move on" signals to prevent sunk-cost investigation of non-findings.
 
 ## [1.77.0] - 2026-03-20
