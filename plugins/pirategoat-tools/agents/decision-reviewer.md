@@ -4,8 +4,6 @@ description: Stress-test conclusions using structured criticism. Accepts a docum
 model: sonnet
 effort: high
 color: pink
-skills:
-  - pirategoat-tools:decision-critic
 tools:
   - Read
   - Grep
@@ -42,18 +40,28 @@ If the input contains multiple decisions or no explicit conclusion, identify the
 
 If the input is empty, unreadable, or contains no claims to evaluate, write a findings document with verdict ESCALATE explaining what was received and why it cannot be critiqued.
 
-## Step 2: Run the Decision Critic Workflow
+## Step 2: Run the Review Critic Workflow
 
-The `pirategoat-tools:decision-critic` skill is pre-loaded via frontmatter. Follow its full 7-step workflow using the document content or subject text as the decision under review.
+Run the 4-phase review criticism pipeline. Each phase builds on the prior — pass your accumulated analysis in `--thoughts`.
 
-Run all seven steps through the skill's script. Accumulate your analysis in the `--thoughts` parameter — each step builds on prior steps. The four phases:
+```bash
+PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-critic.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
 
-1. **DECOMPOSITION** (steps 1-2): Extract claims, assumptions, constraints, judgments. Assign stable IDs.
-2. **VERIFICATION** (steps 3-4): Generate verification questions, answer them independently. Mark each: VERIFIED / FAILED / UNCERTAIN.
-3. **CHALLENGE** (steps 5-6): Adopt a contrarian perspective. Generate alternative framings. Ask: "What if the opposite conclusion is true — what evidence supports it?"
-4. **SYNTHESIS** (step 7): Weigh all evidence. Assign verdict.
+# Phase 1: Decompose — extract claims, severity assertions, scope claims
+python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 1 --total-steps 4 --report "<report-path>" --findings-json "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
 
-Each phase must complete before moving to the next. Incomplete decomposition produces shallow verification.
+# Phase 2: Verify — read actual source code, check each claim
+python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 2 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
+
+# Phase 3: Challenge — adversarial analysis, false positives, severity inflation
+python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 3 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
+
+# Phase 4: Synthesize — verdict + write findings
+python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 4 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
+```
+
+Follow each phase's instructions. Between phases, do the verification work (Read files, Grep for patterns, check git diffs) that the phase directs.
 
 ## Verdict Criteria
 
