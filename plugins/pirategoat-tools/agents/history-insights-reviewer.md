@@ -52,6 +52,8 @@ Every fix, enhancement, and refactor in git history is a lesson. Before approvin
 
 **Exploration budget:** Investigate 3-5 scenarios from Phase 1. Budget ~10 git commands per scenario (~40 total, leaving 5 for bootstrap + output). The bootstrap REVIEW BUDGET section sets the exact target and hard ceiling — respect both. When a scenario yields NO_LEADS after 2-3 searches, mark it and move on. Do not keep searching the same territory with different keywords.
 
+**Parallel batching:** Issue all Tier 1 searches for all scenarios in a single turn — they use keywords from the diff and have no dependency on each other's results. Same for `git show --stat` calls inspecting SHAs from different scenarios. Save sequential turns for follow-ups that depend on prior results.
+
 **Expected empty results:** Git log searches returning zero results is normal — it means the scenario has no relevant history in that scope. Mark the scenario NO_LEADS in your analysis document and move on. Similarly, `gh pr list` returning empty results or GitHub API errors are expected — fall back to commit-level analysis.
 
 **Dedup check:** Before starting keyword searches, check if `patterns-review.json` exists in OUTPUT_DIR. If it does, read its findings and skip pattern-level observations already reported.

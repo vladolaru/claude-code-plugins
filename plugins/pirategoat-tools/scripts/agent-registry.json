@@ -74,11 +74,12 @@
         "performance",
         "optimiz",
         "cache",
-        "query",
+        "db query",
+        "sql query",
         "load time",
         "slow",
         "n+1",
-        "lazy",
+        "lazy load",
         "pagination",
         "bulk"
       ],
@@ -100,8 +101,7 @@
         "Files spanning 3+ architectural layers",
         "Commits mentioning architecture, refactor, restructure, decouple, extract",
         "Large PRs (20+ files or 500+ lines)",
-        "New modules or packages introduced",
-        "Deployment or infrastructure architecture changes (Dockerfiles, Terraform, CI pipelines, Helm charts)"
+        "New modules or packages introduced"
       ],
       "triage_keywords": [
         "architect",
@@ -201,7 +201,7 @@
         "--base-ref-only"
       ],
       "dispatch_class": "always",
-      "focus": "Codebase pattern consistency, reinvention prevention, consolidation opportunities",
+      "focus": "Codebase pattern consistency, reinvention prevention, consolidation opportunities — low value for isolated additions to well-established modules; high value when PR introduces new patterns or touches areas with existing conventions",
       "model_tier": "sonnet"
     },
     "history-insights-reviewer": {
@@ -216,8 +216,13 @@
       "file_history": true,
       "max_history_commits": 5,
       "budget_override": 45,
-      "dispatch_class": "always",
-      "focus": "Git history precedents, lessons learned",
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "PR modifies existing code that has meaningful git history (prior fixes, enhancements, refactors)",
+        "Changed files touch areas with known past issues or multiple prior contributors",
+        "PR refactors or restructures code where the team may have learned lessons from earlier attempts"
+      ],
+      "focus": "Git history precedents, lessons learned — high value when PR modifies existing code with prior fixes/enhancements; low value for net-new additions with no history to mine",
       "model_tier": "sonnet"
     },
     "tests-mutation-reviewer": {
@@ -259,7 +264,7 @@
         "file_deletions",
         "net_removal"
       ],
-      "focus": "Unused functions, orphaned imports, unreachable paths, code obsoleted by refactors",
+      "focus": "Unused functions, orphaned imports, unreachable paths, code obsoleted by refactors — low value for PRs that only add net-new code without modifying or removing existing code",
       "model_tier": "sonnet"
     },
     "a11y-reviewer": {
@@ -284,7 +289,9 @@
         "keyboard",
         "screen reader",
         "aria",
-        "focus",
+        "focus trap",
+        "focus management",
+        "focusable",
         "wcag"
       ],
       "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA",
@@ -340,19 +347,19 @@
         "Commits mentioning API, endpoint, contract, breaking, deprecate, backwards"
       ],
       "triage_keywords": [
-        "api",
+        "rest api",
+        "api endpoint",
         "endpoint",
-        "rest",
-        "response",
-        "schema",
+        "rest_api",
+        "response schema",
         "contract",
+        "breaking change",
         "breaking",
         "deprecat",
         "backward",
-        "version",
         "hook signature"
       ],
-      "focus": "API contract stability, backwards-incompatible changes, response shape drift, hook/filter contract breaks, missing deprecation",
+      "focus": "API contract stability, backwards-incompatible changes, response shape drift, hook/filter contract breaks, missing deprecation — high value when modifying existing endpoints or public interfaces; lower for purely new additions",
       "model_tier": "sonnet",
       "file_history": true,
       "max_history_commits": 5
@@ -374,21 +381,22 @@
         "GDPR/privacy-related erasure or consent handlers"
       ],
       "triage_keywords": [
-        "user",
-        "customer",
+        "user_data",
+        "customer_data",
         "email",
         "personal",
         "pii",
         "gdpr",
         "privacy",
-        "log",
+        "error_log",
+        "logging",
         "merchant",
-        "payment",
-        "card",
+        "card_number",
+        "card_detail",
         "address",
         "erasure",
         "consent",
-        "export"
+        "data_export"
       ],
       "focus": "PII in logs, data leakage in API responses, GDPR erasure gaps, payment data handling, cross-boundary data flow",
       "model_tier": "sonnet"
@@ -413,14 +421,15 @@
         "async",
         "await",
         "promise",
-        "transaction",
+        "begin_transaction",
+        "db_transaction",
         "lock",
         "mutex",
         "concurrent",
         "parallel",
         "cron",
         "queue",
-        "race",
+        "race condition",
         "atomic",
         "idempoten",
         "duplicate"
