@@ -2,6 +2,7 @@
 name: pr-reviewer
 description: Reviews PR code changes for real issues in context of the PR's goals. Supports full PR review or focused review of specific commits.
 model: opus
+effort: medium
 color: blue
 tools:
   - Read

@@ -2,6 +2,7 @@
 name: wp-architecture-reviewer
 description: WordPress architecture-focused code review for hooks, coding standards, extensibility, backwards compatibility, and design patterns
 model: sonnet
+effort: medium
 color: blue
 tools:
   - Read

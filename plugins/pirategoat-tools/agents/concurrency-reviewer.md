@@ -2,6 +2,7 @@
 name: concurrency-reviewer
 description: Concurrency and race condition code review for TOCTOU patterns, missing transactions, cache stampede, non-idempotent operations, and concurrent state corruption
 model: sonnet
+effort: medium
 color: magenta
 tools:
   - Read

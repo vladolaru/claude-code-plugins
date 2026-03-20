@@ -2,6 +2,7 @@
 name: reliability-reviewer
 description: Operational resilience code review for logging, error handling, rollback safety, feature flags, and failure-mode handling
 model: sonnet
+effort: medium
 color: orange
 tools:
   - Read

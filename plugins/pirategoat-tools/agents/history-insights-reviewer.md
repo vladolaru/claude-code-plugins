@@ -2,6 +2,7 @@
 name: history-insights-reviewer
 description: Mines git history and GitHub PRs for fixes, enhancements, and lessons learned from similar scenarios elsewhere in the codebase — surfaces what the team already knows
 model: sonnet
+effort: medium
 color: cyan
 tools:
   - Read

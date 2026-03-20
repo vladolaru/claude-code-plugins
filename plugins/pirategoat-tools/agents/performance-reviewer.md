@@ -2,6 +2,7 @@
 name: performance-reviewer
 description: WordPress performance-focused code review for database queries, caching, asset loading, and scalability issues
 model: sonnet
+effort: medium
 color: yellow
 tools:
   - Read

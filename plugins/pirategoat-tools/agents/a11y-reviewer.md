@@ -2,6 +2,7 @@
 name: a11y-reviewer
 description: Frontend accessibility code review for ARIA correctness, keyboard operability, focus management, screen reader announcements (speak(), aria-live), and WCAG 2.2 AA compliance — covers both visual UI components and non-visual a11y features in hooks/utilities
 model: opus
+effort: medium
 color: green
 tools:
   - Read

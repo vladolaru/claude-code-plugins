@@ -2,6 +2,7 @@
 name: api-contract-reviewer
 description: API contract stability review for backwards-incompatible REST changes, hook/filter argument breaks, response shape drift, and missing deprecation
 model: sonnet
+effort: medium
 color: cyan
 tools:
   - Read

@@ -2,6 +2,7 @@
 name: decision-reviewer
 description: Stress-test conclusions using structured criticism. Accepts a document path or inline text. Returns STAND/REVISE/ESCALATE verdict with a findings document.
 model: opus
+effort: medium
 color: pink
 skills:
   - pirategoat-tools:decision-critic
