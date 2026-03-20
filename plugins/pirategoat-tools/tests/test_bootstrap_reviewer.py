@@ -315,6 +315,21 @@ class TestComputeReviewBudget:
         budget = compute_review_budget(changed_lines=5, file_count=1)
         assert budget >= 15
 
+    def test_scope_lines_preferred_over_pr_lines(self):
+        """Budget should scale with scope-level lines, not PR-level."""
+        # Scope has 50 lines → budget should be 15 + 5 = 20
+        # PR has 2000 lines → if PR-level were used, budget would be 80 (cap)
+        scope_budget = compute_review_budget(changed_lines=50, file_count=3)
+        pr_budget = compute_review_budget(changed_lines=2000, file_count=50)
+        assert scope_budget < 30  # small scope → small budget
+        assert pr_budget == 80    # large PR → cap
+        assert scope_budget < pr_budget  # scope budget must be smaller
+
+    def test_zero_scope_lines_gets_minimum(self):
+        """Agents with zero diff lines still get minimum budget."""
+        budget = compute_review_budget(changed_lines=0, file_count=0)
+        assert budget == 15
+
 
 class TestBuildErrorOutput:
     """Error output format."""

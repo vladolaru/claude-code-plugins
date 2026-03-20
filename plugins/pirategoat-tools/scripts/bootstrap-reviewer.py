@@ -835,15 +835,21 @@ def main():
         except Exception:
             pass
 
-    # Compute review budget from PR-level metrics (structured data, not prose parsing).
-    # Falls back to scope-based extraction when review-context.json is unavailable.
-    pr_size = load_pr_size_from_context(output_dir)
-    if pr_size:
-        review_budget = compute_review_budget(pr_size.get("lines", 0), pr_size.get("files", 0))
-    else:
-        scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
-        scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
+    # Prefer scope-level metrics (domain-filtered) over PR-level totals.
+    # Scope data gives the agent's actual workload; PR-level is a fallback
+    # for agents without domain scoping (domain=null).
+    scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
+    scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
+
+    if scope_lines_for_budget > 0:
         review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
+    else:
+        # Fallback: use PR-level metrics when scope is unavailable or empty
+        pr_size = load_pr_size_from_context(output_dir)
+        if pr_size:
+            review_budget = compute_review_budget(pr_size.get("lines", 0), pr_size.get("files", 0))
+        else:
+            review_budget = 15  # absolute minimum
 
     # Compute file history for agents that request it
     file_history_output = None
