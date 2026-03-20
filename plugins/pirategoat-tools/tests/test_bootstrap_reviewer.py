@@ -331,6 +331,21 @@ class TestComputeReviewBudget:
         assert budget == 15
 
 
+class TestBudgetOverride:
+    """Agent-level budget override from registry."""
+
+    def test_override_replaces_computed_budget(self):
+        """When budget_override is set, it replaces the scope-computed budget."""
+        # Verify the override exists in the registry
+        with open(str(SCRIPTS_DIR / "agent-registry.json")) as f:
+            registry = json.load(f)
+        agents = registry.get("agents", registry)
+        assert agents["history-insights-reviewer"]["budget_override"] == 45
+        # Verify computed budget would be different (higher) without the override
+        scope_budget = compute_review_budget(changed_lines=500, file_count=5)
+        assert scope_budget > 45, "Override should be lower than computed scope budget"
+
+
 class TestBuildErrorOutput:
     """Error output format."""
 

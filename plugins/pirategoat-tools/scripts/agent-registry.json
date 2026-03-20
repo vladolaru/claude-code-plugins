@@ -215,6 +215,7 @@
       ],
       "file_history": true,
       "max_history_commits": 5,
+      "budget_override": 45,
       "dispatch_class": "always",
       "focus": "Git history precedents, lessons learned",
       "model_tier": "sonnet"

@@ -182,6 +182,11 @@ class TestConditionalSections:
         assert "Target: ~" in result.stdout
         assert "tool calls for this review" in result.stdout
 
+    def test_history_insights_budget_override(self):
+        """history-insights-reviewer should get its budget_override value (45), not computed value."""
+        result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-budget-override")
+        assert "Target: ~45 tool calls" in result.stdout
+
 
 class TestPersonalization:
     """Agent-specific values are correctly interpolated."""

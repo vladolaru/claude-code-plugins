@@ -851,6 +851,13 @@ def main():
         else:
             review_budget = 15  # absolute minimum
 
+    # Agent-level budget override — used when an agent's workload doesn't
+    # correlate with diff size (e.g., history-insights explores git history,
+    # not diff lines).
+    budget_override = config.get("budget_override")
+    if budget_override is not None:
+        review_budget = budget_override
+
     # Compute file history for agents that request it
     file_history_output = None
     if config.get("file_history") and scope_output:
