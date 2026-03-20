@@ -7,15 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.75.1] - 2026-03-20
+
+### Fixed
+
+- **`sed` error in output directory construction on macOS** — all three review commands (`/pr-review`, `/full-code-review`, `/code-review`) used `sed 's/^-//'` to strip a leading dash from the sanitized repo path. When the LLM joined the code block lines into a single shell command, the `sed` pattern got corrupted, producing `unescaped newline inside substitute pattern`. Replaced with `${REPO_ROOT#/}` parameter expansion before `tr`, eliminating `sed` entirely.
+- **`sed` in reviewer-protocol fallback** — same class of issue in the Scope Discovery fallback code block (`sed 's@^refs/remotes/origin/@@'`). Replaced with parameter expansion. This path is skipped by bootstrap in normal operation but fixed for consistency.
+
 ## [1.75.0] - 2026-03-20
 
 ### Added
 
 - **`create-github-pr` skill** — structured PR creation workflow with pre-flight checks (branch guard, existing PR detection), context gathering, content generation with testing steps synthesis from related merged PRs, user approval gate, draft creation, and post-creation assignee/milestone prompts. Moved from global `~/.claude/skills/` into the plugin.
-
-### Fixed
-
-- **`sed` error in output directory construction on macOS** — all three review commands (`/pr-review`, `/full-code-review`, `/code-review`) used `sed 's/^-//'` to strip a leading dash from the sanitized repo path. When the LLM joined the code block lines into a single shell command, the `sed` pattern got corrupted, producing `unescaped newline inside substitute pattern`. Replaced with `${REPO_ROOT#/}` parameter expansion before `tr`, eliminating `sed` entirely.
 
 ## [1.74.0] - 2026-03-20
 
