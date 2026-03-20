@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Decision critic uses review-specific 4-phase prompt injection** (`review-critic.py`) instead of the generic 7-step `decision-critic.py` — tailored for severity calibration, false positive detection, and code-grounded verification. Migrates epistemic boundary, tool citation, state accumulation, and academic grounding from the generic script.
+- **Decision critic dropped from Opus to Sonnet + effort high** — the structured pipeline compensates.
+- **Step 10 dispatch prompt now includes output directory path** for the critic.
 - **Review budget uses domain-scoped metrics** — budget is now computed from each agent's domain-filtered diff size (TOTAL_DIFF_LINES from review-scope.py), not the PR total. Agents with small scopes get proportionally smaller budgets. Reverts the 1.73.1 decision to use PR-level metrics after session analysis showed every agent getting budget=80 regardless of scope.
 - **Budget text enforces hard ceiling** — replaced "calibration hint" framing and "genuine lead" escape hatch with a hard ceiling at 1.5× target and "MUST stop" instruction. Agents can no longer self-justify indefinite budget overruns.
 - **History-insights budget aligned** — agent definition now references the bootstrap budget instead of stating a conflicting number (~40 vs ~80).
