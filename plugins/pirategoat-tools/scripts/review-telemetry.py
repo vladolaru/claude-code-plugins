@@ -102,7 +102,8 @@ class ReviewTelemetry:
 
     def log_agent_start(self, agent_name: str, domain: str = "",
                         model_tier: str = "", scope_files: int = 0,
-                        scope_lines: int = 0) -> None:
+                        scope_lines: int = 0,
+                        budget_target: Optional[int] = None) -> None:
         """Append agent_start event. No-op if not started."""
         if self.log_path is None:
             return
@@ -119,6 +120,8 @@ class ReviewTelemetry:
                 "lines": scope_lines,
             },
         }
+        if budget_target is not None:
+            event["budget_target"] = budget_target
         self._append(event)
 
     def log_agent_complete(self, agent_name: str, verdict: str = "",

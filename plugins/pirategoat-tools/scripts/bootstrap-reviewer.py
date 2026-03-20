@@ -819,22 +819,6 @@ def main():
         from datetime import datetime, timezone
         f.write(datetime.now(timezone.utc).isoformat())
 
-    # Telemetry: log agent start (best-effort)
-    if ReviewTelemetry is not None:
-        try:
-            _scope_files = extract_scope_files(scope_output) if scope_output else []
-            _scope_lines = extract_scope_line_count(scope_output) if scope_output else 0
-            _t = ReviewTelemetry(output_dir)
-            _t.log_agent_start(
-                agent_name=args.agent,
-                domain=config.get("domain", ""),
-                model_tier=config.get("model_tier", ""),
-                scope_files=len(_scope_files),
-                scope_lines=_scope_lines,
-            )
-        except Exception:
-            pass
-
     # Prefer scope-level metrics (domain-filtered) over PR-level totals.
     # Scope data gives the agent's actual workload; PR-level is a fallback
     # for agents without domain scoping (domain=null).
@@ -857,6 +841,21 @@ def main():
     budget_override = config.get("budget_override")
     if budget_override is not None:
         review_budget = budget_override
+
+    # Telemetry: log agent start (best-effort, after budget is finalized)
+    if ReviewTelemetry is not None:
+        try:
+            _t = ReviewTelemetry(output_dir)
+            _t.log_agent_start(
+                agent_name=args.agent,
+                domain=config.get("domain", ""),
+                model_tier=config.get("model_tier", ""),
+                scope_files=len(scope_files_for_budget),
+                scope_lines=scope_lines_for_budget,
+                budget_target=review_budget,
+            )
+        except Exception:
+            pass
 
     # Compute file history for agents that request it
     file_history_output = None

@@ -436,6 +436,32 @@ class TestLogAgentStart:
         assert agents[0]["agent"] == "security-reviewer"
         assert agents[1]["agent"] == "performance-reviewer"
 
+    def test_agent_start_includes_budget(self, telemetry):
+        """agent_start event should include the budget_target field."""
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(
+            agent_name="security-reviewer",
+            domain="security",
+            model_tier="sonnet",
+            scope_files=10,
+            scope_lines=200,
+            budget_target=35,
+        )
+        events = _read_events(telemetry.log_path)
+        start_event = [e for e in events if e["event"] == "agent_start"][0]
+        assert start_event["budget_target"] == 35
+
+    def test_agent_start_omits_budget_when_none(self, telemetry):
+        """agent_start event should omit budget_target when not provided."""
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_start(
+            agent_name="security-reviewer",
+            domain="security",
+        )
+        events = _read_events(telemetry.log_path)
+        start_event = [e for e in events if e["event"] == "agent_start"][0]
+        assert "budget_target" not in start_event
+
 
 # ── log_agent_complete() ─────────────────────────────────────────
 
