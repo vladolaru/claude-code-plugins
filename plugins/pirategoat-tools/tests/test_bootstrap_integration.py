@@ -180,7 +180,14 @@ class TestConditionalSections:
         result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
         assert "=== REVIEW BUDGET ===" in result.stdout
         assert "Target: ~" in result.stdout
-        assert "tool calls for this review" in result.stdout
+        assert "tool calls." in result.stdout
+
+    @pytest.mark.parametrize("agent_name", ALL_AGENTS)
+    def test_review_budget_has_hard_ceiling(self, agent_name):
+        """Budget section must include a hard ceiling instruction."""
+        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-budget-ceiling")
+        assert "Hard ceiling:" in result.stdout
+        assert "MUST stop" in result.stdout
 
     def test_history_insights_budget_override(self):
         """history-insights-reviewer should get its budget_override value (45), not computed value."""
