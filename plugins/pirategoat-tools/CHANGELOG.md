@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.75.0] - 2026-03-20
+
+### Added
+
+- **`create-github-pr` skill** — structured PR creation workflow with pre-flight checks (branch guard, existing PR detection), context gathering, content generation with testing steps synthesis from related merged PRs, user approval gate, draft creation, and post-creation assignee/milestone prompts. Moved from global `~/.claude/skills/` into the plugin.
+
 ## [1.74.0] - 2026-03-20
 
 ### Changed
