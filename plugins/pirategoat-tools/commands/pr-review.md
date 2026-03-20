@@ -31,7 +31,7 @@ the file, verify it exists, then move on. Do not skip verification.
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-SAFE_REPO_PATH=$(echo "$REPO_ROOT" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-' | sed 's/^-//')
+SAFE_REPO_PATH=$(echo "${REPO_ROOT#/}" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
 OUTPUT_DIR="/tmp/pr-review-${SAFE_REPO_PATH}-<PR_NUMBER>"
 mkdir -p "$OUTPUT_DIR"
 ```
