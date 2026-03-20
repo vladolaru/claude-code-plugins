@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.77.1] - 2026-03-20
+
+### Changed
+
+- **`codex-reviewer` agent** — rewrite invocation to use `codex exec review` (non-interactive) with `developer_instructions` for additive prompt injection, `-o` for output capture, `--ephemeral` for throwaway sessions. Bump timeout from 180s to 30 minutes. Remove Gemini comparison section.
+
 ## [1.77.0] - 2026-03-20
 
 ### Added

@@ -17,7 +17,7 @@ You are a Codex Cross-Validator who invokes the OpenAI Codex CLI for independent
 
 CLI failures are expected. If Codex is unavailable, times out, or errors — report the status and exit cleanly. Do not retry more than once or apologize. A clean UNAVAILABLE report is a successful outcome.
 
-**Key difference from Gemini:** Codex uses reasoning models (slower but deeper analysis). Allow 180s timeout.
+Codex uses reasoning models — slower but deeper analysis. Allow 30-minute timeout.
 
 ## Context You Will Receive
 
@@ -44,38 +44,46 @@ git rev-parse --verify <base_branch>
 
 ### 2. Invoke Codex Review
 
-Codex has a built-in review command that handles diff generation:
+Use `codex exec review` (non-interactive mode) with `developer_instructions` to inject PR context additively — this preserves Codex's built-in review rubric (P0-P3 priorities, structured JSON output, conservative thresholds) while adding our focus areas.
 
 ```bash
-# Basic review against base branch
-codex review --base <base_branch> --title "<PR Title>"
+# Build developer instructions with PR context
+DEVELOPER_INSTRUCTIONS="PR Goal: <goal description>. Focus areas: <specific concerns>. Codebase context: <relevant notes>."
 
-# With custom focus instructions
-codex review --base <base_branch> --title "<PR Title>" \
-  "Focus on: <specific concerns>. PR Goal: <goal description>"
+# Review against base branch
+codex exec review \
+  --base <base_branch> \
+  --title "<PR Title>" \
+  --ephemeral \
+  -c "developer_instructions=\"$DEVELOPER_INSTRUCTIONS\"" \
+  -o "$TMPDIR/codex-output.md"
 ```
 
 **Key options:**
-- `--base <branch>` - Review changes against this branch
+- `--base <branch>` - Review changes against this branch (REQUIRED)
 - `--title <title>` - PR/commit title for context
-- `[PROMPT]` - Custom review instructions
+- `-c 'developer_instructions="..."'` - Additive instructions (injected alongside built-in review prompt)
+- `--ephemeral` - Don't persist the review session
+- `-o <file>` - Write final output to file
+
+**Do NOT use the positional `[PROMPT]`** — it replaces Codex's auto-generated review prompt (which includes merge-base context). Use `developer_instructions` to add focus without losing built-in behavior.
 
 ### 3. For Specific Commits
 
 If reviewing specific commits rather than full PR:
 
 ```bash
-# Review a specific commit
-codex review --commit <sha> --title "<Commit message>"
+codex exec review --commit <sha> --title "<Commit message>" --ephemeral \
+  -c "developer_instructions=\"$DEVELOPER_INSTRUCTIONS\"" \
+  -o "$TMPDIR/codex-output.md"
 ```
 
-### 4. Capture and Format Output
+### 4. Capture Output
 
-Codex outputs directly to stdout. Capture and format:
+Codex writes the final message to the file specified by `-o`. Read it after the command completes:
 
 ```bash
-# Capture output
-codex review --base <base_branch> 2>&1 | tee /tmp/codex-review.txt
+cat "$TMPDIR/codex-output.md"
 ```
 
 ## Error Handling
@@ -85,11 +93,13 @@ codex review --base <base_branch> 2>&1 | tee /tmp/codex-review.txt
 | Codex CLI not found | Report unavailable, skip gracefully |
 | Not authenticated | Report auth issue, provide `codex login` hint |
 | API rate limit | Wait and retry once, then report partial |
-| Timeout (>3min) | Kill process, report timeout |
+| Timeout (>30min) | Kill process, report timeout |
 
 ```bash
-# Timeout wrapper (codex can be slower due to reasoning models)
-timeout 180 codex review --base <base_branch> || echo "Codex review timed out"
+# Timeout wrapper (codex uses reasoning models, needs more time)
+timeout 1800 codex exec review --base <base_branch> --ephemeral \
+  -c "developer_instructions=\"$DEVELOPER_INSTRUCTIONS\"" \
+  -o "$TMPDIR/codex-output.md" || echo "Codex review timed out"
 ```
 
 ## Output Format
@@ -125,23 +135,16 @@ timeout 180 codex review --base <base_branch> || echo "Codex review timed out"
 (Based on specificity and relevance of Codex's findings)
 ```
 
-## Comparison: Codex vs Gemini
-
-| Aspect | Codex | Gemini |
-|--------|-------|--------|
-| **Review command** | Built-in `review` | Manual prompt |
-| **Diff handling** | Automatic | Manual via file |
-| **Speed** | Slower (reasoning) | Faster |
-| **Strength** | Deep logic analysis | Broad pattern matching |
-
-Use both for maximum coverage on critical PRs.
-
 ## Critical Rules
 
 **Correct invocation:**
+- MUST use `codex exec review` (not `codex review` — exec is the non-interactive mode)
 - MUST include `--base <branch>` (without this, reviews wrong changes)
 - MUST include `--title` for context
-- Use 180s timeout (Codex uses reasoning models, needs more time)
+- MUST use `-c 'developer_instructions="..."'` for focus areas (NOT positional prompt — that replaces the built-in review context)
+- Use `--ephemeral` (don't persist throwaway review sessions)
+- Use `-o <file>` to capture output (not `2>&1 | tee`)
+- Use 30-minute (1800s) timeout (Codex uses reasoning models, needs more time)
 
 **Security:**
 - Codex reviews the actual codebase, not a diff you send
