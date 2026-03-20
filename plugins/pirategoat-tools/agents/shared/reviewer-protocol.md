@@ -104,7 +104,8 @@ Use Bash `grep`/`rg` only when piping from another command (e.g., `git show ref:
 
 Fall back to manual commands:
 ```bash
-DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+_REF=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null)
+DEFAULT_BRANCH="${_REF#refs/remotes/origin/}"
 [ -z "$DEFAULT_BRANCH" ] && DEFAULT_BRANCH="main"
 RANGE="${DEFAULT_BRANCH}..HEAD"
 git diff --name-only $RANGE | grep -v -E '\.(lock|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map)$' \
