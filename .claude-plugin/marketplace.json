@@ -12,8 +12,8 @@
     {
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
-      "description": "Code review orchestration (19 specialized agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
-      "version": "1.76.0",
+      "description": "Code review orchestration (20 domain reviewers + pipeline/cross-validation agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
+      "version": "1.77.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -90,7 +90,8 @@
         "./agents/api-contract-reviewer.md",
         "./agents/data-flow-privacy-reviewer.md",
         "./agents/concurrency-reviewer.md",
-        "./agents/code-clarity-reviewer.md"
+        "./agents/code-clarity-reviewer.md",
+        "./agents/docs-drift-reviewer.md"
       ]
     },
     {

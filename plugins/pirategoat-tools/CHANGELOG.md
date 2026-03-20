@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.77.0] - 2026-03-20
+
+### Added
+
+- **`docs-drift-reviewer` agent** — detects when code changes cause external documentation to become stale. Checks README, CLAUDE.md, AGENTS.md, API docs, guides, and AI-facing conventions for claims invalidated by the PR's code changes. Two verification tiers: shallow (symbol matching for renames/removals) and deep (behavioral comparison for logic changes). Four categories: stale symbol references, behavioral drift, incomplete API enumeration, and stale examples. Only flags docs made stale by the current change — not pre-existing staleness or missing docs. Adds `docs-drift` domain to review-scope.py.
+
 ## [1.76.0] - 2026-03-20
 
 ### Added

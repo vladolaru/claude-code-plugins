@@ -483,6 +483,41 @@
       ],
       "focus": "Naming accuracy, documentation correctness, name-behavior mismatches, stale docblocks, semantic consistency",
       "model_tier": "sonnet"
+    },
+    "docs-drift-reviewer": {
+      "domain": "docs-drift",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "New, renamed, or removed public functions, classes, or endpoints",
+        "Configuration option additions or removals",
+        "Feature additions, removals, or behavioral changes",
+        "File renames or directory restructuring",
+        "Hook signature changes or new hooks added"
+      ],
+      "triage_keywords": [
+        "rename",
+        "remove",
+        "delete",
+        "deprecat",
+        "endpoint",
+        "config",
+        "option",
+        "feature",
+        "api",
+        "hook",
+        "restructur",
+        "migrate"
+      ],
+      "triage_checks": [
+        "has_documentation_files",
+        "has_public_api_changes"
+      ],
+      "focus": "Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs, guides after code changes",
+      "model_tier": "sonnet"
     }
   }
 }
