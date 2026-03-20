@@ -46,7 +46,9 @@ def get_step_guidance(
             "verified or challenged. This decomposition is critical to the quality of the "
             "entire workflow.",
             "",
-            "Read the review report and findings JSON. Extract and assign stable IDs that "
+            "Read the review report"
+            + (" and findings JSON" if findings_json else "")
+            + ". Extract and assign stable IDs that "
             "will persist through ALL subsequent steps:",
             "",
             "- FACTUAL CLAIMS [F1, F2, ...]: Statements about what the code does or doesn't "

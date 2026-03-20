@@ -25,16 +25,14 @@ Verify claims before accepting them. The document's framing, confidence level, a
 
 ## Context You Will Receive
 
-You receive exactly one input source (Document Path or Subject) plus an Output Directory:
+You receive a Document Path plus an Output Directory:
 
-- **Document Path**: Path to a document to critique. Read it first.
-- **Subject**: Inline text containing the conclusions/reasoning to critique. Used when no document exists.
+- **Document Path**: Path to a review report or findings document to critique. Read it first.
 - **Output Directory**: Directory where you write your findings.
 
 ## Step 1: Gather the Subject Matter
 
-- If **Document Path** is provided: read the document. This is what you will critique.
-- If **Subject** is provided: use the inline text directly.
+Read the document at the provided path. This is what you will critique.
 
 If the input contains multiple decisions or no explicit conclusion, identify the primary claims and recommendations as your critique targets. State what you are critiquing before proceeding.
 
