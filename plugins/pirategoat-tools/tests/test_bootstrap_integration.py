@@ -194,6 +194,13 @@ class TestConditionalSections:
         result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-budget-override")
         assert "Target: ~45 tool calls" in result.stdout
 
+    @pytest.mark.parametrize("agent_name", ALL_AGENTS)
+    def test_review_scope_header_not_duplicated(self, agent_name):
+        """The REVIEW SCOPE header should appear at most once in bootstrap output."""
+        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-scope-header")
+        count = result.stdout.count("=== REVIEW SCOPE ===")
+        assert count <= 1, f"Expected at most 1 REVIEW SCOPE header, found {count}"
+
 
 class TestPersonalization:
     """Agent-specific values are correctly interpolated."""

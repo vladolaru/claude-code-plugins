@@ -518,8 +518,7 @@ def build_output(
     # Section 2: Review Content (middle position — processing zone)
     lines.append("--- Section 2: REVIEW CONTENT (what to review) ---")
     lines.append("")
-    lines.append("=== REVIEW SCOPE ===")
-
+    # scope_output already starts with "=== REVIEW SCOPE ===" from review-scope.py
     if len(scope_output) > SCOPE_INLINE_CAP:
         # Write full scope to file to avoid output persistence cascade
         os.makedirs(output_dir, exist_ok=True)
@@ -568,7 +567,10 @@ def build_output(
 
     if exploration_scope:
         lines.append("=== EXPLORATION SCOPE ===")
-        lines.append(exploration_scope)
+        # Strip the REVIEW SCOPE header that review-scope.py prepends —
+        # this output is wrapped in EXPLORATION SCOPE, not REVIEW SCOPE.
+        cleaned = exploration_scope.replace("=== REVIEW SCOPE ===\n", "", 1)
+        lines.append(cleaned)
         lines.append("")
 
     if file_history:
