@@ -906,6 +906,14 @@ class TestStep10DecisionCritic:
         text = "\n".join(g["actions"])
         assert "review-findings.json" in text
 
+    def test_step_10_dispatch_includes_output_dir(self, mod, tmp_path):
+        """Step 10 dispatch prompt should include the output directory path."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "Output directory:" in text
+
 
 class TestCriticVerdictPersistence:
     """Critic verdict is persisted to file and read back by step 11."""

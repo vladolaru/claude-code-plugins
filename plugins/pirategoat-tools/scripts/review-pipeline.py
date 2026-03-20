@@ -1140,8 +1140,9 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f"Stress-test the conclusions in this review report: {critic_target}")
     if has_findings:
         actions.append(f"Structured findings with per-issue evidence: {findings_path}")
+    actions.append(f"Output directory: {od}")
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
-    actions.append(f"Return STAND, REVISE, or ESCALATE with findings.")
+    actions.append(f"Return STAND, REVISE, or ESCALATE with findings written to {od}/decision-critic-findings.md.")
     actions.append("```")
     if has_findings:
         actions.append("")
