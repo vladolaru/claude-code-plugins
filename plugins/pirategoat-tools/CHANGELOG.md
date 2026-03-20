@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.78.0] - 2026-03-20
+
+### Added
+
+- **`linear-issue-pipeline.py`** — 14-step state machine for investigating Linear issues and optionally implementing fixes with draft PRs. Two modes: `investigate` (steps 1-7 + 14: fetch issue, check existing work, gather context, investigate with type-specific paths, write report, post to Linear) and `fix` (all 14 steps: adds write plan, implement, verify, self-review via codex-reviewer, re-verify, create draft PR). Follows the same curated-context-pipeline pattern as `review-pipeline.py` with `STEP_SEQUENCE`, condition-based routing, state management, and curated briefings. Bot-mode only (`interactive: false`).
+- **`pipeline_events.py`** — `PipelineEventEmitter` class for pipeline-to-bot communication via `pipeline-events.jsonl`. Emits milestone events (status message edits), deliverable events (separate Slack messages), and lifecycle events (`step_started`, `step_completed`, `pipeline_complete`, `pipeline_failed`). All writes are best-effort — never raises.
+
 ## [1.77.1] - 2026-03-20
 
 ### Changed

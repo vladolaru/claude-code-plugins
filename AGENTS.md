@@ -100,7 +100,7 @@ Code review orchestration with 25 agents (20 domain reviewers, 2 pipeline, 2 cro
 | `agents/` | 25 agent definitions (20 reviewers, 2 pipeline, 2 cross-validators, 1 utility) + 2 shared protocols in `agents/shared/` |
 | `skills/` | 19 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, PR creation, etc.) |
 | `commands/` | 6 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, review output |
+| `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, review output, linear issue pipeline, pipeline events |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
 | `AGENTS.md` | Full development instructions, architecture, agent registry reference |
@@ -200,6 +200,9 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/review-pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_pipeline_infrastructure.py -v` |
 | `scripts/review-pipeline.py` (orchestration, subprocess) | `pytest plugins/pirategoat-tools/tests/test_pipeline_orchestration.py -v` |
 | `scripts/review-pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_review_pipeline.py -v` |
+| `scripts/linear-issue-pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_pipeline.py -v` |
+| `scripts/linear-issue-pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_guidance.py -v` |
+| `scripts/pipeline_events.py` | `pytest plugins/pirategoat-tools/tests/test_pipeline_events.py -v` |
 | `scripts/semantic-filter.py` | `pytest plugins/pirategoat-tools/tests/test_semantic_filter.py -v` |
 | `scripts/review_output_simple.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | `scripts/review-telemetry.py` | `pytest plugins/pirategoat-tools/tests/test_review_telemetry.py -v` |
