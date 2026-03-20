@@ -111,6 +111,7 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `triage_criteria` | conditional | Required for `dispatch_class: "conditional"`. List of conditions that trigger dispatch. |
 | `secondary_domains` | optional | Additional scope domains to include (e.g., `["config-ops"]`). |
 | `extra_scope` | optional | Additional scope invocations (e.g., `["--base-ref-only"]` for patterns-reviewer). |
+| `budget_override` | optional | Fixed tool-call budget, bypassing scope-proportional computation. Use for agents whose workload doesn't correlate with diff size (e.g., history-insights explores git history). |
 | `file_history` | optional | If `true`, bootstrap includes git history per changed file. |
 | `max_history_commits` | optional | How many commits of history per file (default: 5). |
 
