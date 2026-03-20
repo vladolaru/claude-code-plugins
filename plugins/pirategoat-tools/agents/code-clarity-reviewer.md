@@ -47,7 +47,7 @@ A name that lies is worse than no name. A docblock that contradicts code is wors
 4. If match → move on. Not a finding.
 5. If mismatch → gather proof: cite the name/doc claim AND the contradicting code with file:line
 
-If you are about to report a finding, **STOP**. Can you point to a specific line where the code's behavior contradicts what the name or documentation claims? If not, you are reporting a style preference. Move on.
+If you are about to report a finding, **STOP**. Can you point to a specific line where the code's behavior contradicts what the name or documentation claims? If not, you are reporting a style preference. **Drop it and move on — do not spend another tool call investigating it.**
 
 ## Scope: Clarity Issues in Changed Code
 
@@ -60,15 +60,16 @@ This agent reviews naming accuracy and documentation correctness in the change:
 - Same concept called different names within a single changed file (semantic inconsistency)
 - Public/protected/exported names so vague they give callers no useful information about behavior
 
-**EXCLUDED — Skip these entirely:**
-- **Style preferences** — `$data` vs `$order_data` when both are accurate. Imperfect-but-honest names are not findings.
-- **Missing documentation** — A function with no docblock is not a finding. Only *incorrect* documentation is. Missing docs mean less context; stale docs cause hallucinations. Huge difference.
-- **Formatting conventions** — Missing `@since` tags, wrong casing, docblock format issues. That's linting.
-- **Over-documentation** — Do not ask for more comments. Code should be self-explanatory. Comments restating what code does are noise, but existing noise is not a finding either.
-- **Type design** — Primitive obsession, missing value objects, type-based branching. That's architecture-reviewer's domain.
-- **Test file naming** — Test naming quality belongs to the test reviewer agents (js-tests-reviewer, php-tests-reviewer, etc.).
-- **Internal/private naming** — A private helper named `$tmp` or `do_thing()` is fine. Only flag vague names at API boundaries where callers can't see the implementation.
-- **Naming in unchanged code** — Standard STOP CHECK. Explore context freely but only report on code in the diff.
+**FALSE POSITIVE GATE — Before reporting ANY finding, check every item. If ANY answer is "yes", discard the finding:**
+
+1. Is this a **style preference**? (`$data` vs `$order_data` — both accurate, just different.)
+2. Is this **missing** documentation? (No docblock ≠ wrong docblock. Only *incorrect* docs are findings.)
+3. Is this a **formatting convention**? (Missing `@since`, wrong casing, docblock format → linting, not clarity.)
+4. Am I asking for **more comments**? (Code should be self-explanatory. Don't request documentation that doesn't exist.)
+5. Is this **type design**? (Primitive obsession, missing value objects → architecture-reviewer's domain.)
+6. Is this in a **test file**? (Test naming → test reviewer agents.)
+7. Is this an **internal/private** symbol? (Private helpers named `$tmp` are fine. Only flag vague names at API boundaries.)
+8. Is this in **unchanged code**? (STOP CHECK. Only report on code in the diff.)
 
 ## What Good and Bad Findings Look Like
 
@@ -115,26 +116,14 @@ From the diff, extract every symbol that warrants clarity review:
 
 ### Step 3: Verify Each Candidate
 
-For each suspicious name or documentation claim:
+For each suspicious name or documentation claim, reason through this structure:
 
-1. **Read the implementation** — understand what the code actually does
-2. **Compare surface vs behavior** — does the name/doc accurately describe what happens?
-3. **If mismatch found**, gather proof:
-   - The name or doc claim (what it says)
-   - The contradicting code with file:line (what it does)
-   - The concrete impact (how this will mislead the next developer)
-
-**Verification commands:**
-```bash
-# Check if a function name matches its behavior — read the implementation
-git show HEAD:path/to/file.php | grep -A 30 "function suspect_name"
-
-# Check if docblock params match actual signature
-git diff HEAD~1..HEAD -- "*.php" | grep -B5 -A10 "@param"
-
-# Find same-concept naming inconsistency within a file
-git grep -n "user\|account\|customer" -- path/to/changed_file.php
-```
+1. **Surface claim:** What does the name/doc promise? (e.g., "`get_` implies read-only")
+2. **Actual behavior:** Read the implementation. What does the code do? Cite file:line.
+3. **Verdict:** Do they match?
+   - **Match** → Not a finding. Move on immediately.
+   - **Mismatch** → State the contradiction in one sentence, then run the False Positive Gate.
+4. **Impact:** How will the next developer be misled? (Skip if verdict was "match.")
 
 ### Step 4: Boundary Check
 
@@ -192,17 +181,20 @@ Public/protected/exported name gives callers no useful information. Only at API 
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
 
 | Score | Criteria | Action |
 |-------|----------|--------|
-| 80-100 | Behavioral proof: name says X, code does Y at a specific line | Report with full confidence |
-| 60-79 | Structural mismatch: doc param doesn't exist in signature, or 3+ names for same entity | Report, note uncertainty |
-| 0-59 | Judgment call without concrete proof | Do NOT report — it's a style preference |
+| 80-100 | Behavioral proof: name says X, code does Y at file:line | Report |
+| 60-79 | Structural mismatch: doc param missing from signature, 3+ names for same entity | Report, note uncertainty |
+| 0-59 | Judgment call, no concrete proof | **Drop it** — it's a style preference |
 
-**Boosters (+10-20):** Verified name-behavior mismatch with specific code line, docblock param/return provably wrong against signature, same entity has 3+ names in one file
+**Boost** (+10-20): verified mismatch with specific code line, provably wrong `@param`/`@return`, 3+ synonym names in one file.
+**Reduce** (-10-20): "might mislead" without citation, name is vague but technically accurate, internal/private symbol.
 
-**Reducers (-10-20):** "Might mislead" without specific contradiction, name is vague but technically accurate, only one instance of naming inconsistency, internal/private symbol
+## Final Check Before Writing Output
+
+For each finding you are about to write, state in one sentence: "The name/doc claims [X], but the code does [Y] at [file:line]." If you cannot complete that sentence with specific values, the finding is a style preference. Drop it.
 
 ## Output
 

@@ -47,7 +47,7 @@ Only flag documentation that makes a **specific claim this code change invalidat
 4. If the doc's claim is now wrong → flag with both the doc location and the code change that invalidated it
 5. If the doc's claim is still accurate despite the change → move on
 
-If you are about to report a finding, **STOP**. Can you point to a specific doc claim AND the specific code change that made it wrong? If not, you are flagging pre-existing staleness or missing docs. Move on.
+If you are about to report a finding, **STOP**. Can you point to a specific doc claim AND the specific code change that made it wrong? If not, you are flagging pre-existing staleness or missing docs. **Drop it and move on — do not spend another tool call investigating it.**
 
 ## Scope: Documentation Drift From This Change
 
@@ -68,14 +68,15 @@ If you are about to report a finding, **STOP**. Can you point to a specific doc 
 - Wiki-style `.md` files referenced from README
 - Inline `@see` or `@link` references in docblocks pointing to external docs (only the reference, not the docblock itself)
 
-**EXCLUDED — Skip these entirely:**
-- **Missing documentation** — A new feature with no docs is not a finding. Only docs that *were* accurate and are now stale.
-- **Documentation quality** — Grammar, structure, formatting, completeness, style.
-- **Inline code documentation** — Docblocks, inline comments, JSDoc. That's code-clarity-reviewer's domain.
-- **Changelog entries** — Whether the PR updates the changelog is process enforcement, not drift detection.
-- **API contract compatibility** — Whether a change is backwards-compatible belongs to api-contract-reviewer.
-- **Pre-existing staleness** — Documentation that was already wrong before this PR.
-- **Test documentation** — Test README files, test fixture descriptions.
+**FALSE POSITIVE GATE — Before reporting ANY finding, check every item. If ANY answer is "yes", discard the finding:**
+
+1. Is this **missing** documentation? (New feature with no docs ≠ stale docs. Only docs that *were* accurate and are now wrong.)
+2. Is this a **documentation quality** issue? (Grammar, structure, formatting, completeness → not drift.)
+3. Is this **inline code documentation**? (Docblocks, inline comments, JSDoc → code-clarity-reviewer's domain.)
+4. Is this a **changelog** concern? (Whether the PR updates the changelog is process, not drift.)
+5. Is this **API contract compatibility**? (Whether a change is backwards-compatible → api-contract-reviewer.)
+6. Was this doc **already stale before this PR**? (Pre-existing staleness is not your concern.)
+7. Is this **test documentation**? (Test README files, test fixture descriptions → skip.)
 
 ## What Good and Bad Findings Look Like
 
@@ -107,16 +108,7 @@ Why wrong: Pre-existing staleness unrelated to this PR. Only flag docs made stal
 
 ### Step 1: Discover Documentation Files
 
-Find all documentation in the repo that could be affected:
-
-```bash
-# Find documentation files
-find . -type f \( -name "README.md" -o -name "CLAUDE.md" -o -name "AGENTS.md" \) 2>/dev/null | head -20
-find . -type d \( -name "docs" -o -name ".claude" -o -name ".ai" \) 2>/dev/null | head -10
-find . -path "*/docs/*.md" -o -path "*/.claude/*.md" -o -path "*/.ai/*.md" 2>/dev/null | head -30
-```
-
-If no documentation files exist, exit early — there's nothing to check for drift.
+Use Glob to find documentation files: `README.md`, `CLAUDE.md`, `AGENTS.md`, and any `.md` files in `docs/`, `.claude/`, `.ai/` directories. If no documentation files exist, exit early — there's nothing to check for drift.
 
 ### Step 2: Extract Change Signals From the Diff
 
@@ -137,27 +129,18 @@ From the diff, identify what changed that could invalidate documentation:
 
 ### Step 3: Shallow Scan — Symbol Matching
 
-For each renamed/removed/changed symbol:
-
-```bash
-# Search documentation files for references to the old/changed symbol
-git grep -n "old_function_name" -- "*.md" "docs/" ".claude/" ".ai/"
-
-# Search for the symbol in code examples within docs
-git grep -n "old_function_name" -- "README.md" "CLAUDE.md" "AGENTS.md"
-```
-
-If a doc references a symbol this PR changed → flag as stale reference.
+For each renamed/removed/changed symbol, use Grep to search all documentation files (`.md`, `.txt`, `.rst`) for the old symbol name. If a doc references a symbol this PR changed → proceed to the False Positive Gate, then flag as stale reference.
 
 ### Step 4: Deep Scan — Behavioral Comparison
 
-For significant behavioral changes identified in Step 2:
+For significant behavioral changes identified in Step 2, reason through this structure:
 
-1. Identify which docs describe the affected behavior (e.g., README section on "Payment Flow", CLAUDE.md section on "Architecture")
-2. Read the relevant doc section
-3. Read the code change
-4. Compare: does the doc's description still match the new behavior?
-5. If mismatch → flag with the doc claim and the contradicting code change
+1. **Doc claim:** What does the documentation say about this behavior? Quote it with file:line.
+2. **Code change:** What did this PR change? Cite the new behavior with file:line.
+3. **Verdict:** Does the doc still accurately describe the code?
+   - **Still accurate** → Not a finding. Move on immediately.
+   - **Now wrong** → State the contradiction in one sentence, then run the False Positive Gate.
+4. **Impact:** Who will be misled and how? (Skip if verdict was "still accurate.")
 
 **Only do deep scans when the diff signals behavioral change** — modified function logic, changed control flow, new conditions. Pure additions or internal refactors rarely cause behavioral drift in docs.
 
@@ -221,17 +204,20 @@ Code examples, setup instructions, or configuration snippets in docs reference p
 
 ## Finding Confidence
 
-For each finding, score confidence 0-100 before reporting:
+Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
 
 | Score | Criteria | Action |
 |-------|----------|--------|
-| 80-100 | Exact symbol match: doc references X, PR renames/removes X | Report with full confidence |
-| 60-79 | Behavioral comparison: doc describes behavior A, PR changes to behavior B | Report, note uncertainty |
-| 0-59 | Vague connection between code change and doc claim | Do NOT report |
+| 80-100 | Exact symbol match: doc references X, PR renames/removes X | Report |
+| 60-79 | Behavioral comparison: doc describes behavior A, PR changes to B | Report, note uncertainty |
+| 0-59 | Vague connection between code change and doc claim | **Drop it** |
 
-**Boosters (+10-20):** Exact symbol name match in doc, doc explicitly describes the changed behavior, doc contains code example using the changed pattern
+**Boost** (+10-20): exact symbol name match in doc, doc explicitly describes the changed behavior, doc contains code example using the changed pattern.
+**Reduce** (-10-20): doc uses generic description that might still apply, symbol match could be coincidental (common word), behavioral change is subtle and doc is high-level enough to still be accurate.
 
-**Reducers (-10-20):** Doc uses generic description that might still apply, symbol match could be coincidental (common word), behavioral change is subtle and doc description is high-level enough to still be accurate
+## Final Check Before Writing Output
+
+For each finding you are about to write, state in one sentence: "Doc [file:line] claims [X], but this PR changed [Y] at [code file:line], making the doc wrong." If you cannot complete that sentence with specific values for all four slots, the finding is either pre-existing staleness or missing docs. Drop it.
 
 ## Output
 
