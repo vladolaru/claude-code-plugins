@@ -513,6 +513,14 @@ class TestModeGuidanceDifferences:
         # Should mention that investigate mode stops here or jumps
         assert "step 14" in text or "present results" in text.lower() or "jump" in text
 
+    def test_step_7_fix_mode_does_not_mention_jump(self, mod):
+        """Step 7 in fix mode must NOT tell the LLM to jump to step 14."""
+        g = mod.get_step_guidance(7, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g)
+        assert "jumps to step 14" not in text
+        assert "Investigate mode" not in text
+
     def test_step_14_mode_in_schema(self, mod):
         """Step 14 guidance should include the current mode in the result schema."""
         g_inv = mod.get_step_guidance(14, "investigate", {}, INVESTIGATE_CTX,
@@ -528,7 +536,12 @@ class TestModeGuidanceDifferences:
 # ---------------------------------------------------------------------------
 
 class TestStep14Orchestration:
+    def _write_report(self, tmp_path, content="# Report\n\nValid bug."):
+        """Helper to create a report file so the orchestrator sees real output."""
+        (tmp_path / "investigation-report.md").write_text(content)
+
     def test_writes_pipeline_result_json(self, mod, tmp_path):
+        self._write_report(tmp_path)
         state = {
             "completed_steps": list(range(1, 14)),
             "degradation_notes": [],
@@ -547,6 +560,7 @@ class TestStep14Orchestration:
         assert result["issue_id"] == "WOOPLUG-1234"
 
     def test_writes_degraded_status(self, mod, tmp_path):
+        self._write_report(tmp_path)
         state = {
             "completed_steps": list(range(1, 14)),
             "degradation_notes": ["Linear comment posting failed"],
@@ -558,9 +572,52 @@ class TestStep14Orchestration:
         assert result["status"] == "degraded"
         assert len(result["degradation_notes"]) == 1
 
+    def test_partial_run_reports_failed_not_success(self, mod, tmp_path):
+        """P1 fix: a run without verdict or report must report failed, not success."""
+        state = {
+            "completed_steps": [1],
+            "degradation_notes": [],
+        }
+        context = {"issue_id": "TEST-1"}
+        mod._orchestrate_step(14, "investigate", {}, state, context, str(tmp_path))
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["status"] == "failed"
+        assert result["verdict"] is None
+        assert any("No verdict" in n for n in result["degradation_notes"])
+
+    def test_fix_mode_without_pr_url_reports_degraded(self, mod, tmp_path):
+        """Fix mode completing without a PR URL is degraded, not success."""
+        self._write_report(tmp_path)
+        state = {
+            "completed_steps": list(range(1, 14)),
+            "degradation_notes": [],
+            "verdict": "valid",
+            "pr_url": None,
+            "linear_comment_posted": True,
+        }
+        context = {"issue_id": "TEST-1"}
+        mod._orchestrate_step(14, "fix", {}, state, context, str(tmp_path))
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["status"] == "degraded"
+        assert any("draft PR" in n for n in result["degradation_notes"])
+
+    def test_fix_mode_resolved_issue_without_pr_is_success(self, mod, tmp_path):
+        """Fix mode with resolved issue doesn't need a PR URL — success is valid."""
+        self._write_report(tmp_path)
+        state = {
+            "completed_steps": list(range(1, 8)) + [14],
+            "degradation_notes": [],
+            "verdict": "already_fixed",
+            "issue_resolved": True,
+        }
+        context = {"issue_id": "TEST-1"}
+        mod._orchestrate_step(14, "fix", {}, state, context, str(tmp_path))
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["status"] == "success"
+
     def test_emits_events(self, mod, tmp_path):
         """Step 14 orchestration emits pipeline_complete event."""
-        # Load the events module
+        self._write_report(tmp_path)
         events_spec = importlib.util.spec_from_file_location(
             "pipeline_events", SCRIPTS_DIR / "pipeline_events.py"
         )
@@ -568,7 +625,8 @@ class TestStep14Orchestration:
         events_spec.loader.exec_module(events_mod)
         emitter = events_mod.PipelineEventEmitter(str(tmp_path))
 
-        state = {"completed_steps": list(range(1, 14)), "degradation_notes": []}
+        state = {"completed_steps": list(range(1, 14)), "degradation_notes": [],
+                 "verdict": "valid"}
         context = {"issue_id": "TEST-1"}
         mod._orchestrate_step(14, "investigate", {}, state, context, str(tmp_path), events=emitter)
 

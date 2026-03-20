@@ -55,7 +55,7 @@ class TestStepSequence:
             assert s["phase"] in valid_phases, f"Step {s['step']} has invalid phase {s['phase']}"
 
     def test_conditions_are_valid(self, mod):
-        valid_conditions = {"always", "fix_mode_only"}
+        valid_conditions = {"always", "fix_mode_only", "fix_mode_and_unresolved"}
         for s in mod.STEP_SEQUENCE:
             assert s["condition"] in valid_conditions, f"Step {s['step']} has invalid condition {s['condition']}"
 
@@ -78,6 +78,16 @@ class TestConditionEvaluation:
     def test_unknown_condition_returns_false(self, mod):
         assert not mod._eval_condition("nonexistent_condition", "fix", {}, {}, {})
 
+    def test_fix_mode_and_unresolved_true_when_unresolved(self, mod):
+        assert mod._eval_condition("fix_mode_and_unresolved", "fix", {}, {}, {})
+
+    def test_fix_mode_and_unresolved_false_when_resolved(self, mod):
+        state = {"issue_resolved": True}
+        assert not mod._eval_condition("fix_mode_and_unresolved", "fix", {}, state, {})
+
+    def test_fix_mode_and_unresolved_false_in_investigate(self, mod):
+        assert not mod._eval_condition("fix_mode_and_unresolved", "investigate", {}, {}, {})
+
 
 # ---------------------------------------------------------------------------
 # Active Steps
@@ -93,10 +103,20 @@ class TestActiveSteps:
         for step in [1, 2, 3, 4, 5, 6, 7, 14]:
             assert step in active, f"Step {step} should be active in investigate mode"
 
-    def test_fix_mode_includes_all_steps(self, mod):
+    def test_fix_mode_includes_all_steps_when_unresolved(self, mod):
         active = mod.get_active_steps("fix", {}, {}, {})
         assert len(active) == TOTAL_STEPS
         for step in range(1, TOTAL_STEPS + 1):
+            assert step in active
+
+    def test_fix_mode_skips_impl_steps_when_resolved(self, mod):
+        state = {"issue_resolved": True}
+        active = mod.get_active_steps("fix", {}, state, {})
+        # Steps 8-13 should be skipped when issue is resolved
+        for step in [8, 9, 10, 11, 12, 13]:
+            assert step not in active, f"Step {step} should be skipped when resolved"
+        # Steps 1-7 and 14 should still be active
+        for step in [1, 2, 3, 4, 5, 6, 7, 14]:
             assert step in active
 
     def test_returns_set(self, mod):

@@ -83,12 +83,12 @@ STEP_SEQUENCE = [
     {"step": 5,  "title": "Investigate",            "phase": "INVESTIGATION",  "condition": "always"},
     {"step": 6,  "title": "Write Report",           "phase": "INVESTIGATION",  "condition": "always"},
     {"step": 7,  "title": "Post to Linear",         "phase": "INVESTIGATION",  "condition": "always"},
-    {"step": 8,  "title": "Write Plan",             "phase": "IMPLEMENTATION", "condition": "fix_mode_only"},
-    {"step": 9,  "title": "Implement",              "phase": "IMPLEMENTATION", "condition": "fix_mode_only"},
-    {"step": 10, "title": "Verify",                 "phase": "IMPLEMENTATION", "condition": "fix_mode_only"},
-    {"step": 11, "title": "Self-Review",            "phase": "VALIDATION",     "condition": "fix_mode_only"},
-    {"step": 12, "title": "Re-Verify",              "phase": "VALIDATION",     "condition": "fix_mode_only"},
-    {"step": 13, "title": "Create Draft PR",        "phase": "OUTPUT",         "condition": "fix_mode_only"},
+    {"step": 8,  "title": "Write Plan",             "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
+    {"step": 9,  "title": "Implement",              "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
+    {"step": 10, "title": "Verify",                 "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
+    {"step": 11, "title": "Self-Review",            "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
+    {"step": 12, "title": "Re-Verify",              "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
+    {"step": 13, "title": "Create Draft PR",        "phase": "OUTPUT",         "condition": "fix_mode_and_unresolved"},
     {"step": 14, "title": "Present Results",         "phase": "OUTPUT",         "condition": "always"},
 ]
 
@@ -121,6 +121,15 @@ def _eval_condition(condition, mode, config, state, context):
 
     if condition == "fix_mode_only":
         return mode == "fix"
+
+    if condition == "fix_mode_and_unresolved":
+        # Fix-mode steps 8-13 only run when the issue isn't already resolved.
+        # Step 3 sets state["issue_resolved"] = True when a merged PR fully
+        # addresses the issue. This prevents planning/implementing fixes for
+        # work that's already done.
+        if mode != "fix":
+            return False
+        return not state.get("issue_resolved", False)
 
     return False
 
@@ -705,7 +714,7 @@ def _step_7_post_to_linear(mode, state, context, config, output_dir):
         "   - Note the failure as a degradation (the report is still saved locally)",
         "   - Continue to the next step — this is not a blocking failure",
         "",
-        f"{'**Investigate mode:** After this step, the pipeline jumps to step 14 (Present Results).' if True else ''}",
+        *([ "**Investigate mode:** After this step, the pipeline jumps to step 14 (Present Results)."] if mode == "investigate" else []),
     ]
 
     return {
@@ -1040,22 +1049,41 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         events.step_started(step=step, title=step_def.get("title", ""))
 
     if step == 14:
-        # Write pipeline-result.json from state
+        # Write pipeline-result.json from state, deriving status from real outputs.
         report_path = os.path.join(output_dir, "investigation-report.md")
-        degradation_notes = state.get("degradation_notes", [])
-        status = "success"
-        if degradation_notes:
+        degradation_notes = list(state.get("degradation_notes", []))
+
+        verdict = state.get("verdict")
+        has_report = os.path.isfile(report_path)
+        pr_url = state.get("pr_url")
+        linear_posted = state.get("linear_comment_posted", False)
+        codex_applied = state.get("codex_review_applied", False)
+
+        # Derive status from what actually exists, not from absence of errors.
+        # A run that never produced a verdict or report is failed, not successful.
+        if not verdict and not has_report:
+            status = "failed"
+            if "No verdict or investigation report produced" not in degradation_notes:
+                degradation_notes.append("No verdict or investigation report produced")
+        elif degradation_notes:
             status = "degraded"
+        elif mode == "fix" and not state.get("issue_resolved", False) and not pr_url:
+            # Fix mode should produce a PR URL unless the issue was already resolved
+            status = "degraded"
+            if "Fix mode completed without creating a draft PR" not in degradation_notes:
+                degradation_notes.append("Fix mode completed without creating a draft PR")
+        else:
+            status = "success"
 
         pipeline_result = {
             "status": status,
             "mode": mode,
             "issue_id": context.get("issue_id", "unknown"),
-            "report_path": report_path if os.path.isfile(report_path) else None,
-            "verdict": state.get("verdict"),
-            "pr_url": state.get("pr_url"),
-            "linear_comment_posted": state.get("linear_comment_posted", False),
-            "codex_review_applied": state.get("codex_review_applied", False),
+            "report_path": report_path if has_report else None,
+            "verdict": verdict,
+            "pr_url": pr_url,
+            "linear_comment_posted": linear_posted,
+            "codex_review_applied": codex_applied,
             "degradation_notes": degradation_notes,
         }
 
