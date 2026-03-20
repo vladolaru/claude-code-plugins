@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.74.0] - 2026-03-20
+
+### Changed
+
+- **Review budget uses domain-scoped metrics** — budget is now computed from each agent's domain-filtered diff size (TOTAL_DIFF_LINES from review-scope.py), not the PR total. Agents with small scopes get proportionally smaller budgets. Reverts the 1.73.1 decision to use PR-level metrics after session analysis showed every agent getting budget=80 regardless of scope.
+- **Budget text enforces hard ceiling** — replaced "calibration hint" framing and "genuine lead" escape hatch with a hard ceiling at 1.5× target and "MUST stop" instruction. Agents can no longer self-justify indefinite budget overruns.
+- **History-insights budget aligned** — agent definition now references the bootstrap budget instead of stating a conflicting number (~40 vs ~80).
+
+### Added
+
+- **`budget_override` field in agent-registry.json** — fixed tool-call budget for agents whose workload doesn't correlate with diff size. History-insights-reviewer uses override=45 (aligned with its ~40 git commands guidance).
+- **`budget_target` in telemetry `agent_start` events** — enables cost analysis without parsing raw session JSONL files.
+
+### Fixed
+
+- **Duplicated `=== REVIEW SCOPE ===` header** — `build_output()` prepended the header, but `review-scope.py` output already includes it. Also stripped the header from exploration scope output (patterns-reviewer).
+
 ## [1.73.2] - 2026-03-19
 
 ### Fixed
