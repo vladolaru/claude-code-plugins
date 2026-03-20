@@ -760,6 +760,14 @@ def _step_8_write_plan(mode, state, context, config, output_dir):
         "   - Task breakdown (numbered, with file paths)",
         "   - Test strategy",
         "   - Risks and mitigation",
+        "",
+        "5. **Assess complexity** based on the plan you just wrote:",
+        "   - **small**: ≤3 files, single concern, straightforward fix, no architectural changes",
+        "   - **medium**: 4-10 files, multiple concerns, or subtle logic changes",
+        "   - **large**: 10+ files, architectural changes, cross-cutting concerns",
+        f"   Write to `{os.path.join(output_dir, 'complexity.json') if output_dir else 'complexity.json'}`:",
+        '   `{"complexity": "small|medium|large", "reason": "brief justification"}`',
+        "   This determines whether the codex reviewer runs at step 11.",
     ]
 
     return {
@@ -822,9 +830,10 @@ def _step_9_implement(mode, state, context, config, output_dir):
 def _step_10_verify(mode, state, context, config, output_dir):
     """Step 10: Verify — run tests, build, lint."""
 
+    complexity_path = os.path.join(output_dir, "complexity.json") if output_dir else "complexity.json"
+
     situation = [
-        "Verify the implementation before self-review.",
-        "Use `verification-before-completion` to ensure everything passes.",
+        "Verify the implementation, then decide whether an independent codex review is needed.",
     ]
 
     actions = [
@@ -839,6 +848,17 @@ def _step_10_verify(mode, state, context, config, output_dir):
         "   - If stuck after 2 attempts, note the failure and continue",
         "",
         "3. Record verification results for the pipeline result.",
+        "",
+        "4. **Decide whether to run the codex reviewer (steps 11-12):**",
+        f"   Read `{complexity_path}` (written at step 8).",
+        "   - **small complexity** → Skip steps 11-12, proceed directly to step 13.",
+        "     The `superpowers:code-reviewer` from subagent-driven-development (step 9)",
+        "     already validated each task — an independent codex review adds cost without",
+        "     proportional value for small, single-concern changes.",
+        "   - **medium or large complexity** → Continue to step 11 for independent",
+        "     codex review. Multi-file changes with subtle interactions benefit from a",
+        "     fresh perspective that the per-task code-reviewer cannot provide.",
+        "   - **complexity.json missing** → Treat as medium (err toward more review).",
     ]
 
     return {
@@ -850,6 +870,7 @@ def _step_10_verify(mode, state, context, config, output_dir):
             "Tests pass (or failures documented as degradation)",
             "Build succeeds (or N/A)",
             "Lint clean (or N/A)",
+            "Complexity-based routing decision: step 11 (codex review) or step 13 (draft PR)",
         ],
     }
 
@@ -864,6 +885,8 @@ def _step_11_self_review(mode, state, context, config, output_dir):
     situation = [
         _PHASE_TRANSITIONS["VALIDATION"],
         "",
+        "You are here because the implementation is **medium or large complexity** —",
+        "the per-task code-reviewer from step 9 is not sufficient for changes of this scope.",
         "Spawn the `codex-reviewer` agent for an independent review of your changes.",
         "Then apply the `receiving-code-review` pattern to address findings.",
     ]

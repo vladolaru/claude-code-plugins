@@ -330,6 +330,15 @@ class TestStep8WritePlan:
         handoff_text = "\n".join(g["handoff"])
         assert "implementation-plan.md" in handoff_text
 
+    def test_includes_complexity_assessment(self, mod):
+        g = mod.get_step_guidance(8, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g)
+        assert "complexity.json" in text
+        assert "small" in text
+        assert "medium" in text
+        assert "large" in text
+
 
 class TestStep9Implement:
     def test_references_subagent_skill(self, mod):
@@ -358,6 +367,40 @@ class TestStep10Verify:
         text = _guidance_text(g).lower()
         assert "test" in text
 
+    def test_includes_complexity_routing_decision(self, mod):
+        """Step 10 must tell the orchestrator to skip codex review for small changes."""
+        g = mod.get_step_guidance(10, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g)
+        assert "complexity" in text.lower()
+        assert "small" in text.lower()
+        # Should mention skipping steps 11-12 for small
+        assert "step 13" in text or "step 11" in text
+        # Should mention codex reviewer decision
+        assert "codex" in text.lower() or "code-reviewer" in text.lower()
+
+    def test_small_skips_to_step_13(self, mod):
+        """Step 10 guidance should say small complexity skips to step 13."""
+        g = mod.get_step_guidance(10, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g).lower()
+        assert "small" in text
+        assert "step 13" in text
+
+    def test_medium_continues_to_step_11(self, mod):
+        """Step 10 guidance should say medium/large continues to step 11."""
+        g = mod.get_step_guidance(10, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g).lower()
+        assert "medium" in text
+        assert "step 11" in text
+
+    def test_handoff_includes_routing_decision(self, mod):
+        g = mod.get_step_guidance(10, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        handoff_text = "\n".join(g["handoff"]).lower()
+        assert "complexity" in handoff_text or "routing" in handoff_text
+
 
 class TestStep11SelfReview:
     def test_references_codex_reviewer(self, mod):
@@ -383,6 +426,13 @@ class TestStep11SelfReview:
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
         assert "unavailable" in text or "degradation" in text
+
+    def test_mentions_medium_plus_complexity(self, mod):
+        """Step 11 should explain it runs for medium+ complexity."""
+        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g).lower()
+        assert "medium" in text or "large" in text or "complexity" in text
 
 
 class TestStep12ReVerify:
