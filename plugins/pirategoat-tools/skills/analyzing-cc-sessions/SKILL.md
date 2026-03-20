@@ -139,7 +139,7 @@ Each line is a JSON object with a `type` field. There are 5 entry types:
 ```
 
 **Content block types in assistant messages:**
-- `thinking` — extended thinking (reasoning, not shown to user)
+- `thinking` — extended thinking (main session only — see Gotchas). Field name is `thinking`, not `text`. Content is redacted (empty string + `signature` field for verification).
 - `text` — visible text response
 - `tool_use` — tool invocation with `id`, `name`, `input`
 
@@ -203,7 +203,7 @@ Subagent files at `{session}/subagents/agent-{id}.jsonl` have a **simpler struct
 - **No `progress` entries** — just alternating `user` and `assistant` messages
 - **First line** = dispatch prompt (the `user` message with the task)
 - **Subsequent lines** = alternating assistant tool calls and user tool results
-- **Same content block format** as main session (tool_use, tool_result, text, thinking)
+- **Similar content block format** as main session (tool_use, tool_result, text) but **no `thinking` blocks** — extended thinking is stripped from subagent JSONL even when it occurs (see Gotchas)
 
 ```
 Line 0: user    → dispatch prompt (contains the full task/instructions)
@@ -304,20 +304,38 @@ def categorize_bash(command: str) -> str:
 
 ### Extract Token Usage
 
+**IMPORTANT:** `input_tokens` alone is misleading — it only counts non-cached input. Real input cost = `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`. The `output_tokens` field includes both visible text and hidden thinking tokens (see Gotchas).
+
 ```python
 def extract_token_usage(filepath: str) -> dict:
-    """Sum token usage across all assistant turns."""
+    """Sum token usage across all assistant turns, including cache tokens."""
     total_input = 0
     total_output = 0
+    total_cache_create = 0
+    total_cache_read = 0
     with open(filepath) as f:
         for line in f:
-            entry = json.loads(line.strip())
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
             msg = entry.get("message", {})
             if isinstance(msg, dict):
                 usage = msg.get("usage", {})
                 total_input += usage.get("input_tokens", 0)
                 total_output += usage.get("output_tokens", 0)
-    return {"input_tokens": total_input, "output_tokens": total_output}
+                total_cache_create += usage.get("cache_creation_input_tokens", 0)
+                total_cache_read += usage.get("cache_read_input_tokens", 0)
+    return {
+        "input_tokens": total_input,
+        "output_tokens": total_output,
+        "cache_creation_input_tokens": total_cache_create,
+        "cache_read_input_tokens": total_cache_read,
+        "effective_input": total_input + total_cache_create + total_cache_read,
+    }
 ```
 
 ## Existing Analysis Scripts
@@ -404,3 +422,6 @@ When comparing multiple sessions for the same agent type, track:
 | Session JSONL = chronological | Mostly yes, but parallel tool calls create interleaved entries |
 | `model` is on the entry | No — `model` is inside `message` on assistant entries: `entry.message.model` |
 | `usage` is on the entry | Sometimes on the entry itself, sometimes inside `message.usage` — check both |
+| Subagents have `thinking` blocks | **No.** Thinking blocks are stripped from subagent JSONL entirely. Main session records them but with redacted content (empty `thinking` field + `signature`). To detect thinking in subagents, compare `output_tokens` to visible output (text chars + tool_use input chars) / 4. A gap of 20-40% is typical and represents hidden thinking tokens. |
+| `input_tokens` = total input cost | **No.** `input_tokens` only counts non-cached tokens (often single digits). Real input = `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`. Using `input_tokens` alone will undercount by 99%+. |
+| `output_tokens` = visible output | **No.** `output_tokens` includes both visible text/tool_use AND hidden extended thinking tokens. There is no separate field for thinking tokens in the usage data. |
