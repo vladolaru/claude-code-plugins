@@ -31,6 +31,17 @@ class TestStepCount:
         assert result.returncode == 0
         assert "Step 1/4" in result.stdout
 
+    def test_total_steps_mismatch_is_invalid(self):
+        result = run_critic(
+            "--step-number", "1",
+            "--total-steps", "7",
+            "--report", "/tmp/nonexistent-report.md",
+            "--output-dir", "/tmp/test-critic",
+            "--thoughts", "initial",
+        )
+        assert result.returncode != 0
+        assert "must be 4" in result.stderr
+
     def test_step_5_is_invalid(self):
         result = run_critic(
             "--step-number", "5",

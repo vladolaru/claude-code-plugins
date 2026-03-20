@@ -46,7 +46,7 @@ Run the 4-phase review criticism pipeline. Each phase builds on the prior — pa
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-critic.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
 
 # Phase 1: Decompose — extract claims, severity assertions, scope claims
 python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 1 --total-steps 4 --report "<report-path>" --findings-json "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"

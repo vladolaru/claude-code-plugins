@@ -85,43 +85,49 @@ def get_step_guidance(
 
     # STEP 2 — VERIFICATION
     if step == 2:
+        actions_2 = [
+            "You are a review critic performing factored verification. This is the most "
+            "important step — your accuracy here directly determines verdict quality. "
+            "Take your time and be rigorous.",
+        ]
+        if findings_json:
+            actions_2.append("")
+            actions_2.append(f"FINDINGS JSON (for targeted verification): {findings_json}")
+        actions_2.extend([
+            "",
+            "For each VERIFIABLE item from Step 1, verify INDEPENDENTLY:",
+            "",
+            "EPISTEMIC BOUNDARY (critical for avoiding confirmation bias):",
+            "- Verify by reading the PRIMARY SOURCE (actual code files), NOT by re-reading "
+            "the review report. The report is what you're checking, not what you check against.",
+            "- Do NOT assume the review is correct and look for confirming evidence.",
+            "- Do NOT assume the review is wrong and look for disconfirming evidence.",
+            "- Do NOT claim to have verified a factual assertion without running a command "
+            "or reading a file.",
+            "- Do NOT state specific numbers, counts, or line references without citing "
+            "the tool output that produced them.",
+            "",
+            "For each item:",
+            "- Read the actual source file at the referenced line using the Read tool",
+            "- Check: does the code actually do what the finding claims?",
+            "- Check: are line numbers accurate?",
+            "- Check: is the severity proportionate to actual impact in context?",
+            "- For scope claims: run `git diff` to verify the line is actually in the diff",
+            "- For quantitative claims (line counts, occurrence counts): run the command to verify",
+            "",
+            "SEPARATE your answer from its implication:",
+            "- Tool used: <command run, file read, or 'NONE — domain knowledge only'>",
+            "- Answer: <factual response based on tool output>",
+            "- Implication: <what this means for the review's claim>",
+            "",
+            "Mark each: VERIFIED / FAILED / UNCERTAIN.",
+            "",
+            state_requirement,
+        ])
         return {
             "phase": "VERIFICATION",
             "step_title": "Verify",
-            "actions": [
-                "You are a review critic performing factored verification. This is the most "
-                "important step — your accuracy here directly determines verdict quality. "
-                "Take your time and be rigorous.",
-                "",
-                "For each VERIFIABLE item from Step 1, verify INDEPENDENTLY:",
-                "",
-                "EPISTEMIC BOUNDARY (critical for avoiding confirmation bias):",
-                "- Verify by reading the PRIMARY SOURCE (actual code files), NOT by re-reading "
-                "the review report. The report is what you're checking, not what you check against.",
-                "- Do NOT assume the review is correct and look for confirming evidence.",
-                "- Do NOT assume the review is wrong and look for disconfirming evidence.",
-                "- Do NOT claim to have verified a factual assertion without running a command "
-                "or reading a file.",
-                "- Do NOT state specific numbers, counts, or line references without citing "
-                "the tool output that produced them.",
-                "",
-                "For each item:",
-                "- Read the actual source file at the referenced line using the Read tool",
-                "- Check: does the code actually do what the finding claims?",
-                "- Check: are line numbers accurate?",
-                "- Check: is the severity proportionate to actual impact in context?",
-                "- For scope claims: run `git diff` to verify the line is actually in the diff",
-                "- For quantitative claims (line counts, occurrence counts): run the command to verify",
-                "",
-                "SEPARATE your answer from its implication:",
-                "- Tool used: <command run, file read, or 'NONE — domain knowledge only'>",
-                "- Answer: <factual response based on tool output>",
-                "- Implication: <what this means for the review's claim>",
-                "",
-                "Mark each: VERIFIED / FAILED / UNCERTAIN.",
-                "",
-                state_requirement,
-            ],
+            "actions": actions_2,
             "next": f"Step {next_step}: Challenge the review with adversarial analysis.",
             "academic_note": (
                 "Chain-of-Verification (Dhuliawala et al., 2023): \"Factored verification "
@@ -296,6 +302,14 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Validate total steps matches the constant
+    if args.total_steps != TOTAL_STEPS:
+        print(
+            f"ERROR: total-steps must be {TOTAL_STEPS} (got {args.total_steps})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Validate step number
     if args.step_number < 1 or args.step_number > TOTAL_STEPS:
