@@ -147,6 +147,11 @@ DOMAIN_CATALOG = {
         "include": r"\.(php|js|ts|jsx|tsx|py|go|java|sql)$",
         "exclude": _TEST_EXCLUDE,
     },
+    "clarity": {
+        "description": "Code files for naming/documentation clarity review, excluding tests",
+        "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb)$",
+        "exclude": _TEST_EXCLUDE,
+    },
     "config-ops": {
         "description": "CI/CD configs, Docker, Terraform, and infrastructure files",
         "include": r"(\.github/workflows/|\.gitlab-ci|Dockerfile|docker-compose|\.tf$|\.tfvars$|\.toml$|Jenkinsfile|\.circleci/|Makefile$|\.helmfile|chart\.yaml$|values\.yaml$)",

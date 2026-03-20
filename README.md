@@ -24,7 +24,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 | Plugin | What it does |
 |--------|-------------|
-| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 23 review agents, 19 skills (testing-patterns, software-architecture, WordPress, Figma), rich feedback loops |
+| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 24 review agents, 19 skills (testing-patterns, software-architecture, WordPress, Figma), rich feedback loops |
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
@@ -32,7 +32,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 ### pirategoat-tools
 
-The main plugin. 22 specialized review agents that run in parallel, 19 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, Figma-to-code workflows, and browser automation. Agents integrate with linters, coverage tools, and security scanners for ground-truth validation.
+The main plugin. 23 specialized review agents that run in parallel, 19 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, Figma-to-code workflows, and browser automation. Agents integrate with linters, coverage tools, and security scanners for ground-truth validation.
 
 **[Full documentation →](plugins/pirategoat-tools/README.md)** | [Changelog](plugins/pirategoat-tools/CHANGELOG.md)
 
@@ -67,7 +67,7 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 23 agents, 19 skills, 6 commands
+│   ├── pirategoat-tools/         # 24 agents, 19 skills, 6 commands
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   ├── image-optimizer/          # 1 command, optimization scripts

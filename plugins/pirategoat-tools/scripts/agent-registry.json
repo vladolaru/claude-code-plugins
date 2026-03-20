@@ -444,6 +444,45 @@
       "dispatch_class": "special",
       "focus": "Stress-test review conclusions via structured criticism",
       "model_tier": "opus"
+    },
+    "code-clarity-reviewer": {
+      "domain": "clarity",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "New or modified functions, methods, or classes",
+        "Renamed symbols (functions, classes, variables)",
+        "Modified or added docblocks, JSDoc, or PHPDoc comments",
+        "New files introducing public API surface",
+        "Function signature changes (parameters, return types)",
+        "Inline comments added or modified in changed code"
+      ],
+      "triage_keywords": [
+        "function",
+        "class",
+        "method",
+        "interface",
+        "enum",
+        "const ",
+        "rename",
+        "@param",
+        "@return",
+        "@throws",
+        "docblock",
+        "phpdoc",
+        "jsdoc",
+        "/**"
+      ],
+      "triage_checks": [
+        "has_new_functions",
+        "has_modified_signatures",
+        "has_docblock_changes"
+      ],
+      "focus": "Naming accuracy, documentation correctness, name-behavior mismatches, stale docblocks, semantic consistency",
+      "model_tier": "sonnet"
     }
   }
 }

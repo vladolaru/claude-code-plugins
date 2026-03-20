@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.76.0] - 2026-03-20
+
+### Added
+
+- **`code-clarity-reviewer` agent** — reviews naming accuracy, documentation correctness, and intent communication. Flags names that lie (get_ that mutates, validate_ that transforms), docblocks that contradict code (@param/@return mismatches, stale claims), and semantic inconsistency (same concept with multiple names in one file). Language-agnostic, behavioral-proof-required verification standard. Conditional dispatch with broad triggers on any diff containing new/modified functions, classes, docblocks, or signatures. Adds `clarity` domain to review-scope.py.
+
 ## [1.75.1] - 2026-03-20
 
 ### Fixed
