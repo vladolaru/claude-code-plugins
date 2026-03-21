@@ -421,3 +421,39 @@ class TestCLIIntegration:
         assert "run_id" in state
         assert len(state["run_id"]) > 0
 
+
+class TestQuickModeConfig:
+    """--quick CLI flag is stored in run-config.json and persists across steps."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_quick_flag_stored_in_config(self, tmp_path):
+        """Passing --quick stores quick=true in run-config.json."""
+        r = self._run("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42",
+                       "--quick")
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["quick"] is True
+
+    def test_no_quick_flag_defaults_false(self, tmp_path):
+        """Without --quick, config has quick=false."""
+        r = self._run("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config.get("quick") is False
+
+    def test_quick_from_config_on_subsequent_steps(self, tmp_path):
+        """--quick persists in config and is readable at step 3."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42",
+                   "--quick")
+        # Step 3 should read config with quick=true
+        r = self._run("--step", "3", "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["quick"] is True
+

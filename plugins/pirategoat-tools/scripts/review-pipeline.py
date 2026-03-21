@@ -1738,6 +1738,8 @@ def main():
     parser.add_argument("--git-range", help="Explicit git range")
     parser.add_argument("--original-branch", help="Branch to restore on cleanup")
     parser.add_argument("--stash-ref", help="Stash ref to restore on cleanup")
+    parser.add_argument("--quick", action="store_true", default=False,
+                        help="Quick review mode: fewer agents, conditional critic skip")
 
     args = parser.parse_args()
     output_dir = args.output_dir
@@ -1773,6 +1775,7 @@ def main():
                 config["output_instructions"] = args.output_instructions
             if args.git_range:
                 config["git_range"] = args.git_range
+            config["quick"] = args.quick
             write_config(output_dir, config)
         else:
             config = existing_config
