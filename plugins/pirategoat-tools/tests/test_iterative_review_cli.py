@@ -1,0 +1,377 @@
+"""Tests for iterative_review CLI -- argument parsing and action routing."""
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+MODULE_DIR = SCRIPTS_DIR / "iterative_review"
+
+
+class TestCLIParsing:
+    def test_review_action_requires_merge_base_on_round_1(self, tmp_path):
+        """Round 1 requires --merge-base."""
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "review", "--round", "1",
+             "--output-dir", str(tmp_path / "code-review")],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode != 0
+        assert "merge-base" in result.stderr.lower() or "required" in result.stderr.lower()
+
+    def test_advance_action_requires_output_dir(self):
+        """Advance requires --output-dir."""
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1"],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode != 0
+
+    def test_advance_rejects_missing_outcomes(self, tmp_path):
+        """Advance fails if outcomes file doesn't exist."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        # Write state but no outcomes
+        state = {"current_round": 1, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "terminated": False}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        # Write findings so advance expects outcomes
+        (d / "round-1-findings.json").write_text(json.dumps([
+            {"id": "r1_f1", "severity": "P1", "title": "Test", "body": "X", "location": "a.py:1"}
+        ]))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode != 0
+
+    def test_advance_with_complete_outcomes(self, tmp_path):
+        """Advance succeeds when all findings have outcomes and convergence is met."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [{"id": "r1_f1", "severity": "P1", "title": "T", "body": "B", "location": "a.py:1"}]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "False positive."}]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        # Should detect all_rejected convergence
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert updated_state["terminated"] is True
+        assert updated_state["termination"] == "all_rejected"
+
+
+class TestAdvanceRoundSummary:
+    """Advance action correctly records round summary in state."""
+
+    def test_round_summary_counts(self, tmp_path):
+        """Round summary records correct fixed/rejected/deferred counts."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 5, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 500,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r1_f2", "severity": "P1", "title": "B", "body": "Y", "location": "b.py:2"},
+            {"id": "r1_f3", "severity": "P2", "title": "C", "body": "Z", "location": "c.py:3"},
+        ]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Fixed it."},
+            {"id": "r1_f2", "action": "rejected", "reasoning": "Not real."},
+            {"id": "r1_f3", "action": "deferred", "reasoning": "Out of scope."},
+        ]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert len(updated_state["rounds"]) == 1
+        r = updated_state["rounds"][0]
+        assert r["fixed"] == 1
+        assert r["rejected"] == 1
+        assert r["deferred"] == 1
+        assert r["findings"] == 3
+
+    def test_deferred_items_written(self, tmp_path):
+        """Deferred findings are written to deferred-items.jsonl."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 5, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 500,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r1_f1", "severity": "P1", "title": "Bug", "body": "X", "location": "a.py:1"},
+        ]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r1_f1", "action": "deferred", "reasoning": "Out of scope."},
+        ]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        jsonl_path = d / "deferred-items.jsonl"
+        assert jsonl_path.exists()
+        items = [json.loads(line) for line in jsonl_path.read_text().strip().split("\n")]
+        assert len(items) == 1
+        assert items[0]["id"] == "r1_f1"
+
+
+class TestAdvanceConvergence:
+    """Advance action detects convergence conditions."""
+
+    def test_max_rounds_convergence(self, tmp_path):
+        """Terminates with max_rounds when round equals max_rounds."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 3, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r3_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
+        ]
+        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
+        ]
+        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "3",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert updated_state["terminated"] is True
+        assert updated_state["termination"] == "max_rounds"
+
+    def test_nitpicks_only_convergence(self, tmp_path):
+        """Terminates with nitpicks_only when all findings are P3."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 5, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r1_f1", "severity": "P3", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r1_f2", "severity": "P3", "title": "B", "body": "Y", "location": "b.py:2"},
+        ]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Done."},
+            {"id": "r1_f2", "action": "fixed", "summary": "Done."},
+        ]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert updated_state["terminated"] is True
+        assert updated_state["termination"] == "nitpicks_only"
+
+    def test_continue_when_no_convergence(self, tmp_path):
+        """Does not terminate when convergence is not met."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 5, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 500,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r1_f2", "severity": "P2", "title": "B", "body": "Y", "location": "b.py:2"},
+        ]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Done."},
+            {"id": "r1_f2", "action": "rejected", "reasoning": "Not real."},
+        ]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert updated_state["terminated"] is False
+        assert "round 2" in result.stdout.lower()
+
+
+class TestAdvanceResultFile:
+    """Advance writes review-loop-result.json on termination."""
+
+    def test_result_file_written_on_termination(self, tmp_path):
+        """review-loop-result.json is written when loop terminates."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [{"id": "r1_f1", "severity": "P1", "title": "T", "body": "B", "location": "a.py:1"}]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "False positive."}]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        result_path = d / "review-loop-result.json"
+        assert result_path.exists()
+        result_data = json.loads(result_path.read_text())
+        assert result_data["termination"] == "all_rejected"
+        assert result_data["rounds_completed"] == 1
+        assert result_data["total_rejected"] == 1
+        assert result_data["total_fixed"] == 0
+
+    def test_no_result_file_when_continuing(self, tmp_path):
+        """review-loop-result.json is NOT written when loop continues."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 5, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 500,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r1_f2", "severity": "P2", "title": "B", "body": "Y", "location": "b.py:2"},
+        ]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Done."},
+            {"id": "r1_f2", "action": "rejected", "reasoning": "Not real."},
+        ]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        result_path = d / "review-loop-result.json"
+        assert not result_path.exists()
+
+
+class TestAdvanceTerminatedState:
+    """Advance action handles already-terminated state."""
+
+    def test_advance_on_terminated_state_prints_completion(self, tmp_path):
+        """Advance on already-terminated state prints completion briefing."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 2, "max_rounds": 3,
+                 "rounds": [{"round": 1, "findings": 2, "fixed": 1, "rejected": 1, "deferred": 0}],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": True, "termination": "all_rejected",
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "2",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        assert "complete" in result.stdout.lower()
+
+
+class TestAdvanceMissingOutcomes:
+    """Advance validates outcome completeness."""
+
+    def test_advance_rejects_incomplete_outcomes(self, tmp_path):
+        """Advance fails if not all findings have outcomes."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r1_f2", "severity": "P2", "title": "B", "body": "Y", "location": "b.py:2"},
+        ]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        # Only outcome for r1_f1 -- r1_f2 is missing
+        outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Done."},
+        ]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode != 0
+        assert "r1_f2" in result.stderr

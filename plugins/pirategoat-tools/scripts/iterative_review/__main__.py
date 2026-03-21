@@ -1,0 +1,389 @@
+"""CLI entry point for the iterative review loop.
+
+Two actions:
+  review  -- Invoke Codex and produce evaluation briefing (run in background)
+  advance -- Read outcomes, update pushback log, check convergence
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess as sp
+import sys
+from pathlib import Path
+
+from .loop import (
+    read_loop_state, write_loop_state, DEFAULT_STATE,
+    compute_max_rounds, compute_relevant_diff_size, check_convergence,
+    build_pushback_entry, append_pushback_log, read_pushback_log,
+    append_deferred_item, validate_outcomes,
+)
+from .briefing import (
+    format_evaluation_briefing, format_completion_briefing,
+    format_degraded_briefing,
+)
+from .telemetry import ReviewTelemetry
+from .backends.codex import (
+    parse_codex_output, write_prompt_file, get_schema_path,
+    invoke_codex_review,
+)
+
+
+def _sanitize_filename(name):
+    """Convert a string to a filesystem-safe slug."""
+    slug = name.lower().strip()
+    slug = slug.replace(" ", "-")
+    slug = "".join(c for c in slug if c.isalnum() or c == "-")
+    slug = slug.strip("-")[:60]
+    return slug or "independent-review"
+
+
+def action_review(args):
+    """REVIEW action -- invoke Codex, parse output, produce evaluation briefing."""
+    output_dir = args.output_dir
+    round_num = args.round
+    os.makedirs(output_dir, exist_ok=True)
+
+    telemetry = ReviewTelemetry(output_dir)
+    state = read_loop_state(output_dir)
+
+    # Round 1 initialization
+    if round_num == 1:
+        if not args.merge_base:
+            print("ERROR: --merge-base is required on round 1", file=sys.stderr)
+            sys.exit(2)
+
+        state = {**DEFAULT_STATE}
+        state["merge_base"] = args.merge_base
+        state["current_round"] = 1
+
+        # Read context file
+        context = ""
+        if args.context_file and os.path.isfile(args.context_file):
+            with open(args.context_file) as f:
+                context = f.read()
+            state["context_file"] = args.context_file
+            state["context"] = context
+
+        # Compute diff size (noise-filtered)
+        try:
+            result = sp.run(
+                ["git", "diff", "--name-only", f"{args.merge_base}..HEAD"],
+                capture_output=True, text=True
+            )
+            all_files = [f for f in result.stdout.strip().split("\n") if f]
+            relevant, excluded = compute_relevant_diff_size(all_files)
+            # Count actual diff lines for relevant files only
+            if relevant:
+                stat_result = sp.run(
+                    ["git", "diff", "--stat", f"{args.merge_base}..HEAD", "--"] + relevant,
+                    capture_output=True, text=True
+                )
+                # Parse last line: " N files changed, X insertions(+), Y deletions(-)"
+                m = re.search(r'(\d+) insertions?\(\+\)', stat_result.stdout)
+                ins = int(m.group(1)) if m else 0
+                m = re.search(r'(\d+) deletions?\(-\)', stat_result.stdout)
+                dels = int(m.group(1)) if m else 0
+                diff_lines = ins + dels
+            else:
+                diff_lines = 0
+            state["diff_lines_relevant"] = diff_lines
+            state["diff_lines_total"] = diff_lines + excluded  # approximate
+            state["noise_files_excluded"] = excluded
+        except Exception:
+            diff_lines = 0
+            state["diff_lines_relevant"] = 0
+
+        state["max_rounds"] = compute_max_rounds(state["diff_lines_relevant"])
+
+        # Resolve analysis doc prefix
+        prefix = "independent-review"
+        if args.analysis_prefix:
+            prefix = _sanitize_filename(args.analysis_prefix)
+        state["analysis_doc_prefix"] = prefix
+
+        telemetry.pipeline_event("review_loop_started",
+                                 max_rounds=state["max_rounds"],
+                                 diff_lines_total=state.get("diff_lines_total", 0),
+                                 diff_lines_relevant=state["diff_lines_relevant"],
+                                 noise_files_excluded=state.get("noise_files_excluded", 0))
+    else:
+        # Round 2+: read existing state
+        if state["terminated"]:
+            print(format_completion_briefing(
+                state["termination"], len(state["rounds"]),
+                sum(r.get("fixed", 0) for r in state["rounds"]),
+                sum(r.get("rejected", 0) for r in state["rounds"]),
+                sum(r.get("deferred", 0) for r in state["rounds"]),
+            ))
+            return
+        state["current_round"] = round_num
+        context = state.get("context", "")
+
+    # Reset progress log
+    telemetry.reset_progress()
+    telemetry.progress("round_started", round=round_num)
+
+    # Compose prompt file
+    pushback_log = read_pushback_log(output_dir)
+    prefix = state.get("analysis_doc_prefix", "independent-review")
+    analysis_path = os.path.join(output_dir, f"{prefix}-r{round_num}-analysis.md")
+
+    prior_path = None
+    if round_num > 1 and state.get("pass_prior_analysis", True):
+        candidate = os.path.join(output_dir, f"{prefix}-r{round_num - 1}-analysis.md")
+        if os.path.isfile(candidate):
+            prior_path = candidate
+        else:
+            telemetry.progress("analysis_doc_missing", round=round_num,
+                               msg=f"Prior analysis doc not found: {candidate}")
+
+    # Write the prompt file using write_prompt_file from codex backend
+    prompt_file = write_prompt_file(
+        output_dir=output_dir,
+        round_num=round_num,
+        rubric="",  # rubric is composed externally or empty for now
+        merge_base=state["merge_base"],
+        context=context if round_num == 1 else state.get("context", ""),
+        pushback_log=pushback_log if pushback_log else None,
+        analysis_doc_path=analysis_path,
+        prior_analysis_path=prior_path,
+    )
+
+    context_chars = os.path.getsize(prompt_file) if os.path.isfile(prompt_file) else 0
+    telemetry.progress("composing_context", round=round_num,
+                       context_chars=context_chars, context_limit=50000)
+
+    # Context size warning
+    if context_chars > 50000:
+        telemetry.progress("context_size_warning", round=round_num,
+                           context_chars=context_chars)
+
+    # Invoke Codex
+    merge_base = state["merge_base"]
+    codex_output_file = os.path.join(output_dir, f"round-{round_num}-codex-output.json")
+    schema_file = get_schema_path()
+
+    telemetry.progress("codex_invoked", round=round_num,
+                       diff_lines=state.get("diff_lines_relevant", 0),
+                       msg=f"Reviewing against {merge_base}")
+    telemetry.pipeline_event("review_round_started", round=round_num)
+
+    raw_output, success = invoke_codex_review(
+        prompt_file=prompt_file,
+        schema_file=schema_file,
+        output_file=codex_output_file,
+    )
+
+    if not success and not raw_output:
+        telemetry.progress("codex_unavailable", round=round_num)
+        telemetry.pipeline_event("codex_unavailable", round=round_num)
+        # Write empty findings
+        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+        with open(findings_path, "w") as f:
+            json.dump([], f)
+        state["terminated"] = True
+        state["termination"] = "codex_unavailable"
+        write_loop_state(output_dir, state)
+        print("Codex CLI is unavailable. Review loop cannot proceed.")
+        return
+
+    # Parse output
+    findings, degraded = parse_codex_output(raw_output, round_num)
+
+    telemetry.progress("codex_completed", round=round_num,
+                       findings_count=len(findings))
+    telemetry.pipeline_event("codex_completed", round=round_num,
+                             findings_count=len(findings))
+
+    if degraded:
+        raw_path = os.path.join(output_dir, f"round-{round_num}-codex-raw.md")
+        with open(raw_path, "w") as f:
+            f.write(raw_output)
+
+    # Write findings
+    findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+    with open(findings_path, "w") as f:
+        json.dump(findings, f, indent=2)
+
+    # Check zero findings convergence
+    if len(findings) == 0:
+        state["terminated"] = True
+        state["termination"] = "zero_findings"
+        write_loop_state(output_dir, state)
+        telemetry.pipeline_event("review_loop_completed",
+                                 termination="zero_findings",
+                                 rounds_completed=round_num - 1)
+        print(format_completion_briefing("zero_findings", round_num - 1, 0, 0, 0))
+        return
+
+    write_loop_state(output_dir, state)
+
+    # Produce briefing
+    if degraded:
+        briefing = format_degraded_briefing(round_num, findings[0]["id"])
+        briefing += "\n\n" + raw_output
+    else:
+        briefing = format_evaluation_briefing(
+            findings, round_num,
+            merge_base=merge_base,
+            diff_lines=state.get("diff_lines_relevant", 0),
+        )
+
+    telemetry.progress("briefing_ready", round=round_num)
+    print(briefing)
+
+
+def action_advance(args):
+    """ADVANCE action -- read outcomes, update pushback, check convergence."""
+    output_dir = args.output_dir
+    round_num = args.round
+
+    telemetry = ReviewTelemetry(output_dir)
+    state = read_loop_state(output_dir)
+
+    if state.get("terminated"):
+        print(format_completion_briefing(
+            state["termination"], len(state["rounds"]), 0, 0, 0))
+        return
+
+    # Read findings
+    findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+    try:
+        with open(findings_path) as f:
+            findings = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        print(f"ERROR: Cannot read {findings_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Read outcomes
+    outcomes_path = os.path.join(output_dir, f"round-{round_num}-outcomes.json")
+    try:
+        with open(outcomes_path) as f:
+            outcomes = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        print(f"ERROR: Cannot read {outcomes_path}. Write outcomes before advancing.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Validate completeness
+    missing = validate_outcomes(findings, outcomes)
+    if missing:
+        print(f"ERROR: Missing outcomes for findings: {', '.join(missing)}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Build round summary
+    fixed = sum(1 for o in outcomes if o["action"] == "fixed")
+    rejected = sum(1 for o in outcomes if o["action"] == "rejected")
+    deferred = sum(1 for o in outcomes if o["action"] == "deferred")
+
+    # Update pushback log
+    findings_by_id = {f["id"]: f for f in findings}
+    round_header = f"### Round {round_num} -- {len(findings)} findings ({fixed} fixed, {rejected} rejected, {deferred} deferred)\n\n"
+    entries = []
+    for o in outcomes:
+        finding = findings_by_id.get(o["id"], {})
+        entry = build_pushback_entry(o, finding, round_num)
+        if entry:
+            entries.append(entry)
+
+    if entries:
+        append_pushback_log(output_dir, round_header + "\n".join(entries) + "\n")
+
+    # Append deferred items
+    for o in outcomes:
+        if o["action"] == "deferred":
+            finding = findings_by_id.get(o["id"], {})
+            append_deferred_item(output_dir, {
+                "id": o["id"],
+                "severity": finding.get("severity", "unknown"),
+                "title": finding.get("title", ""),
+                "location": finding.get("location", ""),
+                "reasoning": o.get("reasoning", ""),
+            })
+
+    # Record round in state
+    state.setdefault("rounds", []).append({
+        "round": round_num,
+        "findings": len(findings),
+        "fixed": fixed,
+        "rejected": rejected,
+        "deferred": deferred,
+    })
+
+    # Check convergence
+    all_p3 = all(findings_by_id[o["id"]].get("severity") == "P3"
+                 for o in outcomes) if outcomes else False
+    all_rej = fixed == 0  # no code changed
+    termination = check_convergence(
+        findings_count=len(findings), all_p3=all_p3, all_rejected=all_rej,
+        current_round=round_num, max_rounds=state.get("max_rounds", 3)
+    )
+
+    telemetry.pipeline_event("evaluation_completed", round=round_num,
+                             fixed=fixed, rejected=rejected, deferred=deferred)
+    telemetry.pipeline_event("review_round_completed", round=round_num)
+
+    if termination:
+        state["terminated"] = True
+        state["termination"] = termination
+        write_loop_state(output_dir, state)
+
+        # Write review-loop-result.json
+        total_fixed = sum(r.get("fixed", 0) for r in state["rounds"])
+        total_rejected = sum(r.get("rejected", 0) for r in state["rounds"])
+        total_deferred = sum(r.get("deferred", 0) for r in state["rounds"])
+        result = {
+            "termination": termination,
+            "rounds_completed": len(state["rounds"]),
+            "max_rounds": state.get("max_rounds", 3),
+            "total_findings": sum(r.get("findings", 0) for r in state["rounds"]),
+            "total_fixed": total_fixed,
+            "total_rejected": total_rejected,
+            "total_deferred": total_deferred,
+            "rounds": state["rounds"],
+        }
+        result_path = os.path.join(output_dir, "review-loop-result.json")
+        with open(result_path, "w") as f:
+            json.dump(result, f, indent=2)
+
+        telemetry.pipeline_event("review_loop_completed",
+                                 termination=termination,
+                                 rounds_completed=len(state["rounds"]),
+                                 total_fixed=total_fixed,
+                                 total_rejected=total_rejected,
+                                 total_deferred=total_deferred)
+
+        print(format_completion_briefing(
+            termination, len(state["rounds"]),
+            total_fixed, total_rejected, total_deferred
+        ))
+    else:
+        write_loop_state(output_dir, state)
+        next_round = round_num + 1
+        print(f"Review round {round_num} complete. Proceed to review round {next_round}.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Iterative Codex review loop")
+    parser.add_argument("--action", choices=["review", "advance"], required=True)
+    parser.add_argument("--round", type=int, required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--merge-base", help="Merge base SHA (required on round 1)")
+    parser.add_argument("--context-file", help="Path to context file (round 1 only)")
+    parser.add_argument("--analysis-prefix", help="Prefix for analysis doc filenames")
+    parser.add_argument("--no-prior-analysis", action="store_true",
+                        help="Disable reading prior round analysis docs")
+
+    args = parser.parse_args()
+
+    if args.action == "review":
+        action_review(args)
+    elif args.action == "advance":
+        action_advance(args)
+
+
+if __name__ == "__main__":
+    main()
