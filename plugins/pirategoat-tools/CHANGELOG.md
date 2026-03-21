@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.79.0] - 2026-03-21
+
+### Added
+
+- **Quick review mode for pr-review** (`--quick` flag or user intent detection)
+  - Excludes 5 lower-signal agents: wp-architecture, history-insights, data-flow-privacy, concurrency, reliability
+  - Nudges orchestrator toward aggressive skips at dispatch (step 5)
+  - Conditionally skips decision critic when reconciliation verdict is approve/comment (step 10)
+  - Full telemetry capture: `quick_mode` flag in pipeline start/summary, `EXCLUDED_QUICK_MODE` dispatch status, critic skip decisions via `log_step` decisions dict
+
 ## [1.78.0] - 2026-03-21
 
 ### Added
