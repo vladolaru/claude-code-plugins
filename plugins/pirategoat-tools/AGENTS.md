@@ -19,6 +19,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
 | `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
 | `schemas/review-output.ts` | TypeScript type definitions for structured review output (Issue, SecurityIssue, PerformanceIssue, etc.). |
+| `scripts/iterative_review/` | Iterative review loop sub-module. Multi-round Codex review with pushback tracking, convergence detection, noise-filtered diff sizing, and telemetry. CLI entry point: `python3 -m iterative_review --action review\|advance`. |
 
 ## Architecture
 

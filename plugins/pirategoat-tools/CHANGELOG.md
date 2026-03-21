@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.80.0] - 2026-03-22
+
+### Changed
+- Step 11 (Self-Review) replaced with iterative Codex review loop — multi-round
+  review with pushback tracking, convergence detection, and KISS fix discipline
+- Step 12 (Re-Verify) now skipped — verification handled within each review round
+
+### Added
+- `scripts/iterative_review/` sub-module: loop state, telemetry, Codex backend,
+  briefing generation, CLI entry point
+- Severity-gated pushback log (P0-P1 rejections/deferrals only)
+- Codex analysis working docs for cross-round continuity
+- Deferred items JSONL for PR follow-ups section
+- Noise-filtered diff sizing (imports from review-scope.py)
+- Mid-loop recovery via idempotent rounds
+- Context size tracking with auto-truncation
+
 ## [1.79.0] - 2026-03-21
 
 ### Added
