@@ -1722,6 +1722,15 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             except (json.JSONDecodeError, OSError):
                 state["reconciliation_verdict"] = ""
 
+        # Record critic skip decision for telemetry
+        is_quick = config.get("quick", False)
+        recon_verdict = state.get("reconciliation_verdict", "")
+        if is_quick and recon_verdict in ("approve", "comment"):
+            state.setdefault("step_decisions", {})[str(step)] = {
+                "critic_skipped": True,
+                "reason": f"quick mode + reconciliation verdict: {recon_verdict}",
+            }
+
     if step == 11:
         # Read critic verdict from file (written by LLM at step 10)
         critic_path = os.path.join(output_dir, "decision-critic-verdict.json")
@@ -1878,8 +1887,9 @@ def main():
             try:
                 pr_number = config.get("pr_number", "")
                 bot_mode = not config.get("interactive", True)
+                quick_mode = config.get("quick", False)
                 telemetry.start(pr_number=pr_number, total_steps=12,
-                                bot_mode=bot_mode)
+                                bot_mode=bot_mode, quick_mode=quick_mode)
             except Exception:
                 pass
 
@@ -1900,19 +1910,7 @@ def main():
         if args.stash_ref:
             state["workspace"]["stash_ref"] = args.stash_ref
 
-        # Telemetry: log step
-        telemetry = _init_telemetry(output_dir)
-        if telemetry:
-            try:
-                step_def = _STEP_MAP.get(step, {})
-                bot_mode = not config.get("interactive", True)
-                telemetry.log_step(
-                    step=step, phase=step_def.get("phase", ""),
-                    title=step_def.get("title", ""),
-                    bot_mode=bot_mode,
-                )
-            except Exception:
-                pass
+        # Telemetry: log step (deferred until after orchestration, see below)
 
     # Validate step number
     if step not in _STEP_MAP:
@@ -1931,6 +1929,23 @@ def main():
 
     # --- Step-specific orchestration ---
     context = _orchestrate_step(step, mode, config, state, context, output_dir)
+
+    # Telemetry: log step (after orchestration so decisions are available)
+    if step > 1:
+        telemetry = _init_telemetry(output_dir)
+        if telemetry:
+            try:
+                step_def = _STEP_MAP.get(step, {})
+                bot_mode = not config.get("interactive", True)
+                decisions = state.get("step_decisions", {}).get(str(step))
+                telemetry.log_step(
+                    step=step, phase=step_def.get("phase", ""),
+                    title=step_def.get("title", ""),
+                    bot_mode=bot_mode,
+                    decisions=decisions,
+                )
+            except Exception:
+                pass
 
     # --- Update state ---
     if step not in state.get("completed_steps", []):

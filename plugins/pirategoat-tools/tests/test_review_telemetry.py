@@ -547,3 +547,76 @@ class TestSummaryOverrideCounting:
             "DISPATCH_OVERRIDE should count as dispatched"
         assert summary["agents_skipped"] == 2, \
             "SKIPPED_OVERRIDE should count as skipped, DISPATCH_OVERRIDE should not"
+
+
+# ── Quick mode + decisions telemetry ──────────────────────────────
+
+
+class TestQuickModeTelemetry:
+    """Quick mode flag and decisions captured in telemetry."""
+
+    def test_start_captures_quick_mode(self, mod, tmp_path):
+        output_dir = tmp_path / "pr-review-org-repo-42"
+        output_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.start(pr_number="42", quick_mode=True)
+        events = _read_events(t.log_path)
+        start = events[0]
+        assert start["pipeline"]["quick_mode"] is True
+
+    def test_start_defaults_quick_mode_false(self, mod, tmp_path):
+        output_dir = tmp_path / "pr-review-org-repo-42"
+        output_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.start(pr_number="42")
+        events = _read_events(t.log_path)
+        start = events[0]
+        assert start["pipeline"]["quick_mode"] is False
+
+    def test_log_step_captures_decisions(self, mod, tmp_path):
+        output_dir = tmp_path / "pr-review-org-repo-42"
+        output_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.start(pr_number="42")
+        decisions = {"critic_skipped": True, "reason": "quick mode + verdict: comment"}
+        t.log_step(step=10, phase="VALIDATION", title="Decision Critic",
+                   decisions=decisions)
+        events = _read_events(t.log_path)
+        step_event = events[1]
+        assert step_event["decisions"] == decisions
+
+    def test_log_step_no_decisions_by_default(self, mod, tmp_path):
+        output_dir = tmp_path / "pr-review-org-repo-42"
+        output_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.start(pr_number="42")
+        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan")
+        events = _read_events(t.log_path)
+        step_event = events[1]
+        assert "decisions" not in step_event
+
+    def test_summary_includes_quick_mode(self, mod, tmp_path):
+        output_dir = tmp_path / "pr-review-org-repo-42"
+        output_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.start(pr_number="42", quick_mode=True)
+        t.finalize(step=11, phase="OUTPUT", title="Present Results")
+        events = _read_events(t.log_path)
+        final = events[-1]
+        assert final["summary"]["quick_mode"] is True
+
+    def test_summary_quick_mode_false_by_default(self, mod, tmp_path):
+        output_dir = tmp_path / "pr-review-org-repo-42"
+        output_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t.start(pr_number="42")
+        t.finalize(step=11, phase="OUTPUT", title="Present Results")
+        events = _read_events(t.log_path)
+        final = events[-1]
+        assert final["summary"]["quick_mode"] is False

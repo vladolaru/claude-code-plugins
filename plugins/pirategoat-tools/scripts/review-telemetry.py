@@ -47,9 +47,11 @@ class ReviewTelemetry:
         return self._log_path
 
     def start(self, pr_number: str = "", total_steps: int = 15,
-              bot_mode: bool = False) -> str:
+              bot_mode: bool = False, quick_mode: bool = False) -> str:
         """Create log file + marker. Write pipeline_start. Return log path."""
         os.makedirs(self.log_dir, exist_ok=True)
+
+        self._quick_mode = quick_mode
 
         now = datetime.now(timezone.utc)
         basename = os.path.basename(self.output_dir.rstrip("/"))
@@ -71,6 +73,7 @@ class ReviewTelemetry:
                 "output_dir": self.output_dir,
                 "total_steps": total_steps,
                 "bot_mode": bot_mode,
+                "quick_mode": quick_mode,
             },
         }
         self._append(event)
@@ -78,7 +81,8 @@ class ReviewTelemetry:
 
     def log_step(self, step: int, phase: str, title: str,
                  bot_mode: bool = False,
-                 thoughts_length: int = 0) -> None:
+                 thoughts_length: int = 0,
+                 decisions: Optional[dict] = None) -> None:
         """Append step timing event (no snapshot). No-op if not started."""
         if self.log_path is None:
             return
@@ -98,6 +102,8 @@ class ReviewTelemetry:
                 "thoughts_length": thoughts_length,
             },
         }
+        if decisions:
+            event["decisions"] = decisions
         self._append(event)
 
     def log_agent_start(self, agent_name: str, domain: str = "",
@@ -362,6 +368,7 @@ class ReviewTelemetry:
     def _build_summary(self, total_duration_ms: Optional[int]) -> dict:
         """Build pipeline summary from all available data."""
         summary: Dict[str, Any] = {"total_duration_ms": total_duration_ms}
+        summary["quick_mode"] = getattr(self, "_quick_mode", False)
 
         context = self._extract_context()
         if context:
