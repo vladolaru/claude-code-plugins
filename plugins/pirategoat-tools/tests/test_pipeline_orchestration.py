@@ -574,21 +574,29 @@ class TestQuickModeDispatch:
     def registry(self):
         return load_registry()
 
-    def test_quick_mode_excludes_blocklisted_agents(self, registry):
-        """quick=True gives blocklisted agents SKIPPED_QUICK_MODE status."""
+    def test_quick_mode_excludes_blocklisted_agents_without_signals(self, registry):
+        """quick=True skips blocklisted agents when no triage keywords match."""
+        # Use files that don't trigger keyword matches for blocklisted agents
+        # (no "hook", "filter", "concurrent", "privacy", "deploy", etc.)
+        neutral_files = [
+            "src/Controller.php",
+            "src/components/Modal.tsx",
+            "tests/ControllerTest.php",
+            "src/utils/helpers.go",
+        ]
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
             output_dir="/tmp/test-quick",
-            changed_files=_QUICK_MODE_TEST_FILES,
+            changed_files=neutral_files,
             registry=registry,
             quick=True,
+            commit_messages="fix button alignment in modal",
         )
         dispatch_map = {d["name"]: d for d in plan["agents"]}
         for agent_name in _QUICK_MODE_BLOCKED_AGENTS:
-            assert agent_name in dispatch_map, (
-                f"Blocked agent '{agent_name}' missing from dispatch plan"
-            )
+            if agent_name not in dispatch_map:
+                continue  # agent may have no files in domain
             assert dispatch_map[agent_name]["status"] == "SKIPPED_QUICK_MODE", (
                 f"Expected SKIPPED_QUICK_MODE for '{agent_name}', "
                 f"got '{dispatch_map[agent_name]['status']}'"
@@ -623,5 +631,29 @@ class TestQuickModeDispatch:
         dispatch_map = {d["name"]: d for d in plan["agents"]}
         assert dispatch_map["pr-reviewer"]["status"] == "DISPATCH", (
             "pr-reviewer should still DISPATCH in quick mode"
+        )
+
+    def test_quick_mode_honors_keyword_triage(self, registry):
+        """Blocklisted agents with keyword matches should still dispatch in quick mode."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick-keywords",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=True,
+            # Commit messages with keywords that match blocklisted agents
+            commit_messages="fix concurrent race condition in payment hook filter",
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        # concurrency-reviewer should dispatch (keyword "concurrent" matched)
+        assert dispatch_map["concurrency-reviewer"]["status"] == "DISPATCH", (
+            "concurrency-reviewer should DISPATCH when keywords match, "
+            f"got {dispatch_map['concurrency-reviewer']['status']}"
+        )
+        # wp-architecture-reviewer should dispatch (keyword "hook"/"filter" matched)
+        assert dispatch_map["wp-architecture-reviewer"]["status"] == "DISPATCH", (
+            "wp-architecture-reviewer should DISPATCH when keywords match, "
+            f"got {dispatch_map['wp-architecture-reviewer']['status']}"
         )
 

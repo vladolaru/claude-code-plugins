@@ -1137,11 +1137,11 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     # Quick-mode critic skip: low-risk verdicts don't need stress-testing
     is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
-    skip_critic = is_quick and recon_verdict in ("approve", "comment")
+    skip_critic = is_quick and recon_verdict.lower() in ("approve", "comment")
 
     if skip_critic:
         # Map reconciliation verdict to review verdict
-        review_verdict = "APPROVE" if recon_verdict == "approve" else "COMMENT"
+        review_verdict = "APPROVE" if recon_verdict.lower() == "approve" else "COMMENT"
 
         situation = [
             _PHASE_TRANSITIONS["VALIDATION"],
@@ -1725,7 +1725,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         state.setdefault("step_decisions", {}).pop(str(step), None)
         is_quick = config.get("quick", False)
         recon_verdict = state.get("reconciliation_verdict", "")
-        if is_quick and recon_verdict in ("approve", "comment"):
+        if is_quick and recon_verdict.lower() in ("approve", "comment"):
             state["step_decisions"][str(step)] = {
                 "critic_skipped": True,
                 "reason": f"quick mode + reconciliation verdict: {recon_verdict}",
@@ -1865,10 +1865,11 @@ def main():
             write_config(output_dir, config)
         else:
             config = existing_config
-            # On rerun, --quick from CLI overrides existing config
-            # (user may want quick mode on a previously full-reviewed PR)
-            if args.quick:
-                config["quick"] = True
+            # On rerun, always sync --quick from CLI into config.
+            # Without this, a quick→normal rerun stays in quick mode,
+            # and a normal→quick rerun was already handled.
+            if config.get("quick") != args.quick:
+                config["quick"] = args.quick
                 write_config(output_dir, config)
 
         # Note: review-context.json is NOT cleared here. For interactive runs,

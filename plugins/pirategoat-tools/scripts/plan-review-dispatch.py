@@ -584,21 +584,6 @@ def build_dispatch_plan(
         if config.get("dispatch_class") in ("manual", "special"):
             continue
 
-        # Quick mode: blocklisted agents get SKIPPED_QUICK_MODE
-        # Uses SKIPPED_ prefix so check-reviewer-agent-status.py recognizes
-        # these as intentionally skipped (its filter is startswith("SKIP")).
-        if quick and agent_name in _QUICK_MODE_EXCLUDED_AGENTS:
-            entry = {
-                "name": agent_name,
-                "domain": config.get("domain"),
-                "focus": config.get("focus", ""),
-                "status": "SKIPPED_QUICK_MODE",
-                "reason": "excluded in quick review mode",
-            }
-            dispatch_list.append(entry)
-            agent_signals.append(f"{agent_name}: STATUS=SKIPPED_QUICK_MODE")
-            continue
-
         status, reason = decide_agent_dispatch(
             agent_name, config, domain_counts,
             clean_files=clean_files,
@@ -606,6 +591,18 @@ def build_dispatch_plan(
             diffstat=diffstat,
             pr_text=pr_text,
         )
+
+        # Quick mode: skip blocklisted agents ONLY if triage did not find
+        # strong signals (keywords matched, special checks triggered).
+        # If triage explicitly dispatched based on evidence, honor it —
+        # the blocklist catches low-signal default dispatches, not
+        # keyword-confirmed ones.
+        if (quick and agent_name in _QUICK_MODE_EXCLUDED_AGENTS
+                and status == "DISPATCH"
+                and "keywords matched" not in reason
+                and reason.startswith("conditional")):
+            status = "SKIPPED_QUICK_MODE"
+            reason = "excluded in quick review mode (no triage signal to override)"
 
         entry = {
             "name": agent_name,

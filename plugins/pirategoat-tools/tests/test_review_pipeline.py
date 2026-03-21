@@ -1229,3 +1229,14 @@ class TestStep10QuickMode:
         handoff_text = "\n".join(g["handoff"]) if g["handoff"] else ""
         assert "decision-critic-verdict.json" in handoff_text
         assert "review-verdict.json" in handoff_text
+
+    def test_skip_critic_case_insensitive(self, mod, tmp_path):
+        """Verdict casing should not affect critic skip (step 11 uppercases verdicts)."""
+        for verdict in ("approve", "APPROVE", "Approve", "comment", "COMMENT"):
+            state = {"completed_steps": [], "reconciliation_verdict": verdict}
+            config = {"quick": True}
+            g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
+            text = "\n".join(g["actions"])
+            assert "decision-reviewer" not in text, (
+                f"Critic should be skipped for verdict '{verdict}'"
+            )

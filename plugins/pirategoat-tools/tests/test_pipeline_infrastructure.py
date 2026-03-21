@@ -472,3 +472,17 @@ class TestQuickModeConfig:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
 
+    def test_quick_flag_resets_on_rerun_without_flag(self, tmp_path):
+        """Rerunning step 1 WITHOUT --quick after a quick run should reset to false."""
+        # First run: with --quick
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42",
+                   "--quick")
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["quick"] is True
+        # Second run: without --quick (same output dir)
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["quick"] is False
+
