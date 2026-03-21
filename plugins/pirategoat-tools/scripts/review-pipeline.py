@@ -1556,7 +1556,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     agents = plan.get("agents", [])
                     state["dispatch_plan_summary"] = {
                         "dispatched": sum(1 for a in agents if a.get("status") == "DISPATCH"),
-                        "skipped": sum(1 for a in agents if a.get("status", "").startswith("SKIPPED")),
+                        "skipped": sum(1 for a in agents if a.get("status") not in ("DISPATCH", "DISPATCH_OVERRIDE")),
                         "conditional": sum(1 for a in agents if a.get("status") == "DISPATCH" and "conditional" in a.get("reason", "").lower()),
                     }
                     # Store agent details for human-readable step 5 summary
