@@ -27,6 +27,13 @@ the file, verify it exists, then move on. Do not skip verification.
 - If empty: STOP. "Usage: `/pr-review <PR_URL_or_number>`"
 - Extract PR number from URL if needed (`.../pull/3817` → `3817`)
 
+**Detect quick review mode:** If the user's input clearly indicates they want
+a quick or fast review (e.g., "quick", "fast", "quick mode", "light review"),
+add `--quick` to the first `review-pipeline.py` call. Examples:
+- `/pr-review 42 quick` → add `--quick`
+- `/pr-review quick mode https://github.com/.../pull/42` → add `--quick`
+- `/pr-review 42` → do NOT add `--quick` (standard review)
+
 **Construct output directory** (sanitize all fragments):
 
 ```bash
@@ -40,8 +47,10 @@ mkdir -p "$OUTPUT_DIR"
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-pipeline.py \
-  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>"
+  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" [--quick]
 ```
+
+Add `--quick` only if the user indicated they want a quick review.
 
 Execute the briefing printed by the script. Then call with `--step N`
 where N is the next step indicated in the output. Continue until the
