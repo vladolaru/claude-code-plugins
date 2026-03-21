@@ -562,15 +562,43 @@ def _step_2_fetch_issue(mode, state, context, config, output_dir):
 # ---------------------------------------------------------------------------
 
 def _step_3_check_existing(mode, state, context, config, output_dir):
-    """Step 3: Check Existing Work — search for existing PRs and branches."""
+    """Step 3: Check Existing Work — search for existing PRs, verify repo fit."""
     issue_id = context.get("issue_id", "unknown")
+    repo_slug = context.get("repo_slug", "")
 
     situation = [
-        f"Before investigating, check if work on **{issue_id}** already exists.",
-        "A merged PR means the issue may be resolved. An open PR means someone is already working on it.",
+        f"Before investigating, check if work on **{issue_id}** already exists,",
+        "and verify this issue actually belongs to the current repository.",
+        "",
+        "A Linear team prefix (e.g., TRAPLAT) can map to multiple repos. The bot",
+        "picks one based on config, but the issue may actually be about a different",
+        "codebase. You must verify before investing time in investigation.",
     ]
 
     actions = [
+        "**A. Verify this issue belongs to this repo**",
+        "",
+        "Cross-reference the issue content (from step 2) against this codebase:",
+        "",
+        "1. **Linked PRs:** Which repo are they in? If all linked PRs target a",
+        "   different repo, that's strong signal this issue doesn't belong here.",
+        "2. **File paths mentioned** in description/comments: Do they exist in this",
+        "   repo? Run `ls` or `find` on a few key paths.",
+        "3. **Component/module names:** Do the components mentioned in the issue",
+        "   (class names, hook names, API endpoints, admin pages) exist here?",
+        "4. **Labels or project context:** Do they reference a specific codebase",
+        "   or deployment target that doesn't match this repo?",
+        "",
+        "If 2+ signals point to a different repo, **STOP the pipeline:**",
+        f"- Write `{os.path.join(output_dir, 'pipeline-result.json') if output_dir else 'pipeline-result.json'}` with:",
+        '  `{"status": "failed", "degradation_notes": ["Wrong repo: issue appears to be about <REPO>, not ' + (repo_slug or '<current>') + '"]}`',
+        "- Output the JSON and stop. Do NOT continue to step 4.",
+        "",
+        "If the evidence is ambiguous (some paths exist, some don't), note the",
+        "uncertainty and proceed — the investigation itself will clarify.",
+        "",
+        "**B. Check for existing work**",
+        "",
         "1. Check linked PRs from the Linear issue data (step 2):",
         "   - Merged PR → investigate if the fix actually resolves the issue. If yes, report 'already done' and recommend closing.",
         "   - Open PR (non-draft) → note in findings. Investigation continues but should reference the PR.",
@@ -579,7 +607,6 @@ def _step_3_check_existing(mode, state, context, config, output_dir):
         f"2. Search GitHub for branches/PRs mentioning `{issue_id}`:",
         f"   ```bash",
         f"   gh pr list --search '{issue_id}' --state all --limit 10",
-        f"   gh search prs '{issue_id}' --repo <REPO> --limit 10",
         f"   ```",
         "",
         "3. If a merged PR fully resolves the issue:",
@@ -595,6 +622,7 @@ def _step_3_check_existing(mode, state, context, config, output_dir):
         "situation": situation,
         "actions": actions,
         "handoff": [
+            "Issue verified to belong to this repository (or ambiguity noted)",
             "Existing PRs and branches searched and documented",
             "Decision: issue is unresolved (continue) or resolved (report and stop at step 7)",
         ],

@@ -158,6 +158,42 @@ class TestStep3CheckExisting:
                                   config={}, output_dir="/tmp/test")
         assert "WOOPLUG-1234" in _guidance_text(g)
 
+    def test_includes_repo_verification(self, mod):
+        """Step 3 must tell the LLM to verify the issue belongs to this repo."""
+        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g).lower()
+        assert "verify" in text or "belongs" in text
+        assert "repo" in text
+
+    def test_repo_verification_checks_linked_prs(self, mod):
+        """Should check which repo linked PRs target."""
+        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g).lower()
+        assert "linked pr" in text or "linked prs" in text
+
+    def test_repo_verification_checks_file_paths(self, mod):
+        """Should check if mentioned file paths exist in this codebase."""
+        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g).lower()
+        assert "file path" in text or "file paths" in text
+
+    def test_repo_mismatch_instructs_stop(self, mod):
+        """If issue doesn't belong here, LLM should stop and write failed result."""
+        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g)
+        assert "STOP" in text or "stop" in text.lower()
+        assert "pipeline-result.json" in text
+
+    def test_handoff_includes_repo_verification(self, mod):
+        g = mod.get_step_guidance(3, "investigate", {}, INVESTIGATE_CTX,
+                                  config={}, output_dir="/tmp/test")
+        handoff_text = "\n".join(g["handoff"]).lower()
+        assert "repo" in handoff_text or "verified" in handoff_text
+
 
 # ---------------------------------------------------------------------------
 # Step 4: Gather Context
