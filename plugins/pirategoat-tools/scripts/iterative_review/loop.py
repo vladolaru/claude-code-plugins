@@ -2,6 +2,8 @@
 
 import json
 import os
+import sys
+import re
 from copy import deepcopy
 
 # ---------------------------------------------------------------------------
@@ -177,3 +179,54 @@ def validate_outcomes(findings, outcomes):
     """Check that every finding has an outcome. Returns list of missing IDs."""
     outcome_ids = {o["id"] for o in outcomes}
     return [f["id"] for f in findings if f["id"] not in outcome_ids]
+
+
+# ---------------------------------------------------------------------------
+# Diff Sizing (noise-filtered)
+# ---------------------------------------------------------------------------
+
+def _import_filter_noise():
+    """Import filter_noise from review-scope.py (sibling script)."""
+    scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    try:
+        # review-scope.py has a hyphen, can't use normal import
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "review_scope",
+            os.path.join(scripts_dir, "review-scope.py")
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.filter_noise
+    except Exception:
+        return None
+
+_filter_noise = _import_filter_noise()
+
+
+def compute_relevant_diff_size(files):
+    """Filter noise files and return (relevant_files, excluded_count).
+
+    Uses NOISE_PATTERNS from review-scope.py if available,
+    falls back to a minimal built-in list.
+    """
+    if _filter_noise:
+        relevant, excluded = _filter_noise(files)
+        return relevant, len(excluded)
+
+    # Fallback: minimal noise patterns if review-scope.py import fails
+    _FALLBACK_NOISE = [
+        r"\.(lock|png|jpg|jpeg|gif|svg|ico|woff|woff2|map)$",
+        r"(package-lock\.json|pnpm-lock\.yaml|go\.sum)$",
+        r"(^|/)(vendor|node_modules)/",
+    ]
+    relevant = []
+    excluded = 0
+    for f in files:
+        if any(re.search(p, f) for p in _FALLBACK_NOISE):
+            excluded += 1
+        else:
+            relevant.append(f)
+    return relevant, excluded

@@ -21,6 +21,7 @@ from iterative_review.loop import (
     append_deferred_item,
     read_deferred_items,
     validate_outcomes,
+    compute_relevant_diff_size,
 )
 
 
@@ -189,3 +190,35 @@ class TestValidateOutcomes:
         outcomes = [{"id": "r1_f1", "action": "fixed", "summary": "Done"}]
         missing = validate_outcomes(findings, outcomes)
         assert "r1_f2" in missing
+
+
+class TestDiffSizing:
+    def test_excludes_lock_files(self):
+        files = ["src/app.py", "package-lock.json", "src/util.py"]
+        relevant, excluded = compute_relevant_diff_size(files)
+        assert "package-lock.json" not in relevant
+        assert "src/app.py" in relevant
+        assert excluded == 1
+
+    def test_excludes_vendor_dirs(self):
+        files = ["src/app.py", "vendor/lib/foo.php"]
+        relevant, excluded = compute_relevant_diff_size(files)
+        assert len(relevant) == 1
+        assert excluded == 1
+
+    def test_excludes_images(self):
+        files = ["src/app.py", "assets/logo.png", "assets/icon.svg"]
+        relevant, excluded = compute_relevant_diff_size(files)
+        assert len(relevant) == 1
+        assert excluded == 2
+
+    def test_all_noise_returns_empty(self):
+        files = ["package-lock.json", "assets/logo.png"]
+        relevant, excluded = compute_relevant_diff_size(files)
+        assert len(relevant) == 0
+        assert excluded == 2
+
+    def test_empty_input(self):
+        relevant, excluded = compute_relevant_diff_size([])
+        assert relevant == []
+        assert excluded == 0
