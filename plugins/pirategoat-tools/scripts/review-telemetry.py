@@ -224,6 +224,25 @@ class ReviewTelemetry:
             pass
         return None
 
+    def _read_quick_mode(self) -> bool:
+        """Read quick_mode from the pipeline_start event (first line of JSONL).
+
+        Falls back to in-memory _quick_mode, then False. This handles the
+        cross-process case where start() and finalize() run in different
+        invocations of the pipeline script.
+        """
+        if self.log_path and os.path.isfile(self.log_path):
+            try:
+                with open(self.log_path) as f:
+                    first_line = f.readline().strip()
+                if first_line:
+                    event = json.loads(first_line)
+                    if event.get("event") == "pipeline_start":
+                        return event.get("pipeline", {}).get("quick_mode", False)
+            except (json.JSONDecodeError, KeyError, OSError):
+                pass
+        return getattr(self, "_quick_mode", False)
+
     def _snapshot(self) -> dict:
         """Build a snapshot of the output directory state."""
         snap: Dict[str, Any] = {}
@@ -368,7 +387,7 @@ class ReviewTelemetry:
     def _build_summary(self, total_duration_ms: Optional[int]) -> dict:
         """Build pipeline summary from all available data."""
         summary: Dict[str, Any] = {"total_duration_ms": total_duration_ms}
-        summary["quick_mode"] = getattr(self, "_quick_mode", False)
+        summary["quick_mode"] = self._read_quick_mode()
 
         context = self._extract_context()
         if context:

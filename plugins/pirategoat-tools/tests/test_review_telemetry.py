@@ -620,3 +620,19 @@ class TestQuickModeTelemetry:
         events = _read_events(t.log_path)
         final = events[-1]
         assert final["summary"]["quick_mode"] is False
+
+    def test_summary_quick_mode_cross_process(self, mod, tmp_path):
+        """Separate ReviewTelemetry instance (simulating different process)
+        should still read quick_mode from the JSONL start event."""
+        output_dir = tmp_path / "pr-review-org-repo-42"
+        output_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        # Process 1: start() records quick_mode=True
+        t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t1.start(pr_number="42", quick_mode=True)
+        # Process 2: new instance, never called start()
+        t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        t2.finalize(step=11, phase="OUTPUT", title="Present Results")
+        events = _read_events(t2.log_path)
+        final = events[-1]
+        assert final["summary"]["quick_mode"] is True

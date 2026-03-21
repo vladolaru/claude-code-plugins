@@ -457,3 +457,18 @@ class TestQuickModeConfig:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
 
+    def test_quick_flag_on_rerun_overrides_existing_config(self, tmp_path):
+        """Rerunning step 1 with --quick on a previously non-quick output dir
+        should update run-config.json to quick=true."""
+        # First run: no --quick
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config.get("quick") is False
+        # Second run: with --quick (same output dir)
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42",
+                   "--quick")
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["quick"] is True
+

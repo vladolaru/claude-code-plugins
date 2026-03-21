@@ -733,16 +733,13 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
     # Build human-readable dispatch summary from agent details
     if plan_agents:
         is_quick = config.get("quick", False) if config else False
-        # In quick mode, filter out EXCLUDED_QUICK_MODE agents from display
+        # In quick mode, filter out SKIPPED_QUICK_MODE agents from display
         visible_agents = [
             a for a in plan_agents
-            if not (is_quick and a["status"] == "EXCLUDED_QUICK_MODE")
+            if not (is_quick and a["status"] == "SKIPPED_QUICK_MODE")
         ]
         dispatched = [a for a in visible_agents if a["status"] in ("DISPATCH", "DISPATCH_OVERRIDE")]
-        skipped = [
-            a for a in visible_agents
-            if a["status"].startswith("SKIPPED") or a["status"] == "EXCLUDED_QUICK_MODE"
-        ]
+        skipped = [a for a in visible_agents if a["status"].startswith("SKIPPED")]
 
         if dispatched:
             situation.append("")
@@ -1860,6 +1857,11 @@ def main():
             write_config(output_dir, config)
         else:
             config = existing_config
+            # On rerun, --quick from CLI overrides existing config
+            # (user may want quick mode on a previously full-reviewed PR)
+            if args.quick:
+                config["quick"] = True
+                write_config(output_dir, config)
 
         # Note: review-context.json is NOT cleared here. For interactive runs,
         # gather-review-context.py overwrites it at step 3. For non-interactive

@@ -575,7 +575,7 @@ class TestQuickModeDispatch:
         return load_registry()
 
     def test_quick_mode_excludes_blocklisted_agents(self, registry):
-        """quick=True gives blocklisted agents EXCLUDED_QUICK_MODE status."""
+        """quick=True gives blocklisted agents SKIPPED_QUICK_MODE status."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -589,13 +589,13 @@ class TestQuickModeDispatch:
             assert agent_name in dispatch_map, (
                 f"Blocked agent '{agent_name}' missing from dispatch plan"
             )
-            assert dispatch_map[agent_name]["status"] == "EXCLUDED_QUICK_MODE", (
-                f"Expected EXCLUDED_QUICK_MODE for '{agent_name}', "
+            assert dispatch_map[agent_name]["status"] == "SKIPPED_QUICK_MODE", (
+                f"Expected SKIPPED_QUICK_MODE for '{agent_name}', "
                 f"got '{dispatch_map[agent_name]['status']}'"
             )
 
     def test_normal_mode_does_not_exclude(self, registry):
-        """quick=False (default) does not produce EXCLUDED_QUICK_MODE status."""
+        """quick=False (default) does not produce SKIPPED_QUICK_MODE status."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -605,8 +605,8 @@ class TestQuickModeDispatch:
             quick=False,
         )
         for entry in plan["agents"]:
-            assert entry["status"] != "EXCLUDED_QUICK_MODE", (
-                f"Agent '{entry['name']}' should not have EXCLUDED_QUICK_MODE "
+            assert entry["status"] != "SKIPPED_QUICK_MODE", (
+                f"Agent '{entry['name']}' should not have SKIPPED_QUICK_MODE "
                 f"when quick=False"
             )
 

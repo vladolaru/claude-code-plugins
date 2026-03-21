@@ -544,7 +544,7 @@ def build_dispatch_plan(
         commit_messages: Pre-fetched commit messages (fetched from git if None).
         diffstat: Pre-fetched diffstat (fetched from git if None).
         review_context: Parsed review-context.json dict (for PR metadata triage).
-        quick: If True, exclude low-signal agents with EXCLUDED_QUICK_MODE status.
+        quick: If True, exclude low-signal agents with SKIPPED_QUICK_MODE status.
 
     Returns:
         Dispatch plan dict with mode, dispatch array, scope_summary, etc.
@@ -584,17 +584,19 @@ def build_dispatch_plan(
         if config.get("dispatch_class") in ("manual", "special"):
             continue
 
-        # Quick mode: blocklisted agents get EXCLUDED_QUICK_MODE
+        # Quick mode: blocklisted agents get SKIPPED_QUICK_MODE
+        # Uses SKIPPED_ prefix so check-reviewer-agent-status.py recognizes
+        # these as intentionally skipped (its filter is startswith("SKIP")).
         if quick and agent_name in _QUICK_MODE_EXCLUDED_AGENTS:
             entry = {
                 "name": agent_name,
                 "domain": config.get("domain"),
                 "focus": config.get("focus", ""),
-                "status": "EXCLUDED_QUICK_MODE",
+                "status": "SKIPPED_QUICK_MODE",
                 "reason": "excluded in quick review mode",
             }
             dispatch_list.append(entry)
-            agent_signals.append(f"{agent_name}: STATUS=EXCLUDED_QUICK_MODE")
+            agent_signals.append(f"{agent_name}: STATUS=SKIPPED_QUICK_MODE")
             continue
 
         status, reason = decide_agent_dispatch(

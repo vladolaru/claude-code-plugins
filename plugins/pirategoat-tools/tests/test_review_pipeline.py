@@ -392,7 +392,7 @@ class TestStep5DispatchPlan:
 
 
 class TestStep5QuickMode:
-    """Step 5 quick mode: filters EXCLUDED_QUICK_MODE agents from display + aggressive nudge."""
+    """Step 5 quick mode: filters SKIPPED_QUICK_MODE agents from display + aggressive nudge."""
 
     def _make_state_with_quick_plan(self):
         """State with quick mode agents included."""
@@ -403,14 +403,14 @@ class TestStep5QuickMode:
             "dispatch_plan_agents": [
                 {"name": "pr-reviewer", "focus": "PR overall goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "DISPATCH", "reason": "keywords matched (commits: auth)"},
-                {"name": "wp-architecture-reviewer", "focus": "WordPress hooks", "status": "EXCLUDED_QUICK_MODE", "reason": "excluded in quick review mode"},
-                {"name": "history-insights-reviewer", "focus": "Git history", "status": "EXCLUDED_QUICK_MODE", "reason": "excluded in quick review mode"},
-                {"name": "reliability-reviewer", "focus": "Error handling", "status": "EXCLUDED_QUICK_MODE", "reason": "excluded in quick review mode"},
+                {"name": "wp-architecture-reviewer", "focus": "WordPress hooks", "status": "SKIPPED_QUICK_MODE", "reason": "excluded in quick review mode"},
+                {"name": "history-insights-reviewer", "focus": "Git history", "status": "SKIPPED_QUICK_MODE", "reason": "excluded in quick review mode"},
+                {"name": "reliability-reviewer", "focus": "Error handling", "status": "SKIPPED_QUICK_MODE", "reason": "excluded in quick review mode"},
             ],
         }
 
     def test_excluded_agents_not_in_situation(self, mod, tmp_path):
-        """EXCLUDED_QUICK_MODE agents should not appear in the briefing."""
+        """SKIPPED_QUICK_MODE agents should not appear in the briefing."""
         state = self._make_state_with_quick_plan()
         config = {"quick": True}
         g = mod.get_step_guidance(5, "pr", state, {}, config=config)
@@ -435,7 +435,7 @@ class TestStep5QuickMode:
         config = {"quick": False}
         g = mod.get_step_guidance(5, "pr", state, {}, config=config)
         text = "\n".join(g["situation"])
-        # In normal mode, EXCLUDED_QUICK_MODE agents should still be visible
+        # In normal mode, SKIPPED_QUICK_MODE agents should still be visible
         assert "wp-architecture-reviewer" in text
 
 
