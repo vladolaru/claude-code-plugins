@@ -1,5 +1,6 @@
 """Tests for review-pipeline.py — orchestration: subprocess calls, telemetry, integration."""
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -11,6 +12,19 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
+
+# ---------------------------------------------------------------------------
+# Import dispatch planner module (hyphenated filename)
+# ---------------------------------------------------------------------------
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+_dispatch_spec = importlib.util.spec_from_file_location(
+    "plan_review_dispatch", str(_SCRIPTS_DIR / "plan-review-dispatch.py")
+)
+_dispatch_mod = importlib.util.module_from_spec(_dispatch_spec)
+_dispatch_spec.loader.exec_module(_dispatch_mod)
+
+build_dispatch_plan = _dispatch_mod.build_dispatch_plan
+load_registry = _dispatch_mod.load_registry
 
 
 @pytest.fixture(scope="module")
@@ -524,4 +538,90 @@ class TestFullSequenceIntegration:
         assert result["verdict"] == "APPROVE"
         assert result["status"] == "success"
         assert result["review_baseline_saved"] is True
+
+
+# =============================================================================
+# Quick Mode Dispatch Tests
+# =============================================================================
+
+# Files that cover enough domains to trigger most agents
+_QUICK_MODE_TEST_FILES = [
+    "src/Controller.php",
+    "src/components/Modal.tsx",
+    "src/hooks/useData.ts",
+    "tests/ControllerTest.php",
+    "src/styles/modal.scss",
+    "e2e/checkout.spec.ts",
+    ".github/workflows/ci.yml",
+    "Dockerfile",
+    "src/utils/auth.go",
+    "src/utils/auth_test.go",
+]
+
+_QUICK_MODE_BLOCKED_AGENTS = frozenset([
+    "wp-architecture-reviewer",
+    "history-insights-reviewer",
+    "data-flow-privacy-reviewer",
+    "concurrency-reviewer",
+    "reliability-reviewer",
+])
+
+
+class TestQuickModeDispatch:
+    """Quick mode excludes low-signal agents from dispatch."""
+
+    @pytest.fixture(scope="class")
+    def registry(self):
+        return load_registry()
+
+    def test_quick_mode_excludes_blocklisted_agents(self, registry):
+        """quick=True gives blocklisted agents EXCLUDED_QUICK_MODE status."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=True,
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        for agent_name in _QUICK_MODE_BLOCKED_AGENTS:
+            assert agent_name in dispatch_map, (
+                f"Blocked agent '{agent_name}' missing from dispatch plan"
+            )
+            assert dispatch_map[agent_name]["status"] == "EXCLUDED_QUICK_MODE", (
+                f"Expected EXCLUDED_QUICK_MODE for '{agent_name}', "
+                f"got '{dispatch_map[agent_name]['status']}'"
+            )
+
+    def test_normal_mode_does_not_exclude(self, registry):
+        """quick=False (default) does not produce EXCLUDED_QUICK_MODE status."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-normal",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=False,
+        )
+        for entry in plan["agents"]:
+            assert entry["status"] != "EXCLUDED_QUICK_MODE", (
+                f"Agent '{entry['name']}' should not have EXCLUDED_QUICK_MODE "
+                f"when quick=False"
+            )
+
+    def test_quick_mode_non_blocked_agents_triage_normally(self, registry):
+        """quick=True does not affect non-blocked agents — pr-reviewer still dispatches."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test-quick",
+            changed_files=_QUICK_MODE_TEST_FILES,
+            registry=registry,
+            quick=True,
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+        assert dispatch_map["pr-reviewer"]["status"] == "DISPATCH", (
+            "pr-reviewer should still DISPATCH in quick mode"
+        )
 

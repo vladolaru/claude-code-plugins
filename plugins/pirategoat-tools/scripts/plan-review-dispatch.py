@@ -167,6 +167,15 @@ def build_domain_counts(files: List[str]) -> Dict[str, int]:
 # Test domain names — used to detect test-only file sets
 _TEST_DOMAINS = ("php-tests", "js-tests", "e2e-tests", "go-tests")
 
+# Agents excluded in quick review mode — lower-signal for small/low-risk PRs
+_QUICK_MODE_EXCLUDED_AGENTS = frozenset([
+    "wp-architecture-reviewer",
+    "history-insights-reviewer",
+    "data-flow-privacy-reviewer",
+    "concurrency-reviewer",
+    "reliability-reviewer",
+])
+
 
 def is_test_file(filepath: str) -> bool:
     """Check if a file matches any test domain pattern."""
@@ -522,6 +531,7 @@ def build_dispatch_plan(
     commit_messages: Optional[str] = None,
     diffstat: Optional[Dict] = None,
     review_context: Optional[dict] = None,
+    quick: bool = False,
 ) -> dict:
     """Build the complete dispatch plan.
 
@@ -534,6 +544,7 @@ def build_dispatch_plan(
         commit_messages: Pre-fetched commit messages (fetched from git if None).
         diffstat: Pre-fetched diffstat (fetched from git if None).
         review_context: Parsed review-context.json dict (for PR metadata triage).
+        quick: If True, exclude low-signal agents with EXCLUDED_QUICK_MODE status.
 
     Returns:
         Dispatch plan dict with mode, dispatch array, scope_summary, etc.
@@ -572,6 +583,20 @@ def build_dispatch_plan(
         # manual = opt-in only, never auto-dispatched.
         if config.get("dispatch_class") in ("manual", "special"):
             continue
+
+        # Quick mode: blocklisted agents get EXCLUDED_QUICK_MODE
+        if quick and agent_name in _QUICK_MODE_EXCLUDED_AGENTS:
+            entry = {
+                "name": agent_name,
+                "domain": config.get("domain"),
+                "focus": config.get("focus", ""),
+                "status": "EXCLUDED_QUICK_MODE",
+                "reason": "excluded in quick review mode",
+            }
+            dispatch_list.append(entry)
+            agent_signals.append(f"{agent_name}: STATUS=EXCLUDED_QUICK_MODE")
+            continue
+
         status, reason = decide_agent_dispatch(
             agent_name, config, domain_counts,
             clean_files=clean_files,
@@ -653,6 +678,12 @@ def main():
         default=None,
         help="Path to review-context.json for PR metadata triage (title, body, labels, branch, issues).",
     )
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        default=False,
+        help="Quick review mode: exclude low-signal agents.",
+    )
 
     args = parser.parse_args()
 
@@ -672,6 +703,7 @@ def main():
         output_dir=args.output_dir,
         changed_files=changed_files,
         review_context=review_context,
+        quick=args.quick,
     )
 
     # Output JSON to stdout (for inline parsing by commands)
