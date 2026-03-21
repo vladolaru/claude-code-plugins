@@ -1163,3 +1163,53 @@ class TestDegradedPaths:
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
         # Should not crash — script handles missing verdict
         assert g is not None
+
+
+class TestStep10QuickMode:
+    """Step 10 quick mode: skip critic when verdict is low-risk."""
+
+    def test_skip_critic_on_approve_verdict(self, mod, tmp_path):
+        state = {"completed_steps": [], "reconciliation_verdict": "approve"}
+        config = {"quick": True}
+        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "decision-reviewer" not in text
+        assert "SKIPPED" in text
+        assert "decision-critic-verdict.json" in text
+
+    def test_skip_critic_on_comment_verdict(self, mod, tmp_path):
+        state = {"completed_steps": [], "reconciliation_verdict": "comment"}
+        config = {"quick": True}
+        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "decision-reviewer" not in text
+        assert "SKIPPED" in text
+
+    def test_run_critic_on_request_changes(self, mod, tmp_path):
+        state = {"completed_steps": [], "reconciliation_verdict": "request_changes"}
+        config = {"quick": True}
+        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "decision-reviewer" in text
+
+    def test_run_critic_on_block_verdict(self, mod, tmp_path):
+        state = {"completed_steps": [], "reconciliation_verdict": "block"}
+        config = {"quick": True}
+        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "decision-reviewer" in text
+
+    def test_normal_mode_always_runs_critic(self, mod, tmp_path):
+        state = {"completed_steps": [], "reconciliation_verdict": "approve"}
+        config = {"quick": False}
+        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "decision-reviewer" in text
+
+    def test_quick_skip_still_requires_verdict_files(self, mod, tmp_path):
+        state = {"completed_steps": [], "reconciliation_verdict": "approve"}
+        config = {"quick": True}
+        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
+        handoff_text = "\n".join(g["handoff"]) if g["handoff"] else ""
+        assert "decision-critic-verdict.json" in handoff_text
+        assert "review-verdict.json" in handoff_text

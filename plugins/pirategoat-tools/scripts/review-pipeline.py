@@ -1136,6 +1136,48 @@ def _step_9_review_report(mode, state, context, config, output_dir):
 def _step_10_decision_critic(mode, state, context, config, output_dir):
     """Step 10: Decision Critic — stress-test conclusions."""
     od = output_dir or "<OUTPUT_DIR>"
+
+    # Quick-mode critic skip: low-risk verdicts don't need stress-testing
+    is_quick = config.get("quick", False)
+    recon_verdict = state.get("reconciliation_verdict", "")
+    skip_critic = is_quick and recon_verdict in ("approve", "comment")
+
+    if skip_critic:
+        # Map reconciliation verdict to review verdict
+        review_verdict = "APPROVE" if recon_verdict == "approve" else "COMMENT"
+
+        situation = [
+            _PHASE_TRANSITIONS["VALIDATION"],
+            f"Quick mode is active and reconciliation verdict is **{recon_verdict}** — "
+            "skipping the decision critic. Low-risk verdicts do not need stress-testing.",
+        ]
+        actions = [
+            f"Write the critic skip verdict:",
+            f"```json",
+            f'// Save to: {od}/decision-critic-verdict.json',
+            f'{{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: {recon_verdict}"}}',
+            f"```",
+            f"",
+            f"Write the final review verdict:",
+            f"```json",
+            f'// Save to: {od}/review-verdict.json',
+            f'{{"verdict": "{review_verdict}"}}',
+            f"```",
+            f"",
+            f"Before proceeding, verify both files exist and contain valid JSON.",
+        ]
+        handoff = [
+            f"`{od}/decision-critic-verdict.json` and `{od}/review-verdict.json` must both exist with valid JSON.",
+        ]
+
+        return {
+            "phase": "VALIDATION",
+            "title": "Decision Critic",
+            "situation": situation,
+            "actions": actions,
+            "handoff": handoff,
+        }
+
     degradation = state.get("degradation", {})
 
     situation = [_PHASE_TRANSITIONS["VALIDATION"]]
@@ -1668,6 +1710,17 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 }
             except (json.JSONDecodeError, OSError):
                 pass
+
+    if step == 10:
+        # Read reconciliation verdict for quick-mode critic skip decision
+        findings_path = os.path.join(output_dir, "review-findings.json")
+        if os.path.isfile(findings_path):
+            try:
+                with open(findings_path) as f:
+                    findings = json.load(f)
+                state["reconciliation_verdict"] = findings.get("verdict", "")
+            except (json.JSONDecodeError, OSError):
+                state["reconciliation_verdict"] = ""
 
     if step == 11:
         # Read critic verdict from file (written by LLM at step 10)
