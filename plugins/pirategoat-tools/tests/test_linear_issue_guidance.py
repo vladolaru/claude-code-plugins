@@ -439,17 +439,18 @@ class TestStep10Verify:
 
 
 class TestStep11SelfReview:
-    def test_references_codex_reviewer(self, mod):
+    def test_references_iterative_review(self, mod):
         g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
-        assert "codex-reviewer" in text
+        assert "iterative" in text.lower()
+        assert "review" in text.lower()
 
-    def test_references_receiving_code_review(self, mod):
+    def test_references_review_loop(self, mod):
         g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
-        assert "receiving-code-review" in text
+        assert "merge-base" in text.lower() or "merge_base" in text.lower()
 
     def test_includes_phase_transition(self, mod):
         g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
@@ -457,32 +458,24 @@ class TestStep11SelfReview:
         text = _guidance_text(g).lower()
         assert "validation" in text or "validate" in text
 
-    def test_mentions_degradation_fallback(self, mod):
-        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "unavailable" in text or "degradation" in text
-
-    def test_mentions_medium_plus_complexity(self, mod):
-        """Step 11 should explain it runs for medium+ complexity."""
-        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
-                                  config={}, output_dir="/tmp/test")
-        text = _guidance_text(g).lower()
-        assert "medium" in text or "large" in text or "complexity" in text
-
 
 class TestStep12ReVerify:
-    def test_mentions_re_run(self, mod):
+    def test_is_no_op(self, mod):
         g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
-        assert "re-run" in text or "rerun" in text or "verification" in text
+        assert "no-op" in text or "no action" in text
 
-    def test_mentions_regression(self, mod):
+    def test_references_iterative_review_loop(self, mod):
         g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
-        assert "regression" in text or "revert" in text
+        assert "iterative review loop" in text or "review round" in text
+
+    def test_handoff_is_none(self, mod):
+        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        assert g["handoff"] is None
 
 
 class TestStep13CreateDraftPR:

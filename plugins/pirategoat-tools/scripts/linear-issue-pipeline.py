@@ -995,43 +995,54 @@ def _step_10_verify(mode, state, context, config, output_dir):
 # ---------------------------------------------------------------------------
 
 def _step_11_self_review(mode, state, context, config, output_dir):
-    """Step 11: Self-Review — spawn codex-reviewer for independent review."""
+    """Step 11: Iterative Review — multi-round independent code review loop."""
+
+    scripts_dir = Path(__file__).resolve().parent
+    issue_id = context.get("issue_id", "unknown")
 
     situation = [
         _PHASE_TRANSITIONS["VALIDATION"],
         "",
-        "You are here because the implementation is **medium or large complexity** —",
-        "the per-task code-reviewer from step 9 is not sufficient for changes of this scope.",
-        "Spawn the `codex-reviewer` agent for an independent review of your changes.",
-        "Then apply the `receiving-code-review` pattern to address findings.",
+        "Implementation is complete and verified. Starting the iterative",
+        "review loop — an independent Codex review with multi-round",
+        "pushback tracking and convergence detection.",
     ]
 
     actions = [
-        "1. Spawn the `codex-reviewer` agent against your implementation diff:",
-        "   - Use the Agent tool with `subagent_type: 'pirategoat-tools:codex-reviewer'`",
-        "   - Provide the diff context (changed files, git range)",
+        "1. Compute the merge base:",
+        "   ```bash",
+        "   MERGE_BASE=$(git merge-base main HEAD)",
+        "   ```",
         "",
-        "2. Read the codex review findings.",
+        "2. Start the review loop (run in background):",
+        f"   ```bash",
+        f"   python3 {scripts_dir / 'iterative_review'} --action review --round 1 \\",
+        f"     --output-dir {os.path.join(output_dir, 'code-review')} \\",
+        f"     --merge-base $MERGE_BASE \\",
+        f"     --context-file {os.path.join(output_dir, 'investigation-report.md')} \\",
+        f"     --analysis-prefix {issue_id.lower()}",
+        f"   ```",
         "",
-        "3. Apply the `superpowers:receiving-code-review` skill:",
-        "   - Read each finding carefully",
-        "   - Understand the concern before reacting",
-        "   - Verify technically (don't blindly agree)",
-        "   - Evaluate: is this a real issue or false positive?",
-        "   - Implement fixes for valid findings",
+        f"   Tail `{os.path.join(output_dir, 'code-review', 'review-progress.jsonl')}` for status.",
         "",
-        "4. If codex-reviewer is unavailable:",
-        "   - Note as degradation",
-        "   - Skip to step 13 (the pipeline continues without self-review)",
+        "3. When the review completes, follow the evaluation briefing.",
+        "",
+        "4. After writing outcomes, advance:",
+        f"   ```bash",
+        f"   python3 {scripts_dir / 'iterative_review'} --action advance --round 1 \\",
+        f"     --output-dir {os.path.join(output_dir, 'code-review')}",
+        f"   ```",
+        "",
+        "5. Repeat until the advance call returns 'loop complete.'",
     ]
 
     return {
         "phase": "VALIDATION",
-        "title": "Self-Review",
+        "title": "Iterative Review",
         "situation": situation,
         "actions": actions,
         "handoff": [
-            "Codex review findings received and addressed (or unavailability noted as degradation)",
+            f"`{os.path.join(output_dir, 'code-review', 'review-loop-result.json')}` exists with final review stats",
         ],
     }
 
@@ -1041,32 +1052,24 @@ def _step_11_self_review(mode, state, context, config, output_dir):
 # ---------------------------------------------------------------------------
 
 def _step_12_reverify(mode, state, context, config, output_dir):
-    """Step 12: Re-Verify — re-run verification after review fixes."""
+    """Step 12: Re-Verify — skipped when iterative review loop handles verification."""
 
     situation = [
-        "Re-run verification after applying review fixes.",
-        "This ensures the review fixes didn't break anything.",
+        "Verification is handled within each review round of the iterative review loop.",
+        "This step is a no-op.",
     ]
 
     actions = [
-        "1. Re-run the same verification as step 10:",
-        "   - Tests, build, lint",
-        "",
-        "2. If this fails, the review fixes introduced a regression:",
-        "   - Revert the problematic fix",
-        "   - Note in degradation that the review finding was acknowledged but not applied",
-        "",
-        "3. Record final verification status.",
+        "No action needed — the iterative review loop (step 11) includes verification",
+        "after each round of fixes. Proceed to step 13.",
     ]
 
     return {
         "phase": "VALIDATION",
-        "title": "Re-Verify",
+        "title": "Re-Verify (Skipped)",
         "situation": situation,
         "actions": actions,
-        "handoff": [
-            "Final verification passes (or degradation documented)",
-        ],
+        "handoff": None,
     }
 
 
