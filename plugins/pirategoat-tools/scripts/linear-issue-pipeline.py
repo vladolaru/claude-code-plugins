@@ -27,6 +27,8 @@ import argparse
 import glob as glob_mod
 import json
 import os
+import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -258,6 +260,53 @@ def clean_stale_artifacts(output_dir):
 
 
 # ---------------------------------------------------------------------------
+# Subprocess Helper
+# ---------------------------------------------------------------------------
+
+def _run_subprocess(cmd, cwd=None, timeout=60):
+    """Run a subprocess and return (stdout, success). Never raises."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+        if r.returncode == 0:
+            return r.stdout.strip(), True
+        return r.stdout.strip(), False
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return "", False
+
+
+# ---------------------------------------------------------------------------
+# Repo Sanity Check
+# ---------------------------------------------------------------------------
+
+def check_repo_match(context):
+    """Check if CWD repo matches the expected repo from issue-context.json.
+
+    Compares the origin remote URL against context["repo_slug"].
+    Returns (matches: bool, actual_slug: str|None, expected_slug: str|None).
+    """
+    expected = context.get("repo_slug")
+    if not expected:
+        # No repo expectation in context — skip check
+        return True, None, None
+
+    stdout, ok = _run_subprocess(["git", "remote", "get-url", "origin"])
+    if not ok or not stdout:
+        # Can't determine current repo — skip check (don't block on git failures)
+        return True, None, expected
+
+    # Extract owner/repo from remote URL
+    # Handles: git@github.com:Owner/Repo.git, https://github.com/Owner/Repo.git
+    m = re.search(r'[:/]([^/]+/[^/]+?)(?:\.git)?$', stdout)
+    if not m:
+        return True, stdout, expected
+
+    actual = m.group(1)
+
+    # Case-insensitive comparison (GitHub slugs are case-insensitive)
+    return actual.lower() == expected.lower(), actual, expected
+
+
+# ---------------------------------------------------------------------------
 # Event Emission (best-effort)
 # ---------------------------------------------------------------------------
 
@@ -402,18 +451,55 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
 # ---------------------------------------------------------------------------
 
 def _step_1_parse_input(mode, state, context, config, output_dir):
-    """Step 1: Parse Input — confirm parameters and mode."""
+    """Step 1: Parse Input — confirm parameters, mode, and repo match."""
     issue_id = context.get("issue_id", config.get("issue_id", "unknown"))
+    repo_mismatch = state.get("repo_mismatch")
+    interactive = config.get("interactive", True)
 
     situation = [_PIPELINE_MISSION, ""]
     situation.append(f"Mode: **{mode}** {'(investigate only — report, no code changes)' if mode == 'investigate' else '(investigate + implement + draft PR)'}")
     situation.append(f"Issue: **{issue_id}**")
+
+    # Repo mismatch — hard stop
+    if repo_mismatch:
+        actual = repo_mismatch.get("actual", "unknown")
+        expected = repo_mismatch.get("expected", "unknown")
+        situation.append("")
+        situation.append(f"⛔ **REPO MISMATCH:** This repository is `{actual}` but issue **{issue_id}** belongs to `{expected}`.")
+
+        if interactive:
+            actions = [
+                f"⛔ PIPELINE STOPPED: You are in the wrong repository.",
+                f"",
+                f"This issue ({issue_id}) belongs to **{expected}**, but the current",
+                f"working directory is **{actual}**.",
+                f"",
+                f"Switch to the correct repository and try again:",
+                f"  `cd /path/to/{expected.split('/')[-1] if '/' in expected else expected}`",
+            ]
+        else:
+            actions = [
+                f"⛔ PIPELINE STOPPED: Repo mismatch — expected {expected}, got {actual}.",
+                f"pipeline-result.json has been written with status: failed.",
+            ]
+
+        return {
+            "phase": "SETUP",
+            "title": "Parse Input",
+            "situation": situation,
+            "actions": actions,
+            "handoff": None,
+        }
 
     actions = [
         f"1. Read `{output_dir}/issue-context.json` — this contains pre-computed issue and repo context from the bot.",
         f"2. Read `{output_dir}/run-config.json` — this contains the pipeline mode and configuration.",
         "3. Confirm the issue ID and mode are correct.",
         "4. If issue-context.json is missing or empty, the pipeline cannot proceed — report failure.",
+        "",
+        "5. **Repo sanity check:** Run `git remote get-url origin` and confirm the repo matches",
+        "   the `repo_slug` in issue-context.json. If they don't match, STOP — you are in the",
+        "   wrong codebase. Report the mismatch and do not proceed.",
     ]
 
     return {
@@ -424,6 +510,7 @@ def _step_1_parse_input(mode, state, context, config, output_dir):
         "handoff": [
             "issue-context.json has been read and contains a valid issue_id",
             "run-config.json has been read and contains a valid mode",
+            "Repo matches the expected repo_slug (or no repo_slug to check against)",
         ],
     }
 
@@ -1057,6 +1144,33 @@ def _step_14_present_results(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
+# Shared Orchestration Helpers
+# ---------------------------------------------------------------------------
+
+def _write_failed_result(output_dir, mode, context, error, events=None):
+    """Write a failed pipeline-result.json. Used for early bail-outs."""
+    pipeline_result = {
+        "status": "failed",
+        "mode": mode,
+        "issue_id": context.get("issue_id", "unknown"),
+        "report_path": None,
+        "verdict": None,
+        "pr_url": None,
+        "linear_comment_posted": False,
+        "codex_review_applied": False,
+        "degradation_notes": [error],
+    }
+    result_path = os.path.join(output_dir, "pipeline-result.json")
+    try:
+        with open(result_path, "w") as f:
+            json.dump(pipeline_result, f, indent=2)
+    except OSError:
+        pass
+    if events:
+        events.pipeline_failed(step=1, error=error)
+
+
+# ---------------------------------------------------------------------------
 # Step Orchestration (side effects — file I/O, event emission)
 # ---------------------------------------------------------------------------
 
@@ -1070,6 +1184,23 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
     if events:
         step_def = _STEP_MAP.get(step, {})
         events.step_started(step=step, title=step_def.get("title", ""))
+
+    if step == 1:
+        # Repo sanity check — verify CWD matches the expected repo.
+        matches, actual, expected = check_repo_match(context)
+        if not matches:
+            state["repo_mismatch"] = {
+                "actual": actual,
+                "expected": expected,
+            }
+            interactive = config.get("interactive", True)
+            if not interactive:
+                # Bot mode: write failed result immediately and signal stop.
+                _write_failed_result(
+                    output_dir, mode, context,
+                    error=f"Repo mismatch: expected {expected}, got {actual}",
+                    events=events,
+                )
 
     if step == 14:
         # Write pipeline-result.json from state, deriving status from real outputs.
@@ -1205,6 +1336,19 @@ def main():
     if step not in state.get("completed_steps", []):
         state.setdefault("completed_steps", []).append(step)
     write_state(output_dir, state)
+
+    # --- Early exit: repo mismatch ---
+    if state.get("repo_mismatch"):
+        guidance = get_step_guidance(step, mode, state, context, config=config,
+                                    output_dir=output_dir)
+        guidance["next_step"] = None
+        guidance["skip_reason"] = None
+        output = format_output(step, guidance)
+        print(output)
+        if not config.get("interactive", True):
+            # Bot mode: pipeline-result.json already written by orchestration
+            sys.exit(1)
+        return
 
     # --- Compute routing AFTER orchestration (state may have changed) ---
     active = get_active_steps(mode, config, state, context)

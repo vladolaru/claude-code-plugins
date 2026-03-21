@@ -221,6 +221,164 @@ class TestContextReading:
 
 
 # ---------------------------------------------------------------------------
+# Repo Sanity Check
+# ---------------------------------------------------------------------------
+
+class TestCheckRepoMatch:
+    def test_matches_when_no_repo_slug_in_context(self, mod):
+        """No repo_slug → skip check, return True."""
+        matches, actual, expected = mod.check_repo_match({})
+        assert matches is True
+
+    def test_matches_ssh_url(self, mod, monkeypatch):
+        """SSH remote URL matches repo_slug."""
+        def fake_subprocess(cmd, **kwargs):
+            class R:
+                returncode = 0
+                stdout = "git@github.com:Automattic/woocommerce-payments.git"
+                stderr = ""
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake_subprocess)
+        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
+        matches, actual, expected = mod.check_repo_match(ctx)
+        assert matches is True
+        assert actual == "Automattic/woocommerce-payments"
+
+    def test_matches_https_url(self, mod, monkeypatch):
+        """HTTPS remote URL matches repo_slug."""
+        def fake_subprocess(cmd, **kwargs):
+            class R:
+                returncode = 0
+                stdout = "https://github.com/Automattic/woocommerce-payments.git"
+                stderr = ""
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake_subprocess)
+        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
+        matches, actual, expected = mod.check_repo_match(ctx)
+        assert matches is True
+
+    def test_case_insensitive(self, mod, monkeypatch):
+        """Comparison is case-insensitive (GitHub slugs are)."""
+        def fake_subprocess(cmd, **kwargs):
+            class R:
+                returncode = 0
+                stdout = "git@github.com:automattic/WooCommerce-Payments.git"
+                stderr = ""
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake_subprocess)
+        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
+        matches, _, _ = mod.check_repo_match(ctx)
+        assert matches is True
+
+    def test_mismatch_detected(self, mod, monkeypatch):
+        """Different repo returns False with both slugs."""
+        def fake_subprocess(cmd, **kwargs):
+            class R:
+                returncode = 0
+                stdout = "git@github.com:Automattic/wpcom.git"
+                stderr = ""
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake_subprocess)
+        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
+        matches, actual, expected = mod.check_repo_match(ctx)
+        assert matches is False
+        assert actual == "Automattic/wpcom"
+        assert expected == "Automattic/woocommerce-payments"
+
+    def test_git_failure_skips_check(self, mod, monkeypatch):
+        """If git fails, skip check (don't block on infra issues)."""
+        def fake_subprocess(cmd, **kwargs):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "not a git repo"
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake_subprocess)
+        ctx = {"repo_slug": "Automattic/woocommerce-payments"}
+        matches, _, _ = mod.check_repo_match(ctx)
+        assert matches is True
+
+
+# ---------------------------------------------------------------------------
+# Repo Mismatch Guidance
+# ---------------------------------------------------------------------------
+
+class TestRepoMismatchGuidance:
+    def test_bot_mode_shows_pipeline_stopped(self, mod):
+        state = {"repo_mismatch": {"actual": "Org/wrong", "expected": "Org/right"}}
+        config = {"interactive": False}
+        g = mod.get_step_guidance(1, "investigate", state, {}, config=config, output_dir="/tmp")
+        text = "\n".join(g.get("situation", []) + g.get("actions", []))
+        assert "PIPELINE STOPPED" in text or "REPO MISMATCH" in text
+        assert "Org/wrong" in text
+        assert "Org/right" in text
+
+    def test_interactive_mode_tells_user_to_switch(self, mod):
+        state = {"repo_mismatch": {"actual": "Org/wrong", "expected": "Org/right"}}
+        config = {"interactive": True}
+        g = mod.get_step_guidance(1, "investigate", state, {}, config=config, output_dir="/tmp")
+        text = "\n".join(g.get("situation", []) + g.get("actions", []))
+        assert "wrong repository" in text.lower() or "REPO MISMATCH" in text
+        assert "Org/right" in text
+
+    def test_mismatch_has_no_handoff(self, mod):
+        """Mismatch means stop — no handoff to next step."""
+        state = {"repo_mismatch": {"actual": "Org/wrong", "expected": "Org/right"}}
+        g = mod.get_step_guidance(1, "investigate", state, {}, config={}, output_dir="/tmp")
+        assert g["handoff"] is None
+
+    def test_no_mismatch_has_normal_guidance(self, mod):
+        """Without mismatch state, step 1 guidance is normal."""
+        g = mod.get_step_guidance(1, "investigate", {}, {"issue_id": "X-1"},
+                                  config={}, output_dir="/tmp")
+        assert g["handoff"] is not None
+        text = "\n".join(g.get("actions", []))
+        assert "repo sanity check" in text.lower() or "git remote" in text
+
+
+class TestRepoMismatchOrchestration:
+    def test_bot_mode_writes_failed_result(self, mod, tmp_path, monkeypatch):
+        """Bot-mode repo mismatch writes pipeline-result.json with status: failed."""
+        def fake_subprocess(cmd, **kwargs):
+            class R:
+                returncode = 0
+                stdout = "git@github.com:Org/wrong-repo.git"
+                stderr = ""
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake_subprocess)
+
+        context = {"issue_id": "TEST-1", "repo_slug": "Org/right-repo"}
+        config = {"interactive": False}
+        state = {"completed_steps": [], "degradation_notes": []}
+        mod._orchestrate_step(1, "investigate", config, state, context, str(tmp_path))
+
+        assert state.get("repo_mismatch") is not None
+        result_path = tmp_path / "pipeline-result.json"
+        assert result_path.exists()
+        result = json.loads(result_path.read_text())
+        assert result["status"] == "failed"
+        assert any("mismatch" in n.lower() or "Repo" in n for n in result["degradation_notes"])
+
+    def test_interactive_mode_does_not_write_result(self, mod, tmp_path, monkeypatch):
+        """Interactive-mode repo mismatch sets state but does NOT write pipeline-result.json."""
+        def fake_subprocess(cmd, **kwargs):
+            class R:
+                returncode = 0
+                stdout = "git@github.com:Org/wrong-repo.git"
+                stderr = ""
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake_subprocess)
+
+        context = {"issue_id": "TEST-1", "repo_slug": "Org/right-repo"}
+        config = {"interactive": True}
+        state = {"completed_steps": [], "degradation_notes": []}
+        mod._orchestrate_step(1, "investigate", config, state, context, str(tmp_path))
+
+        assert state.get("repo_mismatch") is not None
+        assert not (tmp_path / "pipeline-result.json").exists()
+
+
+# ---------------------------------------------------------------------------
 # Stale Artifact Cleanup
 # ---------------------------------------------------------------------------
 
