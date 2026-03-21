@@ -15,6 +15,12 @@ from iterative_review.loop import (
     compute_max_rounds,
     check_convergence,
     DEFAULT_STATE,
+    build_pushback_entry,
+    append_pushback_log,
+    read_pushback_log,
+    append_deferred_item,
+    read_deferred_items,
+    validate_outcomes,
 )
 
 
@@ -109,3 +115,77 @@ class TestConvergence:
             current_round=3, max_rounds=3
         )
         assert result == "zero_findings"
+
+
+class TestPushbackLog:
+    def test_builds_entry_for_p1_rejection(self):
+        outcome = {
+            "id": "r1_f2", "action": "rejected",
+            "reasoning": "Input is pre-validated."
+        }
+        finding = {
+            "id": "r1_f2", "severity": "P1",
+            "title": "Missing null check", "location": "handler.py:42"
+        }
+        entry = build_pushback_entry(outcome, finding, round_num=1)
+        assert entry is not None
+        assert "REJECTED" in entry
+        assert "r1_f2" in entry
+        assert "handler.py:42" in entry
+
+    def test_skips_entry_for_p2_rejection(self):
+        outcome = {"id": "r1_f3", "action": "rejected", "reasoning": "Minor."}
+        finding = {"id": "r1_f3", "severity": "P2", "title": "X", "location": "a.py:1"}
+        entry = build_pushback_entry(outcome, finding, round_num=1)
+        assert entry is None
+
+    def test_skips_entry_for_fixed(self):
+        outcome = {"id": "r1_f1", "action": "fixed", "summary": "Done."}
+        finding = {"id": "r1_f1", "severity": "P0", "title": "X", "location": "a.py:1"}
+        entry = build_pushback_entry(outcome, finding, round_num=1)
+        assert entry is None
+
+    def test_includes_p0_deferred(self):
+        outcome = {"id": "r1_f1", "action": "deferred", "reasoning": "Out of scope."}
+        finding = {"id": "r1_f1", "severity": "P0", "title": "X", "location": "a.py:1"}
+        entry = build_pushback_entry(outcome, finding, round_num=1)
+        assert entry is not None
+        assert "DEFERRED" in entry
+
+    def test_append_and_read_log(self, tmp_path):
+        d = str(tmp_path)
+        append_pushback_log(d, "### Round 1\nREJECTED: [r1_f2] ...\n")
+        append_pushback_log(d, "### Round 2\nDEFERRED: [r2_f1] ...\n")
+        log = read_pushback_log(d)
+        assert "Round 1" in log
+        assert "Round 2" in log
+
+
+class TestDeferredItems:
+    def test_append_and_read(self, tmp_path):
+        d = str(tmp_path)
+        append_deferred_item(d, {
+            "id": "r1_f3", "severity": "P1",
+            "title": "Race condition", "location": "cache.py:67",
+            "reasoning": "Out of scope."
+        })
+        items = read_deferred_items(d)
+        assert len(items) == 1
+        assert items[0]["id"] == "r1_f3"
+
+
+class TestValidateOutcomes:
+    def test_valid_outcomes(self):
+        findings = [{"id": "r1_f1"}, {"id": "r1_f2"}]
+        outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Done"},
+            {"id": "r1_f2", "action": "rejected", "reasoning": "No"},
+        ]
+        missing = validate_outcomes(findings, outcomes)
+        assert missing == []
+
+    def test_missing_outcome(self):
+        findings = [{"id": "r1_f1"}, {"id": "r1_f2"}]
+        outcomes = [{"id": "r1_f1", "action": "fixed", "summary": "Done"}]
+        missing = validate_outcomes(findings, outcomes)
+        assert "r1_f2" in missing
