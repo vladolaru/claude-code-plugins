@@ -1005,6 +1005,22 @@ class TestCriticVerdictPersistence:
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
 
+    def test_step_11_maps_skipped_critic_to_unavailable(self, tmp_path):
+        """SKIPPED verdict (quick mode) should map to unavailable for downstream consumers."""
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
+        (tmp_path / "review-report.md").write_text("# Review")
+        (tmp_path / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
+        (tmp_path / "decision-critic-verdict.json").write_text(
+            '{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: approve"}'
+        )
+        r = self._run("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["critic_verdict"] == "unavailable"
+
     def test_step_1_clears_stale_critic_verdict(self, tmp_path):
         """Step 1 should clear decision-critic-verdict.json from previous runs."""
         (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "REVISE"}')

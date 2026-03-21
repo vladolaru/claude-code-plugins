@@ -1719,11 +1719,14 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             except (json.JSONDecodeError, OSError):
                 state["reconciliation_verdict"] = ""
 
-        # Record critic skip decision for telemetry
+        # Record critic skip decision for telemetry.
+        # Clear any stale decision first (step 10 may be rerun after
+        # review-findings.json changes from approve/comment to a higher verdict).
+        state.setdefault("step_decisions", {}).pop(str(step), None)
         is_quick = config.get("quick", False)
         recon_verdict = state.get("reconciliation_verdict", "")
         if is_quick and recon_verdict in ("approve", "comment"):
-            state.setdefault("step_decisions", {})[str(step)] = {
+            state["step_decisions"][str(step)] = {
                 "critic_skipped": True,
                 "reason": f"quick mode + reconciliation verdict: {recon_verdict}",
             }
@@ -1735,7 +1738,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             try:
                 with open(critic_path) as f:
                     critic_data = json.load(f)
-                state["critic_verdict"] = critic_data.get("verdict", "unavailable")
+                raw_verdict = critic_data.get("verdict", "unavailable")
+                # Map SKIPPED → unavailable so downstream consumers
+                # (pirategoat-bot) correctly show "not cross-validated"
+                state["critic_verdict"] = (
+                    "unavailable" if raw_verdict == "SKIPPED" else raw_verdict
+                )
             except (json.JSONDecodeError, OSError):
                 state["critic_verdict"] = "unavailable"
         else:
