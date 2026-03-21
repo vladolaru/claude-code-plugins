@@ -1484,6 +1484,8 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             ctx_path = os.path.join(output_dir, "review-context.json")
             if os.path.isfile(ctx_path):
                 planner_cmd.extend(["--review-context", ctx_path])
+            if config.get("quick"):
+                planner_cmd.append("--quick")
 
             stdout, ok = _run_subprocess(planner_cmd, timeout=60)
 
