@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.78.0] - 2026-03-20
+## [1.78.0] - 2026-03-21
 
 ### Added
 
 - **`linear-issue-pipeline.py`** — 14-step state machine for investigating Linear issues and optionally implementing fixes with draft PRs. Two modes: `investigate` (steps 1-7 + 14: fetch issue, check existing work, gather context, investigate with type-specific paths, write report, post to Linear) and `fix` (all 14 steps: adds write plan, implement, verify, self-review via codex-reviewer, re-verify, create draft PR). Follows the same curated-context-pipeline pattern as `review-pipeline.py` with `STEP_SEQUENCE`, condition-based routing, state management, and curated briefings. Bot-mode only (`interactive: false`).
 - **`pipeline_events.py`** — `PipelineEventEmitter` class for pipeline-to-bot communication via `pipeline-events.jsonl`. Emits milestone events (status message edits), deliverable events (separate Slack messages), and lifecycle events (`step_started`, `step_completed`, `pipeline_complete`, `pipeline_failed`). All writes are best-effort — never raises.
+- **Two-layer repo verification** — Step 1 runs a deterministic `git remote get-url origin` check against `issue-context.json`'s `repo_slug` (catches clone pool errors, interactive wrong-directory). Step 3 adds semantic verification where the LLM cross-references linked PRs, file paths, and component names against the codebase (catches team prefix → wrong repo mapping, e.g., TRAPLAT issue about transact-platform-server routed to wpcom). Both layers write `pipeline-result.json` with `status: "failed"` and a clear degradation note on mismatch.
+- **Complexity-conditional codex review** — Step 8 (Write Plan) instructs the LLM to assess implementation complexity and write `complexity.json`. Step 10 (Verify) routes based on the assessment: small changes (≤3 files, single concern) skip the codex reviewer and rely on the per-task `superpowers:code-reviewer` from subagent-driven-development; medium/large changes continue to step 11 for independent codex review.
+- **`fix_mode_and_unresolved` condition** — Steps 8-13 use this condition so fix-mode runs skip planning/implementation when step 3 finds a merged PR that already resolves the issue.
+- **Pipeline result status derived from real outputs** — `pipeline-result.json` status is `failed` (not `success`) when no verdict or report was produced, `degraded` when fix mode completes without a PR URL, and `success` only when actual artifacts exist. Prevents partial runs from appearing successful to bot consumers.
+- **Mode-specific step 7 guidance** — The "jumps to step 14" note only appears in investigate mode, preventing fix-mode LLMs from stopping after posting the investigation report.
 
 ## [1.77.1] - 2026-03-20
 
