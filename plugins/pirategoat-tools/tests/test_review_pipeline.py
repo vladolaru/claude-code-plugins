@@ -391,6 +391,54 @@ class TestStep5DispatchPlan:
         assert "SKIPPED_OVERRIDE" in text
 
 
+class TestStep5QuickMode:
+    """Step 5 quick mode: filters EXCLUDED_QUICK_MODE agents from display + aggressive nudge."""
+
+    def _make_state_with_quick_plan(self):
+        """State with quick mode agents included."""
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3],
+            "dispatch_plan_summary": {"dispatched": 5, "skipped": 2, "conditional": 1},
+            "dispatch_plan_agents": [
+                {"name": "pr-reviewer", "focus": "PR overall goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
+                {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "DISPATCH", "reason": "keywords matched (commits: auth)"},
+                {"name": "wp-architecture-reviewer", "focus": "WordPress hooks", "status": "EXCLUDED_QUICK_MODE", "reason": "excluded in quick review mode"},
+                {"name": "history-insights-reviewer", "focus": "Git history", "status": "EXCLUDED_QUICK_MODE", "reason": "excluded in quick review mode"},
+                {"name": "reliability-reviewer", "focus": "Error handling", "status": "EXCLUDED_QUICK_MODE", "reason": "excluded in quick review mode"},
+            ],
+        }
+
+    def test_excluded_agents_not_in_situation(self, mod, tmp_path):
+        """EXCLUDED_QUICK_MODE agents should not appear in the briefing."""
+        state = self._make_state_with_quick_plan()
+        config = {"quick": True}
+        g = mod.get_step_guidance(5, "pr", state, {}, config=config)
+        text = "\n".join(g["situation"])
+        assert "pr-reviewer" in text
+        assert "security-reviewer" in text
+        assert "wp-architecture-reviewer" not in text
+        assert "history-insights-reviewer" not in text
+        assert "reliability-reviewer" not in text
+
+    def test_aggressive_override_nudge(self, mod, tmp_path):
+        """Quick mode should nudge the orchestrator to be more aggressive with skips."""
+        state = self._make_state_with_quick_plan()
+        config = {"quick": True}
+        g = mod.get_step_guidance(5, "pr", state, {}, config=config)
+        text = "\n".join(g["actions"])
+        assert "quick" in text.lower()
+
+    def test_normal_mode_shows_all_agents(self, mod, tmp_path):
+        """Without quick mode, all agents shown including those with unusual statuses."""
+        state = self._make_state_with_quick_plan()
+        config = {"quick": False}
+        g = mod.get_step_guidance(5, "pr", state, {}, config=config)
+        text = "\n".join(g["situation"])
+        # In normal mode, EXCLUDED_QUICK_MODE agents should still be visible
+        assert "wp-architecture-reviewer" in text
+
+
 class TestStep6DispatchAgents:
     """Step 6: Dispatch Agents. main() reads dispatch-plan.json, passes agent list."""
 

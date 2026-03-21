@@ -732,8 +732,17 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
 
     # Build human-readable dispatch summary from agent details
     if plan_agents:
-        dispatched = [a for a in plan_agents if a["status"] == "DISPATCH"]
-        skipped = [a for a in plan_agents if a["status"].startswith("SKIPPED")]
+        is_quick = config.get("quick", False) if config else False
+        # In quick mode, filter out EXCLUDED_QUICK_MODE agents from display
+        visible_agents = [
+            a for a in plan_agents
+            if not (is_quick and a["status"] == "EXCLUDED_QUICK_MODE")
+        ]
+        dispatched = [a for a in visible_agents if a["status"] in ("DISPATCH", "DISPATCH_OVERRIDE")]
+        skipped = [
+            a for a in visible_agents
+            if a["status"].startswith("SKIPPED") or a["status"] == "EXCLUDED_QUICK_MODE"
+        ]
 
         if dispatched:
             situation.append("")
@@ -781,6 +790,14 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
     actions.append(f"To override, edit `{od}/dispatch-plan.json`:")
     actions.append('- Force-skip a dispatched agent: set status to `"SKIPPED_OVERRIDE"` with `"override_reason": "..."`')
     actions.append('- Force-dispatch a skipped agent: set status to `"DISPATCH_OVERRIDE"` with `"override_reason": "..."`')
+
+    if config and config.get("quick"):
+        actions.append("")
+        actions.append(
+            "**Quick review mode is active.** Be aggressive with skips — if an agent's "
+            "value is uncertain for this change, skip it. The goal is a fast, focused "
+            "review covering the most likely risk areas."
+        )
 
     return {
         "phase": "EXECUTION",
