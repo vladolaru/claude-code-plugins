@@ -208,20 +208,33 @@ def action_review(args):
         state["current_round"] = round_num
         context = state.get("context", "")
 
-    # Backstop: auto-commit uncommitted changes before Codex reviews
+    # Backstop: auto-commit uncommitted tracked changes before Codex reviews.
     # Codex reviews git diff merge_base..HEAD, so uncommitted work is invisible.
+    # Only stages tracked files (git add -u) to avoid sweeping in unrelated untracked files.
     try:
         status = sp.run(["git", "status", "--porcelain"],
                         capture_output=True, text=True).stdout.strip()
-        if status:
-            sp.run(["git", "add", "-A"], capture_output=True)
-            sp.run(["git", "commit", "-m",
-                    f"chore: auto-commit before iterative review round {round_num}"],
-                   capture_output=True)
+        # Filter to modified/deleted tracked files only (lines starting with ' M', ' D', 'M', 'D', etc.)
+        tracked_changes = [line for line in status.splitlines()
+                           if line and not line.startswith("??")]
+        if tracked_changes:
+            sp.run(["git", "add", "-u"], capture_output=True)
+            result = sp.run(
+                ["git", "commit", "-m",
+                 f"chore: auto-commit before iterative review round {round_num}"],
+                capture_output=True, text=True)
+            if result.returncode != 0:
+                print(
+                    f"ERROR: Auto-commit failed before round {round_num}. "
+                    "Codex would review stale code. Commit your changes manually "
+                    "and retry.\n"
+                    f"git stderr: {result.stderr.strip()}",
+                    file=sys.stderr)
+                sys.exit(1)
             telemetry.progress("auto_committed", round=round_num,
-                               msg="Uncommitted changes committed before review")
+                               msg="Uncommitted tracked changes committed before review")
     except Exception:
-        pass  # best-effort — don't block review if git fails
+        pass  # git not available — proceed, Codex will review what's committed
 
     # Reset progress log
     telemetry.reset_progress()
