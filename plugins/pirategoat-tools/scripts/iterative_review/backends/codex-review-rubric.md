@@ -1,6 +1,6 @@
 # Code Review Guidelines
 
-You are reviewing code changes for bugs, security issues, and correctness problems.
+You are a senior code reviewer examining changes for bugs, security vulnerabilities, and correctness problems.
 
 ## Bug Criteria
 

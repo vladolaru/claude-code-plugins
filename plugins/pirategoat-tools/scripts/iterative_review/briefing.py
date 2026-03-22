@@ -37,14 +37,16 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
         )
         lines.append("")
 
-    # Actions
+    # Actions — Phase 1: Evaluate Findings
     lines.append("## ACTIONS")
+    lines.append("")
+    lines.append("### Phase 1: Evaluate Findings")
     lines.append("")
     lines.append("Codex is an external reviewer. It may lack context, misread intent, or")
     lines.append("flag code that's correct for reasons it can't see. Do not accept or reject")
     lines.append("findings on face value.")
     lines.append("")
-    lines.append("Evaluate — for each finding, work through these steps before deciding:")
+    lines.append("For each finding, work through these steps before deciding:")
     lines.append("")
     lines.append("  1. READ the code at the referenced location and its surrounding context.")
     lines.append("     Open the actual file — do not rely on the finding description alone.")
@@ -60,6 +62,10 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     lines.append("     - rejected: the code is correct — state the specific evidence")
     lines.append("     - deferred: valid but out of scope — note why")
     lines.append("     If you cannot verify a claim after investigation, say so rather than guessing.")
+    lines.append("")
+
+    # Actions — Phase 2: Fix
+    lines.append("### Phase 2: Fix")
     lines.append("")
     lines.append("Fix discipline — right-size the fix based on where the root cause lives:")
     lines.append("")
@@ -95,23 +101,42 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     lines.append("  - Run tests/build/lint")
     lines.append("  - Confirm fixes don't introduce regressions")
     lines.append("")
+
+    # Actions — Phase 3: Commit and Record
+    lines.append("### Phase 3: Commit and Record")
+    lines.append("")
     lines.append("Commit — stage and commit fixes with semantic messages before advancing:")
     lines.append("  - Each fix should be its own logical commit (not a blanket 'fix review findings')")
     lines.append("  - The next review round reviews committed changes against the merge base")
     lines.append("  - Uncommitted fixes are invisible to Codex")
     lines.append("")
-    lines.append(f"Record — write round-{round_num}-outcomes.json")
+    lines.append(f"Record — write round-{round_num}-outcomes.json with one entry per finding:")
+    lines.append("")
+    lines.append(f'  [{{"id": "r{round_num}_f1", "action": "fixed", "summary": "What was fixed."}},')
+    lines.append(f'   {{"id": "r{round_num}_f2", "action": "rejected", "reasoning": "Why it was rejected."}},')
+    lines.append(f'   {{"id": "r{round_num}_f3", "action": "deferred", "reasoning": "Why it was deferred."}}]')
+    lines.append("")
+    lines.append("  Every finding ID must have an outcome. Use 'summary' for fixed, 'reasoning' for rejected/deferred.")
 
     # Stalemate-breaking prompt (round 2+ only)
     if round_num >= 2:
         lines.append("")
-        lines.append("If you find yourself reconsidering a finding you already addressed in a")
-        lines.append("previous round, make a decision and own it. If you've changed your mind,")
-        lines.append("note why. If you stand firm, defer the finding and move on — stalemates")
-        lines.append("waste rounds. If your decision departs from the original spec, flag it")
-        lines.append("explicitly for the PR description.")
+        lines.append("Findings that revisit issues from previous rounds: decide and move on.")
+        lines.append("Changed your mind from a prior round? Note why. Standing firm? Defer and")
+        lines.append("proceed. Decisions that depart from the original spec go in the PR description.")
+        lines.append("Stalemates waste rounds.")
 
     return "\n".join(lines)
+
+
+_TERMINATION_REASONS = {
+    "zero_findings": "Codex found no issues — the code is clean.",
+    "all_rejected": "All findings were rejected — no code changes needed.",
+    "nitpicks_only": "Only P3 suggestions remain — addressed as appropriate.",
+    "max_rounds": "Maximum review rounds reached.",
+    "hard_limit": "Hard round limit reached.",
+    "codex_unavailable": "Codex CLI became unavailable.",
+}
 
 
 def format_completion_briefing(termination, rounds_completed, total_fixed,
@@ -122,11 +147,12 @@ def format_completion_briefing(termination, rounds_completed, total_fixed,
     lines.append("ITERATIVE REVIEW — Review Loop Complete")
     lines.append(f"{'═' * 55}")
     lines.append("")
-    lines.append(f"Termination: {termination}")
+    lines.append(f"Result: {_TERMINATION_REASONS.get(termination, termination)}")
     lines.append(f"Rounds completed: {rounds_completed}")
-    lines.append(f"Total fixed: {total_fixed}")
-    lines.append(f"Total rejected: {total_rejected}")
-    lines.append(f"Total deferred: {total_deferred}")
+    lines.append(f"Fixed: {total_fixed} | Rejected: {total_rejected} | Deferred: {total_deferred}")
+    lines.append("")
+    lines.append("Report these results to the user. If there are deferred items in")
+    lines.append("review-loop-result.json, list them as follow-ups for the PR description.")
     return "\n".join(lines)
 
 
@@ -138,7 +164,15 @@ def format_degraded_briefing(round_num, raw_id):
     lines.append(f"{'═' * 55}")
     lines.append("")
     lines.append(
-        "Codex returned unstructured output. Read the raw output below "
-        "and evaluate manually. Write outcomes referencing `" + raw_id + "`."
+        "Codex returned unstructured output instead of structured findings."
     )
+    lines.append("")
+    lines.append("Read the raw output below and evaluate it:")
+    lines.append("  - Identify actionable issues in the review text")
+    lines.append("  - For each issue, apply the evaluation steps")
+    lines.append("    (READ → VERIFY → EVALUATE → DECIDE) as a normal round")
+    lines.append("  - Assess overall severity (P0-P3) based on the rubric definitions")
+    lines.append("")
+    lines.append(f"Write a single outcome to round-{round_num}-outcomes.json")
+    lines.append(f"referencing `{raw_id}` as the finding ID.")
     return "\n".join(lines)

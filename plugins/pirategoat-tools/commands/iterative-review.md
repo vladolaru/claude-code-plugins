@@ -107,7 +107,8 @@ Report the result and stop.
 ### Triage and Fix
 
 The evaluation briefing lists findings with IDs, severity, file locations,
-and descriptions. For each finding:
+and descriptions. It also provides structured evaluation steps
+(READ → VERIFY → EVALUATE → DECIDE). Follow those steps for each finding.
 
 Codex is an external reviewer — be skeptical. It may lack context, misread
 intent, or flag code that's correct for reasons it can't see. Verify each

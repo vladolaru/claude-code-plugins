@@ -130,8 +130,9 @@ def write_prompt_file(output_dir, round_num, rubric, merge_base,
         parts.append(pushback_log)
         parts.append(
             "\nReview the CURRENT state of the code. Previously fixed issues "
-            "should no longer exist. Do not re-raise rejected items unless you "
-            "have a specific technical counter-argument the reviewer has not addressed.\n"
+            "should no longer exist. Re-raise a rejected item ONLY if you have "
+            "a new technical counter-argument the reviewer has not addressed. "
+            "Otherwise, treat rejected items as resolved.\n"
         )
 
     # Prior analysis doc (round 2+)

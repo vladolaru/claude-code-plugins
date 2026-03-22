@@ -12,6 +12,7 @@ from iterative_review.briefing import (
     format_evaluation_briefing,
     format_completion_briefing,
     format_degraded_briefing,
+    _TERMINATION_REASONS,
 )
 
 
@@ -55,6 +56,26 @@ class TestEvaluationBriefing:
         assert "Fix discipline" in text
         assert "outcomes.json" in text
 
+    def test_contains_phase_headers(self):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
+        assert "### Phase 1: Evaluate Findings" in text
+        assert "### Phase 2: Fix" in text
+        assert "### Phase 3: Commit and Record" in text
+
+    def test_outcomes_format_uses_round_num(self):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=3, merge_base="abc", diff_lines=100)
+        assert "r3_f1" in text
+        assert "r3_f2" in text
+        assert "round-3-outcomes.json" in text
+
+    def test_outcomes_format_shows_all_actions(self):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
+        assert '"fixed"' in text
+        assert '"rejected"' in text
+        assert '"deferred"' in text
+        assert '"summary"' in text
+        assert '"reasoning"' in text
+
     def test_contains_merge_base_visibility(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc123def", diff_lines=750)
         assert "abc123def" in text
@@ -68,7 +89,7 @@ class TestEvaluationBriefing:
 
     def test_round_2_includes_stalemate_prompt(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
-        assert "stalemate" in text.lower() or "own it" in text.lower()
+        assert "stalemate" in text.lower()
 
     def test_round_1_no_stalemate_prompt(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
@@ -80,12 +101,12 @@ class TestEvaluationBriefing:
 
 
 class TestCompletionBriefing:
-    def test_contains_termination_reason(self):
+    def test_contains_human_readable_reason(self):
         text = format_completion_briefing(
             termination="zero_findings", rounds_completed=2,
             total_fixed=3, total_rejected=1, total_deferred=0
         )
-        assert "zero_findings" in text
+        assert "clean" in text.lower()
         assert "complete" in text.lower()
 
     def test_contains_stats(self):
@@ -96,9 +117,41 @@ class TestCompletionBriefing:
         assert "5" in text
         assert "8" in text
 
+    def test_all_termination_reasons_have_descriptions(self):
+        for key in ["zero_findings", "all_rejected", "nitpicks_only",
+                     "max_rounds", "hard_limit", "codex_unavailable"]:
+            assert key in _TERMINATION_REASONS
+
+    def test_unknown_termination_falls_back_to_raw(self):
+        text = format_completion_briefing(
+            termination="some_new_reason", rounds_completed=1,
+            total_fixed=0, total_rejected=0, total_deferred=0
+        )
+        assert "some_new_reason" in text
+
+    def test_contains_actionable_instruction(self):
+        text = format_completion_briefing(
+            termination="zero_findings", rounds_completed=1,
+            total_fixed=0, total_rejected=0, total_deferred=0
+        )
+        assert "report" in text.lower()
+        assert "deferred" in text.lower()
+
 
 class TestDegradedBriefing:
     def test_contains_raw_output_reference(self):
         text = format_degraded_briefing(round_num=1, raw_id="r1_raw")
         assert "r1_raw" in text
-        assert "unstructured" in text.lower() or "manually" in text.lower()
+        assert "unstructured" in text.lower()
+
+    def test_contains_evaluation_guidance(self):
+        text = format_degraded_briefing(round_num=1, raw_id="r1_raw")
+        assert "READ" in text
+        assert "VERIFY" in text
+        assert "EVALUATE" in text
+        assert "DECIDE" in text
+
+    def test_uses_round_num_for_outcomes_file(self):
+        text = format_degraded_briefing(round_num=3, raw_id="r3_raw")
+        assert "round-3-outcomes.json" in text
+        assert "r3_raw" in text
