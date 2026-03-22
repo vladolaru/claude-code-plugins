@@ -452,6 +452,20 @@ class TestStep11SelfReview:
         text = _guidance_text(g)
         assert "merge-base" in text.lower() or "merge_base" in text.lower()
 
+    def test_uses_module_invocation(self, mod):
+        """Step 11 must use 'python3 -m iterative_review', not direct path."""
+        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g)
+        assert "-m iterative_review" in text
+
+    def test_detects_default_branch_dynamically(self, mod):
+        """Step 11 must not hardcode 'main' as the merge-base branch."""
+        g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g)
+        assert "symbolic-ref" in text or "BASE_BRANCH" in text
+
     def test_includes_phase_transition(self, mod):
         g = mod.get_step_guidance(11, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")

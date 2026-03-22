@@ -143,6 +143,17 @@ def get_schema_path():
                         "codex-review-schema.json")
 
 
+def get_rubric():
+    """Read the review rubric from codex-review-rubric.md."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "codex-review-rubric.md")
+    try:
+        with open(path) as f:
+            return f.read()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
 def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800):
     """Invoke `codex exec` with a custom review prompt and structured output.
 

@@ -25,7 +25,7 @@ from .briefing import (
 )
 from .telemetry import ReviewTelemetry
 from .backends.codex import (
-    parse_codex_output, write_prompt_file, get_schema_path,
+    parse_codex_output, write_prompt_file, get_schema_path, get_rubric,
     invoke_codex_review,
 )
 
@@ -145,7 +145,7 @@ def action_review(args):
     prompt_file = write_prompt_file(
         output_dir=output_dir,
         round_num=round_num,
-        rubric="",  # rubric is composed externally or empty for now
+        rubric=get_rubric(),
         merge_base=state["merge_base"],
         context=context if round_num == 1 else state.get("context", ""),
         pushback_log=pushback_log if pushback_log else None,

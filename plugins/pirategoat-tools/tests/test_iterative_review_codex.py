@@ -12,6 +12,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from iterative_review.backends.codex import (
     parse_codex_output,
     write_prompt_file,
+    get_rubric,
 )
 
 
@@ -122,3 +123,20 @@ class TestWritePromptFile:
             context="", pushback_log=None, analysis_doc_path="a.md",
         )
         assert "round-3-prompt.md" in path
+
+
+class TestRubric:
+    def test_rubric_file_exists(self):
+        rubric = get_rubric()
+        assert len(rubric) > 0, "Rubric file missing or empty"
+
+    def test_rubric_contains_severity_levels(self):
+        rubric = get_rubric()
+        assert "P0" in rubric
+        assert "P1" in rubric
+        assert "P2" in rubric
+        assert "P3" in rubric
+
+    def test_rubric_contains_conservative_threshold(self):
+        rubric = get_rubric()
+        assert "no findings" in rubric.lower()
