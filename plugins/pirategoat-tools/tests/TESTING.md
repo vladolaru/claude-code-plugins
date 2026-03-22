@@ -10,11 +10,11 @@ tests/
 ├── __init__.py                       # Package marker
 ├── conftest.py                       # Shared fixtures (setup_temp_git_repo, bootstrap_repo, pipeline_mod)
 ├── test_bootstrap_reviewer.py        # Level 1: Bootstrap unit tests (direct imports)
-├── test_bootstrap_integration.py     # Level 1: Bootstrap integration tests (subprocess)
+├── test_bootstrap_integration.py     # Level 1: Bootstrap integration (smoke + category reps + build_output)
 ├── test_review_pipeline.py           # Level 1: Pipeline briefing tests (get_step_guidance)
 ├── test_pipeline_infrastructure.py   # Level 1: Pipeline infrastructure (step sequence, routing, state, CLI)
 ├── test_pipeline_orchestration.py    # Level 1: Pipeline orchestration (subprocess, telemetry, integration)
-├── test_domain_routing.py            # Level 1: Domain routing evals (pytest)
+├── test_domain_routing.py            # Level 1: Domain routing (direct function calls + branch freshness)
 ├── test_commands.py                  # Level 1: Structural + review command tests (incl. pr-update, switch-to)
 ├── test_commands_helpers.py          # Shared helpers for command tests
 ├── test_review_output.py             # Level 1: ReviewOutputBuilder unit tests (pytest)
@@ -36,49 +36,32 @@ tests/
 
 ### Level 1: Bootstrap Unit Tests (`test_bootstrap_reviewer.py`)
 
-Deterministic pytest suite. Tests `bootstrap-reviewer.py` by importing its functions directly. No network or model calls.
-
-| Class | Functions under test | What it verifies |
-|---|---|---|
-| `TestDeriveReviewerName` | `derive_reviewer_name()` | All agents produce correct output names, edge cases (no suffix, empty string) |
-| `TestExtractProtocolSections` | `extract_protocol_sections()` | Skip-list works, new sections auto-included, code fences not misread, L1 title stripped |
-| `TestExtractFields` | `extract_pr_number()`, `extract_output_dir()`, `extract_status()` | Parses structured scope output, handles missing fields |
-| `TestBuildOutput` | `build_output()` | Section markers, conditional sections (domain rules, exploration scope), output paths, builder snippet |
-| `TestBuildErrorOutput` | `build_error_output()` | Error structure, plugin root, action directive |
+Deterministic pytest suite. Tests `bootstrap-reviewer.py` pure functions by importing them directly — `extract_protocol_sections`, `build_output`, `compute_review_budget`, `load_pr_intent`, and others. No network or model calls.
 
 ### Level 1: Bootstrap Integration Tests (`test_bootstrap_integration.py`)
 
-Integration tests that run the full `bootstrap-reviewer.py` script via subprocess for all agents against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state):
+Integration tests that run `bootstrap-reviewer.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7):
 
-| Class | What it verifies |
-|---|---|
-| `TestOutputStructure` | Every agent produces all required section markers |
-| `TestContentIdentity` | REVIEW RULES content is identical across all agents; DOMAIN RULES identical across test agents |
-| `TestConditionalSections` | DOMAIN RULES only for test agents; EXPLORATION SCOPE only for patterns-reviewer; tests-mutation-reviewer has no scope |
-| `TestPersonalization` | REVIEWER_NAME, output file paths, builder snippet are correct per agent |
-| `TestErrorHandling` | Unknown agent exits 1 with structured error; all valid agents exit 0 |
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestCategoryRepresentatives` | 5 | One comprehensive test per agent category: standard, test-agent, exploration, null-domain, history+override. Each verifies section structure, conditional sections, personalization, and budget in one shot. |
+| `TestArchitecturalInvariants` | 2 | REVIEW RULES identical across 3 representative agents; DOMAIN RULES identical across 2 test agents |
+| `TestSmokeAllAgents` | 21 | Every registered agent exits 0 — the ONE legitimate ALL_AGENTS parameterization (validates registry correctness) |
+| `TestErrorCases` | 2 | Unknown agent exits 1 with structured error output |
+| `TestReviewOutputBuilderAPIExample` | 6 | Section 3 includes complete builder API usage example (direct `build_output()` call) |
+| `TestBootstrapOutputSizeCap` | 4 | Large scope truncated with file reference; small scope inline (direct `build_output()` call) |
+| `TestDynamicDispatchRisk` | 4 | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK; PHP → high, no PHP → low (direct `build_output()` call) |
+| `TestOutputFilenameConsistency` | 2 | Output filenames from `save()` match bootstrap expectations (direct `build_output()` call) |
 
 ### Level 1: Domain Routing Evals (`test_domain_routing.py`)
 
-Deterministic pytest suite that verifies `review-scope.py` routes each diff fixture to the correct set of domains. For every fixture × domain combination, creates a temp git repo, applies the diff, runs `review-scope.py --domain <X>`, and asserts STATUS is `OK` or `NO_DOMAIN_FILES`.
+Deterministic pytest suite that verifies `review-scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess). For each fixture, creates a temp git repo, gets the changed file list via `git diff --name-only`, and runs the filter functions for each domain.
 
-Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parameterized across all 9 domains and all 9 fixtures (81 test cases). Repos are cached per fixture to avoid redundant git operations.
+Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parameterized across all 14 domains and all 12 fixtures (168 test cases). Repos and file lists are cached per fixture.
 
-**Fixture domain coverage:**
+Also includes `TestBranchFreshness` — 6 integration tests that run `review-scope.py` via subprocess to verify merge-base detection, stale branch warnings, and range rebasing (these need the full pipeline).
 
-| Fixture | code | security | perf | arch | wp-arch | php-tests | js-tests | e2e-tests | patterns |
-|---|---|---|---|---|---|---|---|---|---|
-| `php-source.diff` | OK | OK | OK | OK | OK | - | - | - | OK |
-| `js-ts-source.diff` | OK | OK | OK | OK | OK | - | - | - | OK |
-| `php-test-only.diff` | OK | OK | OK | - | OK | OK | - | - | OK |
-| `js-test-only.diff` | OK | OK | OK | - | OK | - | OK | - | OK |
-| `e2e-test-only.diff` | OK | OK | OK | OK | OK | - | - | OK | OK |
-| `mixed-code-and-tests.diff` | OK | OK | OK | OK | OK | OK | OK | - | OK |
-| `wp-hooks-and-i18n.diff` | OK | OK | OK | OK | OK | - | - | - | OK |
-| `multi-file-realistic.diff` | OK | OK | OK | OK | OK | OK | OK | OK | OK |
-| `no-code-changes.diff` | - | - | - | - | - | - | - | - | - |
-
-`OK` = STATUS: OK (domain matches files), `-` = STATUS: NO_DOMAIN_FILES (domain excludes all files)
+**Fixture domain coverage:** See `ROUTING_MATRIX` dict in `test_domain_routing.py` for the complete 12×14 matrix. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
 
 ### Level 1: Command Structure Evals (`test_commands.py`)
 
@@ -223,15 +206,44 @@ Every grader has tests for both:
 
 Protocol extraction uses a skip-list (sections to exclude) rather than an include-list. New sections added to `reviewer-protocol.md` are automatically included in bootstrap output — and the test `test_new_section_auto_included` verifies this. If someone adds a section to the protocol, they don't need to update the bootstrap script or tests.
 
-### 6. All agents, always
+### 6. Parameterize on the axis of variation
 
-Integration tests are parameterized across all reviewer agents. Adding a new agent to `AGENT_CONFIG` in `bootstrap-reviewer.py` automatically includes it in all parameterized tests. No test file changes needed.
+Parameterize tests over the dimension that creates different code paths, not over the entire agent population.
 
-### 7. Tests read real protocol files
+**ALL_AGENTS parameterization is ONLY for smoke tests** — where each agent can independently fail due to config (bad domain, missing protocol file). The smoke test `TestSmokeAllAgents.test_exits_0` validates registry correctness.
+
+**For everything else, use category representatives** — one agent per conditional path through the code. The five categories that cover all branches in `main()`:
+
+| Category | Representative | Path covered |
+|----------|---------------|-------------|
+| Standard | `performance-reviewer` | Default path, no special flags |
+| Test agent | `php-tests-reviewer` | `"tests-reviewer" in protocols` → DOMAIN RULES |
+| Exploration | `patterns-reviewer` | `extra_scope` → EXPLORATION SCOPE |
+| Null domain | `tests-mutation-reviewer` | `domain is None` → no scope discovery |
+| History + override | `history-insights-reviewer` | `file_history` + `budget_override` |
+
+**Adding a new agent?** It automatically appears in the smoke test. If it introduces a new conditional path (new protocol type, new flag), add it as a new category representative.
+
+**Anti-patterns to avoid:**
+- `@pytest.mark.parametrize("agent_name", ALL_AGENTS)` for template string assertions — the template doesn't vary by agent
+- Parameterizing the "absent" case over all non-matching agents — 1-2 representatives suffice for an else-branch
+- Testing `derive_reviewer_name()` output via subprocess for 21 agents — it's a pure function; if it works for 1, it works for all
+
+### 7. Test at the right layer
+
+If a function is importable and deterministic, test it as a unit test — don't invoke it via subprocess. Subprocess tests validate **orchestration**: "does `main()` correctly wire together plugin root discovery → protocol extraction → scope discovery → `build_output()`?" Unit tests validate **logic**: "does `build_output()` include DOMAIN RULES when `domain_rules` is not None?"
+
+**Wrong layer:** Running a subprocess to verify that `"=== REVIEW RULES ===" in stdout` — this is a hardcoded string in `build_output()`, already covered by unit tests.
+
+**Right layer:** Running a subprocess to verify that `returncode == 0` for every registered agent — this exercises the full `main()` orchestration path, which unit tests can't cover.
+
+The `build_output()`-based test classes (`TestReviewOutputBuilderAPIExample`, `TestBootstrapOutputSizeCap`, `TestDynamicDispatchRisk`, `TestOutputFilenameConsistency`) demonstrate the right pattern: import the function, call it directly, assert on the result. Fast and focused.
+
+### 8. Tests read real protocol files
 
 Integration tests run the actual bootstrap script against real `reviewer-protocol.md` and `tests-reviewer-protocol.md` files. This means tests catch heading drift (e.g., someone renames a section that the skip-list references).
 
-### 8. Mock git repos, not the real repo
+### 9. Mock git repos, not the real repo
 
 Integration tests that shell out to scripts (which run git commands) use temporary git repos created from `.diff` fixtures via `setup_temp_git_repo()` in `conftest.py`. This isolates tests from the real repository state — dirty working trees, recent commits, and branch structure don't affect results. The scripts resolve their plugin files via their own script path (`os.path.abspath(__file__)`), so changing `cwd` to a temp repo only affects git operations.
 
@@ -239,10 +251,12 @@ Integration tests that shell out to scripts (which run git commands) use tempora
 
 ### Add a new reviewer agent
 
-1. Add the agent to `AGENT_CONFIG` in `scripts/bootstrap-reviewer.py`
+1. Add the agent to `scripts/agent-registry.json`
 2. Create the agent `.md` file in `agents/`
-3. Run `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py -v`
-4. All parameterized tests automatically pick up the new agent — no test changes needed
+3. Run `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` — the `TestSmokeAllAgents` smoke test automatically picks up the new agent and validates it exits 0
+4. If the agent introduces a **new conditional path** through `main()` (new protocol type, new flag like `file_history` or `extra_scope`), add a category representative test in `TestCategoryRepresentatives`
+5. If the agent introduces a new domain, add it to `ALL_DOMAINS` in `test_domain_routing.py` and update `ROUTING_MATRIX` for each fixture
+6. **Do NOT** add `@pytest.mark.parametrize("agent_name", ALL_AGENTS)` tests for template assertions — the smoke test handles registry validation; category representatives handle conditional paths
 
 ### Add a new grader
 
@@ -272,9 +286,9 @@ Integration tests that shell out to scripts (which run git commands) use tempora
 Follow the pattern in `test_bootstrap_reviewer.py`:
 
 1. Use `importlib` to import from the hyphenated script filename
-2. Write unit tests for pure functions with synthetic inputs
-3. Write integration tests that run the script via subprocess
-4. Use `@pytest.mark.parametrize` for agent-level coverage
+2. Write unit tests for pure functions with synthetic inputs (right layer — principle §7)
+3. Write integration tests via subprocess only for orchestration paths that unit tests can't cover
+4. Use `@pytest.mark.parametrize` only on the axis that creates variation (principle §6) — never ALL_AGENTS for invariant assertions
 5. Derive `PLUGIN_ROOT` from the test file's location (no hardcoded paths)
 
 ### Add a new diff fixture
