@@ -138,39 +138,6 @@ class GradeResult:
 | `grade_output_pair(output_dir, reviewer_name)` | Output directory + reviewer name | Both `.json` and `.md` exist, delegates to json + markdown graders, reviewer name matches |
 | `grade_review_baseline(path)` | Path to `.branch-review-baseline.json` | File exists, valid JSON, required fields (`last_reviewed_sha`, `last_reviewed_at`, `review_type`, `review_count`, `base_ref`, `git_range_used`), SHA format (7-40 hex), positive review_count, range contains `..` |
 
-### Level 3: E2E Pipeline Tests (`tests/e2e/`)
-
-End-to-end tests for the `/pr-review` pipeline using a permanent test repo on GitHub (`vladolaru/pirategoat-pr-review-pipeline-test-repo`). Two layers:
-
-**Layer 1 — Script-level** (`test_scripts.py`): Calls pipeline scripts directly via subprocess against a clone of the test repo. No Claude CLI, no API cost. Validates context schema, merge-base correctness, and dispatch decisions.
-
-**Layer 2 — Full pipeline** (`test_pipeline.py`): Spawns the Claude CLI with `--output-format stream-json`, parses the JSONL stream in real-time, and fires step-level checkpoints. Each test takes 5-15 minutes and costs $2-5. Run manually.
-
-| Component | Purpose |
-|---|---|
-| `conftest.py` | Session-scoped repo clone, per-test output dirs |
-| `expectations.py` | `PRExpectations` dataclass with PR1-4 constants |
-| `assertions.py` | File existence, schema, context field, severity helpers |
-| `stream_monitor.py` | JSONL parser, checkpoint engine, `StreamMonitor` class |
-| `checkpoints.py` | Builds step-level checkpoints from expectations |
-| `test_scripts.py` | Layer 1: script-level tests |
-| `test_pipeline.py` | Layer 2: full pipeline tests |
-
-**Running e2e tests:**
-
-```bash
-# Layer 1 (fast, free):
-pytest plugins/pirategoat-tools/tests/e2e/test_scripts.py -v
-
-# Layer 2 — single PR:
-pytest plugins/pirategoat-tools/tests/e2e/test_pipeline.py -v -k "test_pr1" --timeout=900
-
-# Layer 2 — all PRs (slow, expensive):
-pytest plugins/pirategoat-tools/tests/e2e/test_pipeline.py -v --timeout=900
-```
-
-**Test repo:** 4 permanent PRs exercise clean/buggy/large/non-default-branch scenarios. Reviews on PRs exercise the "analyze PR review state" pipeline step.
-
 ### Level 2: Agent Compliance Evals (`eval_agent_compliance.py`)
 
 Tests that agents actually produce correct output when dispatched. Two modes:

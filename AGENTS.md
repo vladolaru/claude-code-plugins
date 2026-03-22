@@ -215,9 +215,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `commands/switch-to.md` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` |
 | `.claude-plugin/marketplace.json` | `pytest plugins/pirategoat-tools/tests/test_commands.py -v` (validates command registration, agent cross-refs) |
 
-**Run all deterministic tests:** `pytest plugins/pirategoat-tools/tests/ -v --ignore=plugins/pirategoat-tools/tests/e2e 2>&1 | tail -30`
-
-**IMPORTANT:** Always exclude the `tests/e2e/` directory when running the full suite. E2e tests make model calls, are slow, and require manual triggering. The `--ignore` flag is required — without it, pytest will attempt to run e2e tests and hang.
+**Run all tests:** `pytest plugins/pirategoat-tools/tests/ -v 2>&1 | tail -30`
 
 **Test principles:**
 - Code-based graders only (fast, deterministic, no model calls)
