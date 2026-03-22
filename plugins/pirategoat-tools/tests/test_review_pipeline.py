@@ -718,11 +718,11 @@ class TestStep8ReadinessGate:
     """Step 8 readiness gate: blocks reconciliation when agents are still running."""
 
     def test_blocked_when_agents_running(self, mod, tmp_path):
-        """Step 8 should return a blocked briefing when agents_blocked has running agents."""
+        """Step 8 should return a blocked briefing when waiting_on_agents has running agents."""
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
-            "agents_blocked": {
+            "waiting_on_agents": {
                 "running": ["security-reviewer", "performance-reviewer"],
                 "not_dispatched": [],
             },
@@ -747,7 +747,7 @@ class TestStep8ReadinessGate:
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
-            "agents_blocked": {
+            "waiting_on_agents": {
                 "running": ["security-reviewer"],
                 "not_dispatched": ["dead-code-reviewer"],
             },
@@ -759,7 +759,7 @@ class TestStep8ReadinessGate:
         assert "dead-code-reviewer" in text
 
     def test_not_blocked_when_no_running_agents(self, mod, tmp_path):
-        """Step 8 should proceed normally when agents_blocked is absent or empty."""
+        """Step 8 should proceed normally when waiting_on_agents is absent or empty."""
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
@@ -781,7 +781,7 @@ class TestStep8ReadinessGate:
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
-            "agents_blocked": {
+            "waiting_on_agents": {
                 "running": [],
                 "not_dispatched": ["dead-code-reviewer"],
             },

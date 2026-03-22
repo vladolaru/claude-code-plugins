@@ -933,7 +933,7 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
 def _step_8_reconcile(mode, state, context, config, output_dir):
     """Step 8: Reconcile + Verify — dispatch reconciliator with all context."""
     # Hard readiness gate: if agents are still running, block reconciliation
-    blocked = state.get("agents_blocked")
+    blocked = state.get("waiting_on_agents")
     if blocked and blocked.get("running"):
         running = blocked["running"]
         od = output_dir or "<OUTPUT_DIR>"
@@ -1687,7 +1687,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     elif "NOT_DISPATCHED" in stripped:
                         name = stripped.split()[0]
                         not_dispatched.append(name)
-                state["agents_blocked"] = {
+                state["waiting_on_agents"] = {
                     "running": running,
                     "not_dispatched": not_dispatched,
                     "status_output": r.stdout.strip(),
