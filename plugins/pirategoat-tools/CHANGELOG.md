@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.82.0] - 2026-03-22
+
+### Added
+- **`not_applicable` verdict** — reviewer agents that determine changes are not
+  relevant to their domain produce `verdict: "not_applicable"` with a `skip_reason`
+  instead of a misleading `approve`. This prevents the reconciliator and orchestrator
+  from over-indexing on agent counts that include abstentions
+- **`mark_not_applicable(reason)` method** on `ReviewOutputBuilder` — the API agents
+  call during the Quick Relevance Check or NO_DOMAIN_FILES path to signal abstention
+- **Reconciliator not-applicable awareness** — separates abstaining agents from
+  reviewing agents in both narrative output and `meta.reconciliation` metadata
+  (`not_applicable_count`, `not_applicable_agents`, `reviewing_agents`)
+
+### Changed
+- Reviewer protocol's Quick Relevance Check uses `mark_not_applicable()` instead of
+  informal positive-observation-only pattern
+- NO_DOMAIN_FILES path uses `mark_not_applicable()` instead of plain approve
+- Tests-reviewer protocol's "No test files" path uses `mark_not_applicable()`
+- `Verdict` type extended with `'not_applicable'`; `skip_reason` field added to
+  `ReviewOutput` schema
+
 ## [1.81.0] - 2026-03-22
 
 ### Added
