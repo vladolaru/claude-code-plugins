@@ -1,0 +1,32 @@
+diff --git a/src/PaymentHandler.php b/src/PaymentHandler.php
+new file mode 100644
+--- /dev/null
++++ b/src/PaymentHandler.php
+@@ -0,0 +1,12 @@
++<?php
++
++class PaymentHandler {
++    public function process_payment( $order_id ) {
++        $order = wc_get_order( $order_id );
++        if ( ! $order ) {
++            return new WP_Error( 'invalid_order', 'Order not found' );
++        }
++        $amount = $order->get_total();
++        return $this->gateway->charge( $amount );
++    }
++}
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,10 @@
++name: CI
++on:
++  push:
++    branches: [main]
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - run: npm test

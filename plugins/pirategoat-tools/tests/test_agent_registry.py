@@ -175,6 +175,27 @@ class TestAgentCount:
         )
 
 
+class TestNoSemanticFilterConfig:
+    """Agents with no_semantic_filter must have valid domain (so scope discovery runs)."""
+
+    def test_no_semantic_filter_agents_have_domain(self, agents):
+        """no_semantic_filter is only meaningful when domain-based scope runs."""
+        for agent_name, config in agents.items():
+            if config.get("no_semantic_filter"):
+                assert config["domain"] is not None, (
+                    f"Agent '{agent_name}' has no_semantic_filter=true but domain=null "
+                    f"— the flag has no effect without scope discovery"
+                )
+
+    def test_no_semantic_filter_only_on_expected_agents(self, agents):
+        """Guard against accidental no_semantic_filter proliferation."""
+        expected = {"wp-architecture-reviewer", "patterns-reviewer"}
+        actual = {name for name, cfg in agents.items() if cfg.get("no_semantic_filter")}
+        assert actual == expected, (
+            f"Expected no_semantic_filter on {expected}, found on {actual}"
+        )
+
+
 class TestBootstrapCompatibility:
     """Registry entries are compatible with bootstrap-reviewer.py expectations.
 

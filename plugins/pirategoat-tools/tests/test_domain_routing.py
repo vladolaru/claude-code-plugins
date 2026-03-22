@@ -10,6 +10,7 @@ Also tests --preflight mode which checks all domains in one invocation.
 Zero model calls.
 """
 
+import importlib
 import json
 import os
 import subprocess
@@ -28,6 +29,11 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 REVIEW_SCOPE_SCRIPT = SCRIPTS_DIR / "review-scope.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
+
+# Import review-scope functions directly for domain routing tests.
+# filter_noise() and filter_domain() are pure functions — no subprocess needed.
+sys.path.insert(0, str(SCRIPTS_DIR))
+_review_scope = importlib.import_module("review-scope")
 
 ALL_DOMAINS = [
     "a11y",
@@ -306,6 +312,7 @@ def cleanup_repos():
     for path in _repo_cache.values():
         shutil.rmtree(path, ignore_errors=True)
     _repo_cache.clear()
+    _file_list_cache.clear()
 
 
 def _get_repo(fixture_name: str) -> str:
@@ -317,11 +324,35 @@ def _get_repo(fixture_name: str) -> str:
     return _repo_cache[fixture_name]
 
 
+_file_list_cache: dict = {}
+
+
+def _get_changed_files(fixture_name: str) -> list:
+    """Get changed files for a fixture via git. Cached per fixture."""
+    if fixture_name not in _file_list_cache:
+        repo = _get_repo(fixture_name)
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1..HEAD"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        )
+        _file_list_cache[fixture_name] = [
+            f for f in result.stdout.strip().split("\n") if f
+        ]
+    return _file_list_cache[fixture_name]
+
+
 @pytest.mark.parametrize("fixture_name, domain, expected_status", _make_params())
 def test_domain_routing(fixture_name: str, domain: str, expected_status: str):
-    """Verify review-scope.py routes each fixture to the correct domains."""
-    repo = _get_repo(fixture_name)
-    actual = run_review_scope(domain, repo)
+    """Verify filter_noise + filter_domain route each fixture to the correct domains.
+
+    Uses direct function calls instead of subprocess. The routing logic
+    IS filter_noise() + filter_domain() — testing them directly is testing
+    the routing contract without 168 Python process spawns.
+    """
+    files = _get_changed_files(fixture_name)
+    after_noise, _ = _review_scope.filter_noise(files)
+    matched, _ = _review_scope.filter_domain(after_noise, domain)
+    actual = "OK" if matched else "NO_DOMAIN_FILES"
     assert actual == expected_status, (
         f"Fixture {fixture_name}, domain {domain}: "
         f"expected STATUS={expected_status}, got STATUS={actual}"

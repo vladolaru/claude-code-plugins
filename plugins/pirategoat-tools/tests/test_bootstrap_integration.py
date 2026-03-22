@@ -2,7 +2,6 @@
 
 import importlib
 import importlib.util
-import json
 import os
 import subprocess
 import sys
@@ -26,8 +25,6 @@ build_output = _mod.build_output
 derive_reviewer_name = _mod.derive_reviewer_name
 
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
-TEST_AGENTS = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
-
 
 # ---------------------------------------------------------------------------
 # Temp repo for integration tests (created once, reused across all tests)
@@ -35,22 +32,21 @@ TEST_AGENTS = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", 
 sys.path.insert(0, str(TESTS_DIR))
 from conftest import setup_temp_git_repo
 
-_BOOTSTRAP_REPO = None
+_fixture_repo_cache: dict = {}
 
 
-def _get_bootstrap_repo() -> str:
-    """Lazily create a temp git repo from multi-file-realistic.diff."""
-    global _BOOTSTRAP_REPO
-    if _BOOTSTRAP_REPO is None:
-        diff = str(TESTS_DIR / "fixtures" / "multi-file-realistic.diff")
-        _BOOTSTRAP_REPO = setup_temp_git_repo(diff)
-    return _BOOTSTRAP_REPO
+def _get_fixture_repo(fixture: str = "multi-file-realistic.diff") -> str:
+    """Lazily create a temp git repo from the given fixture diff."""
+    if fixture not in _fixture_repo_cache:
+        diff = str(TESTS_DIR / "fixtures" / fixture)
+        _fixture_repo_cache[fixture] = setup_temp_git_repo(diff)
+    return _fixture_repo_cache[fixture]
 
 
-def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+def run_bootstrap(*args: str, timeout: int = 60, fixture: str = "multi-file-realistic.diff") -> subprocess.CompletedProcess:
     """Run bootstrap-reviewer.py via subprocess against a temp git repo.
 
-    Uses a temp repo from multi-file-realistic.diff so tests are fully
+    Uses a temp repo from the specified fixture diff so tests are fully
     isolated from the real repository state. Always passes
     --range HEAD~1..HEAD for deterministic behavior.
     """
@@ -60,44 +56,177 @@ def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     cmd = [sys.executable, str(BOOTSTRAP_SCRIPT)] + full_args
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout,
-        cwd=_get_bootstrap_repo(),
+        cwd=_get_fixture_repo(fixture),
     )
 
 
-class TestOutputStructure:
-    """All agents produce correct section markers."""
+class TestCategoryRepresentatives:
+    """One integration test per agent category.
 
-    @pytest.mark.parametrize("agent_name", ALL_AGENTS)
-    def test_section_markers(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
+    Each test runs the full subprocess chain for one representative agent
+    and verifies section structure, conditional sections, personalization,
+    and budget — all in one comprehensive assertion set.
+
+    This replaces the previous pattern of parameterizing every assertion
+    over ALL_AGENTS. Each category covers a distinct conditional path
+    through main(). If an assertion holds for one agent in the category,
+    it holds for all agents in that category (same code path).
+    """
+
+    def test_standard_agent(self):
+        """Standard conditional agent with no special flags (performance-reviewer)."""
+        result = run_bootstrap("--agent", "performance-reviewer", "--output-dir", "/tmp/test-cat")
         stdout = result.stdout
+        assert result.returncode == 0
 
-        assert f"=== BOOTSTRAP: {agent_name} ===" in stdout
+        # Section structure (hardcoded in build_output template)
+        assert "=== BOOTSTRAP: performance-reviewer ===" in stdout
         assert "--- Section 1: REVIEW RULES" in stdout
         assert "=== REVIEW RULES ===" in stdout
         assert "--- Section 2: REVIEW CONTENT" in stdout
         assert "--- Section 3: OUTPUT INSTRUCTIONS" in stdout
         assert "=== OUTPUT INSTRUCTIONS ===" in stdout
 
+        # Personalization
+        assert "REVIEWER_NAME: performance" in stdout
+        assert "/tmp/test-cat/performance-review.json" in stdout
+        assert "/tmp/test-cat/performance-review.md" in stdout
+        assert 'reviewer="performance"' in stdout
 
-class TestContentIdentity:
-    """REVIEW RULES content identical across all agents."""
+        # Budget present with hard ceiling
+        assert "=== REVIEW BUDGET ===" in stdout
+        assert "Target: ~" in stdout
+        assert "Hard ceiling:" in stdout
+        assert "MUST stop" in stdout
 
-    @pytest.fixture(scope="class")
-    def agent_outputs(self):
-        """Run bootstrap for all agents and cache outputs."""
-        outputs = {}
-        for agent in ALL_AGENTS:
-            result = run_bootstrap("--agent", agent, "--output-dir", "/tmp/test-bootstrap")
-            outputs[agent] = result.stdout
-        return outputs
+        # Conditional sections absent for standard agents
+        assert "=== DOMAIN RULES ===" not in stdout
+        assert "=== EXPLORATION SCOPE ===" not in stdout
+        assert "=== FILE HISTORY ===" not in stdout
 
-    def _extract_section(self, text: str, start_marker: str, *end_markers: str) -> str:
-        """Extract text between start_marker and the earliest end_marker found."""
+        # REVIEW SCOPE header not duplicated
+        assert stdout.count("=== REVIEW SCOPE ===") <= 1
+
+    def test_test_agent(self):
+        """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
+        result = run_bootstrap("--agent", "php-tests-reviewer", "--output-dir", "/tmp/test-cat")
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # Test-agent-specific: DOMAIN RULES present
+        assert "=== DOMAIN RULES ===" in stdout
+
+        # Standard structure still present
+        assert "=== REVIEW RULES ===" in stdout
+        assert "=== REVIEW BUDGET ===" in stdout
+        assert "REVIEWER_NAME: php-tests" in stdout
+        assert "/tmp/test-cat/php-tests-review.json" in stdout
+        assert 'reviewer="php-tests"' in stdout
+
+        # Other conditional sections absent
+        assert "=== EXPLORATION SCOPE ===" not in stdout
+
+    def test_exploration_agent(self):
+        """patterns-reviewer gets EXPLORATION SCOPE + no_semantic_filter (patterns-reviewer)."""
+        result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", "/tmp/test-cat")
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # Exploration-specific: EXPLORATION SCOPE present
+        assert "=== EXPLORATION SCOPE ===" in stdout
+
+        # Personalization
+        assert "REVIEWER_NAME: patterns" in stdout
+        assert 'reviewer="patterns"' in stdout
+
+        # Not a test agent — no DOMAIN RULES
+        assert "=== DOMAIN RULES ===" not in stdout
+
+    def test_null_domain_agent(self):
+        """Null-domain agent skips scope discovery (tests-mutation-reviewer)."""
+        result = run_bootstrap("--agent", "tests-mutation-reviewer", "--output-dir", "/tmp/test-cat")
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # Null-domain-specific: no scope discovery
+        assert "No scope discovery" in stdout
+
+        # tests-mutation-reviewer has protocols=["reviewer"], NOT "tests-reviewer"
+        assert "=== DOMAIN RULES ===" not in stdout
+
+        # Personalization still works
+        assert "REVIEWER_NAME: tests-mutation" in stdout
+        assert 'reviewer="tests-mutation"' in stdout
+
+    def test_secondary_domains_agent(self):
+        """Agent with secondary_domains gets SECONDARY SCOPE (security-reviewer).
+
+        Uses php-with-ci-config fixture which has both security-domain files
+        (PHP) and config-ops files (CI YAML), so the secondary scope append
+        branch is exercised.
+        """
+        result = run_bootstrap(
+            "--agent", "security-reviewer", "--output-dir", "/tmp/test-cat",
+            fixture="php-with-ci-config.diff",
+        )
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # Secondary domains: config-ops scope appended
+        assert "=== SECONDARY SCOPE: config-ops ===" in stdout
+
+        # Standard structure still present
+        assert "=== REVIEW RULES ===" in stdout
+        assert "REVIEWER_NAME: security" in stdout
+
+    def test_history_and_budget_override_agent(self):
+        """history-insights-reviewer gets FILE HISTORY + budget override."""
+        result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-cat")
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # History-specific: FILE HISTORY section present
+        assert "=== FILE HISTORY ===" in stdout
+
+        # Budget override: fixed value 45 (from registry), not scope-computed
+        assert "Target: ~45 tool calls" in stdout
+
+        # Personalization
+        assert "REVIEWER_NAME: history-insights" in stdout
+
+    def test_file_history_without_budget_override(self):
+        """api-contract-reviewer gets FILE HISTORY but uses scope-computed budget."""
+        result = run_bootstrap("--agent", "api-contract-reviewer", "--output-dir", "/tmp/test-cat")
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # file_history present
+        assert "=== FILE HISTORY ===" in stdout
+
+        # No budget override — uses scope-computed value (not 45)
+        assert "Target: ~45 tool calls" not in stdout
+        assert "Target: ~" in stdout
+
+        # Personalization
+        assert "REVIEWER_NAME: api-contract" in stdout
+
+
+class TestArchitecturalInvariants:
+    """Cross-agent properties that must hold.
+
+    These test real architectural contracts, not template strings.
+    Uses 3 representative agents (standard, test, special) — sufficient
+    to verify determinism without running all 21.
+    """
+
+    _REPRESENTATIVE_AGENTS = ["performance-reviewer", "php-tests-reviewer", "patterns-reviewer"]
+
+    @staticmethod
+    def _extract_section(text: str, start_marker: str, *end_markers: str) -> str:
+        """Extract text between start_marker and the earliest end_marker."""
         start = text.find(start_marker)
         if start == -1:
             return ""
-        # Find the earliest end marker after the start
         end = len(text)
         for marker in end_markers:
             pos = text.find(marker, start + len(start_marker))
@@ -105,134 +234,69 @@ class TestContentIdentity:
                 end = pos
         return text[start:end].strip()
 
-    def test_review_rules_identical_across_agents(self, agent_outputs):
-        """REVIEW RULES section should be identical for all agents.
+    def test_review_rules_identical_across_categories(self):
+        """REVIEW RULES (shared protocol) must be identical for all agent categories.
 
-        End at whichever comes first: DOMAIN RULES, REVIEW BUDGET, or Section 2.
+        The protocol extraction uses the same file + same skip-list for every agent.
+        If it produces different results, something is wrong with the extraction logic
+        or the protocol file has agent-conditional content (which it should not).
         """
         rules = {}
-        for agent, output in agent_outputs.items():
-            section = self._extract_section(
-                output, "=== REVIEW RULES ===",
+        for agent in self._REPRESENTATIVE_AGENTS:
+            result = run_bootstrap("--agent", agent, "--output-dir", "/tmp/test-inv")
+            rules[agent] = self._extract_section(
+                result.stdout, "=== REVIEW RULES ===",
                 "=== DOMAIN RULES ===", "=== REVIEW BUDGET ===", "--- Section 2:",
             )
-            rules[agent] = section
 
-        reference = rules[ALL_AGENTS[0]]
-        for agent in ALL_AGENTS[1:]:
+        reference = rules[self._REPRESENTATIVE_AGENTS[0]]
+        assert reference, "REVIEW RULES section should not be empty"
+        for agent in self._REPRESENTATIVE_AGENTS[1:]:
             assert rules[agent] == reference, (
-                f"REVIEW RULES differ between {ALL_AGENTS[0]} and {agent}"
+                f"REVIEW RULES differ between {self._REPRESENTATIVE_AGENTS[0]} and {agent}"
             )
 
-    def test_domain_rules_identical_across_test_agents(self, agent_outputs):
-        """DOMAIN RULES should be identical for all test agents."""
+    def test_domain_rules_identical_across_test_agents(self):
+        """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents.
+
+        All 4 test agents (php, js, e2e, go) must produce the same DOMAIN RULES.
+        A registry drift removing tests-reviewer from any agent would be caught here.
+        """
+        agents = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
         rules = {}
-        for agent in TEST_AGENTS:
-            output = agent_outputs[agent]
-            section = self._extract_section(output, "=== DOMAIN RULES ===", "=== REVIEW BUDGET ===", "--- Section 2:")
-            rules[agent] = section
+        for agent in agents:
+            result = run_bootstrap("--agent", agent, "--output-dir", "/tmp/test-inv")
+            rules[agent] = self._extract_section(
+                result.stdout, "=== DOMAIN RULES ===",
+                "=== REVIEW BUDGET ===", "--- Section 2:",
+            )
 
-
-
-        reference = rules[TEST_AGENTS[0]]
-        assert reference, "Expected DOMAIN RULES for test agents"
-        for agent in TEST_AGENTS[1:]:
+        reference = rules[agents[0]]
+        assert reference, "DOMAIN RULES section should not be empty"
+        for agent in agents[1:]:
             assert rules[agent] == reference, (
-                f"DOMAIN RULES differ between {TEST_AGENTS[0]} and {agent}"
+                f"DOMAIN RULES differ between {agents[0]} and {agent}"
             )
 
 
-class TestConditionalSections:
-    """Sections appear only for relevant agents."""
+class TestSmokeAllAgents:
+    """Every registered agent must run bootstrap without crashing.
 
-    @pytest.mark.parametrize("agent_name", TEST_AGENTS)
-    def test_domain_rules_present_for_test_agents(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
-        assert "=== DOMAIN RULES ===" in result.stdout
-
-    @pytest.mark.parametrize(
-        "agent_name",
-        [a for a in ALL_AGENTS if a not in TEST_AGENTS],
-    )
-    def test_domain_rules_absent_for_non_test_agents(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
-        assert "=== DOMAIN RULES ===" not in result.stdout
-
-    def test_exploration_scope_for_patterns_reviewer(self):
-        result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", "/tmp/test-bootstrap")
-        assert "=== EXPLORATION SCOPE ===" in result.stdout
-
-    @pytest.mark.parametrize(
-        "agent_name",
-        [a for a in ALL_AGENTS if a != "patterns-reviewer"],
-    )
-    def test_no_exploration_scope_for_other_agents(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
-        assert "=== EXPLORATION SCOPE ===" not in result.stdout
-
-    def test_mutation_reviewer_no_scope(self):
-        result = run_bootstrap("--agent", "tests-mutation-reviewer", "--output-dir", "/tmp/test-bootstrap")
-        assert "No scope discovery" in result.stdout
+    This is the one legitimate ALL_AGENTS parameterization — each agent
+    CAN independently fail due to bad registry config (invalid domain,
+    missing protocol file, etc.). The test validates registry correctness.
+    """
 
     @pytest.mark.parametrize("agent_name", ALL_AGENTS)
-    def test_review_budget_present_for_all_agents(self, agent_name):
-        """Every agent should receive a REVIEW BUDGET section."""
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
-        assert "=== REVIEW BUDGET ===" in result.stdout
-        assert "Target: ~" in result.stdout
-        assert "tool calls." in result.stdout
-
-    @pytest.mark.parametrize("agent_name", ALL_AGENTS)
-    def test_review_budget_has_hard_ceiling(self, agent_name):
-        """Budget section must include a hard ceiling instruction."""
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-budget-ceiling")
-        assert "Hard ceiling:" in result.stdout
-        assert "MUST stop" in result.stdout
-
-    def test_history_insights_budget_override(self):
-        """history-insights-reviewer should get its budget_override value (45), not computed value."""
-        result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-budget-override")
-        assert "Target: ~45 tool calls" in result.stdout
-
-    @pytest.mark.parametrize("agent_name", ALL_AGENTS)
-    def test_review_scope_header_not_duplicated(self, agent_name):
-        """The REVIEW SCOPE header should appear at most once in bootstrap output."""
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-scope-header")
-        count = result.stdout.count("=== REVIEW SCOPE ===")
-        assert count <= 1, f"Expected at most 1 REVIEW SCOPE header, found {count}"
+    def test_exits_0(self, agent_name):
+        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-smoke")
+        assert result.returncode == 0, (
+            f"{agent_name} exited with {result.returncode}: {result.stderr}"
+        )
 
 
-class TestPersonalization:
-    """Agent-specific values are correctly interpolated."""
-
-    @pytest.mark.parametrize(
-        "agent_name,reviewer_name",
-        [(a, derive_reviewer_name(a)) for a in ALL_AGENTS],
-    )
-    def test_reviewer_name(self, agent_name, reviewer_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-personalization")
-        assert f"REVIEWER_NAME: {reviewer_name}" in result.stdout
-
-    @pytest.mark.parametrize(
-        "agent_name,reviewer_name",
-        [(a, derive_reviewer_name(a)) for a in ALL_AGENTS],
-    )
-    def test_output_file_paths(self, agent_name, reviewer_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-personalization")
-        assert f"/tmp/test-personalization/{reviewer_name}-review.json" in result.stdout
-        assert f"/tmp/test-personalization/{reviewer_name}-review.md" in result.stdout
-
-    @pytest.mark.parametrize(
-        "agent_name,reviewer_name",
-        [(a, derive_reviewer_name(a)) for a in ALL_AGENTS],
-    )
-    def test_builder_snippet(self, agent_name, reviewer_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-personalization")
-        assert f'reviewer="{reviewer_name}"' in result.stdout
-
-
-class TestErrorHandling:
-    """Error cases: unknown agent, valid agents."""
+class TestErrorCases:
+    """Error paths: unknown agent, malformed input."""
 
     def test_unknown_agent_exits_1(self):
         result = run_bootstrap("--agent", "nonexistent-reviewer", "--output-dir", "/tmp/test-err")
@@ -244,73 +308,6 @@ class TestErrorHandling:
         result = run_bootstrap("--agent", "fake", "--output-dir", "/tmp/test-err")
         assert "=== BOOTSTRAP: fake ===" in result.stdout
         assert "ACTION: Report this error" in result.stdout
-
-    @pytest.mark.parametrize("agent_name", ALL_AGENTS)
-    def test_valid_agents_exit_0(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
-        assert result.returncode == 0, f"{agent_name} exited with {result.returncode}: {result.stderr}"
-
-
-class TestNoSemanticFilter:
-    """no_semantic_filter flag passes --no-semantic-filter to scope discovery."""
-
-    def test_wp_architecture_reviewer_gets_no_semantic_filter(self):
-        """wp-architecture-reviewer has no_semantic_filter: true and scope cmd includes the flag."""
-        result = run_bootstrap("--agent", "wp-architecture-reviewer", "--output-dir", "/tmp/test-bootstrap")
-        # The agent should succeed (not error out)
-        assert result.returncode == 0, f"Exit {result.returncode}: {result.stderr}"
-        # Verify the registry flag is set for this agent
-        assert AGENT_CONFIG["wp-architecture-reviewer"].get("no_semantic_filter") is True
-
-    def test_patterns_reviewer_gets_no_semantic_filter(self):
-        """patterns-reviewer has no_semantic_filter: true and scope cmd includes the flag."""
-        result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", "/tmp/test-bootstrap")
-        assert result.returncode == 0, f"Exit {result.returncode}: {result.stderr}"
-        assert AGENT_CONFIG["patterns-reviewer"].get("no_semantic_filter") is True
-
-    def test_agents_without_flag_do_not_have_it(self):
-        """Agents without no_semantic_filter should not have the flag set."""
-        for agent_name, config in AGENT_CONFIG.items():
-            if agent_name in ("wp-architecture-reviewer", "patterns-reviewer"):
-                continue
-            assert not config.get("no_semantic_filter", False), (
-                f"Agent '{agent_name}' unexpectedly has no_semantic_filter set"
-            )
-
-    def test_no_semantic_filter_appended_to_scope_flags(self):
-        """When no_semantic_filter is true, --no-semantic-filter is passed to run_scope_discovery."""
-        # We verify this by importing the module and checking that the config
-        # value is read during bootstrap. The integration test via subprocess
-        # confirms the flag reaches review-scope.py (which already supports it).
-        # Here we verify the registry config is correct.
-        for agent_name in ("wp-architecture-reviewer", "patterns-reviewer"):
-            config = AGENT_CONFIG[agent_name]
-            assert config.get("no_semantic_filter") is True
-            # Also verify domain is set (so scope discovery runs)
-            assert config["domain"] is not None
-
-
-# Dynamically determine which agents have file_history from the registry
-_AGENTS_WITH_HISTORY = [
-    name for name, cfg in AGENT_CONFIG.items() if cfg.get("file_history")
-]
-_AGENTS_WITHOUT_HISTORY = [
-    name for name in ALL_AGENTS if name not in _AGENTS_WITH_HISTORY
-]
-
-
-class TestFileHistory:
-    """File history section for agents with file_history enabled in registry."""
-
-    @pytest.mark.parametrize("agent_name", _AGENTS_WITH_HISTORY)
-    def test_file_history_present_for_enabled_agents(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
-        assert "=== FILE HISTORY ===" in result.stdout
-
-    @pytest.mark.parametrize("agent_name", _AGENTS_WITHOUT_HISTORY)
-    def test_file_history_absent_for_other_agents(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-bootstrap")
-        assert "=== FILE HISTORY ===" not in result.stdout
 
 
 class TestReviewOutputBuilderAPIExample:
