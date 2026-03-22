@@ -94,8 +94,9 @@ Skip-list (sections bootstrap replaces with concrete values):
 The prompt bootstrap builds uses deliberate section ordering. Preserve this order when modifying `bootstrap-reviewer.py` or protocol files:
 
 1. **REVIEW RULES** (top) — behavioral steering via primacy effect. Agent reads rules first, anchoring behavior.
-2. **REVIEW CONTENT** (middle) — the actual diff/scope. Processing zone where the agent does its work.
-3. **OUTPUT INSTRUCTIONS** (bottom) — format and file paths. Recency effect ensures the agent remembers how to produce output.
+2. **Context sections** — PR INTENT (raw PR metadata), REVIEW FOCUS (pipeline synthesis from change-purpose.md), REVIEWER-REQUESTED FOCUS (requester's additional instructions from `run-config.json`, present only when steering keywords were provided), and REVIEW BUDGET (scope-proportionate tool call calibration).
+3. **REVIEW CONTENT** (middle) — the actual diff/scope. Processing zone where the agent does its work.
+4. **OUTPUT INSTRUCTIONS** (bottom) — format and file paths. Recency effect ensures the agent remembers how to produce output.
 
 ## Agent Registry
 
