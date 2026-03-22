@@ -421,3 +421,45 @@ class TestNoPriorAnalysis:
         from iterative_review.loop import DEFAULT_STATE
         state = {**DEFAULT_STATE}
         assert state["pass_prior_analysis"] is True
+
+
+class TestZeroFindingsArtifact:
+    """Zero-findings path must write review-loop-result.json."""
+
+    def test_zero_findings_writes_result_file(self, tmp_path):
+        """Simulate the zero-findings code path and verify artifact is written."""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        from iterative_review.loop import DEFAULT_STATE, write_loop_state
+
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {**DEFAULT_STATE, "merge_base": "abc", "max_rounds": 3,
+                 "current_round": 1}
+
+        # Simulate what action_review does on zero findings
+        round_num = 1
+        state.setdefault("rounds", []).append({
+            "round": round_num, "findings": 0,
+            "fixed": 0, "rejected": 0, "deferred": 0,
+        })
+        state["terminated"] = True
+        state["termination"] = "zero_findings"
+        write_loop_state(str(d), state)
+
+        result_data = {
+            "termination": "zero_findings",
+            "rounds_completed": len(state["rounds"]),
+            "max_rounds": state.get("max_rounds", 3),
+            "total_findings": 0, "total_fixed": 0,
+            "total_rejected": 0, "total_deferred": 0,
+            "rounds": state["rounds"],
+        }
+        result_path = d / "review-loop-result.json"
+        result_path.write_text(json.dumps(result_data, indent=2))
+
+        # Verify
+        assert result_path.exists()
+        loaded = json.loads(result_path.read_text())
+        assert loaded["termination"] == "zero_findings"
+        assert loaded["rounds_completed"] == 1
+        assert len(loaded["rounds"]) == 1

@@ -69,10 +69,17 @@ def action_review(args):
             state["context"] = context
 
         # Compute diff size (noise-filtered)
+        # Git paths are repo-root-relative, so run git commands from the repo root
         try:
+            toplevel = sp.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True
+            ).stdout.strip()
+            git_cwd = toplevel if toplevel else None
+
             result = sp.run(
                 ["git", "diff", "--name-only", f"{args.merge_base}..HEAD"],
-                capture_output=True, text=True
+                capture_output=True, text=True, cwd=git_cwd
             )
             all_files = [f for f in result.stdout.strip().split("\n") if f]
             relevant, excluded = compute_relevant_diff_size(all_files)
@@ -80,7 +87,7 @@ def action_review(args):
             if relevant:
                 stat_result = sp.run(
                     ["git", "diff", "--stat", f"{args.merge_base}..HEAD", "--"] + relevant,
-                    capture_output=True, text=True
+                    capture_output=True, text=True, cwd=git_cwd
                 )
                 # Parse last line: " N files changed, X insertions(+), Y deletions(-)"
                 m = re.search(r'(\d+) insertions?\(\+\)', stat_result.stdout)
@@ -211,13 +218,37 @@ def action_review(args):
 
     # Check zero findings convergence
     if len(findings) == 0:
+        state.setdefault("rounds", []).append({
+            "round": round_num,
+            "findings": 0,
+            "fixed": 0,
+            "rejected": 0,
+            "deferred": 0,
+        })
         state["terminated"] = True
         state["termination"] = "zero_findings"
         write_loop_state(output_dir, state)
+
+        # Write review-loop-result.json (same as advance path)
+        result_data = {
+            "termination": "zero_findings",
+            "rounds_completed": len(state["rounds"]),
+            "max_rounds": state.get("max_rounds", 3),
+            "total_findings": 0,
+            "total_fixed": 0,
+            "total_rejected": 0,
+            "total_deferred": 0,
+            "rounds": state["rounds"],
+        }
+        result_path = os.path.join(output_dir, "review-loop-result.json")
+        with open(result_path, "w") as f:
+            json.dump(result_data, f, indent=2)
+
         telemetry.pipeline_event("review_loop_completed",
                                  termination="zero_findings",
-                                 rounds_completed=round_num - 1)
-        print(format_completion_briefing("zero_findings", round_num - 1, 0, 0, 0))
+                                 rounds_completed=len(state["rounds"]))
+        print(format_completion_briefing("zero_findings", len(state["rounds"]),
+                                         0, 0, 0))
         return
 
     write_loop_state(output_dir, state)
