@@ -1196,7 +1196,7 @@ def _step_14_present_results(mode, state, context, config, output_dir):
         '     "verdict": "<valid | invalid | duplicate | already_fixed | needs_more_info>",',
         '     "pr_url": "<GitHub PR URL or null>",',
         '     "linear_comment_posted": true,',
-        '     "independent_code_review_completed": false,',
+        '     "independent_code_review": "<not_run | unavailable | clean | converged | max_rounds | hard_limit>",',
         '     "degradation_notes": []',
         "   }",
         "   ```",
@@ -1236,7 +1236,7 @@ def _write_failed_result(output_dir, mode, context, error, events=None):
         "verdict": None,
         "pr_url": None,
         "linear_comment_posted": False,
-        "independent_code_review_completed": False,
+        "independent_code_review": "not_run",
         "degradation_notes": [error],
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
@@ -1290,17 +1290,28 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         has_report = os.path.isfile(report_path)
         pr_url = state.get("pr_url")
         linear_posted = state.get("linear_comment_posted", False)
-        # Check if iterative review completed by looking for its result artifact
-        # and verifying it didn't terminate due to unavailability.
+        # Read iterative review result — surface the outcome, not just whether it ran.
+        # Values: "not_run" (skipped/small complexity), "unavailable" (tool missing),
+        # "clean" (zero_findings), "converged" (all_rejected/nitpicks_only),
+        # "max_rounds" (hit round limit), "hard_limit" (hit absolute ceiling).
+        _REVIEW_OUTCOME_MAP = {
+            "zero_findings": "clean",
+            "all_rejected": "converged",
+            "nitpicks_only": "converged",
+            "max_rounds": "max_rounds",
+            "hard_limit": "hard_limit",
+            "codex_unavailable": "unavailable",
+        }
         review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
-        review_completed = False
+        review_outcome = "not_run"
         if os.path.isfile(review_result_path):
             try:
                 with open(review_result_path) as _rf:
                     _rdata = json.load(_rf)
-                review_completed = _rdata.get("termination") != "codex_unavailable"
+                termination = _rdata.get("termination", "")
+                review_outcome = _REVIEW_OUTCOME_MAP.get(termination, termination or "not_run")
             except (json.JSONDecodeError, OSError):
-                review_completed = False
+                pass
 
         # Derive status from what actually exists, not from absence of errors.
         # A run that never produced a verdict or report is failed, not successful.
@@ -1326,7 +1337,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "verdict": verdict,
             "pr_url": pr_url,
             "linear_comment_posted": linear_posted,
-            "independent_code_review_completed": review_completed,
+            "independent_code_review": review_outcome,
             "degradation_notes": degradation_notes,
         }
 

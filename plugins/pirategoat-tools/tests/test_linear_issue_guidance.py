@@ -648,7 +648,7 @@ class TestStep14Orchestration:
             "verdict": "valid",
             "pr_url": None,
             "linear_comment_posted": True,
-            "independent_code_review_completed": False,
+            "independent_code_review": "not_run",
         }
         context = {"issue_id": "WOOPLUG-1234"}
         mod._orchestrate_step(14, "investigate", {}, state, context, str(tmp_path))
