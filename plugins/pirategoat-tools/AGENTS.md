@@ -76,6 +76,10 @@ These are variations on the mission, not repetitions. Each connects the mission 
 
 **Modifying briefings.** Tests check for keywords in briefing text (e.g., `"review-reconciliator" in text`, `"STAND" in text`). When rewriting briefing prose, preserve these keywords. Run the relevant `TestStep*` class after any text change.
 
+### Step 8 Readiness Gate
+
+Before reconciliation, step 8 checks if all dispatched agents have finished via `check-reviewer-agent-status.py`. If agents are still running, returns a WAITING briefing. Tracks `first_waiting_at` in pipeline state. If elapsed wait exceeds `agent_timeout_seconds + 60s`, escalates: clears the waiting state and proceeds with reconciliation using available results, instructing the LLM to TaskStop stuck agents first.
+
 ### Shared Protocols
 
 **reviewer-protocol.md** provides behavioral rules for all agents. Bootstrap extracts it via a **skip-list** — sections the bootstrap already handles are excluded, everything else is included automatically. New sections added to the protocol are picked up without code changes.
