@@ -64,6 +64,17 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     lines.append("     If you cannot verify a claim after investigation, say so rather than guessing.")
     lines.append("")
 
+    # Cognitive traps (round 1 only — primes the evaluation posture)
+    if round_num == 1:
+        lines.append("Cognitive traps to avoid:")
+        lines.append("  - Rubber-stamping: accepting a finding without reading the code because")
+        lines.append("    'the reviewer found it'. READ the actual code first — always.")
+        lines.append("  - Positional entrenchment (later rounds): rejecting a re-flagged finding")
+        lines.append("    to defend a prior decision. Verify against the code, not your prior reasoning.")
+        lines.append("  - Scope inflation: fixing tangentially related code the finding didn't flag.")
+        lines.append("    The branch's mandate is the boundary.")
+        lines.append("")
+
     # Actions — Phase 2: Fix
     lines.append("### Phase 2: Fix")
     lines.append("")
@@ -118,13 +129,17 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     lines.append("")
     lines.append("  Every finding ID must have an outcome. Use 'summary' for fixed, 'reasoning' for rejected/deferred.")
 
-    # Stalemate-breaking prompt (round 2+ only)
+    # Stalemate-breaking + correction prompt (round 2+ only)
     if round_num >= 2:
         lines.append("")
-        lines.append("Findings that revisit issues from previous rounds: decide and move on.")
-        lines.append("Changed your mind from a prior round? Note why. Standing firm? Defer and")
-        lines.append("proceed. Decisions that depart from the original spec go in the PR description.")
-        lines.append("Stalemates waste rounds.")
+        lines.append("Findings that revisit issues from previous rounds:")
+        lines.append("  When re-evaluating a finding you previously rejected, verify against the")
+        lines.append("  code — not against your prior reasoning. If your prior rejection was wrong,")
+        lines.append("  state specifically what was wrong in your thinking and write it into the")
+        lines.append("  outcome's reasoning field. Do not defend why you pushed back — state the")
+        lines.append("  correction factually and move on. If standing firm, defer and proceed.")
+        lines.append("  Decisions that depart from the original spec go in the PR description.")
+        lines.append("  Stalemates waste rounds.")
 
     return "\n".join(lines)
 

@@ -95,6 +95,24 @@ class TestEvaluationBriefing:
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
         assert "stalemate" not in text.lower()
 
+    def test_round_1_includes_cognitive_traps(self):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
+        assert "Cognitive traps" in text
+        assert "Rubber-stamping" in text
+        assert "Positional entrenchment" in text
+        assert "Scope inflation" in text
+
+    def test_round_2_no_cognitive_traps(self):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
+        assert "Cognitive traps" not in text
+
+    def test_round_2_correction_pattern(self):
+        """Round 2+ prompts agent to state what was wrong in prior reasoning."""
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
+        assert "what was wrong" in text.lower()
+        assert "prior reasoning" in text.lower()
+        assert "correction" in text.lower()
+
     def test_contains_commit_instruction(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
         assert "commit" in text.lower()
