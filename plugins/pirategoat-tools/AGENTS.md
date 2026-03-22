@@ -215,8 +215,8 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 2. Create `commands/<command-name>.md` — commands are orchestrators that invoke agents via the `/Agent` tool
 3. Use `review/plan_dispatch.py` for triage decisions (don't duplicate triage logic)
 4. Add command to `.claude-plugin/marketplace.json` in the `commands` array
-5. Add structural tests in `tests/test_commands.py` (new `TestXxx` class)
-6. Run tests: `pytest plugins/pirategoat-tools/tests/test_commands.py -v`
+5. Add structural tests in `tests/commands/test_commands.py` (new `TestXxx` class)
+6. Run tests: `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v`
 7. **Update all docs** — see [Doc Update Checklist](#doc-update-checklist-for-new-commands-skills-or-agents) below
 
 ### Adding a Skill

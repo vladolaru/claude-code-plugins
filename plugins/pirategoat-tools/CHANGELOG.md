@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.88.0] - 2026-03-23
+
+### Changed
+- **Tests reorganization.** Moved 32 test files from flat `tests/` directory into subdirectories mirroring the scripts package structure: `review/` (10 files), `review/agent/` (6 files), `linear/` (3 files), `analysis/` (2 files), `iterative_review/` (5 files), `commands/` (1 file), `grading/` (2 files). Shared utilities moved to `helpers/` (3 files). Test file names now match their source module names.
+
+### Removed
+- **E2E test suite.** Removed `tests/e2e/` directory (12 files) — model-call-dependent tests that were never run.
+
 ## [1.87.0] - 2026-03-22
 
 ### Changed

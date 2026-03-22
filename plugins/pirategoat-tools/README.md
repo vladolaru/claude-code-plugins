@@ -162,7 +162,15 @@ pirategoat-tools/
 ├── hooks/            # Git hook integrations
 ├── schemas/          # JSON schemas for review output
 ├── docs/             # Documentation and guides
-├── tests/            # Deterministic eval suite
+├── tests/            # Deterministic eval suite (mirrors scripts/ structure)
+│   ├── review/              # Review pipeline + agent tests
+│   │   └── agent/           # Bootstrap, scope, output tests
+│   ├── linear/              # Linear issue pipeline tests
+│   ├── iterative_review/    # Iterative review loop tests
+│   ├── analysis/            # Session analysis tests
+│   ├── commands/            # Command structure tests
+│   ├── grading/             # Graders + compliance evals
+│   └── helpers/             # Shared test utilities
 └── CHANGELOG.md
 ```
 

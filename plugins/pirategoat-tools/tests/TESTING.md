@@ -9,19 +9,46 @@ tests/
 ├── TESTING.md                        # This file
 ├── __init__.py                       # Package marker
 ├── conftest.py                       # Shared fixtures (setup_temp_git_repo, bootstrap_repo, pipeline_mod)
-├── test_bootstrap_reviewer.py        # Level 1: Bootstrap unit tests (direct imports)
-├── test_bootstrap_integration.py     # Level 1: Bootstrap integration (smoke + category reps + build_output)
-├── test_review_pipeline.py           # Level 1: Pipeline briefing tests (get_step_guidance)
-├── test_pipeline_infrastructure.py   # Level 1: Pipeline infrastructure (step sequence, routing, state, CLI)
-├── test_pipeline_orchestration.py    # Level 1: Pipeline orchestration (subprocess, telemetry, integration)
-├── test_domain_routing.py            # Level 1: Domain routing (direct function calls + branch freshness)
-├── test_commands.py                  # Level 1: Structural + review command tests (incl. pr-update, switch-to)
-├── test_commands_helpers.py          # Shared helpers for command tests
-├── test_review_output.py             # Level 1: ReviewOutputBuilder unit tests (pytest)
-├── test_review_api_contract.py       # Level 1: Cross-component contract tests (pytest)
-├── graders.py                        # Shared grading functions
-├── test_graders.py                   # Tests for the graders themselves
-├── eval_agent_compliance.py          # Level 2: Agent compliance evals
+├── review/                           # Tests for scripts/review/
+│   ├── test_pipeline.py              # Pipeline briefing tests (get_step_guidance)
+│   ├── test_pipeline_infra.py        # Pipeline infrastructure (step sequence, routing, state, CLI)
+│   ├── test_pipeline_integration.py  # Pipeline orchestration (subprocess, telemetry, integration)
+│   ├── test_plan_dispatch.py         # Dispatch planning tests
+│   ├── test_context.py               # Review context collection tests
+│   ├── test_agents_status.py         # Agent readiness gate tests
+│   ├── test_workspace_setup.py       # Workspace setup tests
+│   ├── test_critic.py                # Decision critic tests
+│   ├── test_telemetry.py             # Telemetry logging tests
+│   ├── test_agent_registry.py        # Agent registry validation tests
+│   └── agent/                        # Tests for scripts/review/agent/
+│       ├── test_bootstrap.py         # Bootstrap unit tests (direct imports)
+│       ├── test_bootstrap_integration.py  # Bootstrap integration (smoke + category reps + build_output)
+│       ├── test_scope.py             # Scope filtering unit tests
+│       ├── test_scope_routing.py     # Domain routing (direct function calls + branch freshness)
+│       ├── test_output.py            # ReviewOutputBuilder unit tests
+│       └── test_diff_noise_filter.py # Semantic diff noise filter tests
+├── linear/                           # Tests for scripts/linear/
+│   ├── test_pipeline.py              # Linear issue pipeline tests
+│   ├── test_pipeline_guidance.py     # Linear pipeline briefing tests
+│   └── test_events.py               # Pipeline events tests
+├── iterative_review/                 # Tests for scripts/iterative_review/
+│   ├── test_briefing.py              # Iterative review briefing tests
+│   ├── test_cli.py                   # CLI argument tests
+│   ├── test_codex.py                 # Codex integration tests
+│   ├── test_loop.py                  # Review loop tests
+│   └── test_telemetry.py            # Iterative review telemetry tests
+├── analysis/                         # Tests for scripts/analysis/
+│   ├── test_session_metrics.py       # Session metrics extraction tests
+│   └── test_session_analyzer.py      # Session analyzer tests
+├── commands/                         # Tests for commands/
+│   └── test_commands.py              # Structural + review command tests (incl. pr-update, switch-to)
+├── grading/                          # Test graders and compliance evals
+│   ├── test_graders.py               # Tests for the graders themselves
+│   └── eval_agent_compliance.py      # Level 2: Agent compliance evals
+├── helpers/                          # Shared test utilities
+│   ├── graders.py                    # Shared grading functions
+│   ├── command_helpers.py            # Shared helpers for command tests
+│   └── context_fixtures.py          # Review context fixture generators
 └── fixtures/
     ├── no-code-changes.diff          # Docs-only diff for NO_DOMAIN_FILES tests
     ├── php-source.diff               # PHP source: SQL injection, tight coupling
@@ -34,11 +61,11 @@ tests/
     └── multi-file-realistic.diff     # 7 files across all 9 domains
 ```
 
-### Level 1: Bootstrap Unit Tests (`test_bootstrap_reviewer.py`)
+### Level 1: Bootstrap Unit Tests (`review/agent/test_bootstrap.py`)
 
 Deterministic pytest suite. Tests `review/agent/bootstrap.py` pure functions by importing them directly — `extract_protocol_sections`, `build_output`, `compute_review_budget`, `load_pr_intent`, and others. No network or model calls.
 
-### Level 1: Bootstrap Integration Tests (`test_bootstrap_integration.py`)
+### Level 1: Bootstrap Integration Tests (`review/agent/test_bootstrap_integration.py`)
 
 Integration tests that run `review/agent/bootstrap.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7):
 
@@ -53,7 +80,7 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestDynamicDispatchRisk` | 4 | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK; PHP → high, no PHP → low (direct `build_output()` call) |
 | `TestOutputFilenameConsistency` | 2 | Output filenames from `save()` match bootstrap expectations (direct `build_output()` call) |
 
-### Level 1: Domain Routing Evals (`test_domain_routing.py`)
+### Level 1: Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
 Deterministic pytest suite that verifies `review/agent/scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess). For each fixture, creates a temp git repo, gets the changed file list via `git diff --name-only`, and runs the filter functions for each domain.
 
@@ -61,11 +88,11 @@ Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parame
 
 Also includes `TestBranchFreshness` — 6 integration tests that run `review/agent/scope.py` via subprocess to verify merge-base detection, stale branch warnings, and range rebasing (these need the full pipeline).
 
-**Fixture domain coverage:** See `ROUTING_MATRIX` dict in `test_domain_routing.py` for the complete 12×14 matrix. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
+**Fixture domain coverage:** See `ROUTING_MATRIX` dict in `review/agent/test_scope_routing.py` for the complete 12×14 matrix. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
 
-### Level 1: Command Structure Evals (`test_commands.py`)
+### Level 1: Command Structure Evals (`commands/test_commands.py`)
 
-Deterministic pytest suite that validates structural properties of command files. Shared helpers live in `test_commands_helpers.py`. No network or model calls.
+Deterministic pytest suite that validates structural properties of command files. Shared helpers live in `helpers/command_helpers.py`. No network or model calls.
 
 | Class | What it verifies |
 |---|---|
@@ -81,7 +108,7 @@ Deterministic pytest suite that validates structural properties of command files
 | `TestPrUpdate` | `pr-update.md` structural validation: file exists, frontmatter, marketplace registration, not in review commands |
 | `TestSwitchTo` | `switch-to.md` structural validation: file exists, frontmatter, marketplace registration |
 
-### Level 1: ReviewOutputBuilder Unit Tests (`test_review_output.py`)
+### Level 1: ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
 Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, JSON, markdown), and file output.
 
@@ -100,19 +127,9 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestToMarkdown` | Header format, issues grouped by severity, positive observations |
 | `TestSave` | Creates both files, JSON matches to_dict(), return paths correct |
 
-### Level 1: Cross-Component Contract Tests (`test_review_api_contract.py`)
+### Shared Graders (`helpers/graders.py`)
 
-Tests the contracts between the three review pipeline layers: ReviewOutputBuilder (producer), reconcile() (consumer 1), and preprocess_findings() (consumer 2). Uses real output from one layer as input to the next.
-
-| Class | What it verifies |
-|---|---|
-| `TestProducerToReconcileContract` | Builder output consumed by reconcile; multi-agent dedup; all fields survive; non-builder JSON skipped; extra fields don't break reconcile |
-| `TestReconcileToIngestContract` | Reconcile output consumed by ingest (catches clusters/issues mismatch); issues key present; correct count; empty→empty |
-| `TestFullRoundTrip` | 3-agent pipeline end-to-end (no findings dropped); severity preserved; all fields present in ingest output |
-
-### Shared Graders (`graders.py`)
-
-Reusable grading functions for review output files. Used by both `test_graders.py` (validates the graders themselves) and `eval_agent_compliance.py` (grades actual agent output).
+Reusable grading functions for review output files. Used by both `grading/test_graders.py` (validates the graders themselves) and `grading/eval_agent_compliance.py` (grades actual agent output).
 
 Every grader returns a `GradeResult`:
 
@@ -138,7 +155,7 @@ class GradeResult:
 | `grade_output_pair(output_dir, reviewer_name)` | Output directory + reviewer name | Both `.json` and `.md` exist, delegates to json + markdown graders, reviewer name matches |
 | `grade_review_baseline(path)` | Path to `.branch-review-baseline.json` | File exists, valid JSON, required fields (`last_reviewed_sha`, `last_reviewed_at`, `review_type`, `review_count`, `base_ref`, `git_range_used`), SHA format (7-40 hex), positive review_count, range contains `..` |
 
-### Level 2: Agent Compliance Evals (`eval_agent_compliance.py`)
+### Level 2: Agent Compliance Evals (`grading/eval_agent_compliance.py`)
 
 Tests that agents actually produce correct output when dispatched. Two modes:
 
@@ -167,7 +184,7 @@ Every grader has tests for both:
 
 ### 4. Test the graders too
 
-`test_graders.py` validates that grading functions work correctly on synthetic inputs. This prevents false passes (grader too lenient) and false failures (grader too strict). A grader bug could silently undermine the entire eval system.
+`grading/test_graders.py` validates that grading functions work correctly on synthetic inputs. This prevents false passes (grader too lenient) and false failures (grader too strict). A grader bug could silently undermine the entire eval system.
 
 ### 5. Skip-list resilience
 
@@ -220,23 +237,23 @@ Integration tests that shell out to scripts (which run git commands) use tempora
 
 1. Add the agent to `scripts/review/agent_registry.json`
 2. Create the agent `.md` file in `agents/`
-3. Run `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` — the `TestSmokeAllAgents` smoke test automatically picks up the new agent and validates it exits 0
+3. Run `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` — the `TestSmokeAllAgents` smoke test automatically picks up the new agent and validates it exits 0
 4. If the agent introduces a **new conditional path** through `main()` (new protocol type, new flag like `file_history` or `extra_scope`), add a category representative test in `TestCategoryRepresentatives`
-5. If the agent introduces a new domain, add it to `ALL_DOMAINS` in `test_domain_routing.py` and update `ROUTING_MATRIX` for each fixture
+5. If the agent introduces a new domain, add it to `ALL_DOMAINS` in `review/agent/test_scope_routing.py` and update `ROUTING_MATRIX` for each fixture
 6. **Do NOT** add `@pytest.mark.parametrize("agent_name", ALL_AGENTS)` tests for template assertions — the smoke test handles registry validation; category representatives handle conditional paths
 
 ### Add a new grader
 
-1. Write the grading function in `graders.py` following the pattern:
+1. Write the grading function in `helpers/graders.py` following the pattern:
    - Accept a path or text string
    - Build a list of `(condition, failure_message)` tuples
    - Return `_grade(checks)`
-2. Add tests in `test_graders.py` with at least one positive and one negative case
+2. Add tests in `grading/test_graders.py` with at least one positive and one negative case
 3. If the grader validates output files, use `ReviewOutputBuilder` from `scripts/review/agent/output.py` to create valid test fixtures
 
 ### Add a new compliance scenario
 
-1. Add a scenario dict to `SCENARIOS` in `eval_agent_compliance.py`:
+1. Add a scenario dict to `SCENARIOS` in `grading/eval_agent_compliance.py`:
    ```python
    "scenario_name": {
        "description": "What this scenario tests",
@@ -246,11 +263,11 @@ Integration tests that shell out to scripts (which run git commands) use tempora
    }
    ```
 2. Create any needed diff fixtures in `tests/fixtures/`
-3. If a new grader type is needed, add it to `graders.py` first
+3. If a new grader type is needed, add it to `helpers/graders.py` first
 
 ### Add a test for a new script
 
-Follow the pattern in `test_bootstrap_reviewer.py`:
+Follow the pattern in `review/agent/test_bootstrap.py`:
 
 1. Use `importlib` to import from the hyphenated script filename
 2. Write unit tests for pure functions with synthetic inputs (right layer — principle §7)
@@ -274,8 +291,8 @@ Follow the pattern in `test_bootstrap_reviewer.py`:
    +}
    ```
 3. Keep fixtures minimal — just enough to trigger the scenario
-4. Add the fixture to `ROUTING_MATRIX` in `test_domain_routing.py` with expected STATUS per domain
-5. Run `pytest plugins/pirategoat-tools/tests/test_domain_routing.py -v` to verify routing
+4. Add the fixture to `ROUTING_MATRIX` in `review/agent/test_scope_routing.py` with expected STATUS per domain
+5. Run `pytest plugins/pirategoat-tools/tests/review/agent/test_scope_routing.py -v` to verify routing
 
 ## Conventions
 
@@ -291,13 +308,29 @@ _spec.loader.exec_module(_mod)
 function_under_test = _mod.function_name
 ```
 
-### Path resolution
+### Importing from helpers/
 
-All paths are derived from `Path(__file__).resolve().parent`:
+Shared test utilities live in `tests/helpers/`. The `helpers/` package is importable from any test subdirectory via the `conftest.py` sys.path setup:
 
 ```python
-TESTS_DIR = Path(__file__).resolve().parent
-PLUGIN_ROOT = TESTS_DIR.parent
+from helpers.graders import grade_review_json, grade_output_pair
+from helpers.command_helpers import load_command, get_frontmatter
+from helpers.context_fixtures import make_review_context
+```
+
+### Path resolution
+
+Tests are organized in subdirectories mirroring `scripts/`. Path constants adapt based on subdirectory depth:
+
+```python
+# In tests/review/test_pipeline.py (one level deep)
+TESTS_DIR = Path(__file__).resolve().parent.parent   # tests/
+PLUGIN_ROOT = TESTS_DIR.parent                        # pirategoat-tools/
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
+
+# In tests/review/agent/test_bootstrap.py (two levels deep)
+TESTS_DIR = Path(__file__).resolve().parent.parent.parent  # tests/
+PLUGIN_ROOT = TESTS_DIR.parent                              # pirategoat-tools/
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 ```
 
@@ -313,12 +346,12 @@ Never hardcode absolute paths. Tests run from any working directory.
 ### Dependencies
 
 - **pytest** — the only external dependency (stdlib otherwise)
-- **Zero model calls** in `test_bootstrap_reviewer.py`, `test_commands.py`, and `test_graders.py`
-- `eval_agent_compliance.py --dispatch` requires the `claude` CLI
+- **Zero model calls** in `review/agent/test_bootstrap.py`, `commands/test_commands.py`, and `grading/test_graders.py`
+- `grading/eval_agent_compliance.py --dispatch` requires the `claude` CLI
 
 ## Valid Values Reference
 
-These are the canonical valid values used by graders. If the review output schema changes, update both the source (`review/agent/output.py`) and the grader constants (`graders.py`).
+These are the canonical valid values used by graders. If the review output schema changes, update both the source (`review/agent/output.py`) and the grader constants (`helpers/graders.py`).
 
 | Constant | Values | Source |
 |---|---|---|
