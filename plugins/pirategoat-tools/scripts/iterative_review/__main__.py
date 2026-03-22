@@ -463,13 +463,15 @@ def action_advance(args):
 
     findings_by_id = {f["id"]: f for f in findings}
 
-    # Extend max rounds if P0/P1 findings exist at the limit
+    # Extend max rounds if P0/P1 findings were fixed at the limit
+    # (deferred/rejected P0/P1 won't be addressed next round — no point extending)
     max_rounds = state.get("max_rounds", 3)
-    has_critical = any(
+    has_critical_fixed = any(
         findings_by_id[o["id"]].get("severity") in ("P0", "P1")
+        and o["action"] == "fixed"
         for o in outcomes
     ) if outcomes else False
-    if has_critical and round_num >= max_rounds and max_rounds < MAX_ROUNDS_HARD_LIMIT:
+    if has_critical_fixed and round_num >= max_rounds and max_rounds < MAX_ROUNDS_HARD_LIMIT:
         max_rounds += 1
         state["max_rounds"] = max_rounds
         telemetry.pipeline_event("max_rounds_extended", round=round_num,

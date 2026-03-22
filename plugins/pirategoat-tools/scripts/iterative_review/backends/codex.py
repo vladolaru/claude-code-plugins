@@ -15,11 +15,33 @@ from datetime import datetime, timezone
 # Output Parsing
 # ---------------------------------------------------------------------------
 
+def _get_repo_root():
+    """Get the repo root for stripping absolute paths. Cached."""
+    if not hasattr(_get_repo_root, "_cache"):
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True)
+            _get_repo_root._cache = result.stdout.strip() if result.returncode == 0 else ""
+        except Exception:
+            _get_repo_root._cache = ""
+    return _get_repo_root._cache
+
+
+def _to_relative_path(absolute_path):
+    """Convert an absolute file path to repo-relative."""
+    root = _get_repo_root()
+    if root and absolute_path.startswith(root):
+        rel = absolute_path[len(root):]
+        return rel.lstrip("/")
+    return absolute_path
+
+
 def _format_location(code_location):
-    """Extract file:line from Codex's code_location dict."""
+    """Extract file:line from Codex's code_location dict, repo-relative."""
     if not code_location:
         return "unknown"
-    path = code_location.get("absolute_file_path", "unknown")
+    path = _to_relative_path(code_location.get("absolute_file_path", "unknown"))
     lr = code_location.get("line_range", {})
     start = lr.get("start")
     end = lr.get("end")
