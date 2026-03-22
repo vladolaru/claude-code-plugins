@@ -112,6 +112,8 @@ _STALE_ARTIFACTS = [
     "change-purpose.md",
 ]
 
+DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches check-reviewer-agent-status.py
+
 # Files to preserve across runs
 _PRESERVED_FILES = {
     "run-config.json",
@@ -1692,6 +1694,19 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     "not_dispatched": not_dispatched,
                     "status_output": r.stdout.strip(),
                 }
+                # Read per-agent timeout for escalation threshold
+                agent_timeout = DEFAULT_AGENT_TIMEOUT
+                ctx_path = os.path.join(output_dir, "review-context.json")
+                if os.path.isfile(ctx_path):
+                    try:
+                        with open(ctx_path) as f:
+                            ctx_data = json.load(f)
+                        agent_timeout = ctx_data.get("review", {}).get(
+                            "agent_timeout_seconds", DEFAULT_AGENT_TIMEOUT
+                        )
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                state["waiting_on_agents"]["agent_timeout_seconds"] = agent_timeout
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass  # Gate is best-effort; if checker fails, proceed normally
 
