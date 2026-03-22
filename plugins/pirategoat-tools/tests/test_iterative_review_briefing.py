@@ -45,9 +45,13 @@ class TestEvaluationBriefing:
         assert "db.py:42-45" in text
         assert "handler.py:10" in text
 
-    def test_contains_triage_actions(self):
+    def test_contains_evaluation_steps(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
-        assert "Triage" in text
+        assert "Evaluate" in text
+        assert "1. READ" in text
+        assert "2. VERIFY" in text
+        assert "3. EVALUATE" in text
+        assert "4. DECIDE" in text
         assert "Fix discipline" in text
         assert "outcomes.json" in text
 
