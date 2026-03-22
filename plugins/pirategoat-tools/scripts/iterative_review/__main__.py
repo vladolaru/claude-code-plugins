@@ -233,6 +233,20 @@ def action_review(args):
                 sys.exit(1)
             telemetry.progress("auto_committed", round=round_num,
                                msg="Uncommitted tracked changes committed before review")
+
+        # Warn if untracked files remain — git add -u doesn't stage new files
+        untracked = [line for line in status.splitlines()
+                     if line and line.startswith("??")]
+        if untracked:
+            files = [line[3:] for line in untracked]
+            telemetry.progress("untracked_files_warning", round=round_num,
+                               count=len(files), files=files[:10])
+            print(
+                f"WARNING: {len(files)} untracked file(s) will not be reviewed by Codex:\n"
+                + "\n".join(f"  {f}" for f in files[:10])
+                + ("\n  ..." if len(files) > 10 else "")
+                + "\nIf these are part of your fix, commit them before proceeding.",
+                file=sys.stderr)
     except Exception:
         pass  # git not available — proceed, Codex will review what's committed
 

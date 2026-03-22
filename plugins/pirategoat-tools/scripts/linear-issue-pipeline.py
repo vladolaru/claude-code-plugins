@@ -1116,7 +1116,7 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
         "The PR links back to the Linear issue and includes investigation context.",
     ]
 
-    deferred_path = os.path.join(output_dir, "code-review", "deferred-items.jsonl")
+    review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
 
     actions = [
         "1. Create a feature branch (if not already on one):",
@@ -1129,10 +1129,10 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
         f"   - Include `Refs {issue_id}` in the commit body",
         "",
         "3. Check for deferred review items:",
-        f"   - Read `{deferred_path}` (if it exists)",
-        "   - Each line is a JSON object with id, severity, title, location, reasoning",
-        "   - These are review findings that were valid but deferred (out of scope for this PR)",
-        "   - Include them in the PR description under a `## Follow-ups` section",
+        f"   - Read `{review_result_path}` and check the `deferred_items` array",
+        "   - This list is already pruned — items resolved in later rounds are removed",
+        "   - If any remain, include them in the PR description under a `## Follow-ups` section",
+        "   - Each item has severity, title, location, and reasoning",
         "",
         "4. Push and create draft PR:",
         "   ```bash",
