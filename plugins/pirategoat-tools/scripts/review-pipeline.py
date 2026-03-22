@@ -934,16 +934,20 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
 
 def _step_8_reconcile(mode, state, context, config, output_dir):
     """Step 8: Reconcile + Verify — dispatch reconciliator with all context."""
-    # Hard readiness gate: if agents are still running, block reconciliation
-    blocked = state.get("waiting_on_agents")
-    if blocked and blocked.get("running"):
-        running = blocked["running"]
+    # Readiness gate: if agents are still running, wait for them
+    waiting = state.get("waiting_on_agents")
+    if waiting and waiting.get("running"):
+        # Record when we first started waiting (preserve across retries)
+        if "first_waiting_at" not in waiting:
+            waiting["first_waiting_at"] = datetime.now(timezone.utc).isoformat()
+
+        running = waiting["running"]
         od = output_dir or "<OUTPUT_DIR>"
         situation = [
-            f"**Blocked:** {len(running)} agent(s) still running: {', '.join(running)}",
+            f"**Waiting:** {len(running)} agent(s) still running: {', '.join(running)}",
             "Reconciliation cannot start until all dispatched agents have finished.",
         ]
-        not_dispatched = blocked.get("not_dispatched", [])
+        not_dispatched = waiting.get("not_dispatched", [])
         if not_dispatched:
             situation.append(
                 f"**Also not dispatched:** {', '.join(not_dispatched)} — dispatch these first."
@@ -957,7 +961,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         ]
         return {
             "phase": "SYNTHESIS",
-            "title": "Reconcile + Verify — BLOCKED",
+            "title": "Reconcile + Verify — WAITING",
             "situation": situation,
             "actions": actions,
             "handoff": None,

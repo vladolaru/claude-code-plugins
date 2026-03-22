@@ -734,7 +734,7 @@ class TestStep8ReadinessGate:
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert "BLOCKED" in g["title"]
+        assert "WAITING" in g["title"]
         text = "\n".join(g["situation"])
         assert "security-reviewer" in text
         assert "performance-reviewer" in text
@@ -772,9 +772,27 @@ class TestStep8ReadinessGate:
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert "BLOCKED" not in g["title"]
+        assert "WAITING" not in g["title"]
         text = "\n".join(g["actions"])
         assert "review-reconciliator" in text
+
+    def test_blocked_records_first_waiting_at(self, mod, tmp_path):
+        """First WAITING call should record first_waiting_at timestamp."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "waiting_on_agents": {
+                "running": ["security-reviewer"],
+                "not_dispatched": [],
+            },
+            "agents": {"dispatched": ["security-reviewer"], "completed": [], "failed": []},
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert "WAITING" in g["title"]
+        # The step function should have added first_waiting_at to state
+        waiting = state.get("waiting_on_agents", {})
+        assert "first_waiting_at" in waiting
 
     def test_not_blocked_when_only_not_dispatched(self, mod, tmp_path):
         """NOT_DISPATCHED alone should not block — only RUNNING agents block."""
@@ -794,7 +812,7 @@ class TestStep8ReadinessGate:
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert "BLOCKED" not in g["title"]
+        assert "WAITING" not in g["title"]
 
 
 class TestStep9ReviewReport:
