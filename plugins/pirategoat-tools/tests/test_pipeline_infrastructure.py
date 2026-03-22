@@ -486,3 +486,47 @@ class TestQuickModeConfig:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is False
 
+    def test_bot_mode_step1_rerun_preserves_quick(self, tmp_path):
+        """In bot mode (interactive=false), re-invoking step 1 without --quick
+        should NOT reset the pre-written quick=true. The bot writes the correct
+        value in run-config.json and may not pass --quick on subsequent calls."""
+        # Step 1: with --quick
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42",
+                   "--quick")
+        # Simulate bot mode by setting interactive=false and providing
+        # the review-context.json that bot mode requires
+        config_path = tmp_path / "run-config.json"
+        config = json.loads(config_path.read_text())
+        config["interactive"] = False
+        config_path.write_text(json.dumps(config))
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {"merge_base": "abc123"},
+        }))
+        assert config["quick"] is True
+        # Step 1 rerun: without --quick (bot mode)
+        r = self._run("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert r.returncode == 0
+        config = json.loads(config_path.read_text())
+        assert config["quick"] is True, \
+            "bot-mode step 1 rerun should not reset quick to false"
+
+    def test_interactive_step1_rerun_still_resets_quick(self, tmp_path):
+        """In interactive mode, re-invoking step 1 without --quick should still
+        reset quick to false (existing behavior for human-driven reruns)."""
+        # Step 1: with --quick
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42",
+                   "--quick")
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["quick"] is True
+        assert config.get("interactive") is True  # default
+        # Step 1 rerun: without --quick (interactive rerun)
+        r = self._run("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["quick"] is False, \
+            "interactive step 1 rerun should reset quick to false"
+
