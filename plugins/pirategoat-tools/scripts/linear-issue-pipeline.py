@@ -1414,11 +1414,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
     _terminal = state.get("issue_resolved", False) or state.get("verdict") in _TERMINAL_VERDICTS
     _step8_ran = 8 in state.get("completed_steps", [])
     _overriding = config.get("skip_clarity_gate", False)
-    # Re-evaluate on every post-step-8 entry (no one-way latch), so a
-    # re-triggered step 8 can produce a new passing assessment that unblocks.
-    # Skip when: terminal verdict, override active (user already acknowledged
-    # the block — re-reading the same failing assessment would restore the
-    # verdict we just cleared and emit duplicate events).
+    # Re-evaluate on every post-step-8 entry so a re-triggered step 8 can
+    # unblock with a new passing assessment. Skip when: terminal verdict or
+    # override active. Use _clarity_events_emitted to avoid duplicate
+    # milestone/deliverable events when _orchestrate_step is called multiple
+    # times in the same run (e.g., early-exit block calls step 15 directly).
+    _skip_events = state.get("_clarity_events_emitted", False)
     if step > 8 and _step8_ran and not _terminal and not _overriding:
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
         if os.path.isfile(assessment_path):
@@ -1444,7 +1445,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                     state["clarity_blocked"] = True
                     if not state.get("verdict"):
                         state["verdict"] = "needs_clarification"
-                    if events:
+                    if events and not _skip_events:
                         hard_failed = [k for k, v in assessment["hard_gates"].items()
                                        if not v.get("pass", True)]
                         events.milestone(
@@ -1456,18 +1457,20 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             type_="clarity_assessment",
                             path="clarity-assessment.json",
                         )
+                    state["_clarity_events_emitted"] = True
                 else:
                     # Assessment passed — clear any prior block from a previous run
                     if state.get("clarity_blocked"):
                         del state["clarity_blocked"]
                     if state.get("verdict") == "needs_clarification":
                         del state["verdict"]
-                    if events:
+                    if events and not _skip_events:
                         events.milestone(
                             name="clarity_assessed",
                             step=8,
                             summary="passed",
                         )
+                    state["_clarity_events_emitted"] = True
             except (json.JSONDecodeError, ValueError, OSError) as exc:
                 # Fail closed: malformed JSON, missing schema keys, or wrong
                 # nested types = block. LLM-written files have realistic type drift.
@@ -1477,8 +1480,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                 state.setdefault("degradation_notes", []).append(
                     f"Clarity assessment file was invalid — blocking as precaution ({exc})"
                 )
-                if events:
+                if events and not _skip_events:
                     events.milestone(name="clarity_assessed", step=8, summary="blocked (file invalid)")
+                state["_clarity_events_emitted"] = True
         else:
             # Fail closed: missing file = block.
             state["clarity_blocked"] = True
@@ -1487,8 +1491,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             state.setdefault("degradation_notes", []).append(
                 "Clarity assessment file missing — blocking as precaution"
             )
-            if events:
+            if events and not _skip_events:
                 events.milestone(name="clarity_assessed", step=8, summary="blocked (file missing)")
+            state["_clarity_events_emitted"] = True
 
     if step == 15:
         # Write pipeline-result.json from state, deriving status from real outputs.
@@ -1535,16 +1540,11 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
 
         # Derive status from what actually exists, not from absence of errors.
         # A run that never produced a verdict or report is failed, not successful.
-        # Clarity gate block: "blocked" in fix mode (bot can offer override),
-        # "degraded" in investigate mode (no implementation to gate, and the bot's
-        # override path resumes at step 9 which is nonsensical for investigate).
+        # Clarity gate block: "blocked" in both modes so the bot surfaces the
+        # assessment questions to Slack. The bot decides whether to offer the
+        # "proceed anyway" override based on mode (fix only, not investigate).
         if clarity_blocked and not clarity_overridden:
-            if mode == "fix":
-                status = "blocked"
-            else:
-                status = "degraded"
-                if "Clarity assessment flagged insufficient clarity" not in degradation_notes:
-                    degradation_notes.append("Clarity assessment flagged insufficient clarity")
+            status = "blocked"
             if not verdict:
                 verdict = "needs_clarification"
         elif not verdict and not has_report:
