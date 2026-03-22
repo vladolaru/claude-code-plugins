@@ -1413,10 +1413,13 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
     _TERMINAL_VERDICTS = {"already_fixed", "duplicate", "invalid", "needs_more_info"}
     _terminal = state.get("issue_resolved", False) or state.get("verdict") in _TERMINAL_VERDICTS
     _step8_ran = 8 in state.get("completed_steps", [])
-    # Re-evaluate on every post-step-8 entry (no _clarity_checked latch).
-    # This allows a re-triggered step 8 to produce a new assessment that
-    # unblocks a previously blocked run without requiring skip_clarity_gate.
-    if step > 8 and _step8_ran and not _terminal:
+    _overriding = config.get("skip_clarity_gate", False)
+    # Re-evaluate on every post-step-8 entry (no one-way latch), so a
+    # re-triggered step 8 can produce a new passing assessment that unblocks.
+    # Skip when: terminal verdict, override active (user already acknowledged
+    # the block — re-reading the same failing assessment would restore the
+    # verdict we just cleared and emit duplicate events).
+    if step > 8 and _step8_ran and not _terminal and not _overriding:
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
         if os.path.isfile(assessment_path):
             try:
