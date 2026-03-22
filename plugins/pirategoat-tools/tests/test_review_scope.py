@@ -653,6 +653,7 @@ class TestSemanticFilterIntegration:
     def test_build_scope_calls_semantic_filter(self):
         """build_scope applies semantic filter to diffs by default."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x), \
              patch.object(review_scope, 'apply_semantic_filter', wraps=review_scope.apply_semantic_filter) as mock_filter:
             # Mock git commands
             mock_run.side_effect = self._mock_git_commands
@@ -668,6 +669,7 @@ class TestSemanticFilterIntegration:
     def test_build_scope_skips_filter_when_disabled(self):
         """build_scope skips semantic filter when --no-semantic-filter is set."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x), \
              patch.object(review_scope, 'apply_semantic_filter') as mock_filter:
             mock_run.side_effect = self._mock_git_commands
             args = argparse.Namespace(
@@ -764,7 +766,8 @@ class TestBudgetSortOrder:
         #   small(100) fits → 100 used
         #   medium(300) fits → 400 used
         #   large(500) exceeds → skipped  ← large file lost!
-        with patch.object(review_scope, 'run_cmd') as mock_run:
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_budget_test
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=600,
