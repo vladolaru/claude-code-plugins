@@ -408,3 +408,70 @@ class TestAddObservation:
         md = b.to_markdown()
         assert "Observations" in md
         assert "File lacks CSRF protection" in md
+
+
+# =============================================================================
+# TestNotApplicable
+# =============================================================================
+
+
+class TestNotApplicable:
+    """mark_not_applicable produces not_applicable verdict with skip_reason."""
+
+    def test_verdict_is_not_applicable(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.mark_not_applicable("No changes relevant to security domain")
+        d = b.to_dict()
+        assert d["verdict"] == "not_applicable"
+
+    def test_skip_reason_in_output(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.mark_not_applicable("No security-relevant changes in diff")
+        d = b.to_dict()
+        assert d["skip_reason"] == "No security-relevant changes in diff"
+
+    def test_skip_reason_absent_by_default(self):
+        """skip_reason is not present when agent reviewed normally."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        d = b.to_dict()
+        assert "skip_reason" not in d
+
+    def test_empty_reason_raises(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="reason"):
+            b.mark_not_applicable("")
+
+    def test_whitespace_only_reason_raises(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="reason"):
+            b.mark_not_applicable("   ")
+
+    def test_overrides_auto_calculated_verdict(self):
+        """mark_not_applicable overrides even if issues were somehow added."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue("high", "XSS", "f.php", "desc", "rec", line=1)
+        b.mark_not_applicable("Agent mistakenly started before checking relevance")
+        d = b.to_dict()
+        assert d["verdict"] == "not_applicable"
+
+    def test_in_json_output(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.mark_not_applicable("No relevant changes")
+        j = b.to_json()
+        parsed = json.loads(j)
+        assert parsed["verdict"] == "not_applicable"
+        assert parsed["skip_reason"] == "No relevant changes"
+
+    def test_skip_reason_stripped(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.mark_not_applicable("  No relevant changes  ")
+        d = b.to_dict()
+        assert d["skip_reason"] == "No relevant changes"
+
+    def test_normal_approve_has_no_skip_reason(self):
+        """A normal approve (no issues, no mark_not_applicable) has no skip_reason."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_positive("Clean code")
+        d = b.to_dict()
+        assert d["verdict"] == "approve"
+        assert "skip_reason" not in d

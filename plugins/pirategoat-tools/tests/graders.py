@@ -25,7 +25,7 @@ class GradeResult:
 
 
 VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
-VALID_VERDICTS = {"approve", "block", "request_changes", "comment"}
+VALID_VERDICTS = {"approve", "block", "request_changes", "comment", "not_applicable"}
 REQUIRED_ISSUE_FIELDS = {"id", "severity", "title", "file", "description", "recommendation"}
 REQUIRED_JSON_TOP_FIELDS = {"pr_id", "reviewer", "verdict", "summary", "issues", "meta"}
 
