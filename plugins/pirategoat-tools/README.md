@@ -152,7 +152,8 @@ pirategoat-tools/
 ├── skills/           # 19 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library
-├── scripts/          # Helper scripts (review, parsing, linting)
+├── scripts/          # Helper scripts (review pipeline, scope filtering, telemetry)
+│   └── iterative_review/   # Multi-round Codex review loop sub-module
 ├── hooks/            # Git hook integrations
 ├── schemas/          # JSON schemas for review output
 ├── docs/             # Documentation and guides
