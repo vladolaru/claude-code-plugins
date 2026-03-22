@@ -438,6 +438,23 @@ def load_change_purpose(output_dir: str) -> Optional[str]:
         return None
 
 
+def load_additional_instructions(output_dir: str) -> Optional[str]:
+    """Load additional_instructions from run-config.json in the output directory.
+
+    Returns the instructions string, or None if not present.
+    """
+    config_path = os.path.join(output_dir, "run-config.json")
+    if not os.path.isfile(config_path):
+        return None
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+        instructions = config.get("additional_instructions", "").strip()
+        return instructions if instructions else None
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def build_output(
     agent_name: str,
     plugin_root: str,
@@ -452,6 +469,7 @@ def build_output(
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
     change_purpose: Optional[str] = None,
+    additional_instructions: Optional[str] = None,
     review_budget: Optional[int] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
@@ -495,6 +513,19 @@ def build_output(
         lines.append("this summary. Use it alongside PR INTENT to focus your review.")
         lines.append("")
         lines.append(change_purpose)
+        lines.append("")
+
+    # Reviewer-Requested Focus — additional instructions from the requester.
+    # Positioned after PR INTENT and REVIEW FOCUS for primacy ordering:
+    # rules → context → steering → content.
+    if additional_instructions:
+        lines.append("=== REVIEWER-REQUESTED FOCUS ===")
+        lines.append("The person requesting this review specifically asked:")
+        lines.append("")
+        lines.append(f"> {additional_instructions}")
+        lines.append("")
+        lines.append("Keep this front-of-mind throughout your analysis. Prioritize findings")
+        lines.append("related to this guidance.")
         lines.append("")
 
     # Review Budget — scope-proportionate tool call calibration
@@ -876,6 +907,9 @@ def main():
     # Load change-purpose.md (main session's distilled synthesis, if available)
     change_purpose = load_change_purpose(output_dir)
 
+    # Load additional instructions from run-config.json (if provided by requester)
+    additional_instructions = load_additional_instructions(output_dir)
+
     # Determine overall status
     overall_status = scope_status
     if config["domain"] is None:
@@ -895,6 +929,7 @@ def main():
         file_history=file_history_output,
         pr_intent=pr_intent,
         change_purpose=change_purpose,
+        additional_instructions=additional_instructions,
         review_budget=review_budget,
     )
 

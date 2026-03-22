@@ -31,6 +31,7 @@ load_pr_intent = _mod.load_pr_intent
 load_pr_number_from_context = _mod.load_pr_number_from_context
 load_pr_size_from_context = _mod.load_pr_size_from_context
 load_change_purpose = _mod.load_change_purpose
+load_additional_instructions = _mod.load_additional_instructions
 compute_review_budget = _mod.compute_review_budget
 extract_scope_files = _mod.extract_scope_files
 extract_scope_line_count = _mod.extract_scope_line_count
@@ -388,3 +389,122 @@ class TestExtractScopeMultipleBlocks:
         files = extract_scope_files(single)
         assert files == ["foo.php"]
         assert extract_scope_line_count(single) == 8
+
+
+class TestLoadAdditionalInstructions:
+    """load_additional_instructions() reads from run-config.json."""
+
+    def test_returns_value_when_present(self, tmp_path):
+        config = {"additional_instructions": "Focus on error handling in the retry logic."}
+        (tmp_path / "run-config.json").write_text(json.dumps(config))
+        result = load_additional_instructions(str(tmp_path))
+        assert result == "Focus on error handling in the retry logic."
+
+    def test_returns_none_when_key_missing(self, tmp_path):
+        config = {"mode": "pr", "quick": False}
+        (tmp_path / "run-config.json").write_text(json.dumps(config))
+        result = load_additional_instructions(str(tmp_path))
+        assert result is None
+
+    def test_returns_none_when_file_missing(self, tmp_path):
+        result = load_additional_instructions(str(tmp_path))
+        assert result is None
+
+    def test_returns_none_when_empty_string(self, tmp_path):
+        config = {"additional_instructions": ""}
+        (tmp_path / "run-config.json").write_text(json.dumps(config))
+        result = load_additional_instructions(str(tmp_path))
+        assert result is None
+
+    def test_returns_none_when_whitespace_only(self, tmp_path):
+        config = {"additional_instructions": "   \n  "}
+        (tmp_path / "run-config.json").write_text(json.dumps(config))
+        result = load_additional_instructions(str(tmp_path))
+        assert result is None
+
+    def test_handles_malformed_json(self, tmp_path):
+        (tmp_path / "run-config.json").write_text("not valid json")
+        result = load_additional_instructions(str(tmp_path))
+        assert result is None
+
+    def test_strips_whitespace(self, tmp_path):
+        config = {"additional_instructions": "  Check for XSS vulnerabilities.  "}
+        (tmp_path / "run-config.json").write_text(json.dumps(config))
+        result = load_additional_instructions(str(tmp_path))
+        assert result == "Check for XSS vulnerabilities."
+
+
+class TestAdditionalInstructionsInjection:
+    """additional_instructions is injected as REVIEWER-REQUESTED FOCUS in bootstrap output."""
+
+    def test_section_present_when_provided(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            additional_instructions="Focus on error handling in the retry logic.",
+        )
+        assert "=== REVIEWER-REQUESTED FOCUS ===" in output
+        assert "Focus on error handling in the retry logic." in output
+        assert "Keep this front-of-mind" in output
+
+    def test_section_absent_when_none(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            additional_instructions=None,
+        )
+        assert "REVIEWER-REQUESTED FOCUS" not in output
+
+    def test_section_absent_when_not_passed(self):
+        """When additional_instructions is omitted (default None), section is absent."""
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+        )
+        assert "REVIEWER-REQUESTED FOCUS" not in output
+
+    def test_positioned_after_change_purpose_before_budget(self):
+        """REVIEWER-REQUESTED FOCUS should appear after REVIEW FOCUS and before REVIEW BUDGET."""
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            change_purpose="Adds retry logic.",
+            additional_instructions="Focus on error handling.",
+            review_budget=30,
+        )
+        focus_pos = output.index("REVIEW FOCUS")
+        requested_pos = output.index("REVIEWER-REQUESTED FOCUS")
+        budget_pos = output.index("REVIEW BUDGET")
+        assert focus_pos < requested_pos < budget_pos
