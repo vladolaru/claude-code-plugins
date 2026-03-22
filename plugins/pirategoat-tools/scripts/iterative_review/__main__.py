@@ -127,8 +127,22 @@ def action_review(args):
     # spending time on prompt composition, diff computation, etc.
     preflight_err = _preflight_codex_cli()
     if preflight_err:
+        # Write structured result so callers can detect the condition
+        # programmatically (same shape as normal termination).
+        result_data = {
+            "termination": "codex_unavailable",
+            "rounds_completed": 0,
+            "total_findings": 0,
+            "total_fixed": 0,
+            "total_rejected": 0,
+            "total_deferred": 0,
+            "rounds": [],
+        }
+        result_path = os.path.join(output_dir, "review-loop-result.json")
+        with open(result_path, "w") as f:
+            json.dump(result_data, f, indent=2)
         print(preflight_err)
-        sys.exit(1)
+        return
 
     telemetry = ReviewTelemetry(output_dir)
     state = read_loop_state(output_dir)

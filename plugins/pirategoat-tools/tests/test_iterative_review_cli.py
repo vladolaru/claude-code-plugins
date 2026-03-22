@@ -750,3 +750,40 @@ class TestPreflightCodexCli:
         """Auth check should not run if codex is not even on PATH."""
         result = _preflight_codex_cli()
         assert "not installed" in result or "not on PATH" in result
+
+
+class TestPreflightIntegration:
+    """Pre-flight failure writes result file and exits cleanly."""
+
+    def test_unavailable_writes_result_and_exits_zero(self, tmp_path):
+        """When codex is not on PATH, script writes result file and exits 0."""
+        d = tmp_path / "review-output"
+        d.mkdir()
+        # Write a helper script that patches shutil.which before importing
+        helper = tmp_path / "run_preflight.py"
+        helper.write_text(
+            f"import sys\n"
+            f"sys.path.insert(0, '{SCRIPTS_DIR}')\n"
+            f"from unittest.mock import patch\n"
+            f"import types\n"
+            f"args = types.SimpleNamespace(\n"
+            f"    output_dir='{d}',\n"
+            f"    round=1, merge_base='abc123', context_file=None,\n"
+            f"    max_rounds=None, no_prior_analysis=False)\n"
+            f"with patch('shutil.which', return_value=None):\n"
+            f"    from iterative_review.__main__ import action_review\n"
+            f"    action_review(args)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, str(helper)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        assert "UNAVAILABLE" in result.stdout
+        # Verify result file was written
+        result_path = d / "review-loop-result.json"
+        assert result_path.exists()
+        data = json.loads(result_path.read_text())
+        assert data["termination"] == "codex_unavailable"
+        assert data["rounds_completed"] == 0

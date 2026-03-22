@@ -93,12 +93,16 @@ PYTHONPATH=$SCRIPTS_DIR:$PYTHONPATH python3 -m iterative_review \
 
 Only include `--max-rounds` if the user specified a round limit or quick mode.
 
-Read the stdout. Two possible outcomes:
+Read the stdout. Three possible outcomes:
 
-**A) Completion briefing** — Codex found zero issues. The review is done.
+**A) UNAVAILABLE message** — Codex CLI is not installed or not authenticated.
+The iterative review cannot run. Inform the user that the iterative Codex
+review is unavailable and why.
+
+**B) Completion briefing** — Codex found zero issues. The review is done.
 Report the result and stop.
 
-**B) Evaluation briefing** — Codex found issues. Proceed to triage below.
+**C) Evaluation briefing** — Codex found issues. Proceed to triage below.
 
 ### Triage and Fix
 
