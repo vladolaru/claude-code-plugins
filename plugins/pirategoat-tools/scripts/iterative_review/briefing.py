@@ -131,7 +131,7 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
 
 _TERMINATION_REASONS = {
     "zero_findings": "Codex found no issues — the code is clean.",
-    "all_rejected": "All findings were rejected — no code changes needed.",
+    "all_rejected": "No code changes needed — findings were rejected or deferred.",
     "nitpicks_only": "Only P3 suggestions remain — addressed as appropriate.",
     "max_rounds": "Maximum review rounds reached.",
     "hard_limit": "Hard round limit reached.",
@@ -173,7 +173,10 @@ def format_degraded_briefing(round_num, raw_id):
     lines.append("  - Assess overall severity (P0-P3) across all issues found")
     lines.append("")
     lines.append(f"Write exactly one outcome to round-{round_num}-outcomes.json")
-    lines.append(f"with `{raw_id}` as the finding ID. Choose the action (fixed/rejected/deferred)")
-    lines.append("that best represents the overall resolution. If issues have mixed resolutions,")
-    lines.append("note the breakdown in the summary field.")
+    lines.append(f"with `{raw_id}` as the finding ID. Pick the action using this priority:")
+    lines.append("  - If ANY issues are deferred → action: deferred (preserves PR follow-ups)")
+    lines.append("  - Else if any fixed → action: fixed")
+    lines.append("  - Else → action: rejected")
+    lines.append("Use 'summary' for fixed, 'reasoning' for rejected/deferred.")
+    lines.append("Include the full breakdown (which issues fixed, rejected, deferred) in that field.")
     return "\n".join(lines)
