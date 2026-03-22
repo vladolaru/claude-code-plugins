@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.85.2] - 2026-03-22
+
+### Changed
+- **Iterative review: structured verification steps.** Replaced the triage
+  decision tree (if real → fix, if wrong → reject) with a 4-step cognitive
+  forcing function (READ → VERIFY → EVALUATE → DECIDE). Separates code
+  reading from claim assessment, preventing confirmation bias when evaluating
+  external review findings. Grounded in factored verification, quote extraction
+  for grounding, and plan-and-solve prompting techniques.
+
 ## [1.85.1] - 2026-03-22
 
 ### Changed
