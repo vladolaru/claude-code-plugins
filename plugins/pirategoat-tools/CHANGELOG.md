@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.83.0] - 2026-03-22
+
+### Added
+- **Step 8 time-based escalation gate** — when waiting on running agents
+  exceeds `agent_timeout_seconds + 60s`, step 8 escalates instead of
+  looping: clears the waiting state, instructs the LLM to TaskStop stuck
+  agents, and proceeds with reconciliation using available results. This
+  prevents the pipeline from spinning on retries until the blunt
+  pipeline-level timeout kills everything (losing completed agent work)
+
+### Changed
+- Renamed `agents_blocked` state key to `waiting_on_agents` for clarity —
+  the pipeline is waiting on agents to finish, not blocked by them
+- Step 8 readiness gate title changed from `BLOCKED` to `WAITING`
+
 ## [1.82.0] - 2026-03-22
 
 ### Added
