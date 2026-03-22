@@ -439,6 +439,37 @@ class TestStep5QuickMode:
         assert "wp-architecture-reviewer" in text
 
 
+class TestStep5AdditionalInstructions:
+    """Step 5: additional_instructions surfaced as Reviewer-Requested Focus."""
+
+    def _make_state_with_plan(self):
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3],
+            "dispatch_plan_summary": {"dispatched": 2, "skipped": 1, "conditional": 0},
+            "dispatch_plan_agents": [
+                {"name": "pr-reviewer", "focus": "PR goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
+                {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "SKIPPED", "reason": "no files in security domain"},
+            ],
+        }
+
+    def test_additional_instructions_in_actions(self, mod, tmp_path):
+        """When config has additional_instructions, actions contain Reviewer-Requested Focus."""
+        state = self._make_state_with_plan()
+        config = {"additional_instructions": "Pay special attention to error handling in the webhook path"}
+        g = mod.get_step_guidance(5, "pr", state, {}, config=config)
+        text = "\n".join(g["actions"])
+        assert "Reviewer-Requested Focus" in text
+        assert "Pay special attention to error handling in the webhook path" in text
+
+    def test_no_additional_instructions_no_section(self, mod, tmp_path):
+        """When config does NOT have additional_instructions, no Reviewer-Requested Focus section."""
+        state = self._make_state_with_plan()
+        g = mod.get_step_guidance(5, "pr", state, {})
+        text = "\n".join(g["actions"])
+        assert "Reviewer-Requested Focus" not in text
+
+
 class TestStep6DispatchAgents:
     """Step 6: Dispatch Agents. main() reads dispatch-plan.json, passes agent list."""
 

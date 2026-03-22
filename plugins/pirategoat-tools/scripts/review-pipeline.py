@@ -796,6 +796,21 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
             "review covering the most likely risk areas."
         )
 
+    additional = config.get("additional_instructions") if config else None
+    if additional:
+        actions.append("")
+        actions.append("## Reviewer-Requested Focus")
+        actions.append("")
+        actions.append("The person requesting this review gave specific instructions:")
+        actions.append("")
+        actions.append(f"> {additional}")
+        actions.append("")
+        actions.append(
+            "Consider whether the dispatch plan adequately covers this focus area. "
+            "If relevant agents were skipped by automated triage, consider overriding "
+            "to include them."
+        )
+
     return {
         "phase": "EXECUTION",
         "title": "Dispatch Plan + Triage",
