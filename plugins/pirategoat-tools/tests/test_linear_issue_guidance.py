@@ -511,6 +511,13 @@ class TestStep13CreateDraftPR:
         text = _guidance_text(g)
         assert "WOOPLUG-5678" in text
 
+    def test_includes_deferred_items_in_pr(self, mod):
+        g = mod.get_step_guidance(13, "fix", {}, FIX_CTX,
+                                  config={}, output_dir="/tmp/test")
+        text = _guidance_text(g)
+        assert "deferred" in text.lower()
+        assert "follow-up" in text.lower() or "follow-ups" in text.lower()
+
     def test_mentions_fallback_on_failure(self, mod):
         g = mod.get_step_guidance(13, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")

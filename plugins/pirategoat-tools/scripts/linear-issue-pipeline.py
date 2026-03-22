@@ -1091,6 +1091,8 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
         "The PR links back to the Linear issue and includes investigation context.",
     ]
 
+    deferred_path = os.path.join(output_dir, "code-review", "deferred-items.jsonl")
+
     actions = [
         "1. Create a feature branch (if not already on one):",
         f"   ```bash",
@@ -1101,18 +1103,26 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
         f"   - Use conventional commit: `fix: <description>`",
         f"   - Include `Refs {issue_id}` in the commit body",
         "",
-        "3. Push and create draft PR:",
+        "3. Check for deferred review items:",
+        f"   - Read `{deferred_path}` (if it exists)",
+        "   - Each line is a JSON object with id, severity, title, location, reasoning",
+        "   - These are review findings that were valid but deferred (out of scope for this PR)",
+        "   - Include them in the PR description under a `## Follow-ups` section",
+        "",
+        "4. Push and create draft PR:",
         "   ```bash",
         "   git push -u origin HEAD",
-        f"   gh pr create --draft --title 'fix: <description>' --body '## Summary\\n\\n<investigation summary>\\n\\nRefs {issue_id}'",
+        f"   gh pr create --draft --title 'fix: <description>' --body-file <pr-body.md>",
         "   ```",
+        f"   Include in the PR body: Summary, `Refs {issue_id}`, and if deferred items exist,",
+        "   a Follow-ups section listing each deferred finding (severity, title, location, reason).",
         "",
-        "4. If PR creation fails:",
+        "5. If PR creation fails:",
         "   - Save the diff locally (`git diff > changes.diff`)",
         "   - Note as degradation with manual instructions",
         "   - Continue to step 14",
         "",
-        "5. Record the PR URL for the pipeline result.",
+        "6. Record the PR URL for the pipeline result.",
     ]
 
     return {

@@ -41,8 +41,11 @@ def _sanitize_filename(name):
 
 
 def _write_loop_result(output_dir, state, termination):
-    """Write review-loop-result.json with cumulative stats from all rounds."""
+    """Write review-loop-result.json with cumulative stats and deferred items."""
+    from .loop import read_deferred_items
+
     rounds = state.get("rounds", [])
+    deferred_items = read_deferred_items(output_dir)
     result_data = {
         "termination": termination,
         "rounds_completed": len(rounds),
@@ -51,6 +54,7 @@ def _write_loop_result(output_dir, state, termination):
         "total_fixed": sum(r.get("fixed", 0) for r in rounds),
         "total_rejected": sum(r.get("rejected", 0) for r in rounds),
         "total_deferred": sum(r.get("deferred", 0) for r in rounds),
+        "deferred_items": deferred_items,
         "rounds": rounds,
     }
     result_path = os.path.join(output_dir, "review-loop-result.json")
