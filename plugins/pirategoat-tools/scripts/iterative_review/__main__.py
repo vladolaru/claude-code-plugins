@@ -127,6 +127,10 @@ def action_review(args):
     # spending time on prompt composition, diff computation, etc.
     preflight_err = _preflight_codex_cli()
     if preflight_err:
+        # Log telemetry before writing result
+        telemetry = ReviewTelemetry(output_dir)
+        telemetry.progress("codex_unavailable", round=round_num)
+        telemetry.pipeline_event("codex_unavailable", round=round_num)
         # Write structured result so callers can detect the condition
         # programmatically (same shape as normal termination).
         result_data = {
