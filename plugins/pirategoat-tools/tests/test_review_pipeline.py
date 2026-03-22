@@ -794,6 +794,58 @@ class TestStep8ReadinessGate:
         waiting = state.get("waiting_on_agents", {})
         assert "first_waiting_at" in waiting
 
+    def test_escalates_after_timeout(self, mod, tmp_path):
+        """Step 8 should escalate to force-proceed after timeout threshold."""
+        from datetime import datetime, timezone, timedelta
+
+        # Simulate first_waiting_at was 25 minutes ago (exceeds 20min + 60s)
+        past = datetime.now(timezone.utc) - timedelta(minutes=25)
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "waiting_on_agents": {
+                "running": ["security-reviewer"],
+                "not_dispatched": [],
+                "first_waiting_at": past.isoformat(),
+                "agent_timeout_seconds": 1200,
+            },
+            "agents": {
+                "dispatched": ["pr-reviewer", "security-reviewer"],
+                "completed": ["pr-reviewer"],
+                "failed": [],
+            },
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        # Should NOT be in waiting state — should have escalated
+        assert "WAITING" not in g["title"]
+        actions_text = "\n".join(g["actions"])
+        # Should instruct TaskStop of stuck agents
+        assert "TaskStop" in actions_text
+        # Should still proceed to reconciliation
+        assert "review-reconciliator" in actions_text
+
+    def test_does_not_escalate_before_timeout(self, mod, tmp_path):
+        """Step 8 should keep waiting when within timeout threshold."""
+        from datetime import datetime, timezone, timedelta
+
+        # Simulate first_waiting_at was 5 minutes ago (well within threshold)
+        past = datetime.now(timezone.utc) - timedelta(minutes=5)
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "waiting_on_agents": {
+                "running": ["security-reviewer"],
+                "not_dispatched": [],
+                "first_waiting_at": past.isoformat(),
+                "agent_timeout_seconds": 1200,
+            },
+            "agents": {"dispatched": ["security-reviewer"], "completed": [], "failed": []},
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert "WAITING" in g["title"]
+
     def test_not_blocked_when_only_not_dispatched(self, mod, tmp_path):
         """NOT_DISPATCHED alone should not block — only RUNNING agents block."""
         state = {

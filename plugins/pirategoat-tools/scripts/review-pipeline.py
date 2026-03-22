@@ -941,31 +941,59 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         if "first_waiting_at" not in waiting:
             waiting["first_waiting_at"] = datetime.now(timezone.utc).isoformat()
 
-        running = waiting["running"]
-        od = output_dir or "<OUTPUT_DIR>"
-        situation = [
-            f"**Waiting:** {len(running)} agent(s) still running: {', '.join(running)}",
-            "Reconciliation cannot start until all dispatched agents have finished.",
-        ]
-        not_dispatched = waiting.get("not_dispatched", [])
-        if not_dispatched:
-            situation.append(
-                f"**Also not dispatched:** {', '.join(not_dispatched)} — dispatch these first."
+        # Time-based escalation: if we've waited longer than the agent timeout
+        # plus a grace period, force-proceed with available results
+        agent_timeout = waiting.get("agent_timeout_seconds", DEFAULT_AGENT_TIMEOUT)
+        escalation_threshold = agent_timeout + 60  # 60s grace period
+        try:
+            first_waiting = datetime.fromisoformat(waiting["first_waiting_at"])
+            elapsed = (datetime.now(timezone.utc) - first_waiting).total_seconds()
+        except (ValueError, KeyError):
+            elapsed = 0
+
+        if elapsed >= escalation_threshold:
+            # Escalate: proceed with whatever agents completed
+            running = waiting["running"]
+            elapsed_min = int(elapsed // 60)
+            # Clear waiting state so reconciliation proceeds
+            state.pop("waiting_on_agents", None)
+            # Store escalation warning for the normal reconciliation briefing
+            state["_escalation_warning"] = (
+                f"**Escalation:** Waited {elapsed_min}m for {len(running)} agent(s) "
+                f"that never finished: {', '.join(running)}. "
+                f"**TaskStop these agents before proceeding.**"
             )
-        actions = [
-            "Wait for running agents to finish, then re-run this step:",
-            f"```",
-            f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{od}\"",
-            f"```",
-            "When ALL_DONE is true, re-run step 8.",
-        ]
-        return {
-            "phase": "SYNTHESIS",
-            "title": "Reconcile + Verify — WAITING",
-            "situation": situation,
-            "actions": actions,
-            "handoff": None,
-        }
+            # Don't return — fall through to normal reconciliation briefing below
+        else:
+            # Not yet escalated — return WAITING briefing
+            running = waiting["running"]
+            od = output_dir or "<OUTPUT_DIR>"
+            situation = [
+                f"**Waiting:** {len(running)} agent(s) still running: {', '.join(running)}",
+                "Reconciliation cannot start until all dispatched agents have finished.",
+            ]
+            not_dispatched = waiting.get("not_dispatched", [])
+            if not_dispatched:
+                situation.append(
+                    f"**Also not dispatched:** {', '.join(not_dispatched)} — dispatch these first."
+                )
+            actions = [
+                "Wait for running agents to finish, then re-run this step:",
+                f"```",
+                f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{od}\"",
+                f"```",
+                "When ALL_DONE is true, re-run step 8.",
+            ]
+            return {
+                "phase": "SYNTHESIS",
+                "title": "Reconcile + Verify — WAITING",
+                "situation": situation,
+                "actions": actions,
+                "handoff": None,
+            }
+
+    # Normal reconciliation briefing (agents done or escalated)
+    escalation = state.pop("_escalation_warning", None)
 
     git = context.get("git", {})
     git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
@@ -992,10 +1020,17 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     elif commit_messages:
         situation.append(f"**Change purpose (derived from commits):** {'; '.join(commit_messages[:3])}")
 
+    if escalation:
+        situation.insert(0, escalation)
+        situation.insert(1, "")
+
     actions = [
-        "**First:** Stop any remaining background review agents. Their work has either completed "
-        "(review files written) or will not be incorporated. Use TaskStop to force-stop all "
-        "remaining agents before proceeding.",
+        ("**First:** TaskStop these stuck agents that exceeded their timeout — "
+         "they will not produce useful output at this point.")
+        if escalation else
+        ("**First:** Stop any remaining background review agents. Their work has either completed "
+         "(review files written) or will not be incorporated. Use TaskStop to force-stop all "
+         "remaining agents before proceeding."),
         "",
         f"**Then:** Dispatch the `review-reconciliator` agent to deduplicate, verify, and produce "
         f"consolidated findings.",
