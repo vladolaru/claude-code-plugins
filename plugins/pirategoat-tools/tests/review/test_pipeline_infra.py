@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
+
+sys.path.insert(0, str(TESTS_DIR))
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH, PIPELINE_TOTAL_STEPS as TOTAL_STEPS
 
 

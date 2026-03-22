@@ -19,8 +19,9 @@ import pytest
 # ---------------------------------------------------------------------------
 # Import ReviewOutputBuilder from scripts/
 # ---------------------------------------------------------------------------
-TESTS_DIR = Path(__file__).resolve().parent
-SCRIPTS_DIR = TESTS_DIR.parent / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent.parent.parent  # agent/ -> review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.agent.output import ReviewOutputBuilder

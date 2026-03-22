@@ -10,14 +10,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+_scripts_dir = str(PLUGIN_ROOT / "scripts")
+
 # Add tests/ and scripts/ to path before importing local modules
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-_scripts_dir = str(Path(__file__).resolve().parent.parent / "scripts")
+sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, _scripts_dir)
 
 import pytest
 
-from graders import (
+from helpers.graders import (
     GradeResult,
     grade_review_json,
     grade_review_markdown,

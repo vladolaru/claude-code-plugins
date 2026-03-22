@@ -20,14 +20,14 @@ import tempfile
 from pathlib import Path
 
 # Path setup
-TESTS_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
 sys.path.insert(0, str(TESTS_DIR))
-from graders import (
+from helpers.graders import (
     GradeResult,
     grade_output_pair,
     grade_review_json,

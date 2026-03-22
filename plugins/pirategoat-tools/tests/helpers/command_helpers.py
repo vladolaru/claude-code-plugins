@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-TESTS_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent.parent  # helpers/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 COMMANDS_DIR = PLUGIN_ROOT / "commands"
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"

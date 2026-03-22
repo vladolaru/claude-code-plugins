@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+TESTS_DIR = Path(__file__).resolve().parent.parent  # commands/ -> tests/
 
-from test_commands_helpers import (
+sys.path.insert(0, str(TESTS_DIR))
+
+from helpers.command_helpers import (
     read_command,
     parse_frontmatter,
     extract_agent_refs,

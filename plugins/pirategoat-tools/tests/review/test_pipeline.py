@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from context_fixtures import COMPLETE_CONTEXT
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
+
+sys.path.insert(0, str(TESTS_DIR))
+from helpers.context_fixtures import COMPLETE_CONTEXT
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
 
 

@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent.parent.parent  # agent/ -> review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 # Import the module
 spec = importlib.util.spec_from_file_location(

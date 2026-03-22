@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 # Import the module under test (hyphenated filename requires importlib)
-TESTS_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent.parent  # analysis/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "analysis" / "session_analyzer.py"
 

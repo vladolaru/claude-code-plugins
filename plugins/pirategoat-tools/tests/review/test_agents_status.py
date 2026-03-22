@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "agents_status.py"
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
 
 
 def _load_module():

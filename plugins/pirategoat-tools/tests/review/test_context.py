@@ -9,11 +9,14 @@ from pathlib import Path
 
 import pytest
 
-# Import shared fixtures — tests run from various CWDs, so use path-based import
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from context_fixtures import COMPLETE_CONTEXT, PARTIAL_CONTEXT
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
 
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "context.py"
+# Import shared fixtures — tests run from various CWDs, so use path-based import
+sys.path.insert(0, str(TESTS_DIR))
+from helpers.context_fixtures import COMPLETE_CONTEXT, PARTIAL_CONTEXT
+
+SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "context.py"
 
 
 def _load_module():

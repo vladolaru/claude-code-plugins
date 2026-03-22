@@ -10,13 +10,12 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+_SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
-# ---------------------------------------------------------------------------
-# Import dispatch planner module (hyphenated filename)
-# ---------------------------------------------------------------------------
-_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(TESTS_DIR))
+from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
 _dispatch_spec = importlib.util.spec_from_file_location(
     "plan_review_dispatch", str(_SCRIPTS_DIR / "review" / "plan_dispatch.py")
 )
@@ -300,7 +299,7 @@ class TestStep7Orchestration:
 
     def test_step_7_baseline_grades_clean(self, tmp_path):
         """The written baseline should pass the grader."""
-        from graders import grade_review_baseline
+        from helpers.graders import grade_review_baseline
         self._run("--step", "1", "--mode", "incremental",
                    "--output-dir", str(tmp_path))
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}

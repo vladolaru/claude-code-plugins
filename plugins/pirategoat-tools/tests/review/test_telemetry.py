@@ -12,11 +12,14 @@ from unittest.mock import patch
 
 import pytest
 
-# Import the module under test
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "telemetry.py"
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from context_fixtures import COMPLETE_CONTEXT
+# Import the module under test
+SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
+
+sys.path.insert(0, str(TESTS_DIR))
+from helpers.context_fixtures import COMPLETE_CONTEXT
 
 
 def _load_module():

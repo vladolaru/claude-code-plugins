@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent.parent  # iterative_review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from iterative_review.loop import (

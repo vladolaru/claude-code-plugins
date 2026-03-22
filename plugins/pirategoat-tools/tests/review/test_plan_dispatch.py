@@ -16,7 +16,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Path setup
 # ---------------------------------------------------------------------------
-TESTS_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 

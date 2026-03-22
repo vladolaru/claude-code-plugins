@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "workspace_setup.py"
+TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "workspace_setup.py"
 
 
 def _load_module():

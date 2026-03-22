@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-TESTS_DIR = Path(__file__).resolve().parent
+TESTS_DIR = Path(__file__).resolve().parent.parent.parent  # agent/ -> review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"

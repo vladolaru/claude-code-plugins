@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent.parent  # linear/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 
 def _load_module():

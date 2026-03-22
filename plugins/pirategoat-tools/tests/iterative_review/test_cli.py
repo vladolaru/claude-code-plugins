@@ -9,7 +9,9 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+TESTS_DIR = Path(__file__).resolve().parent.parent  # iterative_review/ -> tests/
+PLUGIN_ROOT = TESTS_DIR.parent
+SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 MODULE_DIR = SCRIPTS_DIR / "iterative_review"
 
 
