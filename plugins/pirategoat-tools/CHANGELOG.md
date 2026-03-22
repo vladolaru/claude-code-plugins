@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.84.0] - 2026-03-22
+
+### Added
+- **Clarity gate (step 8):** LLM-based assessment of issue clarity before
+  implementation. Evaluates 3 hard gates (problem statement,
+  reproduction/scope, success criteria) and 3 soft signals (conflicting
+  signals, missing technical context, implicit assumptions). Produces
+  `clarity-assessment.json` with structured findings
+- New `needs_clarification` verdict and `blocked` pipeline status for issues
+  lacking implementation clarity
+- `clarity_gate` and `clarity_gate_overridden` fields in
+  `pipeline-result.json` for bot routing and false-positive tracking
+- Override support: bot can resume pipeline at step 9 with
+  `skip_clarity_gate` config flag
+- Step 9 (Write Plan) briefing incorporates flagged ambiguities as
+  documented risks when clarity gate was overridden
+
+### Changed
+- Linear issue pipeline step count: 14 → 15 (existing steps 8-14
+  renumbered to 9-15)
+- `_eval_condition("fix_mode_and_unresolved")` now checks
+  `clarity_blocked` state flag
+
 ## [1.83.0] - 2026-03-22
 
 ### Added
