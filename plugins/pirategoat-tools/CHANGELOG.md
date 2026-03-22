@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`/iterative-review` command** — standalone multi-round Codex review on any
+  feature branch. Orchestrates the iterative review loop directly in the main
+  session: run Codex, triage findings, fix, commit, advance, repeat until
+  convergence. Supports quick mode (`--max-rounds 1`) and user-specified round
+  limits via free-form arguments
+- **`--max-rounds` CLI argument** for `iterative_review` module — overrides
+  diff-size-based computation, capped at hard limit of 20
 ## [1.80.0] - 2026-03-22
 
 ### Changed
