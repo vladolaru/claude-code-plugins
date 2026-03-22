@@ -41,6 +41,8 @@ Read all provided agent JSON files. For each finding across all agents:
 
 4. **Track which agents were expected but had no output file** (the file path was provided but the file doesn't exist or is empty). Note these as skipped agents.
 
+5. **Separate not-applicable agents.** For each agent JSON, check `verdict`. If it is `"not_applicable"`, the agent determined the changes are not relevant to its domain — it did NOT review the code. Record these separately from agents that performed actual reviews. The `skip_reason` field explains why. Do not include not-applicable agents in finding counts or agent-contribution tallies.
+
 **The hard judgment:** Distinguishing "same concern described differently" from "different concern on adjacent lines." When in doubt, keep them separate — under-merging is better than over-merging (losing a distinct issue).
 
 ## Phase 2: Scope & Verify
@@ -121,7 +123,10 @@ output['meta']['reconciliation'] = {
     'false_positives_dropped': FP_COUNT,        # dropped as factually incorrect
     'out_of_scope_dropped': OOS_COUNT,          # dropped as not in diff
     'verified_concerns': VERIFIED_COUNT,        # passed scope + fact check
-    'merge_ratio': round(1 - GROUPED_COUNT / max(TOTAL_INPUT, 1), 2)  # reduction %
+    'merge_ratio': round(1 - GROUPED_COUNT / max(TOTAL_INPUT, 1), 2),  # reduction %
+    'not_applicable_count': NA_COUNT,           # agents that returned not_applicable
+    'not_applicable_agents': NA_AGENT_LIST,     # list: [{"name": "...", "skip_reason": "..."}]
+    'reviewing_agents': REVIEWING_NAMES,        # agents that performed actual reviews
 }
 
 # Write output
@@ -142,7 +147,7 @@ Write `review-findings.md` with this structure:
 ### Overall Verdict: <APPROVE | REQUEST_CHANGES | COMMENT>
 <2-3 sentence summary: what is the overall state of this code?>
 
-**Pipeline:** X findings from Y agents → Z verified concerns (R% merge ratio, M false positives dropped, K out-of-scope dropped). Full metrics in `review-findings.json` → `meta.reconciliation`.
+**Pipeline:** X findings from Y reviewing agents → Z verified concerns (R% merge ratio, M false positives dropped, K out-of-scope dropped). T agents returned not-applicable (changes outside their domain). Full metrics in `review-findings.json` → `meta.reconciliation`.
 
 ### Critical Issues (must fix)
 1. **[Issue]** — file:line
@@ -176,3 +181,11 @@ Narrative review findings: {output_dir}/review-findings.md
 ```
 
 Full quality metrics (input counts, grouping, false positives, out-of-scope, merge ratio) are in `review-findings.json` → `meta.reconciliation`.
+
+## Handling Not-Applicable Agents
+
+When an agent has `verdict: "not_applicable"`, it means "these changes are outside my domain" — the agent abstained, it did not review. In your return signal and narrative:
+
+- **Do NOT count not-applicable agents toward approval confidence.** They did not review the code.
+- **DO report them separately** so the orchestrator knows how many agents actually reviewed vs. abstained.
+- **Include in the narrative:** "T agents returned not-applicable (changes outside their domain): [names with reasons]"
