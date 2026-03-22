@@ -1015,6 +1015,8 @@ def _step_11_self_review(mode, state, context, config, output_dir):
         "   - Run `git status` to check for uncommitted work",
         "   - If there are staged/unstaged changes, commit them with semantic commit messages",
         "   - Do NOT create blanket WIP commits — each commit should be a logical unit",
+        "   - (Backstop: the review loop auto-commits any remaining changes before each round,",
+        "     but semantic commits are much more desirable and useful for the project's history)",
         "",
         "2. Compute the merge base (detect default branch dynamically):",
         "   ```bash",

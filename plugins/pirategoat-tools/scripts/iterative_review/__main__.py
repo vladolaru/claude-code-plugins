@@ -208,6 +208,21 @@ def action_review(args):
         state["current_round"] = round_num
         context = state.get("context", "")
 
+    # Backstop: auto-commit uncommitted changes before Codex reviews
+    # Codex reviews git diff merge_base..HEAD, so uncommitted work is invisible.
+    try:
+        status = sp.run(["git", "status", "--porcelain"],
+                        capture_output=True, text=True).stdout.strip()
+        if status:
+            sp.run(["git", "add", "-A"], capture_output=True)
+            sp.run(["git", "commit", "-m",
+                    f"chore: auto-commit before iterative review round {round_num}"],
+                   capture_output=True)
+            telemetry.progress("auto_committed", round=round_num,
+                               msg="Uncommitted changes committed before review")
+    except Exception:
+        pass  # best-effort — don't block review if git fails
+
     # Reset progress log
     telemetry.reset_progress()
     telemetry.progress("round_started", round=round_num)
