@@ -1344,9 +1344,6 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "pr_url": pr_url,
             "linear_comment_posted": linear_posted,
             "independent_code_review": review_outcome,
-            # Backward compat: pirategoat-bot reads this field (orchestrator-linear.js:440).
-            # Remove after bot is updated to read independent_code_review instead.
-            "codex_review_applied": review_outcome not in ("not_run", "unavailable"),
             "degradation_notes": degradation_notes,
         }
 
