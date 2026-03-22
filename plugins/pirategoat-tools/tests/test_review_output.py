@@ -446,13 +446,12 @@ class TestNotApplicable:
         with pytest.raises(ValueError, match="reason"):
             b.mark_not_applicable("   ")
 
-    def test_overrides_auto_calculated_verdict(self):
-        """mark_not_applicable overrides even if issues were somehow added."""
+    def test_raises_if_issues_already_recorded(self):
+        """mark_not_applicable rejects mixed state — issues + not_applicable is contradictory."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_issue("high", "XSS", "f.php", "desc", "rec", line=1)
-        b.mark_not_applicable("Agent mistakenly started before checking relevance")
-        d = b.to_dict()
-        assert d["verdict"] == "not_applicable"
+        with pytest.raises(ValueError, match="issue.*already recorded"):
+            b.mark_not_applicable("Agent mistakenly started before checking relevance")
 
     def test_in_json_output(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")

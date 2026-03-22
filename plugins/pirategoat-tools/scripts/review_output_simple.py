@@ -190,6 +190,12 @@ class ReviewOutputBuilder:
                 "mark_not_applicable requires a non-empty reason explaining "
                 "why the changes are not relevant to this domain."
             )
+        if self.issues:
+            raise ValueError(
+                f"Cannot mark review as not_applicable — {len(self.issues)} issue(s) "
+                "already recorded. An agent that found issues reviewed the code; "
+                "it should not also claim the changes are irrelevant."
+            )
         self._not_applicable = True
         self._skip_reason = reason.strip()
 
