@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.86.0] - 2026-03-22
+
+### Added
+- **Iterative review: cognitive traps priming (round 1).** The evaluation
+  briefing now includes a compact anti-patterns block at round 1 covering
+  rubber-stamping, positional entrenchment, and scope inflation. Shown once
+  to prime evaluation posture; not repeated at rounds 2+.
+- **Iterative review: self-correction prompt (round 2+).** The stalemate-
+  breaking section now requires the agent to state specifically what was
+  wrong in its prior reasoning when reversing a rejection. The correction
+  flows into the pushback log, giving Codex better signal in subsequent
+  rounds. Adapted from the receiving-code-review skill's "Gracefully
+  Correcting Your Pushback" pattern.
+
 ## [1.85.2] - 2026-03-22
 
 ### Fixed
