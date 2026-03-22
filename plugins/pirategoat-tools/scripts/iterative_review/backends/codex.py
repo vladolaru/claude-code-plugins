@@ -140,7 +140,7 @@ def write_prompt_file(output_dir, round_num, rubric, merge_base,
 def get_schema_path():
     """Return the path to the review output JSON Schema file."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "review-schema.json")
+                        "codex-review-schema.json")
 
 
 def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800):

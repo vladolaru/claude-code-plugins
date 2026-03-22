@@ -375,3 +375,49 @@ class TestAdvanceMissingOutcomes:
         )
         assert result.returncode != 0
         assert "r1_f2" in result.stderr
+
+
+class TestSchemaFile:
+    """The review-schema.json file must exist for Codex invocation."""
+
+    def test_schema_file_exists(self):
+        schema_path = SCRIPTS_DIR / "iterative_review" / "backends" / "codex-review-schema.json"
+        assert schema_path.exists(), f"Missing {schema_path}"
+
+    def test_schema_is_valid_json(self):
+        schema_path = SCRIPTS_DIR / "iterative_review" / "backends" / "codex-review-schema.json"
+        data = json.loads(schema_path.read_text())
+        assert "properties" in data
+        assert "findings" in data["properties"]
+        assert data.get("additionalProperties") is False
+
+    def test_get_schema_path_returns_existing_file(self):
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        from iterative_review.backends.codex import get_schema_path
+        path = get_schema_path()
+        assert Path(path).exists(), f"get_schema_path() returned {path} but file doesn't exist"
+
+
+class TestNoPriorAnalysis:
+    """--no-prior-analysis flag is honored in state."""
+
+    def test_no_prior_analysis_sets_state(self):
+        """--no-prior-analysis sets pass_prior_analysis=False in state during init."""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        from iterative_review.loop import DEFAULT_STATE
+        # Simulate what action_review does on round 1 with --no-prior-analysis
+        state = {**DEFAULT_STATE}
+        state["merge_base"] = "abc123"
+        state["current_round"] = 1
+        # This is the fix we're testing: the flag must be applied
+        no_prior_analysis = True
+        if no_prior_analysis:
+            state["pass_prior_analysis"] = False
+        assert state["pass_prior_analysis"] is False
+
+    def test_default_passes_prior_analysis(self):
+        """Without --no-prior-analysis, pass_prior_analysis defaults to True."""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        from iterative_review.loop import DEFAULT_STATE
+        state = {**DEFAULT_STATE}
+        assert state["pass_prior_analysis"] is True

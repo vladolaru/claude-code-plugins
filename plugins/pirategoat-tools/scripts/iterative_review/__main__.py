@@ -57,6 +57,8 @@ def action_review(args):
         state = {**DEFAULT_STATE}
         state["merge_base"] = args.merge_base
         state["current_round"] = 1
+        if args.no_prior_analysis:
+            state["pass_prior_analysis"] = False
 
         # Read context file
         context = ""
