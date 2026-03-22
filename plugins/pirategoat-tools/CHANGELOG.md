@@ -10,10 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.85.1] - 2026-03-22
 
 ### Changed
-- Redesigned bootstrap integration tests: 257 mechanically-parameterized tests → 46 targeted tests covering every conditional path (43s → ~5s)
+- Redesigned bootstrap integration tests: 257 mechanically-parameterized tests → 48 targeted tests covering every conditional path (43s → ~6s)
 - Domain routing tests use direct function calls instead of subprocess (23s → ~3s)
 - Fixed mock gap in review_scope tests where freshen_base_ref did real git fetch calls (~7s → <1s)
-- Full test suite: 90s → ~29s with zero coverage loss
+- Full test suite: 90s → ~30s with zero coverage loss
+
+### Added
+- Category representative tests for secondary_domains (security-reviewer) and file_history without budget_override (api-contract-reviewer)
+- New `php-with-ci-config.diff` test fixture for exercising the secondary scope append branch
+- DOMAIN RULES invariant now covers all 4 test agents (php, js, e2e, go), not just 2
+- Registry validation for no_semantic_filter agents moved to test_agent_registry.py
 
 ## [1.85.0] - 2026-03-22
 
