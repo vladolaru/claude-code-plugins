@@ -1413,9 +1413,11 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
     _TERMINAL_VERDICTS = {"already_fixed", "duplicate", "invalid", "needs_more_info"}
     _terminal = state.get("issue_resolved", False) or state.get("verdict") in _TERMINAL_VERDICTS
     _step8_ran = 8 in state.get("completed_steps", [])
-    if step > 8 and _step8_ran and not state.get("clarity_blocked") and not state.get("_clarity_checked") and not _terminal:
+    # Re-evaluate on every post-step-8 entry (no _clarity_checked latch).
+    # This allows a re-triggered step 8 to produce a new assessment that
+    # unblocks a previously blocked run without requiring skip_clarity_gate.
+    if step > 8 and _step8_ran and not _terminal:
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
-        state["_clarity_checked"] = True
         if os.path.isfile(assessment_path):
             try:
                 with open(assessment_path) as f:
@@ -1425,12 +1427,22 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                 # required keys as malformed (fail closed).
                 if "clear_enough" not in assessment or "hard_gates" not in assessment:
                     raise ValueError("Missing required keys: clear_enough, hard_gates")
+                # Validate nested types: hard_gates and soft_signals values
+                # must be dicts. LLM can write e.g. {"problem_statement": false}
+                # instead of {"problem_statement": {"pass": false, "note": "..."}}.
+                for section_key in ("hard_gates", "soft_signals"):
+                    section = assessment.get(section_key, {})
+                    if not isinstance(section, dict):
+                        raise ValueError(f"{section_key} must be an object")
+                    for k, v in section.items():
+                        if not isinstance(v, dict):
+                            raise ValueError(f"{section_key}.{k} must be an object, got {type(v).__name__}")
                 if not assessment["clear_enough"]:
                     state["clarity_blocked"] = True
                     if not state.get("verdict"):
                         state["verdict"] = "needs_clarification"
                     if events:
-                        hard_failed = [k for k, v in assessment.get("hard_gates", {}).items()
+                        hard_failed = [k for k, v in assessment["hard_gates"].items()
                                        if not v.get("pass", True)]
                         events.milestone(
                             name="clarity_assessed",
@@ -1442,6 +1454,11 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             path="clarity-assessment.json",
                         )
                 else:
+                    # Assessment passed — clear any prior block from a previous run
+                    if state.get("clarity_blocked"):
+                        del state["clarity_blocked"]
+                    if state.get("verdict") == "needs_clarification":
+                        del state["verdict"]
                     if events:
                         events.milestone(
                             name="clarity_assessed",
@@ -1449,7 +1466,8 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             summary="passed",
                         )
             except (json.JSONDecodeError, ValueError, OSError) as exc:
-                # Fail closed: malformed JSON or missing schema keys = block.
+                # Fail closed: malformed JSON, missing schema keys, or wrong
+                # nested types = block. LLM-written files have realistic type drift.
                 state["clarity_blocked"] = True
                 if not state.get("verdict"):
                     state["verdict"] = "needs_clarification"
@@ -1457,11 +1475,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                     f"Clarity assessment file was invalid — blocking as precaution ({exc})"
                 )
                 if events:
-                    events.milestone(name="clarity_assessed", step=8, summary="blocked (file unreadable)")
+                    events.milestone(name="clarity_assessed", step=8, summary="blocked (file invalid)")
         else:
-            # Fail closed: missing file = block. Step 8 should have produced
-            # clarity-assessment.json. If the LLM wrote to the wrong path or
-            # the write failed, silently passing would defeat the gate.
+            # Fail closed: missing file = block.
             state["clarity_blocked"] = True
             if not state.get("verdict"):
                 state["verdict"] = "needs_clarification"
@@ -1549,8 +1565,13 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             try:
                 with open(assessment_path) as _cf:
                     _cdata = json.load(_cf)
-                hard_failed = [k for k, v in _cdata.get("hard_gates", {}).items() if not v.get("pass", True)]
-                soft_flagged = [k for k, v in _cdata.get("soft_signals", {}).items() if v.get("flagged", False)]
+                # Safely extract gate/signal names, tolerating nested type drift
+                _hg = _cdata.get("hard_gates", {})
+                hard_failed = [k for k, v in (_hg.items() if isinstance(_hg, dict) else [])
+                               if isinstance(v, dict) and not v.get("pass", True)]
+                _ss = _cdata.get("soft_signals", {})
+                soft_flagged = [k for k, v in (_ss.items() if isinstance(_ss, dict) else [])
+                                if isinstance(v, dict) and v.get("flagged", False)]
                 clarity_gate_summary = {
                     "clear_enough": _cdata.get("clear_enough", True),
                     "hard_gates_failed": hard_failed,

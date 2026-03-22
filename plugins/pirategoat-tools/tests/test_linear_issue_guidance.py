@@ -700,8 +700,18 @@ class TestStep15Orchestration:
         """Helper to create a report file so the orchestrator sees real output."""
         (tmp_path / "investigation-report.md").write_text(content)
 
+    def _write_passing_assessment(self, tmp_path):
+        """Helper to create a passing clarity assessment so the gate doesn't block."""
+        import json as _json
+        (tmp_path / "clarity-assessment.json").write_text(_json.dumps({
+            "clear_enough": True,
+            "hard_gates": {},
+            "soft_signals": {},
+        }))
+
     def test_writes_pipeline_result_json(self, mod, tmp_path):
         self._write_report(tmp_path)
+        self._write_passing_assessment(tmp_path)
         state = {
             "completed_steps": list(range(1, 15)),
             "degradation_notes": [],
@@ -709,7 +719,6 @@ class TestStep15Orchestration:
             "pr_url": None,
             "linear_comment_posted": True,
             "independent_code_review": "not_run",
-            "_clarity_checked": True,
         }
         context = {"issue_id": "WOOPLUG-1234"}
         mod._orchestrate_step(15, "investigate", {}, state, context, str(tmp_path))
@@ -722,11 +731,11 @@ class TestStep15Orchestration:
 
     def test_writes_degraded_status(self, mod, tmp_path):
         self._write_report(tmp_path)
+        self._write_passing_assessment(tmp_path)
         state = {
             "completed_steps": list(range(1, 15)),
             "degradation_notes": ["Linear comment posting failed"],
             "verdict": "valid",
-            "_clarity_checked": True,
         }
         context = {"issue_id": "TEST-1"}
         mod._orchestrate_step(15, "fix", {}, state, context, str(tmp_path))
@@ -750,13 +759,13 @@ class TestStep15Orchestration:
     def test_fix_mode_without_pr_url_reports_degraded(self, mod, tmp_path):
         """Fix mode completing without a PR URL is degraded, not success."""
         self._write_report(tmp_path)
+        self._write_passing_assessment(tmp_path)
         state = {
             "completed_steps": list(range(1, 15)),
             "degradation_notes": [],
             "verdict": "valid",
             "pr_url": None,
             "linear_comment_posted": True,
-            "_clarity_checked": True,
         }
         context = {"issue_id": "TEST-1"}
         mod._orchestrate_step(15, "fix", {}, state, context, str(tmp_path))
