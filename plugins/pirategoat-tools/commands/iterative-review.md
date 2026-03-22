@@ -2,10 +2,14 @@
 description: Multi-round independent Codex review on the current branch with pushback tracking and convergence detection. Use when you want an independent external review before creating a PR or merging.
 ---
 
-You are orchestrating an iterative Codex review loop on the current branch.
-Codex CLI runs an independent review, you triage and fix findings, then
-Codex reviews again — repeating until the code converges (zero findings,
-all addressed, or max rounds reached).
+You are a senior engineer running a rigorous pre-merge review loop.
+An independent reviewer (Codex CLI) examines the current branch's diff,
+you triage each finding with engineering judgment, fix real issues, push
+back on false positives, then the reviewer checks again — repeating until
+the code converges or the round limit is reached.
+
+Your judgment on each finding directly determines code quality.
+Rubber-stamping wastes rounds; overcorrecting wastes scope.
 
 ## Setup
 
@@ -96,8 +100,8 @@ Only include `--max-rounds` if the user specified a round limit or quick mode.
 Read the stdout. Three possible outcomes:
 
 **A) UNAVAILABLE message** — Codex CLI is not installed or not authenticated.
-The iterative review cannot run. Inform the user that the iterative Codex
-review is unavailable and why.
+Report the specific reason to the user and stop. This is a setup issue, not
+a review failure — do not attempt workarounds or apologize.
 
 **B) Completion briefing** — Codex found zero issues. The review is done.
 Report the result and stop.
@@ -110,31 +114,37 @@ The evaluation briefing lists findings with IDs, severity, file locations,
 and descriptions. It also provides structured evaluation steps
 (READ → VERIFY → EVALUATE → DECIDE). Follow those steps for each finding.
 
-Codex is an external reviewer — be skeptical. It may lack context, misread
-intent, or flag code that's correct for reasons it can't see. Verify each
-claim against the actual code before deciding.
+**RULE 0: Verify before you trust.** Codex is an external reviewer with
+limited context. It may misread intent, flag correct code, or miss that a
+pattern is deliberate. Read the actual code at the referenced location and
+verify the claim before deciding. If you are about to accept a finding
+without reading the code, STOP — that is rubber-stamping.
+
+For rounds 2+, reference your prior round outcomes. Avoid re-introducing
+patterns you already fixed. If the reviewer re-flags something you rejected
+in a prior round, check whether new evidence exists before changing your
+decision.
 
 - **Read the code** at the referenced location
-- **If real**: fix it, but first check for siblings within the branch's scope.
-  The independent reviewer sees the diff, not the full codebase — it may flag
-  one instance of a problem that exists in several places we changed. Quickly
-  check whether the same pattern appears elsewhere in files this branch already
-  touches or code closely related to the branch's purpose, and fix those too.
-  Do NOT expand into unrelated code — a finding about one endpoint does not
-  justify sweeping every other endpoint. For important siblings outside scope,
-  note them as follow-ups for the PR description.
-  Then right-size the fix based on where the root cause lives:
-  - Pre-existing code (before this branch): minimal, targeted fix
-  - Our branch's code: if it's a symptom of a design decision we made, question
-    the approach and refactor. That's not scope creep — it's fixing our work.
-    Patching symptoms burns rounds; fixing root causes converges faster.
-  - If multiple findings point to the same design problem, reconsider the structure
-- **If wrong**: push back — note the technical reason, reference the code
-- **If valid but out of scope**: defer with reasoning
-- **If you can't tell**: investigate further before deciding
-
-After fixing, commit each fix with a semantic commit message. One logical
-change per commit.
+- **If real** — fix it, following this sequence:
+  1. **Check for siblings**: The reviewer sees the diff, not the full codebase
+     — it may flag one instance of a pattern that recurs elsewhere in this
+     branch's changes. Search files this branch touches for the same pattern
+     and fix all instances together. Stay within the branch's scope — a finding
+     about one endpoint does not justify sweeping every other endpoint. Note
+     important out-of-scope siblings as follow-ups.
+  2. **Right-size the fix** based on where the root cause lives:
+     - Pre-existing code (before this branch): minimal, targeted fix
+     - Our branch's code: question the approach and refactor if it's a design
+       symptom. Patching symptoms burns rounds; fixing root causes converges
+       faster.
+     - Multiple findings → same design problem: reconsider the structure
+  3. **Commit** with a semantic commit message. One logical change per commit.
+- **If wrong** — push back: cite the specific code that contradicts the finding
+- **If valid but out of scope** — defer: state what makes it out of scope for
+  this branch
+- **If uncertain** — investigate deeper before deciding: read more context,
+  check git history
 
 ### Write Outcomes
 
