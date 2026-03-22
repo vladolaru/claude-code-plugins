@@ -32,22 +32,21 @@ ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 sys.path.insert(0, str(TESTS_DIR))
 from conftest import setup_temp_git_repo
 
-_BOOTSTRAP_REPO = None
+_fixture_repo_cache: dict = {}
 
 
-def _get_bootstrap_repo() -> str:
-    """Lazily create a temp git repo from multi-file-realistic.diff."""
-    global _BOOTSTRAP_REPO
-    if _BOOTSTRAP_REPO is None:
-        diff = str(TESTS_DIR / "fixtures" / "multi-file-realistic.diff")
-        _BOOTSTRAP_REPO = setup_temp_git_repo(diff)
-    return _BOOTSTRAP_REPO
+def _get_fixture_repo(fixture: str = "multi-file-realistic.diff") -> str:
+    """Lazily create a temp git repo from the given fixture diff."""
+    if fixture not in _fixture_repo_cache:
+        diff = str(TESTS_DIR / "fixtures" / fixture)
+        _fixture_repo_cache[fixture] = setup_temp_git_repo(diff)
+    return _fixture_repo_cache[fixture]
 
 
-def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+def run_bootstrap(*args: str, timeout: int = 60, fixture: str = "multi-file-realistic.diff") -> subprocess.CompletedProcess:
     """Run bootstrap-reviewer.py via subprocess against a temp git repo.
 
-    Uses a temp repo from multi-file-realistic.diff so tests are fully
+    Uses a temp repo from the specified fixture diff so tests are fully
     isolated from the real repository state. Always passes
     --range HEAD~1..HEAD for deterministic behavior.
     """
@@ -57,7 +56,7 @@ def run_bootstrap(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     cmd = [sys.executable, str(BOOTSTRAP_SCRIPT)] + full_args
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout,
-        cwd=_get_bootstrap_repo(),
+        cwd=_get_fixture_repo(fixture),
     )
 
 
@@ -159,6 +158,27 @@ class TestCategoryRepresentatives:
         assert "REVIEWER_NAME: tests-mutation" in stdout
         assert 'reviewer="tests-mutation"' in stdout
 
+    def test_secondary_domains_agent(self):
+        """Agent with secondary_domains gets SECONDARY SCOPE (security-reviewer).
+
+        Uses php-with-ci-config fixture which has both security-domain files
+        (PHP) and config-ops files (CI YAML), so the secondary scope append
+        branch is exercised.
+        """
+        result = run_bootstrap(
+            "--agent", "security-reviewer", "--output-dir", "/tmp/test-cat",
+            fixture="php-with-ci-config.diff",
+        )
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # Secondary domains: config-ops scope appended
+        assert "=== SECONDARY SCOPE: config-ops ===" in stdout
+
+        # Standard structure still present
+        assert "=== REVIEW RULES ===" in stdout
+        assert "REVIEWER_NAME: security" in stdout
+
     def test_history_and_budget_override_agent(self):
         """history-insights-reviewer gets FILE HISTORY + budget override."""
         result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-cat")
@@ -173,6 +193,22 @@ class TestCategoryRepresentatives:
 
         # Personalization
         assert "REVIEWER_NAME: history-insights" in stdout
+
+    def test_file_history_without_budget_override(self):
+        """api-contract-reviewer gets FILE HISTORY but uses scope-computed budget."""
+        result = run_bootstrap("--agent", "api-contract-reviewer", "--output-dir", "/tmp/test-cat")
+        stdout = result.stdout
+        assert result.returncode == 0
+
+        # file_history present
+        assert "=== FILE HISTORY ===" in stdout
+
+        # No budget override — uses scope-computed value (not 45)
+        assert "Target: ~45 tool calls" not in stdout
+        assert "Target: ~" in stdout
+
+        # Personalization
+        assert "REVIEWER_NAME: api-contract" in stdout
 
 
 class TestArchitecturalInvariants:
@@ -221,8 +257,12 @@ class TestArchitecturalInvariants:
             )
 
     def test_domain_rules_identical_across_test_agents(self):
-        """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents."""
-        agents = ["php-tests-reviewer", "js-tests-reviewer"]
+        """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents.
+
+        All 4 test agents (php, js, e2e, go) must produce the same DOMAIN RULES.
+        A registry drift removing tests-reviewer from any agent would be caught here.
+        """
+        agents = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
         rules = {}
         for agent in agents:
             result = run_bootstrap("--agent", agent, "--output-dir", "/tmp/test-inv")
@@ -231,10 +271,12 @@ class TestArchitecturalInvariants:
                 "=== REVIEW BUDGET ===", "--- Section 2:",
             )
 
-        assert rules[agents[0]], "DOMAIN RULES section should not be empty"
-        assert rules[agents[0]] == rules[agents[1]], (
-            f"DOMAIN RULES differ between {agents[0]} and {agents[1]}"
-        )
+        reference = rules[agents[0]]
+        assert reference, "DOMAIN RULES section should not be empty"
+        for agent in agents[1:]:
+            assert rules[agent] == reference, (
+                f"DOMAIN RULES differ between {agents[0]} and {agent}"
+            )
 
 
 class TestSmokeAllAgents:
