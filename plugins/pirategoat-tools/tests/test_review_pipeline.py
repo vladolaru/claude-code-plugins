@@ -824,6 +824,10 @@ class TestStep8ReadinessGate:
         assert "TaskStop" in actions_text
         # Should still proceed to reconciliation
         assert "review-reconciliator" in actions_text
+        # Escalation should have cleared waiting_on_agents from state
+        assert "waiting_on_agents" not in state
+        # Escalation warning should appear in situation
+        assert "Escalation" in "\n".join(g["situation"])
 
     def test_does_not_escalate_before_timeout(self, mod, tmp_path):
         """Step 8 should keep waiting when within timeout threshold."""
