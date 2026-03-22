@@ -148,7 +148,7 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 ```
 pirategoat-tools/
 ├── agents/           # 25 agent definitions (20 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
-├── commands/         # 6 slash commands
+├── commands/         # 7 slash commands
 ├── skills/           # 19 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library

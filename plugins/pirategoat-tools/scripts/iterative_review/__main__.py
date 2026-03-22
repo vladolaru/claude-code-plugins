@@ -174,7 +174,11 @@ def action_review(args):
             diff_lines = 0
             state["diff_lines_relevant"] = 0
 
-        state["max_rounds"] = compute_max_rounds(state["diff_lines_relevant"])
+        computed = compute_max_rounds(state["diff_lines_relevant"])
+        if args.max_rounds:
+            state["max_rounds"] = min(args.max_rounds, MAX_ROUNDS_HARD_LIMIT)
+        else:
+            state["max_rounds"] = computed
 
         # Resolve analysis doc prefix
         prefix = "independent-review"
@@ -523,6 +527,8 @@ def main():
     parser.add_argument("--merge-base", help="Merge base SHA (required on round 1)")
     parser.add_argument("--context-file", help="Path to context file (round 1 only)")
     parser.add_argument("--analysis-prefix", help="Prefix for analysis doc filenames")
+    parser.add_argument("--max-rounds", type=int,
+                        help="Override max rounds (capped at hard limit of 20)")
     parser.add_argument("--no-prior-analysis", action="store_true",
                         help="Disable reading prior round analysis docs")
 
