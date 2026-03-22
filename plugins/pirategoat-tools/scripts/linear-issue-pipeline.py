@@ -1492,9 +1492,16 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
 
         # Derive status from what actually exists, not from absence of errors.
         # A run that never produced a verdict or report is failed, not successful.
-        # Clarity gate block takes priority when active.
+        # Clarity gate block: "blocked" in fix mode (bot can offer override),
+        # "degraded" in investigate mode (no implementation to gate, and the bot's
+        # override path resumes at step 9 which is nonsensical for investigate).
         if clarity_blocked and not clarity_overridden:
-            status = "blocked"
+            if mode == "fix":
+                status = "blocked"
+            else:
+                status = "degraded"
+                if "Clarity assessment flagged insufficient clarity" not in degradation_notes:
+                    degradation_notes.append("Clarity assessment flagged insufficient clarity")
             if not verdict:
                 verdict = "needs_clarification"
         elif not verdict and not has_report:
@@ -1654,32 +1661,28 @@ def main():
 
     # --- Early exit: clarity gate blocked an implementation step ---
     # If the clarity check just set clarity_blocked and we're on an implementation
-    # step (9-14), don't render that step's guidance — redirect to step 15.
-    # Without this, step 9 would render a full "Write Plan" briefing that the
-    # LLM might act on before reading the footer's "Next: Step 15".
+    # step (9-14), skip directly to step 15's full orchestration (write result,
+    # emit events, print PIPELINE COMPLETE). This avoids rendering the Write Plan
+    # briefing and avoids the bot prompt's "retry BLOCKED steps" loop — we
+    # complete the pipeline right here instead of redirecting.
     if state.get("clarity_blocked") and not config.get("skip_clarity_gate") and 9 <= step <= 14:
-        active = get_active_steps(mode, config, state, context)
-        next_info = compute_next_step(step, active)
-        skipped_titles = []
+        # Run step 15 orchestration directly — writes pipeline-result.json
+        _orchestrate_step(15, mode, config, state, context, output_dir, events)
+        if 15 not in state.get("completed_steps", []):
+            state.setdefault("completed_steps", []).append(15)
+        # Mark skipped implementation steps
         for s in range(step, 15):
-            if s in _STEP_MAP:
-                skipped_titles.append(f"Step {s} ({_STEP_MAP[s]['title']})")
-        skip_reason = f"Skipped (clarity gate blocked): {', '.join(skipped_titles)}" if skipped_titles else None
-        guidance = {
-            "phase": "INVESTIGATION",
-            "title": "Clarity Gate — Blocked",
-            "situation": [
-                "The clarity assessment determined this issue lacks sufficient clarity for implementation.",
-                "Implementation steps are skipped. Proceeding to Present Results.",
-            ],
-            "actions": [
-                f"Call the pipeline for step 15 (Present Results).",
-            ],
-            "handoff": None,
-            "next_step": next_info,
-            "skip_reason": skip_reason,
-        }
-        output = format_output(step, guidance)
+            if s not in state.get("skipped_steps", []):
+                state.setdefault("skipped_steps", []).append(s)
+        write_state(output_dir, state)
+        # Render step 15 guidance (with PIPELINE COMPLETE)
+        active = get_active_steps(mode, config, state, context)
+        guidance = get_step_guidance(15, mode, state, context, config=config,
+                                    output_dir=output_dir)
+        guidance["next_step"] = None  # Last step
+        skipped_titles = [f"Step {s} ({_STEP_MAP[s]['title']})" for s in range(step, 15) if s in _STEP_MAP]
+        guidance["skip_reason"] = f"Skipped (clarity gate blocked): {', '.join(skipped_titles)}" if skipped_titles else None
+        output = format_output(15, guidance)
         print(output)
         return
 
