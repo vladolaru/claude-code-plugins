@@ -107,6 +107,6 @@ Apply the **Refactoring Resilience Test:**
 
 | Situation | Action |
 |-----------|--------|
-| No test files in diff | Report "No test files to review"; APPROVE |
+| No test files in diff | `builder.mark_not_applicable("No test files in diff")`; save and exit |
 | Unfamiliar framework | WebSearch for patterns before generic review |
 | Config only (no test logic) | Apply config standards, not quality standards |
