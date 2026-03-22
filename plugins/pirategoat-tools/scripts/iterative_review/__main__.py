@@ -245,8 +245,7 @@ def action_review(args):
                 f"WARNING: {len(files)} untracked file(s) will not be reviewed by Codex:\n"
                 + "\n".join(f"  {f}" for f in files[:10])
                 + ("\n  ..." if len(files) > 10 else "")
-                + "\nIf these are part of your fix, commit them before proceeding.",
-                file=sys.stderr)
+                + "\nIf these are part of your fix, commit them before proceeding.")
     except Exception:
         pass  # git not available — proceed, Codex will review what's committed
 
