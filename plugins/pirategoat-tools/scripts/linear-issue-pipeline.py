@@ -62,9 +62,9 @@ _PHASE_TRANSITIONS = {
         "The quality of the draft PR depends on the discipline you bring here."
     ),
     "VALIDATION": (
-        "Implementation is complete. Now validate — run the codex reviewer "
-        "for independent feedback, address findings, and re-verify. The goal "
-        "is a draft PR the author can trust."
+        "Implementation is complete. Now validate — run the iterative review "
+        "loop for multi-round independent review with pushback tracking and "
+        "convergence detection. The goal is a draft PR the author can trust."
     ),
     "OUTPUT": (
         "All work is done. Present results clearly, confirm all artifacts "
@@ -882,7 +882,7 @@ def _step_8_write_plan(mode, state, context, config, output_dir):
         "   - **large**: 10+ files, architectural changes, cross-cutting concerns",
         f"   Write to `{os.path.join(output_dir, 'complexity.json') if output_dir else 'complexity.json'}`:",
         '   `{"complexity": "small|medium|large", "reason": "brief justification"}`',
-        "   This determines whether the codex reviewer runs at step 11.",
+        "   This determines whether the iterative review loop runs at step 11.",
     ]
 
     return {
@@ -964,15 +964,15 @@ def _step_10_verify(mode, state, context, config, output_dir):
         "",
         "3. Record verification results for the pipeline result.",
         "",
-        "4. **Decide whether to run the codex reviewer (steps 11-12):**",
+        "4. **Decide whether to run the iterative review loop (steps 11-12):**",
         f"   Read `{complexity_path}` (written at step 8).",
         "   - **small complexity** → Skip steps 11-12, proceed directly to step 13.",
         "     The `superpowers:code-reviewer` from subagent-driven-development (step 9)",
-        "     already validated each task — an independent codex review adds cost without",
-        "     proportional value for small, single-concern changes.",
-        "   - **medium or large complexity** → Continue to step 11 for independent",
-        "     codex review. Multi-file changes with subtle interactions benefit from a",
-        "     fresh perspective that the per-task code-reviewer cannot provide.",
+        "     already validated each task — a multi-round independent review adds cost",
+        "     without proportional value for small, single-concern changes.",
+        "   - **medium or large complexity** → Continue to step 11 for iterative",
+        "     independent review. Multi-file changes with subtle interactions benefit",
+        "     from a fresh perspective that the per-task code-reviewer cannot provide.",
         "   - **complexity.json missing** → Treat as medium (err toward more review).",
     ]
 
@@ -1085,18 +1085,18 @@ def _step_12_reverify(mode, state, context, config, output_dir):
     """Step 12: Re-Verify — skipped when iterative review loop handles verification."""
 
     situation = [
-        "Verification is handled within each review round of the iterative review loop.",
-        "This step is a no-op.",
+        "Verification is already handled within each review round of the iterative",
+        "review loop (step 11). Each round includes test/build/lint verification",
+        "after fixes, so a separate re-verification step is redundant.",
     ]
 
     actions = [
-        "No action needed — the iterative review loop (step 11) includes verification",
-        "after each round of fixes. Proceed to step 13.",
+        "Proceed directly to step 13.",
     ]
 
     return {
         "phase": "VALIDATION",
-        "title": "Re-Verify (Skipped)",
+        "title": "Re-Verify (Handled by Review Loop)",
         "situation": situation,
         "actions": actions,
         "handoff": None,
@@ -1128,11 +1128,12 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
         f"   - Use conventional commit: `fix: <description>`",
         f"   - Include `Refs {issue_id}` in the commit body",
         "",
-        "3. Check for deferred review items:",
-        f"   - Read `{review_result_path}` and check the `deferred_items` array",
+        "3. Check for deferred review items (if the iterative review ran):",
+        f"   - If `{review_result_path}` exists, read the `deferred_items` array",
         "   - This list is already pruned — items resolved in later rounds are removed",
         "   - If any remain, include them in the PR description under a `## Follow-ups` section",
         "   - Each item has severity, title, location, and reasoning",
+        "   - If the file doesn't exist (small complexity, step 11 skipped), skip this step",
         "",
         "4. Push and create draft PR:",
         "   ```bash",
@@ -1282,7 +1283,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         has_report = os.path.isfile(report_path)
         pr_url = state.get("pr_url")
         linear_posted = state.get("linear_comment_posted", False)
-        codex_applied = state.get("codex_review_applied", False)
+        # Check if iterative review ran by looking for its result artifact
+        review_result = os.path.join(output_dir, "code-review", "review-loop-result.json")
+        codex_applied = os.path.isfile(review_result)
 
         # Derive status from what actually exists, not from absence of errors.
         # A run that never produced a verdict or report is failed, not successful.

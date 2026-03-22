@@ -474,11 +474,11 @@ class TestStep11SelfReview:
 
 
 class TestStep12ReVerify:
-    def test_is_no_op(self, mod):
+    def test_verification_already_handled(self, mod):
         g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
-        assert "no-op" in text or "no action" in text
+        assert "already handled" in text or "redundant" in text
 
     def test_references_iterative_review_loop(self, mod):
         g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
