@@ -83,11 +83,18 @@ def action_review(args):
         state["current_round"] = 1
 
         # Clear stale artifacts from prior runs in the same directory
+        import glob
         for stale in ["pushback-log.md", "deferred-items.jsonl",
                       "review-loop-state.json", "review-loop-result.json"]:
             stale_path = os.path.join(output_dir, stale)
             if os.path.isfile(stale_path):
                 os.remove(stale_path)
+        # Remove all round-specific files (findings, outcomes, prompts, raw output)
+        for pattern in ["round-*-findings.json", "round-*-outcomes.json",
+                        "round-*-prompt.md", "round-*-codex-output.json",
+                        "round-*-codex-raw.md"]:
+            for f in glob.glob(os.path.join(output_dir, pattern)):
+                os.remove(f)
         if args.no_prior_analysis:
             state["pass_prior_analysis"] = False
 
