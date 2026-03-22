@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading from claim assessment, preventing confirmation bias when evaluating
   external review findings. Grounded in factored verification, quote extraction
   for grounding, and plan-and-solve prompting techniques.
+- **Iterative review: prompt engineering optimizations.** Applied 5
+  research-backed techniques to the command prompt: identity establishment
+  with stakes framing, RULE 0 emphasis hierarchy with STOP escalation for
+  skepticism, completeness checkpoints for the fix sequence (siblings →
+  right-size → commit), history accumulation for multi-round context, and
+  error normalization for the UNAVAILABLE path.
 
 ## [1.85.1] - 2026-03-22
 
