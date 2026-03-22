@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reconciliator not-applicable awareness** — separates abstaining agents from
   reviewing agents in both narrative output and `meta.reconciliation` metadata
   (`not_applicable_count`, `not_applicable_agents`, `reviewing_agents`)
+- **Iterative review pre-flight check** — verifies Codex CLI is installed and
+  authenticated before spending time on prompt composition and diff computation;
+  exits with clear BLOCKED message if either check fails
 
 ### Changed
 - Reviewer protocol's Quick Relevance Check uses `mark_not_applicable()` instead of

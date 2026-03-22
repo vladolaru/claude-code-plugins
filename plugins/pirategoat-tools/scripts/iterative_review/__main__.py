@@ -27,7 +27,7 @@ from .briefing import (
 from .telemetry import ReviewTelemetry
 from .backends.codex import (
     parse_codex_output, write_prompt_file, get_schema_path, get_rubric,
-    invoke_codex_review,
+    invoke_codex_review, check_codex_auth,
 )
 
 
@@ -95,11 +95,40 @@ def _write_loop_result(output_dir, state, termination):
     return result_data
 
 
+def _preflight_codex_cli():
+    """Check that Codex CLI is available and authenticated.
+
+    Returns None on success, or an error message string on failure.
+    Called once before any expensive work (prompt composition, diff computation).
+    """
+    import shutil
+    if not shutil.which("codex"):
+        return (
+            "UNAVAILABLE: Codex CLI is not installed or not on PATH.\n"
+            "The iterative review loop requires the Codex CLI to run."
+        )
+    authenticated, err = check_codex_auth()
+    if not authenticated:
+        return (
+            "UNAVAILABLE: Codex CLI is not authenticated.\n"
+            f"Auth check failed: {err}\n"
+            "The iterative review loop requires an authenticated Codex CLI."
+        )
+    return None
+
+
 def action_review(args):
     """REVIEW action -- invoke Codex, parse output, produce evaluation briefing."""
     output_dir = args.output_dir
     round_num = args.round
     os.makedirs(output_dir, exist_ok=True)
+
+    # Pre-flight: verify Codex CLI is available and authenticated before
+    # spending time on prompt composition, diff computation, etc.
+    preflight_err = _preflight_codex_cli()
+    if preflight_err:
+        print(preflight_err)
+        sys.exit(1)
 
     telemetry = ReviewTelemetry(output_dir)
     state = read_loop_state(output_dir)

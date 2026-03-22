@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -710,3 +711,42 @@ class TestZeroFindingsArtifact:
         assert loaded["termination"] == "zero_findings"
         assert loaded["rounds_completed"] == 1
         assert len(loaded["rounds"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight check — Codex CLI availability and auth
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, str(SCRIPTS_DIR))
+from iterative_review.__main__ import _preflight_codex_cli
+
+
+class TestPreflightCodexCli:
+    """_preflight_codex_cli checks availability and auth before any work."""
+
+    @patch("iterative_review.__main__.check_codex_auth", return_value=(True, ""))
+    @patch("shutil.which", return_value="/usr/local/bin/codex")
+    def test_returns_none_when_available_and_authed(self, mock_which, mock_auth):
+        assert _preflight_codex_cli() is None
+
+    @patch("shutil.which", return_value=None)
+    def test_returns_error_when_not_installed(self, mock_which):
+        result = _preflight_codex_cli()
+        assert result is not None
+        assert "UNAVAILABLE" in result
+        assert "not installed" in result or "not on PATH" in result
+
+    @patch("iterative_review.__main__.check_codex_auth", return_value=(False, "not logged in"))
+    @patch("shutil.which", return_value="/usr/local/bin/codex")
+    def test_returns_error_when_not_authenticated(self, mock_which, mock_auth):
+        result = _preflight_codex_cli()
+        assert result is not None
+        assert "UNAVAILABLE" in result
+        assert "not authenticated" in result
+        assert "not logged in" in result
+
+    @patch("shutil.which", return_value=None)
+    def test_skips_auth_check_when_not_installed(self, mock_which):
+        """Auth check should not run if codex is not even on PATH."""
+        result = _preflight_codex_cli()
+        assert "not installed" in result or "not on PATH" in result
