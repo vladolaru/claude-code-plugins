@@ -334,39 +334,45 @@ def action_advance(args):
     rejected = sum(1 for o in outcomes if o["action"] == "rejected")
     deferred = sum(1 for o in outcomes if o["action"] == "deferred")
 
-    # Update pushback log
-    findings_by_id = {f["id"]: f for f in findings}
-    round_header = f"### Round {round_num} -- {len(findings)} findings ({fixed} fixed, {rejected} rejected, {deferred} deferred)\n\n"
-    entries = []
-    for o in outcomes:
-        finding = findings_by_id.get(o["id"], {})
-        entry = build_pushback_entry(o, finding, round_num)
-        if entry:
-            entries.append(entry)
+    # Idempotency: skip mutation if this round was already recorded (retry scenario)
+    already_recorded = any(r["round"] == round_num for r in state.get("rounds", []))
 
-    if entries:
-        append_pushback_log(output_dir, round_header + "\n".join(entries) + "\n")
-
-    # Append deferred items
-    for o in outcomes:
-        if o["action"] == "deferred":
+    if not already_recorded:
+        # Update pushback log
+        findings_by_id = {f["id"]: f for f in findings}
+        round_header = f"### Round {round_num} -- {len(findings)} findings ({fixed} fixed, {rejected} rejected, {deferred} deferred)\n\n"
+        entries = []
+        for o in outcomes:
             finding = findings_by_id.get(o["id"], {})
-            append_deferred_item(output_dir, {
-                "id": o["id"],
-                "severity": finding.get("severity", "unknown"),
-                "title": finding.get("title", ""),
-                "location": finding.get("location", ""),
-                "reasoning": o.get("reasoning", ""),
-            })
+            entry = build_pushback_entry(o, finding, round_num)
+            if entry:
+                entries.append(entry)
 
-    # Record round in state
-    state.setdefault("rounds", []).append({
-        "round": round_num,
-        "findings": len(findings),
-        "fixed": fixed,
-        "rejected": rejected,
-        "deferred": deferred,
-    })
+        if entries:
+            append_pushback_log(output_dir, round_header + "\n".join(entries) + "\n")
+
+        # Append deferred items
+        for o in outcomes:
+            if o["action"] == "deferred":
+                finding = findings_by_id.get(o["id"], {})
+                append_deferred_item(output_dir, {
+                    "id": o["id"],
+                    "severity": finding.get("severity", "unknown"),
+                    "title": finding.get("title", ""),
+                    "location": finding.get("location", ""),
+                    "reasoning": o.get("reasoning", ""),
+                })
+
+        # Record round in state
+        state.setdefault("rounds", []).append({
+            "round": round_num,
+            "findings": len(findings),
+            "fixed": fixed,
+            "rejected": rejected,
+            "deferred": deferred,
+        })
+
+    findings_by_id = {f["id"]: f for f in findings}
 
     # Check convergence
     all_p3 = all(findings_by_id[o["id"]].get("severity") == "P3"

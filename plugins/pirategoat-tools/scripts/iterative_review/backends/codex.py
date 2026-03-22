@@ -169,6 +169,11 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800):
     Returns:
         (output_string, success_bool)
     """
+    # Resolve all paths to absolute before changing cwd to repo root
+    prompt_file = os.path.abspath(prompt_file)
+    schema_file = os.path.abspath(schema_file)
+    output_file = os.path.abspath(output_file)
+
     cmd = [
         "codex", "exec",
         "--output-schema", schema_file,

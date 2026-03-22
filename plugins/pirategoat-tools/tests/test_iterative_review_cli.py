@@ -99,6 +99,35 @@ class TestCLIParsing:
         assert updated_state["termination"] == "all_rejected"
 
 
+class TestAdvanceIdempotency:
+    """Advance is idempotent — retrying the same round doesn't duplicate records."""
+
+    def test_retry_does_not_duplicate_round(self, tmp_path):
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 1, "max_rounds": 5, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 500,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [{"id": "r1_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"}]
+        (d / "round-1-findings.json").write_text(json.dumps(findings))
+        outcomes = [{"id": "r1_f1", "action": "fixed", "summary": "Done."}]
+        (d / "round-1-outcomes.json").write_text(json.dumps(outcomes))
+
+        cmd = [sys.executable, "-m", "iterative_review",
+               "--action", "advance", "--round", "1",
+               "--output-dir", str(d)]
+
+        # Run advance twice
+        subprocess.run(cmd, capture_output=True, text=True, cwd=str(SCRIPTS_DIR))
+        subprocess.run(cmd, capture_output=True, text=True, cwd=str(SCRIPTS_DIR))
+
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        round_records = [r for r in updated_state["rounds"] if r["round"] == 1]
+        assert len(round_records) == 1, f"Expected 1 record for round 1, got {len(round_records)}"
+
+
 class TestAdvanceRoundSummary:
     """Advance action correctly records round summary in state."""
 
