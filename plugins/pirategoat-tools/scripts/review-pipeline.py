@@ -1865,10 +1865,14 @@ def main():
             write_config(output_dir, config)
         else:
             config = existing_config
-            # On rerun, always sync --quick from CLI into config.
+            # On interactive rerun, sync --quick from CLI into config.
             # Without this, a quick→normal rerun stays in quick mode,
             # and a normal→quick rerun was already handled.
-            if config.get("quick") != args.quick:
+            # In bot mode (interactive: false), the bot pre-writes the
+            # correct quick value in run-config.json and subsequent steps
+            # may not pass --quick on the CLI (especially with custom
+            # prompt overrides), so we must not overwrite the bot's value.
+            if config.get("interactive", True) and config.get("quick") != args.quick:
                 config["quick"] = args.quick
                 write_config(output_dir, config)
 

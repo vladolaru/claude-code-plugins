@@ -203,6 +203,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/linear-issue-pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_pipeline.py -v` |
 | `scripts/linear-issue-pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_guidance.py -v` |
 | `scripts/pipeline_events.py` | `pytest plugins/pirategoat-tools/tests/test_pipeline_events.py -v` |
+| `scripts/iterative_review/*.py` | `pytest plugins/pirategoat-tools/tests/test_iterative_review_*.py -v` |
 | `scripts/semantic-filter.py` | `pytest plugins/pirategoat-tools/tests/test_semantic_filter.py -v` |
 | `scripts/review_output_simple.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | `scripts/review-telemetry.py` | `pytest plugins/pirategoat-tools/tests/test_review_telemetry.py -v` |
@@ -293,6 +294,12 @@ All AI-generated artifacts (plans, analysis, research, decisions, learnings) go 
 |---|---|
 | [step-by-step-prompt-injection](docs/patterns/step-by-step-prompt-injection.md) | Multi-phase analytical workflows where later steps must be independent of earlier conclusions — e.g., verify before judge, gather before synthesize. Includes script template, skill file structure, testing checklist, and two reference implementations. |
 | [curated-context-pipeline](docs/patterns/curated-context-pipeline.md) | Multi-mode LLM pipelines where a script acts as context curator — reads all state, presents pre-digested briefings, controls flow via condition-driven step routing, and manages split file-based state. Covers pipeline identity anchoring, artifact discipline, and conversational output. Evolves step-by-step prompt injection for operational workflows with shared logic across modes. |
+
+**External tool references** live in `docs/`. Consult them when integrating with external CLIs:
+
+| Reference | When to use |
+|---|---|
+| [codex-cli-reference](docs/codex-cli-reference.md) | Integrating with the OpenAI Codex CLI — prompting contracts, structured output, headless review invocation, cross-CLI comparison with Claude Code, sandbox behavior, and Structured Outputs schema constraints. Based on source analysis + runtime testing. |
 
 **Knowledge capture:** After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using `/dex:grok` to capture the knowledge.
 
