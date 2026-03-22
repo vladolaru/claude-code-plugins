@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.85.2] - 2026-03-22
 
+### Fixed
+- **Iterative review: degraded-mode briefing/outcome contract mismatch.**
+  The degraded briefing implied per-issue outcomes ("for each issue, apply
+  evaluation steps as a normal round") but only one finding ID (`rN_raw`)
+  exists in the degraded path. Reworded to frame the raw output as a single
+  finding, with mixed resolutions noted in the summary field.
+
 ### Changed
 - **Iterative review: structured verification steps.** Replaced the triage
   decision tree (if real → fix, if wrong → reject) with a 4-step cognitive
