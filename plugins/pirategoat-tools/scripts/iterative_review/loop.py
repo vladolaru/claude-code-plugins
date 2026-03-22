@@ -179,9 +179,15 @@ def read_deferred_items(output_dir):
 # ---------------------------------------------------------------------------
 
 def validate_outcomes(findings, outcomes):
-    """Check that every finding has an outcome. Returns list of missing IDs."""
+    """Check that every finding has an outcome and no stray IDs exist.
+
+    Returns (missing_ids, stray_ids).
+    """
+    finding_ids = {f["id"] for f in findings}
     outcome_ids = {o["id"] for o in outcomes}
-    return [f["id"] for f in findings if f["id"] not in outcome_ids]
+    missing = [f["id"] for f in findings if f["id"] not in outcome_ids]
+    stray = [o["id"] for o in outcomes if o["id"] not in finding_ids]
+    return missing, stray
 
 
 # ---------------------------------------------------------------------------

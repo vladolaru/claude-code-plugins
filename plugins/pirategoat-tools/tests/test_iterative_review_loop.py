@@ -203,14 +203,26 @@ class TestValidateOutcomes:
             {"id": "r1_f1", "action": "fixed", "summary": "Done"},
             {"id": "r1_f2", "action": "rejected", "reasoning": "No"},
         ]
-        missing = validate_outcomes(findings, outcomes)
+        missing, stray = validate_outcomes(findings, outcomes)
         assert missing == []
+        assert stray == []
 
     def test_missing_outcome(self):
         findings = [{"id": "r1_f1"}, {"id": "r1_f2"}]
         outcomes = [{"id": "r1_f1", "action": "fixed", "summary": "Done"}]
-        missing = validate_outcomes(findings, outcomes)
+        missing, stray = validate_outcomes(findings, outcomes)
         assert "r1_f2" in missing
+        assert stray == []
+
+    def test_stray_outcome_id(self):
+        findings = [{"id": "r1_f1"}]
+        outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Done"},
+            {"id": "r1_f99", "action": "rejected", "reasoning": "Typo"},
+        ]
+        missing, stray = validate_outcomes(findings, outcomes)
+        assert missing == []
+        assert "r1_f99" in stray
 
 
 class TestDiffSizing:

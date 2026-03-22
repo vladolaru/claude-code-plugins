@@ -89,10 +89,10 @@ def action_review(args):
             stale_path = os.path.join(output_dir, stale)
             if os.path.isfile(stale_path):
                 os.remove(stale_path)
-        # Remove all round-specific files (findings, outcomes, prompts, raw output)
+        # Remove all round-specific files (findings, outcomes, prompts, raw output, analysis)
         for pattern in ["round-*-findings.json", "round-*-outcomes.json",
                         "round-*-prompt.md", "round-*-codex-output.json",
-                        "round-*-codex-raw.md"]:
+                        "round-*-codex-raw.md", "*-analysis.md"]:
             for f in glob.glob(os.path.join(output_dir, pattern)):
                 os.remove(f)
         if args.no_prior_analysis:
@@ -341,9 +341,13 @@ def action_advance(args):
         sys.exit(1)
 
     # Validate completeness
-    missing = validate_outcomes(findings, outcomes)
+    missing, stray = validate_outcomes(findings, outcomes)
     if missing:
         print(f"ERROR: Missing outcomes for findings: {', '.join(missing)}",
+              file=sys.stderr)
+        sys.exit(1)
+    if stray:
+        print(f"ERROR: Outcome IDs not in findings: {', '.join(stray)}",
               file=sys.stderr)
         sys.exit(1)
 
