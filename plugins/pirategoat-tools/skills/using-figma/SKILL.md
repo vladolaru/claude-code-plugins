@@ -107,7 +107,7 @@ PLUGIN_ROOT="<skill base directory>/../.."
 
 2. **Fetch metadata** — Call `get_metadata` on the root node. If the response is >50K chars, save to file and parse with:
    ```bash
-   python3 $PLUGIN_ROOT/scripts/figma-parse-nodes.py <saved-file> [--format tree|flat|json]
+   python3 $PLUGIN_ROOT/scripts/figma/parse_nodes.py <saved-file> [--format tree|flat|json]
    ```
 
 3. **Classify nodes** — From the parsed hierarchy, identify:
@@ -129,7 +129,7 @@ PLUGIN_ROOT="<skill base directory>/../.."
 
 2. **Parse each response** — If a response is >20K chars, save to file and parse with:
    ```bash
-   python3 $PLUGIN_ROOT/scripts/figma-extract-specs.py <saved-file> [--tokens-file <tokens-cache>]
+   python3 $PLUGIN_ROOT/scripts/figma/extract_specs.py <saved-file> [--tokens-file <tokens-cache>]
    ```
 
 3. **Build token mapping** — If no `.claude/figma-config.json` exists, cross-reference Figma token names with the project's CSS variables/design tokens. Write the mapping to `.claude/tmp/figma-cache/token-mapping-<fileKey>.json`.
@@ -265,8 +265,8 @@ Scripts are in the plugin's `scripts/` directory:
 
 | Script | Input | Output | When |
 |--------|-------|--------|------|
-| `figma-parse-nodes.py` | Saved `get_metadata` response file | Structured node hierarchy (tree, flat list, or JSON) | Phase 0, when metadata > 50K chars |
-| `figma-extract-specs.py` | Saved `get_design_context` response file | Extracted design specifications (spacing, typography, colors, hierarchy) | Phase 1, when response > 20K chars |
+| `figma/parse_nodes.py` | Saved `get_metadata` response file | Structured node hierarchy (tree, flat list, or JSON) | Phase 0, when metadata > 50K chars |
+| `figma/extract_specs.py` | Saved `get_design_context` response file | Extracted design specifications (spacing, typography, colors, hierarchy) | Phase 1, when response > 20K chars |
 
 ## Figma MCP Tool Catalog
 

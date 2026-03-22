@@ -8,8 +8,8 @@ Standard protocol for all review agents. Read this FIRST before starting your re
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
-python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent <agent-name>
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent <agent-name>
 ```
 
 If the bootstrap script is not available, locate the plugin root manually:
@@ -17,32 +17,32 @@ If the bootstrap script is not available, locate the plugin root manually:
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 # Fallback if hook hasn't run yet
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review-scope.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/scope.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 echo "PLUGIN_ROOT=$PLUGIN_ROOT"
 ```
 
 If this fails, fall back to the manual scope discovery at the end of this section.
 
 Store `PLUGIN_ROOT` — you'll use it for:
-- `python3 $PLUGIN_ROOT/scripts/review-scope.py` — scope discovery
+- `python3 $PLUGIN_ROOT/scripts/review/agent/scope.py` — scope discovery
 - Reading reference files like `$PLUGIN_ROOT/agents/shared/*.md`, `$PLUGIN_ROOT/skills/*/references/*.md`
 
 ## Scope Discovery (Do This FIRST)
 
-Use `review-scope.py` to efficiently determine your review scope. It handles range detection, noise filtering, domain filtering, context budgeting, and output directory detection in a single call.
+Use `scope.py` to efficiently determine your review scope. It handles range detection, noise filtering, domain filtering, context budgeting, and output directory detection in a single call.
 
 ```bash
 # Your Scope section specifies which --domain to use
-python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain>
+python3 $PLUGIN_ROOT/scripts/review/agent/scope.py --domain <your-domain>
 
 # With explicit range (when provided by caller)
-python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain> --range "main..feature-branch"
+python3 $PLUGIN_ROOT/scripts/review/agent/scope.py --domain <your-domain> --range "main..feature-branch"
 
 # For large PRs: get diffstat overview, then selectively read diffs
-python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain> --summary
+python3 $PLUGIN_ROOT/scripts/review/agent/scope.py --domain <your-domain> --summary
 
 # For agents exploring preexisting code (patterns-reviewer, history-insights-reviewer)
-python3 $PLUGIN_ROOT/scripts/review-scope.py --domain <your-domain> --base-ref-only
+python3 $PLUGIN_ROOT/scripts/review/agent/scope.py --domain <your-domain> --base-ref-only
 ```
 
 ### Reading the Output
@@ -174,7 +174,7 @@ Reason: Unchanged code, pre-existing issue, discovered during exploration.
 
 **If Output Directory was provided:** use it (`mkdir -p` if needed).
 
-**If not provided:** use the `OUTPUT_DIR` from `review-scope.py` output. The script auto-detects PR number via `gh` (github.com) or `ghe` (github.a8c.com) and creates `/tmp/pr-review-{N}`. Falls back to `/tmp/` when no PR is found.
+**If not provided:** use the `OUTPUT_DIR` from `scope.py` output. The script auto-detects PR number via `gh` (github.com) or `ghe` (github.a8c.com) and creates `/tmp/pr-review-{N}`. Falls back to `/tmp/` when no PR is found.
 
 **If the script was not available:**
 ```bash
@@ -187,14 +187,14 @@ fi
 mkdir -p "$OUTPUT_DIR"
 ```
 
-**Note on GHE:** For repos hosted on `github.a8c.com`, the `ghe` CLI is used (requires SOCKS5 proxy). The `review-scope.py` script handles this automatically by detecting the remote URL.
+**Note on GHE:** For repos hosted on `github.a8c.com`, the `ghe` CLI is used (requires SOCKS5 proxy). The `scope.py` script handles this automatically by detecting the remote URL.
 
 ## ReviewOutputBuilder API
 
 ```python
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../scripts'))
-from review_output_simple import ReviewOutputBuilder
+from review.agent.output import ReviewOutputBuilder
 
 builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
 ```

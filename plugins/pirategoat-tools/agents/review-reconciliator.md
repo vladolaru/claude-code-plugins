@@ -89,14 +89,14 @@ For each verified concern:
 ```python
 import sys, os, json, glob
 
-# Locate review_output_simple.py from the plugin cache
+# Locate review/agent/output.py from the plugin cache
 _cache = os.path.expanduser('~/.claude/plugins/cache/vladolaru-claude-code-plugins/pirategoat-tools')
-_candidates = glob.glob(f'{_cache}/*/scripts/review_output_simple.py')
-_candidates.sort(key=lambda p: [int(x) for x in os.path.dirname(os.path.dirname(p)).split('/')[-1].split('.')])
+_candidates = glob.glob(f'{_cache}/*/scripts/review/agent/output.py')
+_candidates.sort(key=lambda p: [int(x) for x in p.split('/scripts/')[0].split('/')[-1].split('.')])
 if not _candidates:
-    raise ImportError("review_output_simple.py not found in plugin cache")
-sys.path.insert(0, os.path.dirname(_candidates[-1]))
-from review_output_simple import ReviewOutputBuilder
+    raise ImportError("review/agent/output.py not found in plugin cache")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(_candidates[-1]))))
+from review.agent.output import ReviewOutputBuilder
 
 builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="reconciliator")
 

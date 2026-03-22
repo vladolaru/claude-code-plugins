@@ -20,8 +20,8 @@ Complete this setup first — it provides your review rules, scope, diffs, and o
 **Run the bootstrap script:**
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
-python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent history-insights-reviewer
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent history-insights-reviewer
 ```
 
 Read the output carefully. It contains your review rules, scope (with diffs and file list), and output instructions. Parse the diffs, file list, BASE_REF, and OUTPUT_DIR from the scope section. Use the diffs for scenario extraction (Phase 1). Use BASE_REF for history mining commands. Only then proceed.

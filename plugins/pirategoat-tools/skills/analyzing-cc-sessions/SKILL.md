@@ -245,7 +245,7 @@ def infer_agent_type(prompt: str) -> str:
     return "unknown"
 ```
 
-For reviewer agents dispatched via `bootstrap-reviewer.py`, the prompt always contains `--agent {agent-name}`.
+For reviewer agents dispatched via `bootstrap.py`, the prompt always contains `--agent {agent-name}`.
 
 ### Correlating Main Session ↔ Subagent
 
@@ -351,8 +351,8 @@ PLUGIN_ROOT="<skill base directory>/../.."
 
 | When you need to... | Use |
 |---------------------|-----|
-| Trace tool call sequences for a specific agent type | `$PLUGIN_ROOT/scripts/analyze-reviewer-sessions.py` |
-| Compare metrics (tokens, duration, findings) across sessions | `$PLUGIN_ROOT/scripts/extract-session-metrics.py` |
+| Trace tool call sequences for a specific agent type | `$PLUGIN_ROOT/scripts/analysis/session_analyzer.py` |
+| Compare metrics (tokens, duration, findings) across sessions | `$PLUGIN_ROOT/scripts/analysis/session_metrics.py` |
 | Do something not covered above | Write a targeted script using the parsing recipes in this skill |
 
 ### Quick Start
@@ -362,12 +362,12 @@ PLUGIN_ROOT="<skill base directory>/../.."
 PLUGIN_ROOT="<skill base directory>/../.."
 
 # Analyze specific agent type across recent sessions
-python3 "$PLUGIN_ROOT/scripts/analyze-reviewer-sessions.py" \
+python3 "$PLUGIN_ROOT/scripts/analysis/session_analyzer.py" \
     --sessions-dir ~/.claude/projects/<project-path-hash> \
     --agent patterns-reviewer --max-sessions 20
 
 # Extract metrics from a specific session
-python3 "$PLUGIN_ROOT/scripts/extract-session-metrics.py" \
+python3 "$PLUGIN_ROOT/scripts/analysis/session_metrics.py" \
     --sessions-dir ~/.claude/projects/<project-path-hash> \
     --limit 5
 ```

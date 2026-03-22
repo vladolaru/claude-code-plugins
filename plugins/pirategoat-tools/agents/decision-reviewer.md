@@ -44,19 +44,19 @@ Run the 4-phase review criticism pipeline. Each phase builds on the prior — pa
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 
 # Phase 1: Decompose — extract claims, severity assertions, scope claims
-python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 1 --total-steps 4 --report "<report-path>" --findings-json "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<report-path>" --findings-json "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
 
 # Phase 2: Verify — read actual source code, check each claim
-python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 2 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 2 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
 
 # Phase 3: Challenge — adversarial analysis, false positives, severity inflation
-python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 3 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 3 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
 
 # Phase 4: Synthesize — verdict + write findings
-python3 $PLUGIN_ROOT/scripts/review-critic.py --step-number 4 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 4 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
 ```
 
 Follow each phase's instructions. Between phases, do the verification work (Read files, Grep for patterns, check git diffs) that the phase directs.

@@ -20,8 +20,8 @@ Do NOT start reviewing code until this step is done:
 **Run the bootstrap script:**
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
-python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent docs-drift-reviewer
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent docs-drift-reviewer
 ```
 
 Read the output carefully. It contains your review rules, review scope, and output instructions. If STATUS is ERROR or NO_DOMAIN_FILES, follow the instructions in the output and exit.

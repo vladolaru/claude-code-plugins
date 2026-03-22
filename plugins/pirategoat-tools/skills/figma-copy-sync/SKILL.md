@@ -103,7 +103,7 @@ Backtrack: Phase 1 → Phase 0 (missing surfaces); Phase 3 → Phase 2 (user req
 2. **Fetch metadata** — Call `get_metadata` on the target node to understand the hierarchy.
    - If response > 50K chars, save to `.claude/tmp/figma-copy-sync/metadata-<nodeId>.json` and parse with:
      ```bash
-     python3 <plugin-scripts>/figma-parse-nodes.py <saved-file> --format tree
+     python3 <plugin-scripts>/figma/parse_nodes.py <saved-file> --format tree
      ```
 
 3. **Identify UI surfaces** — From the hierarchy, classify nodes into:

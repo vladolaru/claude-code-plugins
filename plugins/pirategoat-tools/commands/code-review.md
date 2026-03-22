@@ -49,7 +49,7 @@ Then use `--mode full` instead of `--mode incremental`.
 **Run Step 1:**
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-pipeline.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --step 1 --mode incremental --output-dir "$OUTPUT_DIR"
 ```
 

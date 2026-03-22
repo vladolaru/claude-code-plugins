@@ -40,7 +40,7 @@ mkdir -p "$OUTPUT_DIR"
 **Run Step 1:**
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review-pipeline.py \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --step 1 --mode full --output-dir "$OUTPUT_DIR"
 ```
 

@@ -20,8 +20,8 @@ Do NOT start reviewing code until this step is done:
 **Run the bootstrap script:**
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
-[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname)
-python3 $PLUGIN_ROOT/scripts/bootstrap-reviewer.py --agent e2e-tests-reviewer
+[ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
+python3 $PLUGIN_ROOT/scripts/review/agent/bootstrap.py --agent e2e-tests-reviewer
 ```
 
 Read the output carefully. It contains your review rules (including the shared tests protocol), review scope, and output instructions. If STATUS is NO_DOMAIN_FILES, report "No E2E test files to review" → APPROVE → exit. If ERROR, follow the instructions and exit.
