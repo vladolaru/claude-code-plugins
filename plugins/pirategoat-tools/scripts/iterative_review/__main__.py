@@ -230,15 +230,16 @@ def action_review(args):
                     f"{len(untracked)} untracked file(s) — invisible to Codex:\n"
                     + "\n".join(f"  {f}" for f in untracked[:10])
                     + ("\n  ..." if len(untracked) > 10 else ""))
-            warning = (
-                f"WARNING: Uncommitted changes detected before review round {round_num}.\n"
+            print(
+                f"BLOCKED: Uncommitted changes detected before review round {round_num}.\n"
                 + "\n".join(parts)
-                + "\nCommit these with semantic messages before proceeding. "
-                "Codex only reviews committed changes (merge_base..HEAD)."
+                + "\n\nCodex only reviews committed changes (merge_base..HEAD)."
+                "\nCommit these files with semantic commit messages, then re-run"
+                f" this same command (--action review --round {round_num})."
             )
-            print(warning)
-            telemetry.progress("uncommitted_changes_warning", round=round_num,
+            telemetry.progress("uncommitted_changes_blocked", round=round_num,
                                tracked=len(tracked), untracked=len(untracked))
+            sys.exit(1)
     except Exception:
         pass  # git not available — proceed, Codex will review what's committed
 
