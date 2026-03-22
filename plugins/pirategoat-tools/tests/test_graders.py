@@ -12,7 +12,8 @@ from pathlib import Path
 
 # Add tests/ and scripts/ to path before importing local modules
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+_scripts_dir = str(Path(__file__).resolve().parent.parent / "scripts")
+sys.path.insert(0, _scripts_dir)
 
 import pytest
 
@@ -27,7 +28,7 @@ from graders import (
     grade_review_baseline,
 )
 
-from review_output_simple import ReviewOutputBuilder
+from review.agent.output import ReviewOutputBuilder
 
 
 @pytest.fixture

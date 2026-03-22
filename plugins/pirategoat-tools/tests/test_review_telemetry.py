@@ -1,4 +1,4 @@
-"""Tests for review-telemetry.py — JSONL telemetry for PR review pipelines."""
+"""Tests for review/telemetry.py — JSONL telemetry for PR review pipelines."""
 
 import glob
 import importlib.util
@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 # Import the module under test
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review-telemetry.py"
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "telemetry.py"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context_fixtures import COMPLETE_CONTEXT

@@ -1,4 +1,4 @@
-"""Tests for pipeline_events.py — PipelineEventEmitter."""
+"""Tests for linear/events.py — PipelineEventEmitter."""
 
 import json
 import os
@@ -8,7 +8,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Module loading (same pattern as conftest.py for review-pipeline)
+# Module loading (same pattern as conftest.py for review/pipeline)
 # ---------------------------------------------------------------------------
 
 import importlib.util
@@ -18,7 +18,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 def _load_module():
     spec = importlib.util.spec_from_file_location(
-        "pipeline_events", SCRIPTS_DIR / "pipeline_events.py"
+        "pipeline_events", SCRIPTS_DIR / "linear" / "events.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

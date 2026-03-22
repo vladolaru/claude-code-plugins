@@ -115,27 +115,27 @@ class TestAllCommandsStructural:
 
 
 # =============================================================================
-# Structural Tests — Script References (all commands reference review-pipeline.py)
+# Structural Tests — Script References (all commands reference review/pipeline.py)
 # =============================================================================
 
 
 class TestScriptReferences:
-    """Review commands reference review-pipeline.py (which exists on disk)."""
+    """Review commands reference review/pipeline.py (which exists on disk)."""
 
     @pytest.mark.parametrize("command", ALL_REVIEW_COMMANDS)
     def test_references_review_pipeline(self, command):
         content = read_command(command)
-        assert "review-pipeline.py" in content, (
-            f"{command}: should reference review-pipeline.py"
+        assert "review/pipeline.py" in content, (
+            f"{command}: should reference review/pipeline.py"
         )
 
     def test_review_pipeline_exists(self):
-        path = SCRIPTS_DIR / "review-pipeline.py"
-        assert path.is_file(), f"review-pipeline.py not found at {path}"
+        path = SCRIPTS_DIR / "review" / "pipeline.py"
+        assert path.is_file(), f"review/pipeline.py not found at {path}"
 
 
 class TestReviewCommandsReferenceUnifiedScript:
-    """All review commands reference review-pipeline.py with correct mode."""
+    """All review commands reference review/pipeline.py with correct mode."""
 
     def test_pr_review_uses_pr_mode(self):
         content = read_command("pr-review.md")

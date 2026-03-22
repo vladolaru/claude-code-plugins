@@ -1,4 +1,4 @@
-"""Tests for setup-workspace.py."""
+"""Tests for review/workspace_setup.py."""
 
 import importlib.util
 import json
@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "setup-workspace.py"
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "workspace_setup.py"
 
 
 def _load_module():
@@ -265,7 +265,7 @@ class TestMain:
             "get-url origin": "https://github.com/user/repo.git",
         })
         with patch.object(mod, "_run_cmd", side_effect=mock), \
-             patch("sys.argv", ["setup-workspace.py", "--pr-number", "42"]):
+             patch("sys.argv", ["workspace_setup.py", "--pr-number", "42"]):
             mod.main()
 
         captured = capsys.readouterr()
@@ -289,7 +289,7 @@ class TestMain:
             return None
 
         with patch.object(mod, "_run_cmd", side_effect=tracking_mock), \
-             patch("sys.argv", ["setup-workspace.py", "--pr-number", "42", "--gh-cmd", "ghe"]):
+             patch("sys.argv", ["workspace_setup.py", "--pr-number", "42", "--gh-cmd", "ghe"]):
             mod.main()
 
         checkout_cmds = [c for c in commands_seen if "pr checkout" in c]

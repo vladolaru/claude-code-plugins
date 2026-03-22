@@ -1,4 +1,4 @@
-"""Tests for bootstrap-reviewer.py — integration tests (subprocess runs against all agents)."""
+"""Tests for review/agent/bootstrap.py — integration tests (subprocess runs against all agents)."""
 
 import importlib
 import importlib.util
@@ -12,7 +12,7 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "bootstrap-reviewer.py"
+BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -44,7 +44,7 @@ def _get_fixture_repo(fixture: str = "multi-file-realistic.diff") -> str:
 
 
 def run_bootstrap(*args: str, timeout: int = 60, fixture: str = "multi-file-realistic.diff") -> subprocess.CompletedProcess:
-    """Run bootstrap-reviewer.py via subprocess against a temp git repo.
+    """Run review/agent/bootstrap.py via subprocess against a temp git repo.
 
     Uses a temp repo from the specified fixture diff so tests are fully
     isolated from the real repository state. Always passes
@@ -502,7 +502,7 @@ class TestOutputFilenameConsistency:
 
     def test_save_uses_review_suffix(self, tmp_path):
         """save() should write {reviewer}-review.json and {reviewer}-review.md."""
-        from review_output_simple import ReviewOutputBuilder
+        from review.agent.output import ReviewOutputBuilder
 
         builder = ReviewOutputBuilder(pr_id="42", reviewer="dead-code")
         result = builder.save(str(tmp_path))

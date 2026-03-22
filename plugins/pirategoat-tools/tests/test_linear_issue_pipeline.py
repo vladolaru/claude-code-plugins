@@ -1,4 +1,4 @@
-"""Tests for linear-issue-pipeline.py — step sequence, routing, state, CLI."""
+"""Tests for linear/pipeline.py — step sequence, routing, state, CLI."""
 
 import importlib.util
 import json
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
-PIPELINE_SCRIPT = SCRIPTS_DIR / "linear-issue-pipeline.py"
+PIPELINE_SCRIPT = SCRIPTS_DIR / "linear" / "pipeline.py"
 TOTAL_STEPS = 15
 
 
@@ -531,7 +531,7 @@ class TestFormatOutput:
         output = mod.format_output(1, guidance)
         assert "Step 2" in output
         assert "Fetch Issue" in output
-        assert "linear-issue-pipeline.py" in output
+        assert "pipeline.py" in output
 
     def test_skip_reason_in_output(self, mod):
         guidance = {

@@ -1,4 +1,4 @@
-"""Tests for gather-review-context.py."""
+"""Tests for review/context.py."""
 
 import importlib.util
 import json
@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from context_fixtures import COMPLETE_CONTEXT, PARTIAL_CONTEXT
 
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "gather-review-context.py"
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "context.py"
 
 
 def _load_module():

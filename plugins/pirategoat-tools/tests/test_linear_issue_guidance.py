@@ -1,4 +1,4 @@
-"""Tests for linear-issue-pipeline.py — step briefing content (get_step_guidance).
+"""Tests for linear/pipeline.py — step briefing content (get_step_guidance).
 
 Tests that guidance text for each step contains the right keywords, tool references,
 and structural elements. Follows the same pattern as test_review_pipeline.py.
@@ -16,7 +16,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 def _load_module():
     spec = importlib.util.spec_from_file_location(
-        "linear_issue_pipeline", SCRIPTS_DIR / "linear-issue-pipeline.py"
+        "linear_issue_pipeline", SCRIPTS_DIR / "linear" / "pipeline.py"
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -791,7 +791,7 @@ class TestStep15Orchestration:
         """Step 15 orchestration emits pipeline_complete event."""
         self._write_report(tmp_path)
         events_spec = importlib.util.spec_from_file_location(
-            "pipeline_events", SCRIPTS_DIR / "pipeline_events.py"
+            "pipeline_events", SCRIPTS_DIR / "linear" / "events.py"
         )
         events_mod = importlib.util.module_from_spec(events_spec)
         events_spec.loader.exec_module(events_mod)

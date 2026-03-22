@@ -98,7 +98,7 @@ def find_plugin_root() -> Optional[str]:
         try:
             with open(cache_file) as f:
                 root = f.read().strip()
-            if root and os.path.isdir(root):
+            if root and os.path.isfile(os.path.join(root, "scripts", "review", "agent", "scope.py")):
                 return root
         except OSError:
             pass

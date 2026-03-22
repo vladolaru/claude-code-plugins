@@ -23,7 +23,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = TESTS_DIR.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review_output_simple import ReviewOutputBuilder
+from review.agent.output import ReviewOutputBuilder
 
 
 # =============================================================================

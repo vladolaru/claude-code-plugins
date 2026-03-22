@@ -1,7 +1,7 @@
 """Shared test fixtures for review context protocol tests."""
 
 # A complete context — all fields present
-# (matches what gather-review-context.py produces after gap-filling
+# (matches what review/context.py produces after gap-filling
 #  on top of what the bot writes)
 COMPLETE_CONTEXT = {
     "version": 1,

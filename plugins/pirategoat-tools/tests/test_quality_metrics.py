@@ -1,7 +1,7 @@
 """
 Tests for quality metrics extraction from reviewer session JSONL logs.
 
-Validates the --quality-metrics mode of analyze-reviewer-sessions.py:
+Validates the --quality-metrics mode of analysis/session_analyzer.py:
 - Parsing agent Write output (JSON) to extract finding counts
 - Parsing ingest subagent log to extract categorization outcomes
 - Handling missing/partial data gracefully
@@ -20,7 +20,7 @@ import pytest
 # Import the module under test (hyphenated filename requires importlib)
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
-SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "analyze-reviewer-sessions.py"
+SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "analysis" / "session_analyzer.py"
 
 _spec = importlib.util.spec_from_file_location("analyze_reviewer_sessions", str(SCRIPT_PATH))
 _mod = importlib.util.module_from_spec(_spec)

@@ -1,5 +1,5 @@
 """
-Unit tests for review-scope.py — pure logic functions + merge-base gating.
+Unit tests for review/agent/scope.py — pure logic functions + merge-base gating.
 
 Tests pure functions (no git needed) and the merge-base rebase decision
 via mock-based tests. Zero external dependencies beyond stdlib + pytest.
@@ -23,18 +23,21 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# Path setup — import review-scope as a module
+# Path setup — import review/agent/scope.py as a module
 # ---------------------------------------------------------------------------
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-REVIEW_SCOPE_SCRIPT = SCRIPTS_DIR / "review-scope.py"
+REVIEW_SCOPE_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "scope.py"
 
 # Import review_scope module functions directly for unit testing
 sys.path.insert(0, str(SCRIPTS_DIR))
 import importlib
+import importlib.util
 
-review_scope = importlib.import_module("review-scope")
+_scope_spec = importlib.util.spec_from_file_location("review_scope", str(REVIEW_SCOPE_SCRIPT))
+review_scope = importlib.util.module_from_spec(_scope_spec)
+_scope_spec.loader.exec_module(review_scope)
 
 
 # =============================================================================
@@ -577,11 +580,11 @@ class TestSemanticFiltering:
     """Semantic filtering integration in diff output."""
 
     def test_filter_diff_imported(self):
-        """filter_diff is importable from semantic-filter.py."""
+        """filter_diff is importable from review/agent/diff_noise_filter.py."""
         from importlib.util import spec_from_file_location, module_from_spec
         spec = spec_from_file_location(
             "semantic_filter",
-            str(SCRIPTS_DIR / "semantic-filter.py"),
+            str(SCRIPTS_DIR / "review" / "agent" / "diff_noise_filter.py"),
         )
         mod = module_from_spec(spec)
         spec.loader.exec_module(mod)

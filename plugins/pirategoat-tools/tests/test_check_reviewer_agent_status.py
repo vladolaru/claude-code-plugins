@@ -1,4 +1,4 @@
-"""Tests for check-reviewer-agent-status.py."""
+"""Tests for review/agents_status.py."""
 
 import importlib.util
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "check-reviewer-agent-status.py"
+SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "agents_status.py"
 
 
 def _load_module():

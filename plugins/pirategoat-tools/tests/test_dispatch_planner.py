@@ -1,5 +1,5 @@
 """
-Tests for plan-review-dispatch.py — deterministic, no model calls.
+Tests for review/plan_dispatch.py — deterministic, no model calls.
 
 Tests the dispatch planner by importing functions directly and by
 validating output schema. Mocks subprocess calls to avoid git dependency.
@@ -24,7 +24,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 import importlib.util
 
 _spec = importlib.util.spec_from_file_location(
-    "plan_review_dispatch", str(SCRIPTS_DIR / "plan-review-dispatch.py")
+    "plan_review_dispatch", str(SCRIPTS_DIR / "review" / "plan_dispatch.py")
 )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)

@@ -1,4 +1,4 @@
-"""Tests for review-pipeline.py — step briefing output (get_step_guidance)."""
+"""Tests for review/pipeline.py — step briefing output (get_step_guidance)."""
 
 import json
 import subprocess
@@ -359,7 +359,7 @@ class TestStep5DispatchPlan:
         assert "Skipped" in text
         # Raw JSON should NOT be inlined
         full_text = "\n".join(g["actions"] + g["situation"])
-        assert not ("python3" in full_text and "plan-review-dispatch.py" in full_text)
+        assert not ("python3" in full_text and "plan_dispatch.py" in full_text)
 
     def test_shows_focus_for_agents(self, mod, tmp_path):
         """Step 5 should show what each agent does so the LLM can make informed override decisions."""
@@ -496,7 +496,7 @@ class TestStep6DispatchAgents:
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "bootstrap-reviewer.py" in text
+        assert "bootstrap.py" in text
 
     def test_lists_each_agent_dispatch_call(self, mod, tmp_path):
         """Should list each agent's full dispatch call with concrete values."""
@@ -518,12 +518,12 @@ class TestStep6DispatchAgents:
         assert "Task tool" not in text
 
     def test_references_status_check(self, mod, tmp_path):
-        """Should reference check-reviewer-agent-status.py for monitoring."""
+        """Should reference agents_status.py for monitoring."""
         state = self._make_state_with_agents()
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "check-reviewer-agent-status.py" in text
+        assert "agents_status.py" in text
 
     def test_step6_recomputes_dispatch_plan_summary(self, mod, tmp_path):
         """Step 6 orchestration must recompute summary from final dispatch-plan.json (post-override)."""
@@ -582,7 +582,7 @@ class TestStep7SaveReviewBaseline:
         ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
         g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "check-reviewer-agent-status" in text or "agent status" in text.lower()
+        assert "agents_status" in text or "agent status" in text.lower()
 
     def test_step_7_surfaces_not_dispatched_agents(self, mod, tmp_path):
         """Step 7 should warn about NOT_DISPATCHED agents so missed dispatches don't silently pass."""
@@ -740,7 +740,7 @@ class TestStep8ReadinessGate:
         assert "performance-reviewer" in text
         # Should instruct re-running status check
         actions_text = "\n".join(g["actions"])
-        assert "check-reviewer-agent-status.py" in actions_text
+        assert "agents_status.py" in actions_text
 
     def test_blocked_shows_not_dispatched(self, mod, tmp_path):
         """Blocked briefing should mention NOT_DISPATCHED agents too."""

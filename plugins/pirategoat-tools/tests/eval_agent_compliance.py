@@ -23,7 +23,7 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "bootstrap-reviewer.py"
+BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -171,7 +171,7 @@ def run_grade_only(output_dir: str) -> dict:
 
 
 def run_bootstrap_for_agent(agent_name: str, cwd: str, output_dir: str) -> tuple:
-    """Run bootstrap-reviewer.py and return (exit_code, stdout)."""
+    """Run review/agent/bootstrap.py and return (exit_code, stdout)."""
     cmd = [
         sys.executable,
         str(BOOTSTRAP_SCRIPT),

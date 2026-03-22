@@ -1,4 +1,4 @@
-"""Tests for review-pipeline.py — orchestration: subprocess calls, telemetry, integration."""
+"""Tests for review/pipeline.py — orchestration: subprocess calls, telemetry, integration."""
 
 import importlib.util
 import json
@@ -18,7 +18,7 @@ from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
 # ---------------------------------------------------------------------------
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 _dispatch_spec = importlib.util.spec_from_file_location(
-    "plan_review_dispatch", str(_SCRIPTS_DIR / "plan-review-dispatch.py")
+    "plan_review_dispatch", str(_SCRIPTS_DIR / "review" / "plan_dispatch.py")
 )
 _dispatch_mod = importlib.util.module_from_spec(_dispatch_spec)
 _dispatch_spec.loader.exec_module(_dispatch_mod)
@@ -87,7 +87,7 @@ class TestTelemetryIntegration:
 
 
 class TestStep2Orchestration:
-    """Step 2 main() runs setup-workspace.py and persists workspace state."""
+    """Step 2 main() runs review/workspace_setup.py and persists workspace state."""
 
     def _run(self, *args, cwd=None):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
@@ -95,7 +95,7 @@ class TestStep2Orchestration:
 
     @staticmethod
     def _init_git_repo(path):
-        """Initialize a minimal git repo so setup-workspace.py doesn't touch the real repo."""
+        """Initialize a minimal git repo so review/workspace_setup.py doesn't touch the real repo."""
         subprocess.run(["git", "init"], cwd=str(path), capture_output=True, check=True)
         subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(path), capture_output=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), capture_output=True)
@@ -106,7 +106,7 @@ class TestStep2Orchestration:
         subprocess.run(["git", "commit", "-m", "init"], cwd=str(path), capture_output=True)
 
     def test_step_2_completes_without_crash(self, tmp_path):
-        """Step 2 should complete even when setup-workspace.py fails (no git repo)."""
+        """Step 2 should complete even when review/workspace_setup.py fails (no git repo)."""
         self._init_git_repo(tmp_path)
         self._run("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=str(tmp_path))
@@ -128,14 +128,14 @@ class TestStep2Orchestration:
 
 
 class TestStep3Orchestration:
-    """Step 3 main() runs gather-review-context.py and hydrates state."""
+    """Step 3 main() runs review/context.py and hydrates state."""
 
     def _run(self, *args):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True)
 
     def test_step_3_runs_gather_context(self, tmp_path):
-        """Step 3 should invoke gather-review-context.py (may fail in test env, but state should update)."""
+        """Step 3 should invoke review/context.py (may fail in test env, but state should update)."""
         # Seed step 1
         self._run("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path))
@@ -152,7 +152,7 @@ class TestStep3Orchestration:
         # Seed step 1
         self._run("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42")
-        # Pre-write review-context.json as if gather-review-context.py produced it
+        # Pre-write review-context.json as if review/context.py produced it
         ctx = {
             "git": {"merge_base": "abc", "git_range": "abc..HEAD",
                     "changed_files": ["a.py"], "commit_count": 1},
@@ -169,7 +169,7 @@ class TestStep3Orchestration:
         assert state["resolved_params"]["has_unfetched_issues"] is True
 
     def test_step_3_without_context_still_succeeds(self, tmp_path):
-        """Step 3 should not crash if gather-review-context.py fails (no git repo)."""
+        """Step 3 should not crash if review/context.py fails (no git repo)."""
         self._run("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path))
         r = self._run("--step", "3", "--mode", "full",
@@ -197,7 +197,7 @@ class TestStep3Orchestration:
 
 
 class TestStep5Orchestration:
-    """Step 5 main() runs plan-review-dispatch.py and stores output in state."""
+    """Step 5 main() runs review/plan_dispatch.py and stores output in state."""
 
     def _run(self, *args):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
@@ -253,7 +253,7 @@ class TestStep6Orchestration:
         assert "go-tests-reviewer" not in names
 
     def test_step_6_output_contains_bootstrap_calls(self, tmp_path):
-        """Step 6 output should contain concrete bootstrap-reviewer.py calls."""
+        """Step 6 output should contain concrete bootstrap.py calls."""
         self._run("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path))
         plan = {
@@ -267,7 +267,7 @@ class TestStep6Orchestration:
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         r = self._run("--step", "6", "--mode", "full",
                        "--output-dir", str(tmp_path))
-        assert "bootstrap-reviewer.py" in r.stdout
+        assert "bootstrap.py" in r.stdout
         assert "pr-reviewer" in r.stdout
         assert "abc..HEAD" in r.stdout
 
@@ -491,7 +491,7 @@ class TestFullSequenceIntegration:
         r = self._run("--step", "1", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
 
-        # Pre-write context as if gather-review-context.py succeeded
+        # Pre-write context as if review/context.py succeeded
         ctx = {
             "git": {"merge_base": "abc", "git_range": "abc..HEAD",
                     "changed_files": ["a.py"], "changed_files_csv": "a.py",

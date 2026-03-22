@@ -1,4 +1,4 @@
-"""Tests for review-critic.py — review-specific decision criticism pipeline."""
+"""Tests for review/critic.py — review-specific decision criticism pipeline."""
 
 import json
 import subprocess
@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
-SCRIPT = SCRIPTS_DIR / "review-critic.py"
+SCRIPT = SCRIPTS_DIR / "review" / "critic.py"
 
 
 def run_critic(*args):
-    """Run review-critic.py and return the result."""
+    """Run review/critic.py and return the result."""
     cmd = [sys.executable, str(SCRIPT)] + list(args)
     return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
 

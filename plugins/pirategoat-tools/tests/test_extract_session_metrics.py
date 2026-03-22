@@ -1,5 +1,5 @@
 """
-Tests for extract-session-metrics.py — identify_agent_type() and related functions.
+Tests for analysis/session_metrics.py — identify_agent_type() and related functions.
 
 Deterministic, no model calls.  Uses importlib because the module name has hyphens.
 """
@@ -19,7 +19,7 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-SCRIPT_PATH = SCRIPTS_DIR / "extract-session-metrics.py"
+SCRIPT_PATH = SCRIPTS_DIR / "analysis" / "session_metrics.py"
 
 _spec = importlib.util.spec_from_file_location(
     "extract_session_metrics", str(SCRIPT_PATH)
@@ -57,12 +57,12 @@ def _make_assistant_message(content: str) -> str:
 
 
 # =============================================================================
-# Strategy 1: bootstrap-reviewer.py detection
+# Strategy 1: bootstrap.py detection (also matches legacy bootstrap-reviewer.py)
 # =============================================================================
 
 
 class TestStrategy1Bootstrap:
-    """Strategy 1 detects bootstrap-reviewer.py --agent <name> in first 15 lines."""
+    """Strategy 1 detects bootstrap.py --agent <name> in first 15 lines (also matches legacy bootstrap-reviewer.py)."""
 
     def test_bootstrap_with_suffix(self, tmp_path):
         path = _write_jsonl(

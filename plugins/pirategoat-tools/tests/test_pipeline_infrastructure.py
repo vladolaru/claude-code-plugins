@@ -1,4 +1,4 @@
-"""Tests for review-pipeline.py — infrastructure: step sequence, routing, state, CLI."""
+"""Tests for review/pipeline.py — infrastructure: step sequence, routing, state, CLI."""
 
 import json
 import subprocess
@@ -400,7 +400,7 @@ class TestCLIIntegration:
         assert (tmp_path / ".branch-review-baseline.json").is_file()
 
     def test_step_1_preserves_review_context(self, tmp_path):
-        """Step 1 should preserve review-context.json — gather-review-context.py overwrites it at step 3."""
+        """Step 1 should preserve review-context.json — review/context.py overwrites it at step 3."""
         (tmp_path / "review-context.json").write_text('{"output": {"directory": "/some/path"}}')
         self._run("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path))

@@ -1,4 +1,4 @@
-"""Tests for semantic-filter.py — content-level noise removal from diffs."""
+"""Tests for review/agent/diff_noise_filter.py — content-level noise removal from diffs."""
 
 import importlib.util
 import sys
@@ -10,7 +10,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 # Import the module
 spec = importlib.util.spec_from_file_location(
-    "semantic_filter", str(SCRIPTS_DIR / "semantic-filter.py")
+    "semantic_filter", str(SCRIPTS_DIR / "review" / "agent" / "diff_noise_filter.py")
 )
 semantic_filter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(semantic_filter)

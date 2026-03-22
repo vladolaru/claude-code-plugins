@@ -1,8 +1,8 @@
 """
-Domain routing tests — verify review-scope.py routes fixtures to correct domains.
+Domain routing tests — verify review/agent/scope.py routes fixtures to correct domains.
 
 Deterministic pytest suite. For each fixture, creates a temp git repo, applies the
-diff, and runs review-scope.py --domain <X> for all 11 domains. Asserts STATUS is
+diff, and runs review/agent/scope.py --domain <X> for all 11 domains. Asserts STATUS is
 OK or NO_DOMAIN_FILES.
 
 Also tests --preflight mode which checks all domains in one invocation.
@@ -11,6 +11,7 @@ Zero model calls.
 """
 
 import importlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -27,13 +28,17 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-REVIEW_SCOPE_SCRIPT = SCRIPTS_DIR / "review-scope.py"
+REVIEW_SCOPE_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "scope.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
-# Import review-scope functions directly for domain routing tests.
+# Import review/agent/scope.py functions directly for domain routing tests.
 # filter_noise() and filter_domain() are pure functions — no subprocess needed.
 sys.path.insert(0, str(SCRIPTS_DIR))
-_review_scope = importlib.import_module("review-scope")
+_scope_spec = importlib.util.spec_from_file_location(
+    "review_scope", str(REVIEW_SCOPE_SCRIPT)
+)
+_review_scope = importlib.util.module_from_spec(_scope_spec)
+_scope_spec.loader.exec_module(_review_scope)
 
 ALL_DOMAINS = [
     "a11y",
@@ -262,7 +267,7 @@ from conftest import setup_temp_git_repo
 
 
 def run_review_scope(domain: str, cwd: str) -> str:
-    """Run review-scope.py and extract STATUS from output.
+    """Run review/agent/scope.py and extract STATUS from output.
 
     Uses --range HEAD~1..HEAD since temp repos have no remote and changes
     are committed (auto-detection would see a clean working tree).

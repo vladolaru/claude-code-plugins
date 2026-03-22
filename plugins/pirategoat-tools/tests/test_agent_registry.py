@@ -1,7 +1,7 @@
 """
-Tests for agent-registry.json — deterministic, no model calls.
+Tests for review/agent_registry.json — deterministic, no model calls.
 
-Validates schema, completeness, and cross-references against review-scope.py domains.
+Validates schema, completeness, and cross-references against review/agent/scope.py domains.
 """
 
 import json
@@ -16,14 +16,14 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-REGISTRY_PATH = SCRIPTS_DIR / "agent-registry.json"
+REGISTRY_PATH = SCRIPTS_DIR / "review" / "agent_registry.json"
 
-# Import DOMAIN_CATALOG from review-scope.py
+# Import DOMAIN_CATALOG from review/agent/scope.py
 sys.path.insert(0, str(SCRIPTS_DIR))
 import importlib
 
 _scope_spec = importlib.util.spec_from_file_location(
-    "review_scope", str(SCRIPTS_DIR / "review-scope.py")
+    "review_scope", str(SCRIPTS_DIR / "review" / "agent" / "scope.py")
 )
 _scope_mod = importlib.util.module_from_spec(_scope_spec)
 _scope_spec.loader.exec_module(_scope_mod)
@@ -35,7 +35,7 @@ DOMAIN_CATALOG = _scope_mod.DOMAIN_CATALOG
 VALID_DISPATCH_CLASSES = {"always", "conditional", "manual", "special"}
 VALID_PROTOCOLS = {"reviewer", "tests-reviewer"}
 VALID_MODEL_TIERS = {"inherit", "sonnet", "haiku", "opus"}
-EXPECTED_AGENT_COUNT = 21  # agents from AGENT_CONFIG in bootstrap-reviewer.py
+EXPECTED_AGENT_COUNT = 21  # agents from AGENT_CONFIG in review/agent/bootstrap.py
 
 
 # ---------------------------------------------------------------------------
@@ -197,9 +197,9 @@ class TestNoSemanticFilterConfig:
 
 
 class TestBootstrapCompatibility:
-    """Registry entries are compatible with bootstrap-reviewer.py expectations.
+    """Registry entries are compatible with review/agent/bootstrap.py expectations.
 
-    bootstrap-reviewer.py accesses these keys from AGENT_CONFIG:
+    review/agent/bootstrap.py accesses these keys from AGENT_CONFIG:
     - config["domain"]
     - config["protocols"]
     - config.get("scope_flags", [])

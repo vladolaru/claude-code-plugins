@@ -1,4 +1,4 @@
-"""Tests for bootstrap-reviewer.py — unit tests (direct function imports)."""
+"""Tests for review/agent/bootstrap.py — unit tests (direct function imports)."""
 
 import json
 import sys
@@ -12,12 +12,11 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
-BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "bootstrap-reviewer.py"
+BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-# Import functions under test
-# The module name has a hyphen, so use importlib
+# Import functions under test via importlib (file-based loading)
 import importlib
 
 _spec = importlib.util.spec_from_file_location("bootstrap_reviewer", str(BOOTSTRAP_SCRIPT))
@@ -338,7 +337,7 @@ class TestBudgetOverride:
     def test_override_replaces_computed_budget(self):
         """When budget_override is set, it replaces the scope-computed budget."""
         # Verify the override exists in the registry
-        with open(str(SCRIPTS_DIR / "agent-registry.json")) as f:
+        with open(str(SCRIPTS_DIR / "review" / "agent_registry.json")) as f:
             registry = json.load(f)
         agents = registry.get("agents", registry)
         assert agents["history-insights-reviewer"]["budget_override"] == 45

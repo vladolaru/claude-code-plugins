@@ -12,7 +12,7 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
-PIPELINE_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review-pipeline.py"
+PIPELINE_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "pipeline.py"
 PIPELINE_TOTAL_STEPS = 12
 
 
