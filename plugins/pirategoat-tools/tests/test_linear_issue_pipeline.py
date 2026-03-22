@@ -12,7 +12,7 @@ import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 PIPELINE_SCRIPT = SCRIPTS_DIR / "linear-issue-pipeline.py"
-TOTAL_STEPS = 14
+TOTAL_STEPS = 15
 
 
 def _load_module():
@@ -34,7 +34,7 @@ def mod():
 # ---------------------------------------------------------------------------
 
 class TestStepSequence:
-    def test_has_14_steps(self, mod):
+    def test_has_15_steps(self, mod):
         assert len(mod.STEP_SEQUENCE) == TOTAL_STEPS
 
     def test_step_numbers_are_sequential(self, mod):
@@ -96,11 +96,11 @@ class TestConditionEvaluation:
 class TestActiveSteps:
     def test_investigate_mode_skips_fix_steps(self, mod):
         active = mod.get_active_steps("investigate", {}, {}, {})
-        # Steps 8-13 should NOT be active in investigate mode
-        for step in [8, 9, 10, 11, 12, 13]:
+        # Steps 9-14 should NOT be active in investigate mode
+        for step in [9, 10, 11, 12, 13, 14]:
             assert step not in active, f"Step {step} should be skipped in investigate mode"
-        # Steps 1-7 and 14 should be active
-        for step in [1, 2, 3, 4, 5, 6, 7, 14]:
+        # Steps 1-8 and 15 should be active
+        for step in [1, 2, 3, 4, 5, 6, 7, 8, 15]:
             assert step in active, f"Step {step} should be active in investigate mode"
 
     def test_fix_mode_includes_all_steps_when_unresolved(self, mod):
@@ -112,16 +112,51 @@ class TestActiveSteps:
     def test_fix_mode_skips_impl_steps_when_resolved(self, mod):
         state = {"issue_resolved": True}
         active = mod.get_active_steps("fix", {}, state, {})
-        # Steps 8-13 should be skipped when issue is resolved
-        for step in [8, 9, 10, 11, 12, 13]:
+        # Steps 9-14 should be skipped when issue is resolved
+        for step in [9, 10, 11, 12, 13, 14]:
             assert step not in active, f"Step {step} should be skipped when resolved"
-        # Steps 1-7 and 14 should still be active
-        for step in [1, 2, 3, 4, 5, 6, 7, 14]:
+        # Steps 1-8 and 15 should still be active
+        for step in [1, 2, 3, 4, 5, 6, 7, 8, 15]:
             assert step in active
 
     def test_returns_set(self, mod):
         active = mod.get_active_steps("investigate", {}, {}, {})
         assert isinstance(active, set)
+
+
+# ---------------------------------------------------------------------------
+# Clarity Gate Routing
+# ---------------------------------------------------------------------------
+
+class TestClarityGateRouting:
+    def test_clarity_blocked_skips_impl_steps(self, mod):
+        state = {"clarity_blocked": True}
+        active = mod.get_active_steps("fix", {}, state, {})
+        for step in [9, 10, 11, 12, 13, 14]:
+            assert step not in active, f"Step {step} should be skipped when clarity blocked"
+        for step in [1, 2, 3, 4, 5, 6, 7, 8, 15]:
+            assert step in active
+
+    def test_clarity_blocked_with_override_includes_impl_steps(self, mod):
+        state = {"clarity_blocked": True}
+        config = {"skip_clarity_gate": True}
+        active = mod.get_active_steps("fix", config, state, {})
+        assert len(active) == 15
+        for step in range(1, 16):
+            assert step in active
+
+    def test_investigate_mode_unaffected_by_clarity_blocked(self, mod):
+        state = {"clarity_blocked": True}
+        active = mod.get_active_steps("investigate", {}, state, {})
+        for step in [1, 2, 3, 4, 5, 6, 7, 8, 15]:
+            assert step in active
+
+    def test_clarity_blocked_jumps_8_to_15(self, mod):
+        state = {"clarity_blocked": True}
+        active = mod.get_active_steps("fix", {}, state, {})
+        result = mod.compute_next_step(8, active)
+        assert result["step"] == 15
+        assert result["skip_reason"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -155,10 +190,16 @@ class TestNextStep:
     def test_returns_none_for_empty_active(self, mod):
         assert mod.compute_next_step(1, set()) is None
 
-    def test_investigate_mode_jumps_7_to_14(self, mod):
+    def test_investigate_mode_7_to_8(self, mod):
         active = mod.get_active_steps("investigate", {}, {}, {})
         result = mod.compute_next_step(7, active)
-        assert result["step"] == 14
+        assert result["step"] == 8
+        assert result["skip_reason"] is None
+
+    def test_investigate_mode_8_to_15(self, mod):
+        active = mod.get_active_steps("investigate", {}, {}, {})
+        result = mod.compute_next_step(8, active)
+        assert result["step"] == 15
         assert result["skip_reason"] is not None
 
     def test_fix_mode_7_to_8(self, mod):
@@ -408,6 +449,11 @@ class TestStaleArtifactCleanup:
         mod.clean_stale_artifacts(str(tmp_path))
         assert (tmp_path / "issue-context.json").exists()
 
+    def test_removes_clarity_assessment(self, mod, tmp_path):
+        (tmp_path / "clarity-assessment.json").write_text("{}")
+        mod.clean_stale_artifacts(str(tmp_path))
+        assert not (tmp_path / "clarity-assessment.json").exists()
+
 
 # ---------------------------------------------------------------------------
 # Format Output
@@ -469,7 +515,7 @@ class TestFormatOutput:
             "next_step": None,
             "skip_reason": None,
         }
-        output = mod.format_output(14, guidance)
+        output = mod.format_output(15, guidance)
         assert "PIPELINE COMPLETE" in output
 
     def test_next_step_pointer(self, mod):
@@ -495,9 +541,9 @@ class TestFormatOutput:
             "actions": [],
             "handoff": None,
             "next_step": None,
-            "skip_reason": "Skipped: Step 8 (Write Plan), Step 9 (Implement)",
+            "skip_reason": "Skipped: Step 9 (Write Plan), Step 10 (Implement)",
         }
-        output = mod.format_output(14, guidance)
+        output = mod.format_output(15, guidance)
         assert "Skipped" in output
 
 

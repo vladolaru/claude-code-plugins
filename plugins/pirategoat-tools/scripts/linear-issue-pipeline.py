@@ -7,7 +7,7 @@ trustworthy reports with root cause analysis. In fix mode, implement solutions
 with verification and self-review, delivering draft PRs that are ready for
 human review.
 
-A single script owns a 14-step universal sequence. Mode (investigate|fix) and
+A single script owns a 15-step universal sequence. Mode (investigate|fix) and
 conditions determine which steps run. The script curates context as
 conversational briefings — the LLM executes the actions described in each
 briefing.
@@ -85,13 +85,14 @@ STEP_SEQUENCE = [
     {"step": 5,  "title": "Investigate",            "phase": "INVESTIGATION",  "condition": "always"},
     {"step": 6,  "title": "Write Report",           "phase": "INVESTIGATION",  "condition": "always"},
     {"step": 7,  "title": "Post to Linear",         "phase": "INVESTIGATION",  "condition": "always"},
-    {"step": 8,  "title": "Write Plan",             "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
-    {"step": 9,  "title": "Implement",              "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
-    {"step": 10, "title": "Verify",                 "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
-    {"step": 11, "title": "Self-Review",            "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
-    {"step": 12, "title": "Re-Verify",              "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
-    {"step": 13, "title": "Create Draft PR",        "phase": "OUTPUT",         "condition": "fix_mode_and_unresolved"},
-    {"step": 14, "title": "Present Results",         "phase": "OUTPUT",         "condition": "always"},
+    {"step": 8,  "title": "Assess Clarity",         "phase": "INVESTIGATION",  "condition": "always"},
+    {"step": 9,  "title": "Write Plan",             "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
+    {"step": 10, "title": "Implement",              "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
+    {"step": 11, "title": "Verify",                 "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
+    {"step": 12, "title": "Self-Review",            "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
+    {"step": 13, "title": "Re-Verify",              "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
+    {"step": 14, "title": "Create Draft PR",        "phase": "OUTPUT",         "condition": "fix_mode_and_unresolved"},
+    {"step": 15, "title": "Present Results",         "phase": "OUTPUT",         "condition": "always"},
 ]
 
 _STEP_MAP = {s["step"]: s for s in STEP_SEQUENCE}
@@ -103,6 +104,7 @@ _STALE_ARTIFACTS = [
     "pipeline-events.jsonl",
     "investigation-report.md",
     "implementation-plan.md",
+    "clarity-assessment.json",
 ]
 
 # Files to preserve across runs
@@ -125,13 +127,18 @@ def _eval_condition(condition, mode, config, state, context):
         return mode == "fix"
 
     if condition == "fix_mode_and_unresolved":
-        # Fix-mode steps 8-13 only run when the issue isn't already resolved.
-        # Step 3 sets state["issue_resolved"] = True when a merged PR fully
-        # addresses the issue. This prevents planning/implementing fixes for
-        # work that's already done.
+        # Fix-mode steps 9-14 only run when:
+        # 1. Mode is fix
+        # 2. Issue isn't already resolved (step 3 sets issue_resolved)
+        # 3. Clarity gate hasn't blocked (step 8 sets clarity_blocked)
+        #    UNLESS skip_clarity_gate override is set in config
         if mode != "fix":
             return False
-        return not state.get("issue_resolved", False)
+        if state.get("issue_resolved", False):
+            return False
+        if state.get("clarity_blocked", False):
+            return config.get("skip_clarity_gate", False)
+        return True
 
     return False
 
@@ -397,7 +404,7 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
     """Return briefing dict for a step. Pure formatting — no I/O.
 
     Args:
-        step: Step number (1-14)
+        step: Step number (1-15)
         mode: Pipeline mode (investigate, fix)
         state: Pipeline state dict (from pipeline-state.json)
         context: Issue context dict (from issue-context.json)
@@ -429,19 +436,21 @@ def get_step_guidance(step, mode, state, context, config=None, output_dir=None):
     elif step == 7:
         return _step_7_post_to_linear(mode, state, context, config, output_dir)
     elif step == 8:
-        return _step_8_write_plan(mode, state, context, config, output_dir)
+        return _step_8_assess_clarity(mode, state, context, config, output_dir)
     elif step == 9:
-        return _step_9_implement(mode, state, context, config, output_dir)
+        return _step_9_write_plan(mode, state, context, config, output_dir)
     elif step == 10:
-        return _step_10_verify(mode, state, context, config, output_dir)
+        return _step_10_implement(mode, state, context, config, output_dir)
     elif step == 11:
-        return _step_11_self_review(mode, state, context, config, output_dir)
+        return _step_11_verify(mode, state, context, config, output_dir)
     elif step == 12:
-        return _step_12_reverify(mode, state, context, config, output_dir)
+        return _step_12_self_review(mode, state, context, config, output_dir)
     elif step == 13:
-        return _step_13_create_draft_pr(mode, state, context, config, output_dir)
+        return _step_13_reverify(mode, state, context, config, output_dir)
     elif step == 14:
-        return _step_14_present_results(mode, state, context, config, output_dir)
+        return _step_14_create_draft_pr(mode, state, context, config, output_dir)
+    elif step == 15:
+        return _step_15_present_results(mode, state, context, config, output_dir)
     else:
         return None
 
@@ -829,7 +838,7 @@ def _step_7_post_to_linear(mode, state, context, config, output_dir):
         "   - Note the failure as a degradation (the report is still saved locally)",
         "   - Continue to the next step — this is not a blocking failure",
         "",
-        *([ "**Investigate mode:** After this step, the pipeline jumps to step 14 (Present Results)."] if mode == "investigate" else []),
+        *([ "**Investigate mode:** After this step, the pipeline jumps to step 15 (Present Results)."] if mode == "investigate" else []),
     ]
 
     return {
@@ -844,19 +853,119 @@ def _step_7_post_to_linear(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 8: Write Plan (fix mode only)
+# Step 8: Assess Clarity
 # ---------------------------------------------------------------------------
 
-def _step_8_write_plan(mode, state, context, config, output_dir):
-    """Step 8: Write Plan — create implementation plan from investigation."""
+def _step_8_assess_clarity(mode, state, context, config, output_dir):
+    """Step 8: Assess Clarity — evaluate if the issue has sufficient clarity for implementation."""
+    issue_id = context.get("issue_id", "unknown")
+    assessment_path = os.path.join(output_dir, "clarity-assessment.json") if output_dir else "clarity-assessment.json"
+
+    situation = [
+        _PIPELINE_MISSION,
+        "",
+        f"Investigation of **{issue_id}** is complete. Before proceeding to implementation,",
+        "assess whether the issue provides sufficient clarity for a successful fix.",
+        "",
+        "You have the full context: the raw issue description, all comments (from step 2),",
+        "codebase analysis (from step 4), investigation findings (from step 5), and the",
+        "investigation report (from step 6). Use ALL of this — especially the raw comments,",
+        "which may contain contradictions the report summarized away.",
+    ]
+
+    actions = [
+        "Evaluate the issue against these **hard gates** (any failure → block):",
+        "",
+        "1. **Problem statement** — Can you state in ONE sentence what needs to change?",
+        "   If you cannot, the issue is too vague to implement safely.",
+        "",
+        "2. **Reproduction / scope** — For bugs: are there repro steps or can you derive",
+        "   them from the investigation? For features: is the boundary clear (what's in",
+        "   scope vs out of scope)?",
+        "",
+        "3. **Success criteria** — Is there a testable, observable outcome?",
+        '   "Fix the checkout flow" is NOT criteria. "Payment total matches cart total',
+        '   after applying the 10% coupon" IS criteria.',
+        "",
+        "Then check these **soft signals** (flag but don't block alone):",
+        "",
+        "4. **Conflicting signals** — Do comments contradict the description or each other?",
+        "   Read the RAW comments from step 2, not just the report summary.",
+        "",
+        "5. **Missing technical context** — Does the issue reference components, flows, or",
+        "   behavior that doesn't exist or is ambiguous in the codebase?",
+        "",
+        "6. **Implicit assumptions** — Are there unstated decisions the implementer would",
+        "   have to guess at? (e.g., which users are affected, which edge cases matter)",
+        "",
+        f"Write `{assessment_path}` with this structure:",
+        "```json",
+        "{",
+        '  "clear_enough": true | false,',
+        '  "confidence": "high" | "medium" | "low",',
+        '  "hard_gates": {',
+        '    "problem_statement": {"pass": true | false, "note": "<explanation>"},',
+        '    "reproduction_or_scope": {"pass": true | false, "note": "<explanation>"},',
+        '    "success_criteria": {"pass": true | false, "note": "<explanation>"}',
+        "  },",
+        '  "soft_signals": {',
+        '    "conflicting_signals": {"flagged": true | false, "note": "<explanation or null>"},',
+        '    "missing_technical_context": {"flagged": true | false, "note": "<explanation or null>"},',
+        '    "implicit_assumptions": {"flagged": true | false, "note": "<explanation or null>"}',
+        "  },",
+        '  "questions_for_author": ["<question 1>", "<question 2>", ...],',
+        '  "summary": "<one paragraph explaining the clarity assessment>"',
+        "}",
+        "```",
+        "",
+        "**Decision rule:** `clear_enough` is `false` if ANY hard gate fails.",
+        "All three hard gates pass + soft signals only → `clear_enough` is `true`",
+        "(soft signals are surfaced as warnings but don't block).",
+        "",
+        "If `clear_enough` is false, generate 2-5 specific, answerable questions",
+        "for the issue author in `questions_for_author`.",
+    ]
+
+    return {
+        "phase": "INVESTIGATION",
+        "title": "Assess Clarity",
+        "situation": situation,
+        "actions": actions,
+        "handoff": [
+            f"`{assessment_path}` exists and contains valid JSON",
+            "`clear_enough` boolean is set based on hard gate evaluation",
+            "If blocked: `questions_for_author` contains specific questions",
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step 9: Write Plan (fix mode only)
+# ---------------------------------------------------------------------------
+
+def _step_9_write_plan(mode, state, context, config, output_dir):
+    """Step 9: Write Plan — create implementation plan from investigation."""
     issue_id = context.get("issue_id", "unknown")
     plan_path = os.path.join(output_dir, "implementation-plan.md") if output_dir else "implementation-plan.md"
+
+    # If clarity gate was overridden, warn about known ambiguities
+    clarity_note = []
+    assessment_path = os.path.join(output_dir, "clarity-assessment.json") if output_dir else ""
+    if config.get("skip_clarity_gate") and os.path.isfile(assessment_path):
+        clarity_note = [
+            "",
+            "⚠️ **Clarity gate was overridden.** The user chose to proceed despite",
+            f"flagged ambiguities. Read `{assessment_path}` and treat each flagged",
+            "item as a documented risk in your plan. Call out assumptions explicitly.",
+            "",
+        ]
 
     situation = [
         _PHASE_TRANSITIONS["IMPLEMENTATION"],
         "",
         f"Create an implementation plan for **{issue_id}** based on the investigation findings.",
         "Use the `writing-plans` pattern for structured, bite-sized tasks.",
+        *clarity_note,
     ]
 
     actions = [
@@ -882,7 +991,7 @@ def _step_8_write_plan(mode, state, context, config, output_dir):
         "   - **large**: 10+ files, architectural changes, cross-cutting concerns",
         f"   Write to `{os.path.join(output_dir, 'complexity.json') if output_dir else 'complexity.json'}`:",
         '   `{"complexity": "small|medium|large", "reason": "brief justification"}`',
-        "   This determines whether the iterative review loop runs at step 11.",
+        "   This determines whether the iterative review loop runs at step 12.",
     ]
 
     return {
@@ -897,11 +1006,11 @@ def _step_8_write_plan(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 9: Implement (fix mode only)
+# Step 10: Implement (fix mode only)
 # ---------------------------------------------------------------------------
 
-def _step_9_implement(mode, state, context, config, output_dir):
-    """Step 9: Implement — execute the implementation plan."""
+def _step_10_implement(mode, state, context, config, output_dir):
+    """Step 10: Implement — execute the implementation plan."""
     issue_id = context.get("issue_id", "unknown")
 
     situation = [
@@ -910,7 +1019,7 @@ def _step_9_implement(mode, state, context, config, output_dir):
     ]
 
     actions = [
-        "1. Read the implementation plan from step 8.",
+        "1. Read the implementation plan from step 9.",
         "2. Use the `superpowers:subagent-driven-development` skill to execute:",
         "   - Dispatch a fresh subagent per independent task",
         "   - Each subagent gets the plan task + investigation context",
@@ -939,11 +1048,11 @@ def _step_9_implement(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 10: Verify (fix mode only)
+# Step 11: Verify (fix mode only)
 # ---------------------------------------------------------------------------
 
-def _step_10_verify(mode, state, context, config, output_dir):
-    """Step 10: Verify — run tests, build, lint."""
+def _step_11_verify(mode, state, context, config, output_dir):
+    """Step 11: Verify — run tests, build, lint."""
 
     complexity_path = os.path.join(output_dir, "complexity.json") if output_dir else "complexity.json"
 
@@ -964,13 +1073,13 @@ def _step_10_verify(mode, state, context, config, output_dir):
         "",
         "3. Record verification results for the pipeline result.",
         "",
-        "4. **Decide whether to run the iterative review loop (steps 11-12):**",
-        f"   Read `{complexity_path}` (written at step 8).",
-        "   - **small complexity** → Skip steps 11-12, proceed directly to step 13.",
-        "     The `superpowers:code-reviewer` from subagent-driven-development (step 9)",
+        "4. **Decide whether to run the iterative review loop (steps 12-13):**",
+        f"   Read `{complexity_path}` (written at step 9).",
+        "   - **small complexity** → Skip steps 12-13, proceed directly to step 14.",
+        "     The `superpowers:code-reviewer` from subagent-driven-development (step 10)",
         "     already validated each task — a multi-round independent review adds cost",
         "     without proportional value for small, single-concern changes.",
-        "   - **medium or large complexity** → Continue to step 11 for iterative",
+        "   - **medium or large complexity** → Continue to step 12 for iterative",
         "     independent review. Multi-file changes with subtle interactions benefit",
         "     from a fresh perspective that the per-task code-reviewer cannot provide.",
         "   - **complexity.json missing** → Treat as medium (err toward more review).",
@@ -985,17 +1094,17 @@ def _step_10_verify(mode, state, context, config, output_dir):
             "Tests pass (or failures documented as degradation)",
             "Build succeeds (or N/A)",
             "Lint clean (or N/A)",
-            "Complexity-based routing decision: step 11 (iterative code review) or step 13 (draft PR)",
+            "Complexity-based routing decision: step 12 (iterative code review) or step 14 (draft PR)",
         ],
     }
 
 
 # ---------------------------------------------------------------------------
-# Step 11: Self-Review (fix mode only)
+# Step 12: Self-Review (fix mode only)
 # ---------------------------------------------------------------------------
 
-def _step_11_self_review(mode, state, context, config, output_dir):
-    """Step 11: Iterative Review — multi-round independent code review loop."""
+def _step_12_self_review(mode, state, context, config, output_dir):
+    """Step 12: Iterative Review — multi-round independent code review loop."""
 
     scripts_dir = Path(__file__).resolve().parent
     issue_id = context.get("issue_id", "unknown")
@@ -1049,7 +1158,7 @@ def _step_11_self_review(mode, state, context, config, output_dir):
         "",
         "4. If the script prints `UNAVAILABLE` — the review tool is not installed or not",
         "   authenticated. The iterative review cannot run. Note this as a degradation",
-        "   and skip to step 13 (draft PR). Include in the PR description that the",
+        "   and skip to step 14 (draft PR). Include in the PR description that the",
         "   iterative code review was skipped.",
         "",
         "5. When the review completes, follow the evaluation briefing.",
@@ -1067,7 +1176,7 @@ def _step_11_self_review(mode, state, context, config, output_dir):
         f"   ```",
         "   Then repeat from step 5. Only round 1 needs --merge-base and --context-file.",
         "",
-        "8. When advance returns 'loop complete', proceed to step 12.",
+        "8. When advance returns 'loop complete', proceed to step 13.",
     ]
 
     return {
@@ -1082,20 +1191,20 @@ def _step_11_self_review(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 12: Re-Verify (fix mode only)
+# Step 13: Re-Verify (fix mode only)
 # ---------------------------------------------------------------------------
 
-def _step_12_reverify(mode, state, context, config, output_dir):
-    """Step 12: Re-Verify — skipped when iterative review loop handles verification."""
+def _step_13_reverify(mode, state, context, config, output_dir):
+    """Step 13: Re-Verify — skipped when iterative review loop handles verification."""
 
     situation = [
         "Verification is already handled within each review round of the iterative",
-        "review loop (step 11). Each round includes test/build/lint verification",
+        "review loop (step 12). Each round includes test/build/lint verification",
         "after fixes, so a separate re-verification step is redundant.",
     ]
 
     actions = [
-        "Proceed directly to step 13.",
+        "Proceed directly to step 14.",
     ]
 
     return {
@@ -1108,11 +1217,11 @@ def _step_12_reverify(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 13: Create Draft PR (fix mode only)
+# Step 14: Create Draft PR (fix mode only)
 # ---------------------------------------------------------------------------
 
-def _step_13_create_draft_pr(mode, state, context, config, output_dir):
-    """Step 13: Create Draft PR — open a draft PR on GitHub."""
+def _step_14_create_draft_pr(mode, state, context, config, output_dir):
+    """Step 14: Create Draft PR — open a draft PR on GitHub."""
     issue_id = context.get("issue_id", "unknown")
 
     situation = [
@@ -1140,7 +1249,7 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
         "     drop it — the fix already addresses it",
         "   - If any remain, include them in the PR description under a `## Follow-ups` section",
         "   - Each item has severity, title, location, and reasoning",
-        "   - If the file doesn't exist (small complexity, step 11 skipped), skip this step",
+        "   - If the file doesn't exist (small complexity, step 12 skipped), skip this step",
         "",
         "4. Push and create draft PR:",
         "   ```bash",
@@ -1153,7 +1262,7 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
         "5. If PR creation fails:",
         "   - Save the diff locally (`git diff > changes.diff`)",
         "   - Note as degradation with manual instructions",
-        "   - Continue to step 14",
+        "   - Continue to step 15",
         "",
         "6. Record the PR URL for the pipeline result.",
     ]
@@ -1171,11 +1280,11 @@ def _step_13_create_draft_pr(mode, state, context, config, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Step 14: Present Results
+# Step 15: Present Results
 # ---------------------------------------------------------------------------
 
-def _step_14_present_results(mode, state, context, config, output_dir):
-    """Step 14: Present Results — write pipeline-result.json."""
+def _step_15_present_results(mode, state, context, config, output_dir):
+    """Step 15: Present Results — write pipeline-result.json."""
     result_path = os.path.join(output_dir, "pipeline-result.json") if output_dir else "pipeline-result.json"
     report_path = os.path.join(output_dir, "investigation-report.md") if output_dir else "investigation-report.md"
 
@@ -1189,14 +1298,16 @@ def _step_14_present_results(mode, state, context, config, output_dir):
         f"1. Write `{result_path}` with this structure:",
         "   ```json",
         "   {",
-        '     "status": "<success | degraded | failed>",',
+        '     "status": "<success | degraded | failed | blocked>",',
         f'     "mode": "{mode}",',
         f'     "issue_id": "<issue ID>",',
         f'     "report_path": "{report_path}",',
-        '     "verdict": "<valid | invalid | duplicate | already_fixed | needs_more_info>",',
+        '     "verdict": "<valid | invalid | duplicate | already_fixed | needs_more_info | needs_clarification>",',
         '     "pr_url": "<GitHub PR URL or null>",',
         '     "linear_comment_posted": true,',
         '     "independent_code_review": "<not_run | unavailable | clean | converged | max_rounds | hard_limit>",',
+        '     "clarity_gate": "<object with clear_enough, hard_gates_failed, soft_signals_flagged, assessment_path | null>",',
+        '     "clarity_gate_overridden": false,',
         '     "degradation_notes": []',
         "   }",
         "   ```",
@@ -1205,6 +1316,7 @@ def _step_14_present_results(mode, state, context, config, output_dir):
         "   - `success` — all steps completed without degradation",
         "   - `degraded` — completed but with noted failures (Linear post failed, codex unavailable, etc.)",
         "   - `failed` — critical step failed (could not fetch issue, investigation inconclusive)",
+        "   - `blocked` — clarity gate blocked implementation (needs author clarification)",
         "",
         "3. Force-stop any remaining background agents with TaskStop.",
         "",
@@ -1281,7 +1393,43 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                     events=events,
                 )
 
-    if step == 14:
+    if step == 8:
+        # After the LLM writes clarity-assessment.json, check the result
+        # and set clarity_blocked in state if needed.
+        assessment_path = os.path.join(output_dir, "clarity-assessment.json")
+        if os.path.isfile(assessment_path):
+            try:
+                with open(assessment_path) as f:
+                    assessment = json.load(f)
+                if not assessment.get("clear_enough", True):
+                    state["clarity_blocked"] = True
+                    # Set verdict for step 15 result derivation
+                    state["verdict"] = "needs_clarification"
+                    if events:
+                        hard_failed = [k for k, v in assessment.get("hard_gates", {}).items()
+                                       if not v.get("pass", True)]
+                        events.milestone(
+                            name="clarity_assessed",
+                            step=8,
+                            summary=f"blocked: {len(hard_failed)} hard gate(s) failed",
+                        )
+                        events.deliverable(
+                            type_="clarity_assessment",
+                            path="clarity-assessment.json",
+                        )
+                else:
+                    if events:
+                        events.milestone(
+                            name="clarity_assessed",
+                            step=8,
+                            summary="passed",
+                        )
+            except (json.JSONDecodeError, OSError):
+                # Assessment file unreadable — treat as passed (don't block on I/O)
+                if events:
+                    events.milestone(name="clarity_assessed", step=8, summary="passed (file unreadable)")
+
+    if step == 15:
         # Write pipeline-result.json from state, deriving status from real outputs.
         report_path = os.path.join(output_dir, "investigation-report.md")
         degradation_notes = list(state.get("degradation_notes", []))
@@ -1290,6 +1438,11 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         has_report = os.path.isfile(report_path)
         pr_url = state.get("pr_url")
         linear_posted = state.get("linear_comment_posted", False)
+
+        # Check for clarity gate block
+        clarity_blocked = state.get("clarity_blocked", False)
+        clarity_overridden = config.get("skip_clarity_gate", False)
+
         # Read iterative review result — surface the outcome, not just whether it ran.
         # Values: "not_run" (skipped/small complexity), "unavailable" (tool missing),
         # "clean" (zero_findings), "converged" (all_rejected/nitpicks_only),
@@ -1321,7 +1474,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
 
         # Derive status from what actually exists, not from absence of errors.
         # A run that never produced a verdict or report is failed, not successful.
-        if not verdict and not has_report:
+        # Clarity gate block takes priority when active.
+        if clarity_blocked and not clarity_overridden:
+            status = "blocked"
+            if not verdict:
+                verdict = "needs_clarification"
+        elif not verdict and not has_report:
             status = "failed"
             if "No verdict or investigation report produced" not in degradation_notes:
                 degradation_notes.append("No verdict or investigation report produced")
@@ -1335,6 +1493,24 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         else:
             status = "success"
 
+        # Build clarity_gate summary from assessment file
+        clarity_gate_summary = None
+        assessment_path = os.path.join(output_dir, "clarity-assessment.json")
+        if os.path.isfile(assessment_path):
+            try:
+                with open(assessment_path) as _cf:
+                    _cdata = json.load(_cf)
+                hard_failed = [k for k, v in _cdata.get("hard_gates", {}).items() if not v.get("pass", True)]
+                soft_flagged = [k for k, v in _cdata.get("soft_signals", {}).items() if v.get("flagged", False)]
+                clarity_gate_summary = {
+                    "clear_enough": _cdata.get("clear_enough", True),
+                    "hard_gates_failed": hard_failed,
+                    "soft_signals_flagged": soft_flagged,
+                    "assessment_path": "clarity-assessment.json",
+                }
+            except (json.JSONDecodeError, OSError):
+                pass
+
         pipeline_result = {
             "status": status,
             "mode": mode,
@@ -1344,6 +1520,8 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "pr_url": pr_url,
             "linear_comment_posted": linear_posted,
             "independent_code_review": review_outcome,
+            "clarity_gate": clarity_gate_summary,
+            "clarity_gate_overridden": clarity_overridden and clarity_blocked,
             "degradation_notes": degradation_notes,
         }
 
@@ -1372,7 +1550,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
 
 def main():
     parser = argparse.ArgumentParser(description="Linear issue investigation and fix pipeline")
-    parser.add_argument("--step", type=int, required=True, help="Step number (1-14)")
+    parser.add_argument("--step", type=int, required=True, help="Step number (1-15)")
     parser.add_argument("--mode", choices=["investigate", "fix"],
                         help="Pipeline mode")
     parser.add_argument("--output-dir", required=True, help="Output directory")
