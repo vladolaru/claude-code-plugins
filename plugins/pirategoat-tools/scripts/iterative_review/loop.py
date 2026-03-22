@@ -19,6 +19,7 @@ _MAX_ROUNDS_TABLE = [
     (500, 4),
 ]
 _MAX_ROUNDS_DEFAULT = 3
+MAX_ROUNDS_HARD_LIMIT = 20
 
 
 def compute_max_rounds(diff_lines):
@@ -37,8 +38,10 @@ def check_convergence(findings_count, all_p3, all_rejected, current_round, max_r
     """Check if the review loop should terminate.
 
     Returns termination reason string, or None to continue.
-    Priority: zero_findings > all_rejected > nitpicks_only > max_rounds.
+    Priority: hard_limit > zero_findings > all_rejected > nitpicks_only > max_rounds.
     """
+    if current_round >= MAX_ROUNDS_HARD_LIMIT:
+        return "hard_limit"
     if findings_count == 0:
         return "zero_findings"
     if all_rejected:

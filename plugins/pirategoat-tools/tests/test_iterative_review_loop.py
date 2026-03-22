@@ -117,6 +117,27 @@ class TestConvergence:
         )
         assert result == "zero_findings"
 
+    def test_hard_limit_terminates_regardless(self):
+        from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
+        result = check_convergence(
+            findings_count=5, all_p3=False, all_rejected=False,
+            current_round=MAX_ROUNDS_HARD_LIMIT, max_rounds=MAX_ROUNDS_HARD_LIMIT + 5
+        )
+        assert result == "hard_limit"
+
+    def test_hard_limit_takes_priority_over_continue(self):
+        from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
+        # Even with findings and max_rounds above the limit, hard limit wins
+        result = check_convergence(
+            findings_count=3, all_p3=False, all_rejected=False,
+            current_round=MAX_ROUNDS_HARD_LIMIT, max_rounds=100
+        )
+        assert result == "hard_limit"
+
+    def test_hard_limit_is_20(self):
+        from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
+        assert MAX_ROUNDS_HARD_LIMIT == 20
+
 
 class TestPushbackLog:
     def test_builds_entry_for_p1_rejection(self):

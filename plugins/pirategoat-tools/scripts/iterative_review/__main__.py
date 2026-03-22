@@ -15,7 +15,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from .loop import (
-    read_loop_state, write_loop_state, DEFAULT_STATE,
+    read_loop_state, write_loop_state, DEFAULT_STATE, MAX_ROUNDS_HARD_LIMIT,
     compute_max_rounds, compute_relevant_diff_size, check_convergence,
     build_pushback_entry, append_pushback_log, read_pushback_log,
     append_deferred_item, validate_outcomes,
@@ -391,7 +391,7 @@ def action_advance(args):
         findings_by_id[o["id"]].get("severity") in ("P0", "P1")
         for o in outcomes
     ) if outcomes else False
-    if has_critical and round_num >= max_rounds:
+    if has_critical and round_num >= max_rounds and max_rounds < MAX_ROUNDS_HARD_LIMIT:
         max_rounds += 1
         state["max_rounds"] = max_rounds
         telemetry.pipeline_event("max_rounds_extended", round=round_num,
