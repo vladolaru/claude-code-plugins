@@ -99,6 +99,58 @@ class TestCLIParsing:
         assert updated_state["termination"] == "all_rejected"
 
 
+class TestDeferredPruning:
+    """Deferred items resolved in later rounds are pruned from result."""
+
+    def test_resolved_deferred_pruned_from_result(self, tmp_path):
+        d = tmp_path / "code-review"
+        d.mkdir()
+
+        # Round 1: one fixed (keeps loop going), one deferred
+        state = {"current_round": 1, "max_rounds": 2, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 500,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        r1_findings = [
+            {"id": "r1_f1", "severity": "P2", "title": "Typo", "body": "X", "location": "readme.md:1"},
+            {"id": "r1_f2", "severity": "P2", "title": "Null check", "body": "X", "location": "handler.py:42"},
+        ]
+        (d / "round-1-findings.json").write_text(json.dumps(r1_findings))
+        r1_outcomes = [
+            {"id": "r1_f1", "action": "fixed", "summary": "Fixed typo."},
+            {"id": "r1_f2", "action": "deferred", "reasoning": "Out of scope."},
+        ]
+        (d / "round-1-outcomes.json").write_text(json.dumps(r1_outcomes))
+
+        subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d)],
+            capture_output=True, text=True, cwd=str(SCRIPTS_DIR),
+        )
+
+        # Round 2: same deferred issue found again and fixed
+        r2_findings = [{"id": "r2_f1", "severity": "P2", "title": "Null check",
+                        "body": "X", "location": "handler.py:42"}]
+        (d / "round-2-findings.json").write_text(json.dumps(r2_findings))
+        r2_outcomes = [{"id": "r2_f1", "action": "fixed", "summary": "Added null check."}]
+        (d / "round-2-outcomes.json").write_text(json.dumps(r2_outcomes))
+
+        subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "2",
+             "--output-dir", str(d)],
+            capture_output=True, text=True, cwd=str(SCRIPTS_DIR),
+        )
+
+        # The result should prune the deferred item (same title+location was fixed)
+        result_path = d / "review-loop-result.json"
+        assert result_path.exists()
+        result = json.loads(result_path.read_text())
+        assert len(result.get("deferred_items", [])) == 0
+
+
 class TestAdvanceIdempotency:
     """Advance is idempotent — retrying the same round doesn't duplicate records."""
 

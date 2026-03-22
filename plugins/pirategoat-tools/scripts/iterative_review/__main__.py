@@ -40,12 +40,44 @@ def _sanitize_filename(name):
     return slug or "independent-review"
 
 
+def _collect_resolved_locations(output_dir, rounds):
+    """Collect (title, location) pairs that were fixed or rejected in any round."""
+    resolved = set()
+    for r in rounds:
+        round_num = r["round"]
+        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+        outcomes_path = os.path.join(output_dir, f"round-{round_num}-outcomes.json")
+        try:
+            with open(findings_path) as f:
+                findings = json.load(f)
+            with open(outcomes_path) as f:
+                outcomes = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+        findings_by_id = {fnd["id"]: fnd for fnd in findings}
+        for o in outcomes:
+            if o["action"] in ("fixed", "rejected"):
+                fnd = findings_by_id.get(o["id"], {})
+                key = (fnd.get("title", ""), fnd.get("location", ""))
+                if key != ("", ""):
+                    resolved.add(key)
+    return resolved
+
+
 def _write_loop_result(output_dir, state, termination):
     """Write review-loop-result.json with cumulative stats and deferred items."""
     from .loop import read_deferred_items
 
     rounds = state.get("rounds", [])
-    deferred_items = read_deferred_items(output_dir)
+    all_deferred = read_deferred_items(output_dir)
+
+    # Prune deferred items that were resolved in a later round
+    resolved = _collect_resolved_locations(output_dir, rounds)
+    deferred_items = [
+        item for item in all_deferred
+        if (item.get("title", ""), item.get("location", "")) not in resolved
+    ]
+
     result_data = {
         "termination": termination,
         "rounds_completed": len(rounds),
