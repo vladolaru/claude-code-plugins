@@ -1021,6 +1021,18 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     actions.append(f"- `{od}/review-findings.json` — structured findings")
     actions.append(f"- `{od}/review-findings.md` — human-readable findings")
 
+    additional = config.get("additional_instructions") if config else None
+    if additional:
+        actions.append("")
+        actions.append("**Reviewer-Requested Focus:**")
+        actions.append("")
+        actions.append(f"> {additional}")
+        actions.append("")
+        actions.append(
+            "When prioritizing and deduplicating findings, give additional weight "
+            "to findings that address this guidance."
+        )
+
     handoff = [
         f"Verify `{od}/review-findings.json` and `{od}/review-findings.md` both exist before proceeding.",
     ]

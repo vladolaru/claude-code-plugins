@@ -681,6 +681,39 @@ class TestStep8Reconcile:
         assert "security-review.json" in text
 
 
+class TestStep8AdditionalInstructions:
+    """Step 8: additional_instructions surfaced as Reviewer-Requested Focus."""
+
+    def _make_state_ready(self):
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["pr-reviewer", "security-reviewer"],
+                "completed": ["pr-reviewer", "security-reviewer"],
+                "failed": [],
+            },
+        }
+
+    def test_additional_instructions_in_actions(self, mod, tmp_path):
+        """When config has additional_instructions, actions contain Reviewer-Requested Focus."""
+        state = self._make_state_ready()
+        config = {"additional_instructions": "Pay special attention to error handling in the webhook path"}
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "Reviewer-Requested Focus" in text
+        assert "Pay special attention to error handling in the webhook path" in text
+
+    def test_no_additional_instructions_no_section(self, mod, tmp_path):
+        """When config does NOT have additional_instructions, no Reviewer-Requested Focus section."""
+        state = self._make_state_ready()
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "Reviewer-Requested Focus" not in text
+
+
 class TestStep8ReadinessGate:
     """Step 8 readiness gate: blocks reconciliation when agents are still running."""
 
