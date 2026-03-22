@@ -1402,17 +1402,23 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
     # Skip when: already checked, already blocked, or issue has a terminal
     # resolution (issue_resolved) — terminal verdicts like already_fixed,
     # duplicate, invalid should not be overwritten with needs_clarification.
+    # When resuming with skip_clarity_gate, clear the stale needs_clarification
+    # verdict from the first (blocked) run so step 15 doesn't emit a contradictory
+    # result like status: "success" + verdict: "needs_clarification".
+    if config.get("skip_clarity_gate") and state.get("clarity_blocked") and state.get("verdict") == "needs_clarification":
+        del state["verdict"]
+
     _terminal = state.get("issue_resolved", False)
-    if step > 8 and not state.get("clarity_blocked") and not state.get("_clarity_checked") and not _terminal:
+    _step8_ran = 8 in state.get("completed_steps", [])
+    if step > 8 and _step8_ran and not state.get("clarity_blocked") and not state.get("_clarity_checked") and not _terminal:
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
+        state["_clarity_checked"] = True
         if os.path.isfile(assessment_path):
-            state["_clarity_checked"] = True
             try:
                 with open(assessment_path) as f:
                     assessment = json.load(f)
                 if not assessment.get("clear_enough", True):
                     state["clarity_blocked"] = True
-                    # Only set verdict if no terminal verdict already exists
                     if not state.get("verdict"):
                         state["verdict"] = "needs_clarification"
                     if events:
@@ -1435,9 +1441,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             summary="passed",
                         )
             except (json.JSONDecodeError, OSError):
-                # Fail closed: malformed assessment = block, not pass.
-                # LLM-written JSON being corrupt is realistic. Silently passing
-                # would defeat the gate. Block and note degradation.
+                # Fail closed: malformed JSON = block. LLM-written files can be corrupt.
                 state["clarity_blocked"] = True
                 if not state.get("verdict"):
                     state["verdict"] = "needs_clarification"
@@ -1446,6 +1450,18 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                 )
                 if events:
                     events.milestone(name="clarity_assessed", step=8, summary="blocked (file unreadable)")
+        else:
+            # Fail closed: missing file = block. Step 8 should have produced
+            # clarity-assessment.json. If the LLM wrote to the wrong path or
+            # the write failed, silently passing would defeat the gate.
+            state["clarity_blocked"] = True
+            if not state.get("verdict"):
+                state["verdict"] = "needs_clarification"
+            state.setdefault("degradation_notes", []).append(
+                "Clarity assessment file missing — blocking as precaution"
+            )
+            if events:
+                events.milestone(name="clarity_assessed", step=8, summary="blocked (file missing)")
 
     if step == 15:
         # Write pipeline-result.json from state, deriving status from real outputs.

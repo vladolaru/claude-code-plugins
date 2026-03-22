@@ -709,6 +709,7 @@ class TestStep15Orchestration:
             "pr_url": None,
             "linear_comment_posted": True,
             "independent_code_review": "not_run",
+            "_clarity_checked": True,
         }
         context = {"issue_id": "WOOPLUG-1234"}
         mod._orchestrate_step(15, "investigate", {}, state, context, str(tmp_path))
@@ -725,6 +726,7 @@ class TestStep15Orchestration:
             "completed_steps": list(range(1, 15)),
             "degradation_notes": ["Linear comment posting failed"],
             "verdict": "valid",
+            "_clarity_checked": True,
         }
         context = {"issue_id": "TEST-1"}
         mod._orchestrate_step(15, "fix", {}, state, context, str(tmp_path))
@@ -754,6 +756,7 @@ class TestStep15Orchestration:
             "verdict": "valid",
             "pr_url": None,
             "linear_comment_posted": True,
+            "_clarity_checked": True,
         }
         context = {"issue_id": "TEST-1"}
         mod._orchestrate_step(15, "fix", {}, state, context, str(tmp_path))
