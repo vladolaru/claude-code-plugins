@@ -77,6 +77,13 @@ def action_review(args):
         state = deepcopy(DEFAULT_STATE)
         state["merge_base"] = args.merge_base
         state["current_round"] = 1
+
+        # Clear stale artifacts from prior runs in the same directory
+        for stale in ["pushback-log.md", "deferred-items.jsonl",
+                      "review-loop-state.json", "review-loop-result.json"]:
+            stale_path = os.path.join(output_dir, stale)
+            if os.path.isfile(stale_path):
+                os.remove(stale_path)
         if args.no_prior_analysis:
             state["pass_prior_analysis"] = False
 
