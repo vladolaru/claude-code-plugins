@@ -1,5 +1,6 @@
 """Tests for iterative_review CLI -- argument parsing and action routing."""
 
+import copy
 import json
 import subprocess
 import sys
@@ -406,7 +407,7 @@ class TestNoPriorAnalysis:
         sys.path.insert(0, str(SCRIPTS_DIR))
         from iterative_review.loop import DEFAULT_STATE
         # Simulate what action_review does on round 1 with --no-prior-analysis
-        state = {**DEFAULT_STATE}
+        state = {**copy.deepcopy(DEFAULT_STATE)}
         state["merge_base"] = "abc123"
         state["current_round"] = 1
         # This is the fix we're testing: the flag must be applied
@@ -419,7 +420,7 @@ class TestNoPriorAnalysis:
         """Without --no-prior-analysis, pass_prior_analysis defaults to True."""
         sys.path.insert(0, str(SCRIPTS_DIR))
         from iterative_review.loop import DEFAULT_STATE
-        state = {**DEFAULT_STATE}
+        state = {**copy.deepcopy(DEFAULT_STATE)}
         assert state["pass_prior_analysis"] is True
 
 
@@ -433,7 +434,7 @@ class TestZeroFindingsArtifact:
 
         d = tmp_path / "code-review"
         d.mkdir()
-        state = {**DEFAULT_STATE, "merge_base": "abc", "max_rounds": 3,
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc", "max_rounds": 3,
                  "current_round": 1}
 
         # Simulate what action_review does on zero findings

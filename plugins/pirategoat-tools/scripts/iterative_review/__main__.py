@@ -11,6 +11,7 @@ import os
 import re
 import subprocess as sp
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 from .loop import (
@@ -39,6 +40,25 @@ def _sanitize_filename(name):
     return slug or "independent-review"
 
 
+def _write_loop_result(output_dir, state, termination):
+    """Write review-loop-result.json with cumulative stats from all rounds."""
+    rounds = state.get("rounds", [])
+    result_data = {
+        "termination": termination,
+        "rounds_completed": len(rounds),
+        "max_rounds": state.get("max_rounds", 3),
+        "total_findings": sum(r.get("findings", 0) for r in rounds),
+        "total_fixed": sum(r.get("fixed", 0) for r in rounds),
+        "total_rejected": sum(r.get("rejected", 0) for r in rounds),
+        "total_deferred": sum(r.get("deferred", 0) for r in rounds),
+        "rounds": rounds,
+    }
+    result_path = os.path.join(output_dir, "review-loop-result.json")
+    with open(result_path, "w") as f:
+        json.dump(result_data, f, indent=2)
+    return result_data
+
+
 def action_review(args):
     """REVIEW action -- invoke Codex, parse output, produce evaluation briefing."""
     output_dir = args.output_dir
@@ -54,7 +74,7 @@ def action_review(args):
             print("ERROR: --merge-base is required on round 1", file=sys.stderr)
             sys.exit(2)
 
-        state = {**DEFAULT_STATE}
+        state = deepcopy(DEFAULT_STATE)
         state["merge_base"] = args.merge_base
         state["current_round"] = 1
         if args.no_prior_analysis:
@@ -195,6 +215,8 @@ def action_review(args):
         state["terminated"] = True
         state["termination"] = "codex_unavailable"
         write_loop_state(output_dir, state)
+
+        _write_loop_result(output_dir, state, "codex_unavailable")
         print("Codex CLI is unavailable. Review loop cannot proceed.")
         return
 
@@ -229,26 +251,14 @@ def action_review(args):
         state["termination"] = "zero_findings"
         write_loop_state(output_dir, state)
 
-        # Write review-loop-result.json (same as advance path)
-        result_data = {
-            "termination": "zero_findings",
-            "rounds_completed": len(state["rounds"]),
-            "max_rounds": state.get("max_rounds", 3),
-            "total_findings": 0,
-            "total_fixed": 0,
-            "total_rejected": 0,
-            "total_deferred": 0,
-            "rounds": state["rounds"],
-        }
-        result_path = os.path.join(output_dir, "review-loop-result.json")
-        with open(result_path, "w") as f:
-            json.dump(result_data, f, indent=2)
-
+        result_data = _write_loop_result(output_dir, state, "zero_findings")
         telemetry.pipeline_event("review_loop_completed",
                                  termination="zero_findings",
-                                 rounds_completed=len(state["rounds"]))
-        print(format_completion_briefing("zero_findings", len(state["rounds"]),
-                                         0, 0, 0))
+                                 rounds_completed=result_data["rounds_completed"])
+        print(format_completion_briefing("zero_findings", result_data["rounds_completed"],
+                                         result_data["total_fixed"],
+                                         result_data["total_rejected"],
+                                         result_data["total_deferred"]))
         return
 
     write_loop_state(output_dir, state)
@@ -277,8 +287,12 @@ def action_advance(args):
     state = read_loop_state(output_dir)
 
     if state.get("terminated"):
+        rounds = state.get("rounds", [])
         print(format_completion_briefing(
-            state["termination"], len(state["rounds"]), 0, 0, 0))
+            state["termination"], len(rounds),
+            sum(r.get("fixed", 0) for r in rounds),
+            sum(r.get("rejected", 0) for r in rounds),
+            sum(r.get("deferred", 0) for r in rounds)))
         return
 
     # Read findings
@@ -364,34 +378,19 @@ def action_advance(args):
         state["termination"] = termination
         write_loop_state(output_dir, state)
 
-        # Write review-loop-result.json
-        total_fixed = sum(r.get("fixed", 0) for r in state["rounds"])
-        total_rejected = sum(r.get("rejected", 0) for r in state["rounds"])
-        total_deferred = sum(r.get("deferred", 0) for r in state["rounds"])
-        result = {
-            "termination": termination,
-            "rounds_completed": len(state["rounds"]),
-            "max_rounds": state.get("max_rounds", 3),
-            "total_findings": sum(r.get("findings", 0) for r in state["rounds"]),
-            "total_fixed": total_fixed,
-            "total_rejected": total_rejected,
-            "total_deferred": total_deferred,
-            "rounds": state["rounds"],
-        }
-        result_path = os.path.join(output_dir, "review-loop-result.json")
-        with open(result_path, "w") as f:
-            json.dump(result, f, indent=2)
+        result_data = _write_loop_result(output_dir, state, termination)
 
         telemetry.pipeline_event("review_loop_completed",
                                  termination=termination,
-                                 rounds_completed=len(state["rounds"]),
-                                 total_fixed=total_fixed,
-                                 total_rejected=total_rejected,
-                                 total_deferred=total_deferred)
+                                 rounds_completed=result_data["rounds_completed"],
+                                 total_fixed=result_data["total_fixed"],
+                                 total_rejected=result_data["total_rejected"],
+                                 total_deferred=result_data["total_deferred"])
 
         print(format_completion_briefing(
-            termination, len(state["rounds"]),
-            total_fixed, total_rejected, total_deferred
+            termination, result_data["rounds_completed"],
+            result_data["total_fixed"], result_data["total_rejected"],
+            result_data["total_deferred"]
         ))
     else:
         write_loop_state(output_dir, state)

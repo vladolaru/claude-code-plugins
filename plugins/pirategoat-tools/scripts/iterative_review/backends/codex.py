@@ -178,12 +178,21 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800):
         "-",  # read prompt from stdin
     ]
 
+    # Run from repo root so Codex can write analysis docs to output_dir
+    try:
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True
+        ).stdout.strip()
+    except Exception:
+        toplevel = None
+    cwd = toplevel if toplevel else None
+
     try:
         with open(prompt_file) as pf:
-            # IMPORTANT: do NOT set cwd — inherit project root from parent
             result = subprocess.run(
                 cmd, stdin=pf, capture_output=True, text=True,
-                timeout=timeout
+                timeout=timeout, cwd=cwd
             )
         # Read from -o output file
         if os.path.isfile(output_file):
