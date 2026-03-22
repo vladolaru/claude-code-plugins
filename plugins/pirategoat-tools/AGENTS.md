@@ -20,6 +20,8 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
 | `schemas/review-output.ts` | TypeScript type definitions for structured review output (Issue, SecurityIssue, PerformanceIssue, etc.). |
 | `scripts/iterative_review/` | Iterative review loop sub-module. Multi-round Codex review with pushback tracking, convergence detection, noise-filtered diff sizing, and telemetry. CLI entry point: `python3 -m iterative_review --action review\|advance`. |
+| `scripts/linear-issue-pipeline.py` | 15-step curated-context pipeline for investigating and fixing Linear issues. Owns step sequence, routing, state management, and curated briefings. Called by pirategoat-bot via `--step N --mode investigate\|fix`. |
+| `scripts/pipeline_events.py` | Best-effort JSONL event emission for pipeline progress (step_started, milestone, deliverable, pipeline_complete). Used by both review and linear issue pipelines. |
 
 ## Architecture
 
@@ -182,6 +184,20 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 - `pirategoat-bot/src/orchestrator.js` (writes review-context.json, reads review output)
 - `pirategoat-bot/src/github.js` (maps verdicts to GitHub actions)
 - `pirategoat-bot/scripts/pr-review.py` (outer-pipeline prompt and verdict logic)
+
+### Linear Issue Pipeline
+
+`scripts/linear-issue-pipeline.py` is a 15-step curated-context pipeline for investigating and fixing Linear issues. The pirategoat-bot spawns a Claude CLI session with `prompts/linear-issue.md`, which calls the pipeline step by step.
+
+**Phases:** SETUP (1-3) → INVESTIGATION (4-8) → IMPLEMENTATION (9-10) → VALIDATION (11-13) → OUTPUT (14-15)
+
+**Clarity gate (step 8).** After investigation completes, step 8 assesses whether the issue has sufficient clarity for implementation. Evaluates 3 hard gates (problem statement, reproduction/scope, success criteria) and 3 soft signals (conflicting signals, missing technical context, implicit assumptions). Produces `clarity-assessment.json`. If any hard gate fails, sets `clarity_blocked` in state → implementation steps 9-14 are skipped → result has `status: "blocked"` and `verdict: "needs_clarification"`.
+
+**Override:** Bot can resume at step 9 by setting `skip_clarity_gate: true` in `run-config.json`. The pipeline checks this flag in `_eval_condition("fix_mode_and_unresolved")`. Step 9 briefing incorporates flagged ambiguities as documented risks when overridden.
+
+**Verdict distinction:** `needs_more_info` = investigation inconclusive. `needs_clarification` = investigation succeeded but issue lacks implementation clarity.
+
+**Cross-repo dependency:** The bot reads `pipeline-result.json` (status, verdict, clarity_gate, clarity_gate_overridden) and `clarity-assessment.json` (summary, questions_for_author) to construct Slack messages. Changes to these schemas must be synced with `pirategoat-bot/src/orchestrator-linear.js` and `pirategoat-bot/src/messages-linear.js`.
 
 ## Development Workflows
 
