@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.87.0] - 2026-03-22
+
+### Changed
+- **Scripts reorganization.** Moved 17 scripts + 1 JSON config from flat `scripts/` directory into 5 domain-based Python packages: `review/` (pipeline orchestration), `review/agent/` (bootstrap, scope, output, diff noise filter), `linear/` (linear issue pipeline + events), `figma/` (design spec extraction), `analysis/` (session analysis). All files renamed to underscore convention for valid Python module names. `semantic-filter.py` renamed to `diff_noise_filter.py` to accurately describe its regex-based noise stripping. `agent-registry.json` renamed to `agent_registry.json` for naming consistency.
+
+### Fixed
+- **Bootstrap plugin root cache validation.** The cached root file (`/tmp/.pirategoat-tools-root`) now validates that the cached path contains the expected file layout (`scripts/review/agent/scope.py`), not just that the directory exists. Prevents stale cache entries from pointing to old plugin installations with different directory structures.
+
 ## [1.86.0] - 2026-03-22
 
 ### Added
