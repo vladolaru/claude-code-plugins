@@ -223,7 +223,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 - Code-based graders only (fast, deterministic, no model calls)
 - Grade outcomes not paths
 - Test both positive and negative cases
-- Integration tests run `bootstrap-reviewer.py` via subprocess against all registered agents
+- Parameterize on the axis of variation — ALL_AGENTS only for smoke tests (see `tests/TESTING.md` §6-7)
+- Test pure functions directly; use subprocess only for orchestration that unit tests can't cover
 
 **Agent compliance eval** (requires `claude` CLI, makes model calls):
 ```bash
