@@ -1443,8 +1443,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             raise ValueError(f"{section_key}.{k} must be an object, got {type(v).__name__}")
                 if not assessment["clear_enough"]:
                     state["clarity_blocked"] = True
-                    if not state.get("verdict"):
-                        state["verdict"] = "needs_clarification"
+                    # Always set verdict to needs_clarification when blocking.
+                    # Terminal verdicts (already_fixed, duplicate, etc.) are
+                    # excluded by the _terminal guard above, so any verdict
+                    # here is non-terminal (e.g., "valid") and should be
+                    # overwritten to match the blocked status.
+                    state["verdict"] = "needs_clarification"
                     if events and not _skip_events:
                         hard_failed = [k for k, v in assessment["hard_gates"].items()
                                        if not v.get("pass", True)]
@@ -1475,8 +1479,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                 # Fail closed: malformed JSON, missing schema keys, or wrong
                 # nested types = block. LLM-written files have realistic type drift.
                 state["clarity_blocked"] = True
-                if not state.get("verdict"):
-                    state["verdict"] = "needs_clarification"
+                state["verdict"] = "needs_clarification"
                 state.setdefault("degradation_notes", []).append(
                     f"Clarity assessment file was invalid — blocking as precaution ({exc})"
                 )
@@ -1486,8 +1489,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         else:
             # Fail closed: missing file = block.
             state["clarity_blocked"] = True
-            if not state.get("verdict"):
-                state["verdict"] = "needs_clarification"
+            state["verdict"] = "needs_clarification"
             state.setdefault("degradation_notes", []).append(
                 "Clarity assessment file missing — blocking as precaution"
             )
@@ -1561,7 +1563,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         else:
             status = "success"
 
-        # Build clarity_gate summary from assessment file
+        # Build clarity_gate summary from assessment file.
+        # When the run is blocked, the summary must reflect the block — not
+        # default to clear_enough: true from a malformed file.
         clarity_gate_summary = None
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
         if os.path.isfile(assessment_path):
@@ -1575,14 +1579,37 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                 _ss = _cdata.get("soft_signals", {})
                 soft_flagged = [k for k, v in (_ss.items() if isinstance(_ss, dict) else [])
                                 if isinstance(v, dict) and v.get("flagged", False)]
+                # Use the blocked state as ground truth — if the gate blocked
+                # but the file is malformed (missing clear_enough), don't
+                # default to True and report a passing summary.
+                _clear = _cdata.get("clear_enough")
+                if _clear is None:
+                    _clear = not clarity_blocked
                 clarity_gate_summary = {
-                    "clear_enough": _cdata.get("clear_enough", True),
+                    "clear_enough": _clear,
                     "hard_gates_failed": hard_failed,
                     "soft_signals_flagged": soft_flagged,
                     "assessment_path": "clarity-assessment.json",
                 }
             except (json.JSONDecodeError, OSError):
-                pass
+                # File unreadable — if blocked, surface that in the summary
+                if clarity_blocked:
+                    clarity_gate_summary = {
+                        "clear_enough": False,
+                        "hard_gates_failed": [],
+                        "soft_signals_flagged": [],
+                        "assessment_path": "clarity-assessment.json",
+                        "error": "assessment file unreadable",
+                    }
+        elif clarity_blocked:
+            # File missing but gate blocked (fail-closed) — surface in summary
+            clarity_gate_summary = {
+                "clear_enough": False,
+                "hard_gates_failed": [],
+                "soft_signals_flagged": [],
+                "assessment_path": "clarity-assessment.json",
+                "error": "assessment file missing",
+            }
 
         pipeline_result = {
             "status": status,
