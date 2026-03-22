@@ -208,44 +208,37 @@ def action_review(args):
         state["current_round"] = round_num
         context = state.get("context", "")
 
-    # Backstop: auto-commit uncommitted tracked changes before Codex reviews.
-    # Codex reviews git diff merge_base..HEAD, so uncommitted work is invisible.
-    # Only stages tracked files (git add -u) to avoid sweeping in unrelated untracked files.
+    # Backstop: detect uncommitted changes before Codex reviews.
+    # Codex reviews git diff merge_base..HEAD — uncommitted work is invisible.
+    # We warn but do NOT auto-commit: the operator should commit semantically.
     try:
         status = sp.run(["git", "status", "--porcelain"],
                         capture_output=True, text=True).stdout.strip()
-        # Filter to modified/deleted tracked files only (lines starting with ' M', ' D', 'M', 'D', etc.)
-        tracked_changes = [line for line in status.splitlines()
-                           if line and not line.startswith("??")]
-        if tracked_changes:
-            sp.run(["git", "add", "-u"], capture_output=True)
-            result = sp.run(
-                ["git", "commit", "-m",
-                 f"chore: auto-commit before iterative review round {round_num}"],
-                capture_output=True, text=True)
-            if result.returncode != 0:
-                print(
-                    f"ERROR: Auto-commit failed before round {round_num}. "
-                    "Codex would review stale code. Commit your changes manually "
-                    "and retry.\n"
-                    f"git stderr: {result.stderr.strip()}",
-                    file=sys.stderr)
-                sys.exit(1)
-            telemetry.progress("auto_committed", round=round_num,
-                               msg="Uncommitted tracked changes committed before review")
-
-        # Warn if untracked files remain — git add -u doesn't stage new files
-        untracked = [line for line in status.splitlines()
-                     if line and line.startswith("??")]
-        if untracked:
-            files = [line[3:] for line in untracked]
-            telemetry.progress("untracked_files_warning", round=round_num,
-                               count=len(files), files=files[:10])
-            print(
-                f"WARNING: {len(files)} untracked file(s) will not be reviewed by Codex:\n"
-                + "\n".join(f"  {f}" for f in files[:10])
-                + ("\n  ..." if len(files) > 10 else "")
-                + "\nIf these are part of your fix, commit them before proceeding.")
+        if status:
+            tracked = [line for line in status.splitlines()
+                       if line and not line.startswith("??")]
+            untracked = [line[3:] for line in status.splitlines()
+                         if line and line.startswith("??")]
+            parts = []
+            if tracked:
+                parts.append(
+                    f"{len(tracked)} uncommitted tracked change(s) — invisible to Codex:\n"
+                    + "\n".join(f"  {line}" for line in tracked[:10])
+                    + ("\n  ..." if len(tracked) > 10 else ""))
+            if untracked:
+                parts.append(
+                    f"{len(untracked)} untracked file(s) — invisible to Codex:\n"
+                    + "\n".join(f"  {f}" for f in untracked[:10])
+                    + ("\n  ..." if len(untracked) > 10 else ""))
+            warning = (
+                f"WARNING: Uncommitted changes detected before review round {round_num}.\n"
+                + "\n".join(parts)
+                + "\nCommit these with semantic messages before proceeding. "
+                "Codex only reviews committed changes (merge_base..HEAD)."
+            )
+            print(warning)
+            telemetry.progress("uncommitted_changes_warning", round=round_num,
+                               tracked=len(tracked), untracked=len(untracked))
     except Exception:
         pass  # git not available — proceed, Codex will review what's committed
 
