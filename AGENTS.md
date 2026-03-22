@@ -100,7 +100,7 @@ Code review orchestration with 25 agents (20 domain reviewers, 2 pipeline, 2 cro
 | `agents/` | 25 agent definitions (20 reviewers, 2 pipeline, 2 cross-validators, 1 utility) + 2 shared protocols in `agents/shared/` |
 | `skills/` | 19 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, PR creation, etc.) |
 | `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Agent registry, bootstrap reviewer, scope filtering, dispatch planning, review output, linear issue pipeline, pipeline events |
+| `scripts/` | Domain packages: `review/` (pipeline, dispatch, context, telemetry + `agent/` bootstrap, scope, output), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
 | `AGENTS.md` | Full development instructions, architecture, agent registry reference |
@@ -194,19 +194,19 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 
 | Changed file | Run |
 |---|---|
-| `scripts/bootstrap-reviewer.py` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` |
+| `scripts/review/agent/bootstrap.py` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_reviewer.py plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` |
 | `agents/shared/reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` |
 | `agents/shared/tests-reviewer-protocol.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` |
-| `scripts/review-pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_pipeline_infrastructure.py -v` |
-| `scripts/review-pipeline.py` (orchestration, subprocess) | `pytest plugins/pirategoat-tools/tests/test_pipeline_orchestration.py -v` |
-| `scripts/review-pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_review_pipeline.py -v` |
-| `scripts/linear-issue-pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_pipeline.py -v` |
-| `scripts/linear-issue-pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_guidance.py -v` |
-| `scripts/pipeline_events.py` | `pytest plugins/pirategoat-tools/tests/test_pipeline_events.py -v` |
+| `scripts/review/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_pipeline_infrastructure.py -v` |
+| `scripts/review/pipeline.py` (orchestration, subprocess) | `pytest plugins/pirategoat-tools/tests/test_pipeline_orchestration.py -v` |
+| `scripts/review/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_review_pipeline.py -v` |
+| `scripts/linear/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_pipeline.py -v` |
+| `scripts/linear/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/test_linear_issue_guidance.py -v` |
+| `scripts/linear/events.py` | `pytest plugins/pirategoat-tools/tests/test_pipeline_events.py -v` |
 | `scripts/iterative_review/*.py` | `pytest plugins/pirategoat-tools/tests/test_iterative_review_*.py -v` |
-| `scripts/semantic-filter.py` | `pytest plugins/pirategoat-tools/tests/test_semantic_filter.py -v` |
-| `scripts/review_output_simple.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
-| `scripts/review-telemetry.py` | `pytest plugins/pirategoat-tools/tests/test_review_telemetry.py -v` |
+| `scripts/review/agent/diff_noise_filter.py` | `pytest plugins/pirategoat-tools/tests/test_semantic_filter.py -v` |
+| `scripts/review/agent/output.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
+| `scripts/review/telemetry.py` | `pytest plugins/pirategoat-tools/tests/test_review_telemetry.py -v` |
 | `tests/graders.py` | `pytest plugins/pirategoat-tools/tests/test_graders.py -v` |
 | Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` (verifies agent config still works) |
 | New agent added to `AGENT_CONFIG` | `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` (auto-included in all parameterized tests) |

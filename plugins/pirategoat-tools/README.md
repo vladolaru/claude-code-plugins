@@ -103,17 +103,17 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 
 ### Pipeline Analytics
 
-`scripts/extract-session-metrics.py` — extracts operational metrics from Claude Code session transcripts to measure agent performance and triage effectiveness.
+`scripts/analysis/session_metrics.py` — extracts operational metrics from Claude Code session transcripts to measure agent performance and triage effectiveness.
 
 ```bash
 # Agent metrics: runtime, tokens, findings, hit rates
-python3 scripts/extract-session-metrics.py --limit 50
+python3 scripts/analysis/session_metrics.py --limit 50
 
 # Filter to specific agents
-python3 scripts/extract-session-metrics.py --agents security-reviewer,pr-reviewer
+python3 scripts/analysis/session_metrics.py --agents security-reviewer,pr-reviewer
 
 # Triage effectiveness: dispatch/skip accuracy for adaptive dispatch (Step 3.6)
-python3 scripts/extract-session-metrics.py --triage --limit 30
+python3 scripts/analysis/session_metrics.py --triage --limit 30
 ```
 
 Outputs markdown and JSON reports. Auto-detects the Claude Code sessions directory from the current git repo. See `--help` for all options.
@@ -152,7 +152,12 @@ pirategoat-tools/
 ├── skills/           # 19 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library
-├── scripts/          # Helper scripts (review pipeline, scope filtering, telemetry)
+├── scripts/          # Helper scripts organized by domain
+│   ├── review/             # Review pipeline, dispatch, context, telemetry
+│   │   └── agent/          # Agent bootstrap, scope filtering, output builder
+│   ├── linear/             # Linear issue pipeline, events
+│   ├── figma/              # Figma spec extraction, node parsing
+│   ├── analysis/           # Session analysis, metrics extraction
 │   └── iterative_review/   # Multi-round Codex review loop sub-module
 ├── hooks/            # Git hook integrations
 ├── schemas/          # JSON schemas for review output

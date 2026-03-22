@@ -4,24 +4,24 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 
 ## Key Files
 
-**IMPORTANT: `scripts/agent-registry.json` is the single source of truth for all reviewer agent configuration.** Every agent change starts and ends here.
+**IMPORTANT: `scripts/review/agent_registry.json` is the single source of truth for all reviewer agent configuration.** Every agent change starts and ends here.
 
 | File | Role |
 |------|------|
-| `scripts/review-pipeline.py` | Unified 12-step review pipeline. Owns step sequence, routing, state management, and curated briefings. Called by all three review commands with `--mode pr\|full\|incremental`. |
-| `scripts/agent-registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
-| `scripts/bootstrap-reviewer.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. |
-| `scripts/review-scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. |
-| `scripts/plan-review-dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review-pipeline.py. |
-| `scripts/gather-review-context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. |
-| `scripts/review_output_simple.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
-| `scripts/review-telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
+| `scripts/review/pipeline.py` | Unified 12-step review pipeline. Owns step sequence, routing, state management, and curated briefings. Called by all three review commands with `--mode pr\|full\|incremental`. |
+| `scripts/review/agent_registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
+| `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. |
+| `scripts/review/agent/scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. |
+| `scripts/review/plan_dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review/pipeline.py. |
+| `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. |
+| `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
+| `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
 | `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
 | `schemas/review-output.ts` | TypeScript type definitions for structured review output (Issue, SecurityIssue, PerformanceIssue, etc.). |
 | `scripts/iterative_review/` | Iterative review loop sub-module. Multi-round Codex review with pushback tracking, convergence detection, noise-filtered diff sizing, and telemetry. CLI entry point: `python3 -m iterative_review --action review\|advance`. |
-| `scripts/linear-issue-pipeline.py` | 15-step curated-context pipeline for investigating and fixing Linear issues. Owns step sequence, routing, state management, and curated briefings. Called by pirategoat-bot via `--step N --mode investigate\|fix`. |
-| `scripts/pipeline_events.py` | Best-effort JSONL event emission for pipeline progress (step_started, milestone, deliverable, pipeline_complete). Used by both review and linear issue pipelines. |
+| `scripts/linear/pipeline.py` | 15-step curated-context pipeline for investigating and fixing Linear issues. Owns step sequence, routing, state management, and curated briefings. Called by pirategoat-bot via `--step N --mode investigate\|fix`. |
+| `scripts/linear/events.py` | Best-effort JSONL event emission for pipeline progress (step_started, milestone, deliverable, pipeline_complete). Used by both review and linear issue pipelines. |
 
 ## Architecture
 
@@ -30,16 +30,16 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 ```
 Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   │
-  └─ review-pipeline.py --step N --mode pr|full|incremental
+  └─ review/pipeline.py --step N --mode pr|full|incremental
       │
-      ├─ Step 3: gather-review-context.py → review-context.json
-      ├─ Step 5: plan-review-dispatch.py → dispatch-plan.json
+      ├─ Step 3: review/context.py → review-context.json
+      ├─ Step 5: review/plan_dispatch.py → dispatch-plan.json
       │
       ├─ Step 6: For each agent (parallel):
   │   │
-  │   └─ bootstrap-reviewer.py
+  │   └─ review/agent/bootstrap.py
   │       ├─ Extracts protocol sections (skip-list)
-  │       ├─ Runs review-scope.py (domain-filtered diff)
+  │       ├─ Runs review/agent/scope.py (domain-filtered diff)
   │       └─ Builds structured prompt:
   │           Section 1: REVIEW RULES    (top — primacy effect)
   │           Section 2: REVIEW CONTENT  (middle — processing zone)
@@ -54,7 +54,7 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
 
 ### Pipeline Briefing Design
 
-The step briefings in `review-pipeline.py` follow deliberate design patterns. These are inline rules — see `docs/patterns/curated-context-pipeline.md` for the general principles and rationale behind them.
+The step briefings in `review/pipeline.py` follow deliberate design patterns. These are inline rules — see `docs/patterns/curated-context-pipeline.md` for the general principles and rationale behind them.
 
 **Identity anchoring.** `_PIPELINE_MISSION` constant holds the orchestrator's mission statement. Step 1 prepends it to `situation`. Do not modify the mission text without reviewing the pattern doc's "Pipeline Identity Anchoring" principle — it was designed to anchor the LLM on dedication, precision, and artifact discipline.
 
@@ -80,7 +80,7 @@ These are variations on the mission, not repetitions. Each connects the mission 
 
 ### Step 8 Readiness Gate
 
-Before reconciliation, step 8 checks if all dispatched agents have finished via `check-reviewer-agent-status.py`. If agents are still running, returns a WAITING briefing. Tracks `first_waiting_at` in pipeline state. If elapsed wait exceeds `agent_timeout_seconds + 60s`, escalates: clears the waiting state and proceeds with reconciliation using available results, instructing the LLM to TaskStop stuck agents first.
+Before reconciliation, step 8 checks if all dispatched agents have finished via `review/agents_status.py`. If agents are still running, returns a WAITING briefing. Tracks `first_waiting_at` in pipeline state. If elapsed wait exceeds `agent_timeout_seconds + 60s`, escalates: clears the waiting state and proceeds with reconciliation using available results, instructing the LLM to TaskStop stuck agents first.
 
 ### Shared Protocols
 
@@ -88,7 +88,7 @@ Before reconciliation, step 8 checks if all dispatched agents have finished via 
 
 Skip-list (sections bootstrap replaces with concrete values):
 - `## Step 0` (plugin root — bootstrap resolved it)
-- `## Scope Discovery` (bootstrap ran review-scope.py)
+- `## Scope Discovery` (bootstrap ran review/agent/scope.py)
 - `## Output Directory` (bootstrap resolved to concrete path)
 - `## ReviewOutputBuilder API` (bootstrap provides pre-filled snippet)
 - `## File-Based Output` (bootstrap provides concrete file paths)
@@ -97,7 +97,7 @@ Skip-list (sections bootstrap replaces with concrete values):
 
 ### Bootstrap Output Positioning
 
-The prompt bootstrap builds uses deliberate section ordering. Preserve this order when modifying `bootstrap-reviewer.py` or protocol files:
+The prompt bootstrap builds uses deliberate section ordering. Preserve this order when modifying `review/agent/bootstrap.py` or protocol files:
 
 1. **REVIEW RULES** (top) — behavioral steering via primacy effect. Agent reads rules first, anchoring behavior.
 2. **Context sections** — PR INTENT (raw PR metadata), REVIEW FOCUS (pipeline synthesis from change-purpose.md), REVIEWER-REQUESTED FOCUS (requester's additional instructions from `run-config.json`, present only when steering keywords were provided), and REVIEW BUDGET (scope-proportionate tool call calibration).
@@ -106,13 +106,13 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 
 ## Agent Registry
 
-`scripts/agent-registry.json` configures all reviewer agents. Each entry:
+`scripts/review/agent_registry.json` configures all reviewer agents. Each entry:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `domain` | yes | Scope domain for `review-scope.py` filtering. `null` for agents that don't use scope (e.g., tests-mutation-reviewer). |
+| `domain` | yes | Scope domain for `review/agent/scope.py` filtering. `null` for agents that don't use scope (e.g., tests-mutation-reviewer). |
 | `protocols` | yes | List of protocol files to include: `"reviewer"` (all agents), `"tests-reviewer"` (test agents). |
-| `scope_flags` | yes | Extra flags passed to `review-scope.py` (e.g., `["--max-lines", "500"]`). Empty list `[]` for defaults. |
+| `scope_flags` | yes | Extra flags passed to `review/agent/scope.py` (e.g., `["--max-lines", "500"]`). Empty list `[]` for defaults. |
 | `dispatch_class` | yes | When agent runs — see dispatch classes below. |
 | `focus` | yes | One-line description of the agent's review focus. Surfaced in the step 5 dispatch summary for override decisions — see sync rule below. |
 | `model_tier` | yes | `"inherit"` (caller's model), `"sonnet"`, or `"haiku"`. Match reasoning depth needed. |
@@ -140,7 +140,7 @@ The registry `focus` field is surfaced to the main session at step 5 so the LLM 
 
 | Source | Field | Purpose | Audience |
 |--------|-------|---------|----------|
-| `agent-registry.json` | `focus` | Dispatch summary in step 5 briefing | Main session LLM (during pipeline) |
+| `agent_registry.json` | `focus` | Dispatch summary in step 5 briefing | Main session LLM (during pipeline) |
 | `agents/<name>.md` | `description` (frontmatter) | Agent catalog in CC system prompt | Any session using the Agent tool |
 
 **Rule: When updating an agent's specialization, update both the registry `focus` and the agent `.md` `description` to reflect the same scope.** They don't need identical wording — `focus` is a concise keyword list, `description` is a full sentence — but they must cover the same capabilities. A `focus` that lists "XSS, SQL injection" while the `description` says "sanitization, escaping, nonces, auth" creates a misleading dispatch summary.
@@ -154,10 +154,10 @@ Each reviewer agent produces two files in `OUTPUT_DIR`:
 - `<agent-name>.json` — structured findings using `ReviewOutputBuilder` (see `schemas/review-output.ts` for types)
 - `<agent-name>.md` — human-readable Markdown summary
 
-**ReviewOutputBuilder API** (`scripts/review_output_simple.py`):
+**ReviewOutputBuilder API** (`scripts/review/agent/output.py`):
 
 ```python
-from review_output_simple import ReviewOutputBuilder
+from review.agent.output import ReviewOutputBuilder
 builder = ReviewOutputBuilder(reviewer="security-reviewer", pr_id="123")
 builder.add_issue(severity="high", category="xss", title="...", description="...", file="...", line=42, recommendation="...")
 builder.add_positive("Good input validation on...")
@@ -176,8 +176,8 @@ Verdict is auto-calculated from issue severities:
 
 The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugin's review pipeline. The two repos share integration contracts that must stay in sync:
 
-- **`review-context.json`** — The bot writes this file (orchestrator.js) before spawning the `claude` CLI. This plugin reads and enriches it (gather-review-context.py). Field names, nesting, and required paths must match across both repos.
-- **Outer-pipeline verdict values** — The bot's `pr-review.py` defines outer-pipeline verdicts (`APPROVE`/`COMMENT`/`REQUEST_CHANGES`) and `github.js` maps them to GitHub actions. This plugin has its own per-agent verdict system (`block`/`request_changes`/`comment`/`approve` in `review_output_simple.py`). These are distinct layers — changes to one may need corresponding changes in the other.
+- **`review-context.json`** — The bot writes this file (orchestrator.js) before spawning the `claude` CLI. This plugin reads and enriches it (review/context.py). Field names, nesting, and required paths must match across both repos.
+- **Outer-pipeline verdict values** — The bot's `pr-review.py` defines outer-pipeline verdicts (`APPROVE`/`COMMENT`/`REQUEST_CHANGES`) and `github.js` maps them to GitHub actions. This plugin has its own per-agent verdict system (`block`/`request_changes`/`comment`/`approve` in `review/agent/output.py`). These are distinct layers — changes to one may need corresponding changes in the other.
 - **Prompt template variables** — The bot's `prompts/pr-review.md` injects variables (`{{MERGE_BASE}}`, `{{GIT_RANGE}}`, etc.) that this plugin's scripts consume via the review context.
 
 **Rule: Before changing any integration surface in this plugin, read the corresponding code in pirategoat-bot first.** Do not assume the bot's expectations from this plugin's code alone — check the bot's actual implementation. When in doubt, read:
@@ -187,7 +187,7 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 
 ### Linear Issue Pipeline
 
-`scripts/linear-issue-pipeline.py` is a 15-step curated-context pipeline for investigating and fixing Linear issues. The pirategoat-bot spawns a Claude CLI session with `prompts/linear-issue.md`, which calls the pipeline step by step.
+`scripts/linear/pipeline.py` is a 15-step curated-context pipeline for investigating and fixing Linear issues. The pirategoat-bot spawns a Claude CLI session with `prompts/linear-issue.md`, which calls the pipeline step by step.
 
 **Phases:** SETUP (1-3) → INVESTIGATION (4-8) → IMPLEMENTATION (9-10) → VALIDATION (11-13) → OUTPUT (14-15)
 
@@ -205,7 +205,7 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 
 1. Read existing agent `.md` files in `agents/` to understand the format and conventions
 2. Create `agents/<agent-name>.md` with the agent definition
-3. Add entry to `scripts/agent-registry.json` — choose domain, protocols, dispatch class, model tier, and (if conditional) triage criteria
+3. Add entry to `scripts/review/agent_registry.json` — choose domain, protocols, dispatch class, model tier, and (if conditional) triage criteria
 4. Add agent to `.claude-plugin/marketplace.json` in the `agents` array
 5. Run tests: `pytest plugins/pirategoat-tools/tests/ -v` (parameterized tests auto-include new agents)
 
@@ -213,7 +213,7 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 
 1. Read existing commands in `commands/` to understand the dispatch pattern
 2. Create `commands/<command-name>.md` — commands are orchestrators that invoke agents via the `/Agent` tool
-3. Use `plan-review-dispatch.py` for triage decisions (don't duplicate triage logic)
+3. Use `review/plan_dispatch.py` for triage decisions (don't duplicate triage logic)
 4. Add command to `.claude-plugin/marketplace.json` in the `commands` array
 5. Add structural tests in `tests/test_commands.py` (new `TestXxx` class)
 6. Run tests: `pytest plugins/pirategoat-tools/tests/test_commands.py -v`
@@ -229,9 +229,9 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 
 These are normal — handle them, do not stop or apologize:
 
-- **`review-scope.py` returns empty scope**: The diff has no files matching this agent's domain. Skip the agent — this is correct triage behavior.
+- **`review/agent/scope.py` returns empty scope**: The diff has no files matching this agent's domain. Skip the agent — this is correct triage behavior.
 - **Tests fail after your changes**: Read the failure output, fix the root cause, and re-run. Test failures are feedback, not errors.
-- **`bootstrap-reviewer.py` can't find plugin root**: Ensure you are running from within the repository. The script walks up from CWD looking for `.claude-plugin/`.
+- **`review/agent/bootstrap.py` can't find plugin root**: Ensure you are running from within the repository. The script walks up from CWD looking for `.claude-plugin/`.
 
 ### Testing
 

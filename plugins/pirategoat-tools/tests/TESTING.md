@@ -36,11 +36,11 @@ tests/
 
 ### Level 1: Bootstrap Unit Tests (`test_bootstrap_reviewer.py`)
 
-Deterministic pytest suite. Tests `bootstrap-reviewer.py` pure functions by importing them directly — `extract_protocol_sections`, `build_output`, `compute_review_budget`, `load_pr_intent`, and others. No network or model calls.
+Deterministic pytest suite. Tests `review/agent/bootstrap.py` pure functions by importing them directly — `extract_protocol_sections`, `build_output`, `compute_review_budget`, `load_pr_intent`, and others. No network or model calls.
 
 ### Level 1: Bootstrap Integration Tests (`test_bootstrap_integration.py`)
 
-Integration tests that run `bootstrap-reviewer.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7):
+Integration tests that run `review/agent/bootstrap.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7):
 
 | Class | Tests | What it verifies |
 |---|---|---|
@@ -55,11 +55,11 @@ Integration tests that run `bootstrap-reviewer.py` via subprocess against a temp
 
 ### Level 1: Domain Routing Evals (`test_domain_routing.py`)
 
-Deterministic pytest suite that verifies `review-scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess). For each fixture, creates a temp git repo, gets the changed file list via `git diff --name-only`, and runs the filter functions for each domain.
+Deterministic pytest suite that verifies `review/agent/scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess). For each fixture, creates a temp git repo, gets the changed file list via `git diff --name-only`, and runs the filter functions for each domain.
 
 Uses a `ROUTING_MATRIX` dict mapping fixture → expected domain results. Parameterized across all 14 domains and all 12 fixtures (168 test cases). Repos and file lists are cached per fixture.
 
-Also includes `TestBranchFreshness` — 6 integration tests that run `review-scope.py` via subprocess to verify merge-base detection, stale branch warnings, and range rebasing (these need the full pipeline).
+Also includes `TestBranchFreshness` — 6 integration tests that run `review/agent/scope.py` via subprocess to verify merge-base detection, stale branch warnings, and range rebasing (these need the full pipeline).
 
 **Fixture domain coverage:** See `ROUTING_MATRIX` dict in `test_domain_routing.py` for the complete 12×14 matrix. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
 
@@ -70,20 +70,20 @@ Deterministic pytest suite that validates structural properties of command files
 | Class | What it verifies |
 |---|---|
 | `TestFrontmatter` | All commands exist, have valid YAML frontmatter with `description` field |
-| `TestScriptReferences` | Scripts referenced in commands (`review-pipeline.py`) exist on disk |
-| `TestReviewCommandsReferenceUnifiedScript` | All review commands reference `review-pipeline.py` with correct mode |
+| `TestScriptReferences` | Scripts referenced in commands (`review/pipeline.py`) exist on disk |
+| `TestReviewCommandsReferenceUnifiedScript` | All review commands reference `review/pipeline.py` with correct mode |
 | `TestMarketplaceRegistration` | All review commands are registered in `marketplace.json` |
 | `TestCodeReviewIterative` | `code-review.md` has incremental mode, full/reset option, baseline reference |
 | `TestFullCodeReview` | `full-code-review.md` has full mode |
 | `TestBaselineFileGrading` | `.branch-review-baseline.json` round-trip: valid baseline files pass, incremented counts pass, explicit ranges pass |
-| `TestPrReview` | `pr-review.md` is a thin wrapper delegating to `review-pipeline.py` |
+| `TestPrReview` | `pr-review.md` is a thin wrapper delegating to `review/pipeline.py` |
 | `TestUnifiedMission` | All review commands reference the unified pipeline mission |
 | `TestPrUpdate` | `pr-update.md` structural validation: file exists, frontmatter, marketplace registration, not in review commands |
 | `TestSwitchTo` | `switch-to.md` structural validation: file exists, frontmatter, marketplace registration |
 
 ### Level 1: ReviewOutputBuilder Unit Tests (`test_review_output.py`)
 
-Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review_output_simple.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, JSON, markdown), and file output.
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, JSON, markdown), and file output.
 
 | Class | What it verifies |
 |---|---|
@@ -251,7 +251,7 @@ Integration tests that shell out to scripts (which run git commands) use tempora
 
 ### Add a new reviewer agent
 
-1. Add the agent to `scripts/agent-registry.json`
+1. Add the agent to `scripts/review/agent_registry.json`
 2. Create the agent `.md` file in `agents/`
 3. Run `pytest plugins/pirategoat-tools/tests/test_bootstrap_integration.py -v` — the `TestSmokeAllAgents` smoke test automatically picks up the new agent and validates it exits 0
 4. If the agent introduces a **new conditional path** through `main()` (new protocol type, new flag like `file_history` or `extra_scope`), add a category representative test in `TestCategoryRepresentatives`
@@ -265,7 +265,7 @@ Integration tests that shell out to scripts (which run git commands) use tempora
    - Build a list of `(condition, failure_message)` tuples
    - Return `_grade(checks)`
 2. Add tests in `test_graders.py` with at least one positive and one negative case
-3. If the grader validates output files, use `ReviewOutputBuilder` from `scripts/review_output_simple.py` to create valid test fixtures
+3. If the grader validates output files, use `ReviewOutputBuilder` from `scripts/review/agent/output.py` to create valid test fixtures
 
 ### Add a new compliance scenario
 
@@ -314,11 +314,11 @@ Follow the pattern in `test_bootstrap_reviewer.py`:
 
 ### Importing from scripts/
 
-Scripts have hyphenated names (`bootstrap-reviewer.py`), so use `importlib`:
+Scripts are organized in domain packages (`review/`, `linear/`, `figma/`, `analysis/`). Use `importlib` with the full path:
 
 ```python
 import importlib
-_spec = importlib.util.spec_from_file_location("module_name", str(SCRIPT_PATH))
+_spec = importlib.util.spec_from_file_location("module_name", str(SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"))
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 function_under_test = _mod.function_name
@@ -351,7 +351,7 @@ Never hardcode absolute paths. Tests run from any working directory.
 
 ## Valid Values Reference
 
-These are the canonical valid values used by graders. If the review output schema changes, update both the source (`review_output_simple.py`) and the grader constants (`graders.py`).
+These are the canonical valid values used by graders. If the review output schema changes, update both the source (`review/agent/output.py`) and the grader constants (`graders.py`).
 
 | Constant | Values | Source |
 |---|---|---|

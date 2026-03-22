@@ -4,7 +4,7 @@ Tools and references for analyzing reviewer agent behavior from raw Claude Code 
 
 ## Scripts
 
-### `scripts/analyze-reviewer-sessions.py`
+### `scripts/analysis/session_analyzer.py`
 
 Parses subagent JSONL logs from Claude Code sessions to extract tool call sequences, categorize behavior patterns, and generate efficiency metrics.
 
@@ -15,24 +15,24 @@ Parses subagent JSONL logs from Claude Code sessions to extract tool call sequen
 # e.g. /Users/alice/code/myproject → ~/.claude/projects/-Users-alice-code-myproject
 
 # Analyze all patterns-reviewer dispatches from the last 20 sessions
-python3 plugins/pirategoat-tools/scripts/analyze-reviewer-sessions.py \
+python3 plugins/pirategoat-tools/scripts/analysis/session_analyzer.py \
     --sessions-dir ~/.claude/projects/<encoded-project-path> \
     --agent patterns-reviewer \
     --max-sessions 20
 
 # JSON output for programmatic analysis
-python3 plugins/pirategoat-tools/scripts/analyze-reviewer-sessions.py \
+python3 plugins/pirategoat-tools/scripts/analysis/session_analyzer.py \
     --sessions-dir ~/.claude/projects/<encoded-project-path> \
     --agent security-reviewer \
     --format json
 
 # Analyze all agents (no --agent filter)
-python3 plugins/pirategoat-tools/scripts/analyze-reviewer-sessions.py \
+python3 plugins/pirategoat-tools/scripts/analysis/session_analyzer.py \
     --sessions-dir ~/.claude/projects/<encoded-project-path> \
     --max-sessions 5
 
 # Write to file
-python3 plugins/pirategoat-tools/scripts/analyze-reviewer-sessions.py \
+python3 plugins/pirategoat-tools/scripts/analysis/session_analyzer.py \
     --sessions-dir ~/.claude/projects/<encoded-project-path> \
     --agent patterns-reviewer \
     --output /tmp/patterns-analysis.txt
@@ -49,7 +49,7 @@ python3 plugins/pirategoat-tools/scripts/analyze-reviewer-sessions.py \
 - `text` (default) — human-readable report with full tool sequences
 - `json` — structured data for downstream analysis
 
-### `scripts/extract-session-metrics.py`
+### `scripts/analysis/session_metrics.py`
 
 General-purpose tool for extracting operational metrics (runtime, model, cache tokens, verdict) from session transcripts. Documented in-file.
 
