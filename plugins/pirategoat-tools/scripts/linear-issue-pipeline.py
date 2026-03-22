@@ -838,7 +838,7 @@ def _step_7_post_to_linear(mode, state, context, config, output_dir):
         "   - Note the failure as a degradation (the report is still saved locally)",
         "   - Continue to the next step — this is not a blocking failure",
         "",
-        *([ "**Investigate mode:** After this step, the pipeline jumps to step 15 (Present Results)."] if mode == "investigate" else []),
+        *([ "**Investigate mode:** After this step, the pipeline continues to the clarity assessment (step 8), then jumps to step 15 (Present Results)."] if mode == "investigate" else []),
     ]
 
     return {
@@ -1393,17 +1393,20 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                     events=events,
                 )
 
-    if step == 8:
-        # After the LLM writes clarity-assessment.json, check the result
-        # and set clarity_blocked in state if needed.
+    # Clarity gate check: runs on the step AFTER step 8 (step 9 in fix mode,
+    # step 15 in investigate mode). By this point the LLM has executed step 8's
+    # briefing and written clarity-assessment.json. We check it here because
+    # _orchestrate_step runs BEFORE get_step_guidance — so checking on step 8
+    # itself would read the file before it exists.
+    if step > 8 and not state.get("clarity_blocked") and not state.get("_clarity_checked"):
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
         if os.path.isfile(assessment_path):
+            state["_clarity_checked"] = True
             try:
                 with open(assessment_path) as f:
                     assessment = json.load(f)
                 if not assessment.get("clear_enough", True):
                     state["clarity_blocked"] = True
-                    # Set verdict for step 15 result derivation
                     state["verdict"] = "needs_clarification"
                     if events:
                         hard_failed = [k for k, v in assessment.get("hard_gates", {}).items()
@@ -1425,7 +1428,6 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             summary="passed",
                         )
             except (json.JSONDecodeError, OSError):
-                # Assessment file unreadable — treat as passed (don't block on I/O)
                 if events:
                     events.milestone(name="clarity_assessed", step=8, summary="passed (file unreadable)")
 
