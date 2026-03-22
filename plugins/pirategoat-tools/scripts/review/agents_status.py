@@ -29,7 +29,7 @@ DEFAULT_TIMEOUT = 1200  # 20 minutes
 def _reviewer_filename(agent_name: str) -> str:
     """Derive the review filename from the agent name.
 
-    Matches bootstrap-reviewer.py's derive_reviewer_name():
+    Matches bootstrap.py's derive_reviewer_name():
     'security-reviewer' -> 'security-review.json'
     'pr-reviewer' -> 'pr-review.json'
     """

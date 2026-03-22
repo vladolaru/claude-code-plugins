@@ -13,8 +13,8 @@ Inline comments (// and #) are preserved — they carry developer intent
 review-relevant, especially in WordPress/WooCommerce codebases.
 
 Usage:
-    ./semantic-filter.py < input.diff > filtered.diff
-    git diff main feature | ./semantic-filter.py
+    ./diff_noise_filter.py < input.diff > filtered.diff
+    git diff main feature | ./diff_noise_filter.py
 
 Typical reduction: 10-20% (docblocks, annotations, formatting, blanks)
 """

@@ -64,7 +64,7 @@ KNOWN_REVIEWER_AGENTS = [
 ]
 
 # Patterns to infer agent type from free-form prompts (older sessions
-# that don't use bootstrap-reviewer.py).  More-specific patterns must
+# that don't use bootstrap.py).  More-specific patterns must
 # appear before less-specific ones (e.g. wp-architecture before architecture).
 AGENT_INFERENCE_PATTERNS = {
     "wp-architecture": [
@@ -357,7 +357,7 @@ def identify_agent_type(filepath: str) -> Optional[str]:
     Identify the agent type from a subagent JSONL file.
 
     Strategy:
-    1. Look for bootstrap-reviewer.py --agent <name> in first 15 lines
+    1. Look for bootstrap.py --agent <name> in first 15 lines
     2. Infer from user prompt keywords in first message
     3. Return None if unidentifiable (caller decides whether to include)
     """
@@ -369,9 +369,9 @@ def identify_agent_type(filepath: str) -> Optional[str]:
                 if i > 15:
                     break
 
-                # Strategy 1: bootstrap-reviewer.py --agent <name>
+                # Strategy 1: bootstrap.py --agent <name>
                 match = re.search(
-                    r"bootstrap-reviewer\.py\s+--agent\s+([a-z0-9-]+)", line
+                    r"bootstrap(?:-reviewer)?\.py\s+--agent\s+([a-z0-9-]+)", line
                 )
                 if match:
                     agent_name = match.group(1)

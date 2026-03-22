@@ -254,7 +254,7 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
     if guidance["next"]:
         lines.append(
             f"NEXT (MANDATORY): {guidance['next']} Do NOT stop — call "
-            f"review-critic.py with --step-number {step + 1} immediately."
+            f"critic.py with --step-number {step + 1} immediately."
         )
     else:
         lines.append("PIPELINE COMPLETE — Present verdict to user.")

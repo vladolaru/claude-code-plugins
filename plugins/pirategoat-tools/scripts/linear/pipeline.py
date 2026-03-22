@@ -321,7 +321,7 @@ def _init_events(output_dir):
     """Import and initialize PipelineEventEmitter. Returns None on failure."""
     try:
         import importlib.util
-        events_path = SCRIPTS_DIR / "pipeline_events.py"
+        events_path = SCRIPTS_DIR / "events.py"
         spec = importlib.util.spec_from_file_location("pipeline_events", events_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -386,7 +386,7 @@ def format_output(step, guidance):
             lines.append(f"    ({ns['skip_reason']})")
         lines.append("")
         lines.append(
-            f"Run: python3 {SCRIPTS_DIR / 'linear-issue-pipeline.py'} "
+            f"Run: python3 {SCRIPTS_DIR / 'pipeline.py'} "
             f"--step {ns['step']} --output-dir <OUTPUT_DIR> --issue-id <ISSUE_ID>"
         )
     else:

@@ -6,11 +6,11 @@ Single source of truth for all filtering logic. Agents call this script
 instead of running 5+ ad-hoc git/grep commands to determine their review scope.
 
 Usage:
-    python3 review-scope.py --domain code
-    python3 review-scope.py --domain code --summary
-    python3 review-scope.py --domain php-tests --range main..feature-branch
-    python3 review-scope.py --domain security --max-lines 3000
-    python3 review-scope.py --domain patterns --base-ref-only
+    python3 scope.py --domain code
+    python3 scope.py --domain code --summary
+    python3 scope.py --domain php-tests --range main..feature-branch
+    python3 scope.py --domain security --max-lines 3000
+    python3 scope.py --domain patterns --base-ref-only
 
 Exit codes:
     0  Success — scope determined, output on stdout
@@ -33,10 +33,10 @@ from typing import Dict, List, Optional, Tuple
 # =============================================================================
 
 def _load_semantic_filter():
-    """Lazy-load filter_diff from semantic-filter.py (sibling script)."""
+    """Lazy-load filter_diff from diff_noise_filter.py (sibling script)."""
     import importlib.util as _ilu
-    _sf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "semantic-filter.py")
-    _sf_spec = _ilu.spec_from_file_location("semantic_filter", _sf_path)
+    _sf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diff_noise_filter.py")
+    _sf_spec = _ilu.spec_from_file_location("diff_noise_filter", _sf_path)
     _sf_mod = _ilu.module_from_spec(_sf_spec)
     _sf_spec.loader.exec_module(_sf_mod)
     return _sf_mod.filter_diff

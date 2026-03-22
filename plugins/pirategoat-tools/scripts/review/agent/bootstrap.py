@@ -7,9 +7,9 @@ and output instructions into one structured prompt block. Agents run this
 script as their first action and get everything they need.
 
 Usage:
-    python3 bootstrap-reviewer.py --agent security-reviewer
-    python3 bootstrap-reviewer.py --agent php-tests-reviewer --range main..feature
-    python3 bootstrap-reviewer.py --agent patterns-reviewer --output-dir /tmp/pr-review-42
+    python3 bootstrap.py --agent security-reviewer
+    python3 bootstrap.py --agent php-tests-reviewer --range main..feature
+    python3 bootstrap.py --agent patterns-reviewer --output-dir /tmp/pr-review-42
 
 Exit codes:
     0  Success (scope may be OK or NO_DOMAIN_FILES)
@@ -28,11 +28,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Import telemetry (sibling script, best-effort)
+# Import telemetry (parent directory script, best-effort)
 try:
     _telemetry_spec = importlib.util.spec_from_file_location(
         "review_telemetry",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "review-telemetry.py"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "telemetry.py"),
     )
     _telemetry_mod = importlib.util.module_from_spec(_telemetry_spec)
     _telemetry_spec.loader.exec_module(_telemetry_mod)
@@ -41,17 +41,17 @@ except Exception:
     ReviewTelemetry = None
 
 # =============================================================================
-# Agent Configuration — loaded from agent-registry.json
+# Agent Configuration — loaded from agent_registry.json
 # =============================================================================
 
 
 def load_agent_config() -> Dict[str, dict]:
-    """Load agent configuration from agent-registry.json.
+    """Load agent configuration from agent_registry.json.
 
     The registry is the single source of truth for agent configuration.
     Returns a dict keyed by agent name, compatible with the rest of this module.
     """
-    registry_path = Path(__file__).parent / "agent-registry.json"
+    registry_path = Path(__file__).resolve().parent.parent / "agent_registry.json"
     with open(registry_path) as f:
         registry = json.load(f)
     return registry["agents"]
@@ -70,7 +70,7 @@ SCOPE_INLINE_CAP = 15 * 1024  # 15KB
 # - Operational sections: bootstrap's OUTPUT INSTRUCTIONS provides concrete values
 REVIEWER_PROTOCOL_SKIP_SECTIONS = [
     "## Step 0",            # Locate Plugin Root — bootstrap did this
-    "## Scope Discovery",   # review-scope.py instructions — bootstrap did this
+    "## Scope Discovery",   # scope.py instructions — bootstrap did this
     "## Output Directory",  # bootstrap resolves to concrete OUTPUT_DIR
     "## ReviewOutputBuilder API",  # bootstrap provides pre-filled snippet
     "## File-Based Output", # bootstrap provides concrete file paths
@@ -104,15 +104,16 @@ def find_plugin_root() -> Optional[str]:
             pass
 
     # Method 2: derive from own location (most reliable when running from plugin)
+    # __file__ is in scripts/review/agent/, so go up 3 levels to plugin root
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    candidate = os.path.dirname(script_dir)  # scripts/ -> plugin root
-    if os.path.isfile(os.path.join(candidate, "scripts", "review-scope.py")):
+    candidate = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # agent/ -> review/ -> scripts/ -> plugin root
+    if os.path.isfile(os.path.join(candidate, "scripts", "review", "agent", "scope.py")):
         return candidate
 
     # Method 3: find command fallback
     rc, stdout, _ = run_cmd([
         "find", os.path.expanduser("~/.claude"),
-        "-path", "*/pirategoat-tools/*/scripts/bootstrap-reviewer.py",
+        "-path", "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py",
         "-type", "f",
     ])
     if rc == 0 and stdout:
@@ -122,7 +123,7 @@ def find_plugin_root() -> Optional[str]:
             # Sort for version ordering, take last
             paths.sort()
             script_path = paths[-1]
-            return str(Path(script_path).parent.parent)
+            return str(Path(script_path).parent.parent.parent.parent)
 
     return None
 
@@ -197,10 +198,10 @@ def run_scope_discovery(
     git_range: Optional[str],
     output_dir: Optional[str] = None,
 ) -> Tuple[int, str]:
-    """Run review-scope.py and return (exit_code, output)."""
-    script = os.path.join(plugin_root, "scripts", "review-scope.py")
+    """Run scope.py and return (exit_code, output)."""
+    script = os.path.join(plugin_root, "scripts", "review", "agent", "scope.py")
     if not os.path.isfile(script):
-        return 1, f"ERROR: review-scope.py not found at {script}"
+        return 1, f"ERROR: scope.py not found at {script}"
 
     cmd = [sys.executable, script, "--domain", domain] + extra_flags
     if git_range:
@@ -549,7 +550,7 @@ def build_output(
     # Section 2: Review Content (middle position — processing zone)
     lines.append("--- Section 2: REVIEW CONTENT (what to review) ---")
     lines.append("")
-    # scope_output already starts with "=== REVIEW SCOPE ===" from review-scope.py
+    # scope_output already starts with "=== REVIEW SCOPE ===" from scope.py
     if len(scope_output) > SCOPE_INLINE_CAP:
         # Write full scope to file to avoid output persistence cascade
         os.makedirs(output_dir, exist_ok=True)
@@ -598,7 +599,7 @@ def build_output(
 
     if exploration_scope:
         lines.append("=== EXPLORATION SCOPE ===")
-        # Strip the REVIEW SCOPE header that review-scope.py prepends —
+        # Strip the REVIEW SCOPE header that scope.py prepends —
         # this output is wrapped in EXPLORATION SCOPE, not REVIEW SCOPE.
         cleaned = exploration_scope.replace("=== REVIEW SCOPE ===\n", "", 1)
         lines.append(cleaned)
@@ -633,7 +634,7 @@ def build_output(
     lines.append("ReviewOutputBuilder:")
     lines.append("  import sys, os")
     lines.append(f"  sys.path.insert(0, '{plugin_root}/scripts')")
-    lines.append("  from review_output_simple import ReviewOutputBuilder")
+    lines.append("  from review.agent.output import ReviewOutputBuilder")
     pr_id_str = pr_number if pr_number else "0"
     lines.append(
         f'  builder = ReviewOutputBuilder(pr_id={pr_id_str}, reviewer="{reviewer_name}")'
@@ -664,7 +665,7 @@ def build_output(
     lines.append("")
     lines.append(f"PLUGIN_ROOT: {plugin_root}")
     lines.append(
-        f"  (for manual reads: $PLUGIN_ROOT/scripts/review-scope.py,"
+        f"  (for manual reads: $PLUGIN_ROOT/scripts/review/agent/scope.py,"
     )
     lines.append(f"   $PLUGIN_ROOT/skills/*/references/*.md)")
 
@@ -818,7 +819,7 @@ def main():
         # No domain (tests-mutation-reviewer) — detect output dir manually
         scope_output = "(No scope discovery — this agent does not use domain-based scope)"
         # Still try to detect PR number and output dir
-        detect_script = os.path.join(plugin_root, "scripts", "review-scope.py")
+        detect_script = os.path.join(plugin_root, "scripts", "review", "agent", "scope.py")
         if os.path.isfile(detect_script):
             # Use a dummy domain just to get output dir detection, but we won't use the scope
             # Instead, just detect PR number via gh/ghe directly
@@ -845,7 +846,7 @@ def main():
         output_dir = args.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
-    # Write started marker — check-reviewer-agent-status.py uses this
+    # Write started marker — agents_status.py uses this
     # to distinguish RUNNING from NOT_DISPATCHED
     started_path = os.path.join(output_dir, f"{args.agent}.started")
     with open(started_path, "w") as f:

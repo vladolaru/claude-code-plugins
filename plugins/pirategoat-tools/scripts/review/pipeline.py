@@ -112,7 +112,7 @@ _STALE_ARTIFACTS = [
     "change-purpose.md",
 ]
 
-DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches check-reviewer-agent-status.py
+DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches agents_status.py
 
 # Files to preserve across runs
 _PRESERVED_FILES = {
@@ -369,7 +369,7 @@ def _step_1_parse_input(mode, state, context, config, output_dir):
             situation.append(f"Mode: PR review (PR #{pr_number})")
             actions.append(f"PR #{pr_number} confirmed. The pipeline will review this pull request.")
             actions.append("")
-            actions.append("The pipeline script will run gather-review-context.py at step 3 to "
+            actions.append("The pipeline script will run context.py at step 3 to "
                            "collect git context, PR metadata, and review history.")
         else:
             situation.append("Mode: PR review (no PR number provided)")
@@ -651,7 +651,7 @@ def _step_3_gather_context(mode, state, context, config, output_dir):
     # Actions
     actions.append("Review the context above. The pipeline has gathered all available data.")
     if not git_range:
-        actions.append("The git range will be determined by gather-review-context.py.")
+        actions.append("The git range will be determined by context.py.")
 
     # Change-purpose handoff — only when no unfetched issues
     has_unfetched = state.get("resolved_params", {}).get("has_unfetched_issues", False)
@@ -851,17 +851,17 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
             name = agent.get("name", agent) if isinstance(agent, dict) else agent
             actions.append(f"**{name}:**")
             actions.append(f"```")
-            actions.append(f'python3 {SCRIPTS_DIR}/bootstrap-reviewer.py --agent {name} --range "{git_range}" --output-dir "{od}"')
+            actions.append(f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {name} --range "{git_range}" --output-dir "{od}"')
             actions.append(f"```")
             actions.append("")
 
     actions.append("After dispatching all agents, you can monitor their progress at any time:")
     actions.append(f"```")
-    actions.append(f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{od}\"")
+    actions.append(f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"")
     actions.append(f"```")
     actions.append("")
     actions.append("Use the Agent tool for dispatching. Each agent should run via "
-                   "`bootstrap-reviewer.py` which handles scope discovery, protocol extraction, "
+                   "`agent/bootstrap.py` which handles scope discovery, protocol extraction, "
                    "and output instructions.")
 
     return {
@@ -911,7 +911,7 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
     actions.append("1. Wait for background agent notifications to arrive.")
     actions.append("2. Once the first few agents report back, run the status check as a safety measure:")
     actions.append(f"   ```")
-    actions.append(f"   python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
+    actions.append(f"   python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
     actions.append(f"   ```")
     actions.append("3. If ALL_DONE is true (exit code 0): proceed to step 8 immediately.")
     actions.append("   Step 8 will TaskStop any remaining background agents before reconciliation.")
@@ -980,7 +980,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
             actions = [
                 "Wait for running agents to finish, then re-run this step:",
                 f"```",
-                f"python3 {SCRIPTS_DIR}/check-reviewer-agent-status.py --output-dir \"{od}\"",
+                f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"",
                 f"```",
                 "When ALL_DONE is true, re-run step 8.",
             ]
@@ -1478,7 +1478,7 @@ def format_output(step, guidance):
         if ns.get("skip_reason"):
             lines.append(f"    ({ns['skip_reason']})")
         lines.append("")
-        lines.append(f"Run: python3 {SCRIPTS_DIR / 'review-pipeline.py'} --step {ns['step']} --output-dir <OUTPUT_DIR>")
+        lines.append(f"Run: python3 {SCRIPTS_DIR / 'pipeline.py'} --step {ns['step']} --output-dir <OUTPUT_DIR>")
     else:
         lines.append(f"{'─' * 60}")
         lines.append("✅ PIPELINE COMPLETE")
@@ -1494,7 +1494,7 @@ def _init_telemetry(output_dir, log_dir=None):
     """Import and initialize ReviewTelemetry. Returns None on failure."""
     try:
         import importlib.util
-        telemetry_path = SCRIPTS_DIR / "review-telemetry.py"
+        telemetry_path = SCRIPTS_DIR / "telemetry.py"
         spec = importlib.util.spec_from_file_location("review_telemetry", telemetry_path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -1535,11 +1535,11 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
     context_path = os.path.join(output_dir, "review-context.json")
 
     if step == 2:
-        # Run setup-workspace.py to stash, record branch, checkout PR
+        # Run workspace_setup.py to stash, record branch, checkout PR
         pr_number = config.get("pr_number", "")
         if pr_number:
             setup_cmd = [
-                sys.executable, str(SCRIPTS_DIR / "setup-workspace.py"),
+                sys.executable, str(SCRIPTS_DIR / "workspace_setup.py"),
                 "--pr-number", str(pr_number),
             ]
             stdout, ok = _run_subprocess(setup_cmd, timeout=60)
@@ -1553,13 +1553,13 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     state["workspace_setup_result"] = {"error": "Failed to parse script output"}
             else:
                 state["workspace_setup_result"] = {
-                    "error": "setup-workspace.py failed or produced no output",
+                    "error": "workspace_setup.py failed or produced no output",
                     "checkout_ok": False,
                 }
 
     if step == 3:
-        # Run gather-review-context.py to collect git context, PR metadata, etc.
-        gather_cmd = [sys.executable, str(SCRIPTS_DIR / "gather-review-context.py"),
+        # Run context.py to collect git context, PR metadata, etc.
+        gather_cmd = [sys.executable, str(SCRIPTS_DIR / "context.py"),
                       "--output-dir", output_dir]
         if mode == "pr":
             pr_number = config.get("pr_number", "")
@@ -1574,7 +1574,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             gather_cmd.extend(["--git-range", git_range])
 
         stdout, ok = _run_subprocess(gather_cmd, timeout=120)
-        # Re-read context (gather-review-context.py writes review-context.json)
+        # Re-read context (context.py writes review-context.json)
         if os.path.isfile(context_path):
             try:
                 with open(context_path) as f:
@@ -1591,12 +1591,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             state["resolved_params"]["git_range"] = git["git_range"]
 
     if step == 5:
-        # Run plan-review-dispatch.py to determine which agents to dispatch
+        # Run plan_dispatch.py to determine which agents to dispatch
         git = context.get("git", {})
         git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
         if git_range:
             planner_cmd = [
-                sys.executable, str(SCRIPTS_DIR / "plan-review-dispatch.py"),
+                sys.executable, str(SCRIPTS_DIR / "plan_dispatch.py"),
                 "--mode", mode,
                 "--git-range", git_range,
                 "--output-dir", output_dir,
@@ -1710,7 +1710,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         # before allowing reconciliation to proceed.
         # Exit code 0 = all done, 2 = agents still running, 1 = error.
         status_cmd = [
-            sys.executable, str(SCRIPTS_DIR / "check-reviewer-agent-status.py"),
+            sys.executable, str(SCRIPTS_DIR / "agents_status.py"),
             "--output-dir", output_dir,
         ]
         try:
@@ -1958,9 +1958,9 @@ def main():
                 write_config(output_dir, config)
 
         # Note: review-context.json is NOT cleared here. For interactive runs,
-        # gather-review-context.py overwrites it at step 3. For non-interactive
+        # context.py overwrites it at step 3. For non-interactive
         # (bot) runs, the bot pre-writes it — deleting would break that flow.
-        # The output.directory field is needed by gather-review-context.py to
+        # The output.directory field is needed by context.py to
         # locate .branch-review-baseline.json for incremental reviews.
 
         # Initialize fresh pipeline state

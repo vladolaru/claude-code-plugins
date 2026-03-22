@@ -5,7 +5,7 @@ Lightweight version without Pydantic for immediate use.
 Provides structure and basic validation using plain Python.
 
 Usage:
-    from review_output_simple import ReviewOutputBuilder
+    from review.agent.output import ReviewOutputBuilder
 
     builder = ReviewOutputBuilder(pr_id="123", reviewer="security")
     builder.add_issue(
@@ -33,7 +33,7 @@ def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, se
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "review_telemetry",
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "review-telemetry.py"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "telemetry.py"),
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -317,7 +317,7 @@ class ReviewOutputBuilder:
 
         # Telemetry: log agent completion (best-effort)
         # Use full agent name (reviewer + "-reviewer") to match the
-        # agent_start event and .started file written by bootstrap-reviewer.py.
+        # agent_start event and .started file written by bootstrap.py.
         output = self.to_dict()
         _log_agent_complete_telemetry(
             output_dir,

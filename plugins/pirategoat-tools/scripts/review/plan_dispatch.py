@@ -8,10 +8,10 @@ dispatch plan: which agents to run, which to skip, and why.
 Replaces duplicated triage logic in command files with a single script.
 
 Usage:
-    python3 plan-review-dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review
-    python3 plan-review-dispatch.py --mode incremental --git-range "abc123..HEAD" --output-dir /tmp/review
-    python3 plan-review-dispatch.py --mode pr --git-range "main..HEAD" --output-dir /tmp/pr-review-42
-    python3 plan-review-dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review --changed-files-list "a.py,b.ts"
+    python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review
+    python3 plan_dispatch.py --mode incremental --git-range "abc123..HEAD" --output-dir /tmp/review
+    python3 plan_dispatch.py --mode pr --git-range "main..HEAD" --output-dir /tmp/pr-review-42
+    python3 plan_dispatch.py --mode full --git-range "main..HEAD" --output-dir /tmp/review --changed-files-list "a.py,b.ts"
 
 Output: JSON dispatch plan on stdout.
 
@@ -32,16 +32,16 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # =============================================================================
-# Import DOMAIN_CATALOG from review-scope.py (sibling script)
+# Import DOMAIN_CATALOG from agent/scope.py
 # =============================================================================
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 
-# Use importlib to handle hyphenated filename
+# Use importlib to load scope module from agent subdirectory
 import importlib.util
 
 _scope_spec = importlib.util.spec_from_file_location(
-    "review_scope", str(_SCRIPTS_DIR / "review-scope.py")
+    "review_scope", str(_SCRIPTS_DIR / "agent" / "scope.py")
 )
 _scope_mod = importlib.util.module_from_spec(_scope_spec)
 _scope_spec.loader.exec_module(_scope_mod)
@@ -56,17 +56,17 @@ filter_domain = _scope_mod.filter_domain
 # =============================================================================
 
 def load_registry(registry_path: Optional[str] = None) -> dict:
-    """Load agent registry from agent-registry.json.
+    """Load agent registry from agent_registry.json.
 
     Args:
         registry_path: Override path to registry file. Defaults to
-                       agent-registry.json in the same directory as this script.
+                       agent_registry.json in the same directory as this script.
 
     Returns:
         Dict with "agents" key containing agent configurations.
     """
     if registry_path is None:
-        registry_path = str(_SCRIPTS_DIR / "agent-registry.json")
+        registry_path = str(_SCRIPTS_DIR / "agent_registry.json")
     with open(registry_path) as f:
         return json.load(f)
 
@@ -708,7 +708,7 @@ def main():
     # Output JSON to stdout (for inline parsing by commands)
     print(json.dumps(plan, indent=2))
 
-    # Write to disk (for downstream scripts: check-reviewer-agent-status.py)
+    # Write to disk (for downstream scripts: agents_status.py)
     plan_path = os.path.join(args.output_dir, "dispatch-plan.json")
     os.makedirs(args.output_dir, exist_ok=True)
     with open(plan_path, "w") as f:
