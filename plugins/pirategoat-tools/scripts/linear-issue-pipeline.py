@@ -948,7 +948,7 @@ def _step_10_verify(mode, state, context, config, output_dir):
     complexity_path = os.path.join(output_dir, "complexity.json") if output_dir else "complexity.json"
 
     situation = [
-        "Verify the implementation, then decide whether an independent codex review is needed.",
+        "Verify the implementation, then decide whether an independent code review is needed.",
     ]
 
     actions = [
@@ -985,7 +985,7 @@ def _step_10_verify(mode, state, context, config, output_dir):
             "Tests pass (or failures documented as degradation)",
             "Build succeeds (or N/A)",
             "Lint clean (or N/A)",
-            "Complexity-based routing decision: step 11 (codex review) or step 13 (draft PR)",
+            "Complexity-based routing decision: step 11 (iterative code review) or step 13 (draft PR)",
         ],
     }
 
@@ -1004,14 +1004,14 @@ def _step_11_self_review(mode, state, context, config, output_dir):
         _PHASE_TRANSITIONS["VALIDATION"],
         "",
         "Implementation is complete and verified. Starting the iterative",
-        "review loop — an independent Codex review with multi-round",
+        "review loop — an independent automated review with multi-round",
         "pushback tracking and convergence detection.",
     ]
 
     code_review_dir = os.path.join(output_dir, 'code-review')
 
     actions = [
-        "1. Ensure all implementation changes are committed (Codex reviews committed changes only):",
+        "1. Ensure all implementation changes are committed (the review tool only sees committed changes):",
         "   - Run `git status` to check for uncommitted work",
         "   - If there are staged/unstaged changes, commit them with semantic commit messages",
         "   - Do NOT create blanket WIP commits — each commit should be a logical unit",
@@ -1047,22 +1047,27 @@ def _step_11_self_review(mode, state, context, config, output_dir):
         "",
         f"   Tail `{os.path.join(code_review_dir, 'review-progress.jsonl')}` for status.",
         "",
-        "4. When the review completes, follow the evaluation briefing.",
+        "4. If the script prints `UNAVAILABLE` — the review tool is not installed or not",
+        "   authenticated. The iterative review cannot run. Note this as a degradation",
+        "   and skip to step 13 (draft PR). Include in the PR description that the",
+        "   iterative code review was skipped.",
         "",
-        "5. After writing outcomes, advance (replace N with the current round number):",
+        "5. When the review completes, follow the evaluation briefing.",
+        "",
+        "6. After writing outcomes, advance (replace N with the current round number):",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action advance --round N \\",
         f"     --output-dir {code_review_dir}",
         f"   ```",
         "",
-        "6. If advance says 'Proceed to review round M', run the next review:",
+        "7. If advance says 'Proceed to review round M', run the next review:",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action review --round M \\",
         f"     --output-dir {code_review_dir}",
         f"   ```",
-        "   Then repeat from step 4. Only round 1 needs --merge-base and --context-file.",
+        "   Then repeat from step 5. Only round 1 needs --merge-base and --context-file.",
         "",
-        "7. When advance returns 'loop complete', proceed to step 12.",
+        "8. When advance returns 'loop complete', proceed to step 12.",
     ]
 
     return {
@@ -1191,7 +1196,7 @@ def _step_14_present_results(mode, state, context, config, output_dir):
         '     "verdict": "<valid | invalid | duplicate | already_fixed | needs_more_info>",',
         '     "pr_url": "<GitHub PR URL or null>",',
         '     "linear_comment_posted": true,',
-        '     "codex_review_applied": false,',
+        '     "independent_code_review": "<not_run | unavailable | clean | converged | max_rounds | hard_limit>",',
         '     "degradation_notes": []',
         "   }",
         "   ```",
@@ -1231,7 +1236,7 @@ def _write_failed_result(output_dir, mode, context, error, events=None):
         "verdict": None,
         "pr_url": None,
         "linear_comment_posted": False,
-        "codex_review_applied": False,
+        "independent_code_review": "not_run",
         "degradation_notes": [error],
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
@@ -1285,9 +1290,34 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         has_report = os.path.isfile(report_path)
         pr_url = state.get("pr_url")
         linear_posted = state.get("linear_comment_posted", False)
-        # Check if iterative review ran by looking for its result artifact
-        review_result = os.path.join(output_dir, "code-review", "review-loop-result.json")
-        codex_applied = os.path.isfile(review_result)
+        # Read iterative review result — surface the outcome, not just whether it ran.
+        # Values: "not_run" (skipped/small complexity), "unavailable" (tool missing),
+        # "clean" (zero_findings), "converged" (all_rejected/nitpicks_only),
+        # "max_rounds" (hit round limit), "hard_limit" (hit absolute ceiling).
+        _REVIEW_OUTCOME_MAP = {
+            "zero_findings": "clean",
+            "all_rejected": "converged",
+            "nitpicks_only": "converged",
+            "max_rounds": "max_rounds",
+            "hard_limit": "hard_limit",
+            "codex_unavailable": "unavailable",
+        }
+        review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
+        review_outcome = "not_run"
+        if os.path.isfile(review_result_path):
+            try:
+                with open(review_result_path) as _rf:
+                    _rdata = json.load(_rf)
+                termination = _rdata.get("termination", "")
+                review_outcome = _REVIEW_OUTCOME_MAP.get(termination, termination or "not_run")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Mark unavailable review as degradation so status reflects reality
+        if review_outcome == "unavailable":
+            note = "Independent code review skipped — review tool unavailable"
+            if note not in degradation_notes:
+                degradation_notes.append(note)
 
         # Derive status from what actually exists, not from absence of errors.
         # A run that never produced a verdict or report is failed, not successful.
@@ -1313,7 +1343,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "verdict": verdict,
             "pr_url": pr_url,
             "linear_comment_posted": linear_posted,
-            "codex_review_applied": codex_applied,
+            "independent_code_review": review_outcome,
             "degradation_notes": degradation_notes,
         }
 

@@ -404,7 +404,7 @@ class TestStep10Verify:
         assert "test" in text
 
     def test_includes_complexity_routing_decision(self, mod):
-        """Step 10 must tell the orchestrator to skip codex review for small changes."""
+        """Step 10 must tell the orchestrator to skip iterative code review for small changes."""
         g = mod.get_step_guidance(10, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g)
@@ -412,8 +412,8 @@ class TestStep10Verify:
         assert "small" in text.lower()
         # Should mention skipping steps 11-12 for small
         assert "step 13" in text or "step 11" in text
-        # Should mention codex reviewer decision
-        assert "codex" in text.lower() or "code-reviewer" in text.lower()
+        # Should mention code review decision
+        assert "code review" in text.lower() or "code-reviewer" in text.lower()
 
     def test_small_skips_to_step_13(self, mod):
         """Step 10 guidance should say small complexity skips to step 13."""
@@ -648,7 +648,7 @@ class TestStep14Orchestration:
             "verdict": "valid",
             "pr_url": None,
             "linear_comment_posted": True,
-            "codex_review_applied": False,
+            "independent_code_review": "not_run",
         }
         context = {"issue_id": "WOOPLUG-1234"}
         mod._orchestrate_step(14, "investigate", {}, state, context, str(tmp_path))

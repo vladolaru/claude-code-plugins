@@ -27,7 +27,7 @@ from .briefing import (
 from .telemetry import ReviewTelemetry
 from .backends.codex import (
     parse_codex_output, write_prompt_file, get_schema_path, get_rubric,
-    invoke_codex_review,
+    invoke_codex_review, check_codex_auth,
 )
 
 
@@ -95,11 +95,58 @@ def _write_loop_result(output_dir, state, termination):
     return result_data
 
 
+def _preflight_codex_cli():
+    """Check that Codex CLI is available and authenticated.
+
+    Returns None on success, or an error message string on failure.
+    Called once before any expensive work (prompt composition, diff computation).
+    """
+    import shutil
+    if not shutil.which("codex"):
+        return (
+            "UNAVAILABLE: Codex CLI is not installed or not on PATH.\n"
+            "The iterative review loop requires the Codex CLI to run."
+        )
+    authenticated, err = check_codex_auth()
+    if not authenticated:
+        return (
+            "UNAVAILABLE: Codex CLI is not authenticated.\n"
+            f"Auth check failed: {err}\n"
+            "The iterative review loop requires an authenticated Codex CLI."
+        )
+    return None
+
+
 def action_review(args):
     """REVIEW action -- invoke Codex, parse output, produce evaluation briefing."""
     output_dir = args.output_dir
     round_num = args.round
     os.makedirs(output_dir, exist_ok=True)
+
+    # Pre-flight: verify Codex CLI is available and authenticated before
+    # spending time on prompt composition, diff computation, etc.
+    preflight_err = _preflight_codex_cli()
+    if preflight_err:
+        # Log telemetry before writing result
+        telemetry = ReviewTelemetry(output_dir)
+        telemetry.progress("codex_unavailable", round=round_num)
+        telemetry.pipeline_event("codex_unavailable", round=round_num)
+        # Write structured result so callers can detect the condition
+        # programmatically (same shape as normal termination).
+        result_data = {
+            "termination": "codex_unavailable",
+            "rounds_completed": 0,
+            "total_findings": 0,
+            "total_fixed": 0,
+            "total_rejected": 0,
+            "total_deferred": 0,
+            "rounds": [],
+        }
+        result_path = os.path.join(output_dir, "review-loop-result.json")
+        with open(result_path, "w") as f:
+            json.dump(result_data, f, indent=2)
+        print(preflight_err)
+        return
 
     telemetry = ReviewTelemetry(output_dir)
     state = read_loop_state(output_dir)

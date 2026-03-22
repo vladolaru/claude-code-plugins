@@ -63,6 +63,8 @@ class ReviewOutputBuilder:
         self.review_start = datetime.now()
         self.tool_results_used = []
         self.overall_confidence = 0.95
+        self._not_applicable = False
+        self._skip_reason = None
 
     def add_issue(
         self,
@@ -175,8 +177,33 @@ class ReviewOutputBuilder:
         if tool_name not in self.tool_results_used:
             self.tool_results_used.append(tool_name)
 
+    def mark_not_applicable(self, reason: str):
+        """Mark this review as not applicable — changes not relevant to this domain.
+
+        Use this when the Quick Relevance Check determines the diff has no
+        changes relevant to this agent's specialty, or when NO_DOMAIN_FILES
+        is returned by scope discovery. Produces a 'not_applicable' verdict
+        so the reconciliator knows the agent abstained rather than endorsed.
+        """
+        if not reason or not reason.strip():
+            raise ValueError(
+                "mark_not_applicable requires a non-empty reason explaining "
+                "why the changes are not relevant to this domain."
+            )
+        if self.issues:
+            raise ValueError(
+                f"Cannot mark review as not_applicable — {len(self.issues)} issue(s) "
+                "already recorded. An agent that found issues reviewed the code; "
+                "it should not also claim the changes are irrelevant."
+            )
+        self._not_applicable = True
+        self._skip_reason = reason.strip()
+
     def _calculate_verdict(self) -> str:
         """Auto-calculate verdict from issues."""
+        if self._not_applicable:
+            return 'not_applicable'
+
         counts = {'critical': 0, 'high': 0, 'medium': 0}
 
         for issue in self.issues:
@@ -203,7 +230,7 @@ class ReviewOutputBuilder:
         for issue in self.issues:
             severity_counts[issue['severity']] += 1
 
-        return {
+        result = {
             'pr_id': self.pr_id,
             'reviewer': self.reviewer,
             'timestamp': self.timestamp,
@@ -224,6 +251,9 @@ class ReviewOutputBuilder:
                 'tool_results_used': self.tool_results_used if self.tool_results_used else None
             }
         }
+        if self._skip_reason:
+            result['skip_reason'] = self._skip_reason
+        return result
 
     def to_json(self, indent: int = 2) -> str:
         """Generate JSON string."""

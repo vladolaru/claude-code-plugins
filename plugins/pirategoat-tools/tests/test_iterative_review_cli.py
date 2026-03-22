@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -710,3 +711,79 @@ class TestZeroFindingsArtifact:
         assert loaded["termination"] == "zero_findings"
         assert loaded["rounds_completed"] == 1
         assert len(loaded["rounds"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight check — Codex CLI availability and auth
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, str(SCRIPTS_DIR))
+from iterative_review.__main__ import _preflight_codex_cli
+
+
+class TestPreflightCodexCli:
+    """_preflight_codex_cli checks availability and auth before any work."""
+
+    @patch("iterative_review.__main__.check_codex_auth", return_value=(True, ""))
+    @patch("shutil.which", return_value="/usr/local/bin/codex")
+    def test_returns_none_when_available_and_authed(self, mock_which, mock_auth):
+        assert _preflight_codex_cli() is None
+
+    @patch("shutil.which", return_value=None)
+    def test_returns_error_when_not_installed(self, mock_which):
+        result = _preflight_codex_cli()
+        assert result is not None
+        assert "UNAVAILABLE" in result
+        assert "not installed" in result or "not on PATH" in result
+
+    @patch("iterative_review.__main__.check_codex_auth", return_value=(False, "not logged in"))
+    @patch("shutil.which", return_value="/usr/local/bin/codex")
+    def test_returns_error_when_not_authenticated(self, mock_which, mock_auth):
+        result = _preflight_codex_cli()
+        assert result is not None
+        assert "UNAVAILABLE" in result
+        assert "not authenticated" in result
+        assert "not logged in" in result
+
+    @patch("shutil.which", return_value=None)
+    def test_skips_auth_check_when_not_installed(self, mock_which):
+        """Auth check should not run if codex is not even on PATH."""
+        result = _preflight_codex_cli()
+        assert "not installed" in result or "not on PATH" in result
+
+
+class TestPreflightIntegration:
+    """Pre-flight failure writes result file and exits cleanly."""
+
+    def test_unavailable_writes_result_and_exits_zero(self, tmp_path):
+        """When codex is not on PATH, script writes result file and exits 0."""
+        d = tmp_path / "review-output"
+        d.mkdir()
+        # Write a helper script that patches shutil.which before importing
+        helper = tmp_path / "run_preflight.py"
+        helper.write_text(
+            f"import sys\n"
+            f"sys.path.insert(0, '{SCRIPTS_DIR}')\n"
+            f"from unittest.mock import patch\n"
+            f"import types\n"
+            f"args = types.SimpleNamespace(\n"
+            f"    output_dir='{d}',\n"
+            f"    round=1, merge_base='abc123', context_file=None,\n"
+            f"    max_rounds=None, no_prior_analysis=False)\n"
+            f"with patch('shutil.which', return_value=None):\n"
+            f"    from iterative_review.__main__ import action_review\n"
+            f"    action_review(args)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, str(helper)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        assert "UNAVAILABLE" in result.stdout
+        # Verify result file was written
+        result_path = d / "review-loop-result.json"
+        assert result_path.exists()
+        data = json.loads(result_path.read_text())
+        assert data["termination"] == "codex_unavailable"
+        assert data["rounds_completed"] == 0

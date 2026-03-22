@@ -60,7 +60,7 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: ERROR`:** Report the error to the caller. Do NOT proceed with review.
 
-**On `STATUS: NO_DOMAIN_FILES`:** Report "No [domain] files to review" → APPROVE → exit.
+**On `STATUS: NO_DOMAIN_FILES`:** Call `builder.mark_not_applicable("No [domain] files in diff")`, save output, and exit. Do NOT perform any further analysis.
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted smallest-first (focused changes before large files). If many files exceed the budget, the `=== NOT DIFFED ===` section shows them with diffstat so you can selectively `git diff <range> -- <file>` the most important ones.
 
@@ -73,11 +73,14 @@ After reading the scope output, scan the diff hunks — the actual changed lines
 - Architecture reviewer: any new abstractions, coupling changes, or layer boundary crossings?
 - (Apply the same principle for your specific domain.)
 
-**If nothing in the changed lines is relevant to your specialty**, do not force a review. Produce an APPROVE verdict immediately:
+**If nothing in the changed lines is relevant to your specialty**, do not force a review. Mark the review as not applicable and exit:
 
 ```python
-builder.add_positive("Diff reviewed — no changes relevant to [your domain]")
-# Write output files and exit
+builder.mark_not_applicable("No changes relevant to [your domain] — diff contains only [brief description]")
+builder.add_positive("Diff scanned — no changes relevant to [your domain]")
+builder.set_files_reviewed(N)  # count of files you scanned
+result = builder.save(OUTPUT_DIR)
+# Then return STATUS: FINISHED signal as normal
 ```
 
 This is a backstop against false-positive dispatch. The triage system matched on file paths or keywords, but the actual code changes may not warrant your review. A 30-second scan that exits early saves minutes of wasted deep analysis.

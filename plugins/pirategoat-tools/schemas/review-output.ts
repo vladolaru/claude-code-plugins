@@ -15,7 +15,7 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 /**
  * Verdict options for reviews
  */
-export type Verdict = 'block' | 'request_changes' | 'approve' | 'comment';
+export type Verdict = 'block' | 'request_changes' | 'approve' | 'comment' | 'not_applicable';
 
 /**
  * Confidence score (0.0 to 1.0)
@@ -114,6 +114,7 @@ export interface ReviewOutput {
 
     // Summary
     verdict: Verdict;
+    skip_reason?: string; // Why the agent did not review (only when verdict is 'not_applicable')
     summary: {
         total_issues: number;
         by_severity: {
