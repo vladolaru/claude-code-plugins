@@ -1393,15 +1393,24 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                     events=events,
                 )
 
+    # When step 8 is re-run (re-triggered after clarification), clear the
+    # stale clarity_blocked flag so routing computes correctly — otherwise
+    # get_active_steps() drops steps 9-14 and the step-8 output points
+    # to step 15 instead of step 9. The assessment will be re-evaluated
+    # when the next step (9 or 15) enters _orchestrate_step.
+    if step == 8 and state.get("clarity_blocked"):
+        del state["clarity_blocked"]
+        if state.get("verdict") == "needs_clarification":
+            del state["verdict"]
+        # Reset events flag so the new assessment can emit fresh events
+        state.pop("_clarity_events_emitted", None)
+
     # Clarity gate check: runs on the step AFTER step 8 (step 9 in fix mode,
     # step 15 in investigate mode). By this point the LLM has executed step 8's
     # briefing and written clarity-assessment.json. We check it here because
     # _orchestrate_step runs BEFORE get_step_guidance — so checking on step 8
     # itself would read the file before it exists.
     #
-    # Skip when: already checked, already blocked, or issue has a terminal
-    # resolution (issue_resolved) — terminal verdicts like already_fixed,
-    # duplicate, invalid should not be overwritten with needs_clarification.
     # When resuming with skip_clarity_gate, clear the stale needs_clarification
     # verdict from the first (blocked) run so step 15 doesn't emit a contradictory
     # result like status: "success" + verdict: "needs_clarification".
