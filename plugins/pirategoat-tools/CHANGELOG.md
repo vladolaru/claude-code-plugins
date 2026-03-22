@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.85.0] - 2026-03-22
+
+### Added
+- **Iterative review: scoped sweep-for-siblings instruction.** Evaluation
+  briefing and command now instruct the session to check for sibling
+  instances of a finding within the branch's scope before fixing. Siblings
+  in files the branch already touches get fixed proactively (avoiding extra
+  rounds); siblings outside scope get logged as follow-ups for the PR
+  description rather than expanding the branch's mandate.
+
 ## [1.84.0] - 2026-03-22
 
 ### Added

@@ -114,7 +114,15 @@ intent, or flag code that's correct for reasons it can't see. Verify each
 claim against the actual code before deciding.
 
 - **Read the code** at the referenced location
-- **If real**: fix it. Right-size the fix based on where the root cause lives:
+- **If real**: fix it, but first check for siblings within the branch's scope.
+  The independent reviewer sees the diff, not the full codebase — it may flag
+  one instance of a problem that exists in several places we changed. Quickly
+  check whether the same pattern appears elsewhere in files this branch already
+  touches or code closely related to the branch's purpose, and fix those too.
+  Do NOT expand into unrelated code — a finding about one endpoint does not
+  justify sweeping every other endpoint. For important siblings outside scope,
+  note them as follow-ups for the PR description.
+  Then right-size the fix based on where the root cause lives:
   - Pre-existing code (before this branch): minimal, targeted fix
   - Our branch's code: if it's a symptom of a design decision we made, question
     the approach and refactor. That's not scope creep — it's fixing our work.
