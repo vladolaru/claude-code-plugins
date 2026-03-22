@@ -11,17 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Step 11 (Self-Review) replaced with iterative Codex review loop — multi-round
-  review with pushback tracking, convergence detection, and KISS fix discipline
-- Step 12 (Re-Verify) now skipped — verification handled within each review round
+  independent review with pushback tracking, convergence detection, and
+  root-cause-aware fix discipline
+- Step 12 (Re-Verify) now handled by review loop — each round includes verification
+- Step 13 (Create Draft PR) reads deferred items from pruned review result and
+  includes them as Follow-ups in the PR description
+- `codex_review_applied` in pipeline result now derived from artifact existence
+- VALIDATION phase transition updated for iterative review terminology
+- Steps 8, 10 updated from "codex reviewer" to "iterative review loop"
 
 ### Added
-- `scripts/iterative_review/` sub-module: loop state, telemetry, Codex backend,
-  briefing generation, CLI entry point
-- Severity-gated pushback log (P0-P1 rejections/deferrals only)
-- Codex analysis working docs for cross-round continuity
-- Deferred items JSONL for PR follow-ups section
+- `scripts/iterative_review/` sub-module with 7 files:
+  - `loop.py` — state management, convergence detection, max rounds (diff-size-based),
+    pushback log (severity-gated P0/P1), deferred items JSONL, outcome validation
+  - `telemetry.py` — JSONL progress log and pipeline events
+  - `backends/codex.py` — output parsing, prompt composition with review rubric,
+    repo-relative path normalization, CLI invocation from repo root
+  - `backends/codex-review-rubric.md` — 8 bug criteria, P0-P3 severity, conservative threshold
+  - `backends/codex-review-schema.json` — OpenAI Structured Outputs schema for findings
+  - `briefing.py` — evaluation briefings with root-cause-aware fix discipline,
+    verify-first mindset, completion summaries, degraded mode
+  - `__main__.py` — CLI entry point (`--action review|advance`)
+- Dynamic max rounds: starts at 3-10 based on diff size, extends +1 when fixed
+  P0/P1 findings appear at the limit, hard-capped at 20
+- Idempotent advance — retrying the same round doesn't duplicate records
+- Uncommitted changes detection — blocks review with actionable instructions
+- Stale artifact cleanup on round 1 rerun (findings, outcomes, prompts, analysis docs)
+- Round 2+ state validation — rejects review when no round 1 state exists
+- Cross-round deferred item pruning by (title, location) in review-loop-result.json
+- Dynamic default branch detection (origin/HEAD → main → trunk → develop)
+- Deferred items surfaced in PR description with LLM-level dedup instruction
 - Noise-filtered diff sizing (imports from review-scope.py)
-- Mid-loop recovery via idempotent rounds
 - Context size tracking with auto-truncation
 
 ## [1.79.0] - 2026-03-21
