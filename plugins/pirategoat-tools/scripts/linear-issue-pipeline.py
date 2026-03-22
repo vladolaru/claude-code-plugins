@@ -1011,10 +1011,10 @@ def _step_11_self_review(mode, state, context, config, output_dir):
     code_review_dir = os.path.join(output_dir, 'code-review')
 
     actions = [
-        "1. Commit the implementation before review (Codex reviews committed changes only):",
-        "   ```bash",
-        "   git add -A && git commit -m 'wip: implementation for review'",
-        "   ```",
+        "1. Ensure all implementation changes are committed (Codex reviews committed changes only):",
+        "   - Run `git status` to check for uncommitted work",
+        "   - If there are staged/unstaged changes, commit them with semantic commit messages",
+        "   - Do NOT create blanket WIP commits — each commit should be a logical unit",
         "",
         "2. Compute the merge base (detect default branch dynamically):",
         "   ```bash",
