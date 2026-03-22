@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evaluation steps as a normal round") but only one finding ID (`rN_raw`)
   exists in the degraded path. Reworded to frame the raw output as a single
   finding, with mixed resolutions noted in the summary field.
+- **Iterative review: degraded mixed-round action priority.** Added a
+  priority rule (fixed > deferred > rejected) for the single degraded-mode
+  outcome. Fixed takes precedence to prevent premature convergence (the
+  `fixed == 0` check would otherwise terminate the loop after real code
+  changes). Deferred items are called out explicitly so the completion step
+  can surface them as PR follow-ups.
+- **Iterative review: all_rejected message misreports deferred-only rounds.**
+  The `all_rejected` termination (triggered by `fixed == 0`) displayed "All
+  findings were rejected" even when some were deferred. Updated to "No code
+  changes needed — findings were rejected or deferred."
 
 ### Changed
 - **Iterative review: structured verification steps.** Replaced the triage
