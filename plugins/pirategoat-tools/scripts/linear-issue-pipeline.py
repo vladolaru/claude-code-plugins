@@ -1196,7 +1196,7 @@ def _step_14_present_results(mode, state, context, config, output_dir):
         '     "verdict": "<valid | invalid | duplicate | already_fixed | needs_more_info>",',
         '     "pr_url": "<GitHub PR URL or null>",',
         '     "linear_comment_posted": true,',
-        '     "independent_code_review_applied": false,',
+        '     "independent_code_review_completed": false,',
         '     "degradation_notes": []',
         "   }",
         "   ```",
@@ -1236,7 +1236,7 @@ def _write_failed_result(output_dir, mode, context, error, events=None):
         "verdict": None,
         "pr_url": None,
         "linear_comment_posted": False,
-        "independent_code_review_applied": False,
+        "independent_code_review_completed": False,
         "degradation_notes": [error],
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
@@ -1290,9 +1290,17 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         has_report = os.path.isfile(report_path)
         pr_url = state.get("pr_url")
         linear_posted = state.get("linear_comment_posted", False)
-        # Check if iterative review ran by looking for its result artifact
-        review_result = os.path.join(output_dir, "code-review", "review-loop-result.json")
-        review_applied = os.path.isfile(review_result)
+        # Check if iterative review completed by looking for its result artifact
+        # and verifying it didn't terminate due to unavailability.
+        review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
+        review_completed = False
+        if os.path.isfile(review_result_path):
+            try:
+                with open(review_result_path) as _rf:
+                    _rdata = json.load(_rf)
+                review_completed = _rdata.get("termination") != "codex_unavailable"
+            except (json.JSONDecodeError, OSError):
+                review_completed = False
 
         # Derive status from what actually exists, not from absence of errors.
         # A run that never produced a verdict or report is failed, not successful.
@@ -1318,7 +1326,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "verdict": verdict,
             "pr_url": pr_url,
             "linear_comment_posted": linear_posted,
-            "independent_code_review_applied": review_applied,
+            "independent_code_review_completed": review_completed,
             "degradation_notes": degradation_notes,
         }
 
