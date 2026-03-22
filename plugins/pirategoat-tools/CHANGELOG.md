@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Reviewer-requested focus** — `additional_instructions` from `run-config.json` surfaces prominently in Step 5 (dispatch review), agent bootstrap briefings, and Step 8 (reconciliation) to steer review attention based on the requester's guidance
+
 ## [1.80.0] - 2026-03-22
 
 ### Changed
