@@ -19,9 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reconciliator not-applicable awareness** — separates abstaining agents from
   reviewing agents in both narrative output and `meta.reconciliation` metadata
   (`not_applicable_count`, `not_applicable_agents`, `reviewing_agents`)
-- **Iterative review pre-flight check** — verifies Codex CLI is installed and
+- **Iterative review pre-flight check** — verifies the review CLI is installed and
   authenticated before spending time on prompt composition and diff computation;
-  exits with clear BLOCKED message if either check fails
+  exits with `UNAVAILABLE` message and structured result on failure
+- **`independent_code_review` outcome field** in Linear pipeline result — replaces
+  boolean `codex_review_applied` with a string enum (`not_run`, `unavailable`,
+  `clean`, `converged`, `max_rounds`, `hard_limit`) that surfaces what happened
+- **Linear pipeline step 11 unavailable handling** — when the review tool is
+  unavailable, notes degradation and skips to PR creation
 
 ### Changed
 - Reviewer protocol's Quick Relevance Check uses `mark_not_applicable()` instead of
@@ -30,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests-reviewer protocol's "No test files" path uses `mark_not_applicable()`
 - `Verdict` type extended with `'not_applicable'`; `skip_reason` field added to
   `ReviewOutput` schema
+- Linear pipeline step 11 briefing is now tool-agnostic (no CLI name in prose)
+- `mark_not_applicable()` raises if issues already recorded (prevents contradictory
+  output where verdict is `not_applicable` but findings exist)
 
 ## [1.81.0] - 2026-03-22
 
