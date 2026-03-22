@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.85.1] - 2026-03-22
+
+### Changed
+- Redesigned bootstrap integration tests: 257 mechanically-parameterized tests → 46 targeted tests covering every conditional path (43s → ~5s)
+- Domain routing tests use direct function calls instead of subprocess (23s → ~3s)
+- Fixed mock gap in review_scope tests where freshen_base_ref did real git fetch calls (~7s → <1s)
+- Full test suite: 90s → ~29s with zero coverage loss
+
 ## [1.85.0] - 2026-03-22
 
 ### Added
