@@ -1398,7 +1398,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
     # briefing and written clarity-assessment.json. We check it here because
     # _orchestrate_step runs BEFORE get_step_guidance — so checking on step 8
     # itself would read the file before it exists.
-    if step > 8 and not state.get("clarity_blocked") and not state.get("_clarity_checked"):
+    #
+    # Skip when: already checked, already blocked, or issue has a terminal
+    # resolution (issue_resolved) — terminal verdicts like already_fixed,
+    # duplicate, invalid should not be overwritten with needs_clarification.
+    _terminal = state.get("issue_resolved", False)
+    if step > 8 and not state.get("clarity_blocked") and not state.get("_clarity_checked") and not _terminal:
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
         if os.path.isfile(assessment_path):
             state["_clarity_checked"] = True
@@ -1407,7 +1412,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                     assessment = json.load(f)
                 if not assessment.get("clear_enough", True):
                     state["clarity_blocked"] = True
-                    state["verdict"] = "needs_clarification"
+                    # Only set verdict if no terminal verdict already exists
+                    if not state.get("verdict"):
+                        state["verdict"] = "needs_clarification"
                     if events:
                         hard_failed = [k for k, v in assessment.get("hard_gates", {}).items()
                                        if not v.get("pass", True)]
@@ -1428,8 +1435,17 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             summary="passed",
                         )
             except (json.JSONDecodeError, OSError):
+                # Fail closed: malformed assessment = block, not pass.
+                # LLM-written JSON being corrupt is realistic. Silently passing
+                # would defeat the gate. Block and note degradation.
+                state["clarity_blocked"] = True
+                if not state.get("verdict"):
+                    state["verdict"] = "needs_clarification"
+                state.setdefault("degradation_notes", []).append(
+                    "Clarity assessment file was unreadable — blocking as precaution"
+                )
                 if events:
-                    events.milestone(name="clarity_assessed", step=8, summary="passed (file unreadable)")
+                    events.milestone(name="clarity_assessed", step=8, summary="blocked (file unreadable)")
 
     if step == 15:
         # Write pipeline-result.json from state, deriving status from real outputs.
@@ -1634,6 +1650,37 @@ def main():
         if not config.get("interactive", True):
             # Bot mode: pipeline-result.json already written by orchestration
             sys.exit(1)
+        return
+
+    # --- Early exit: clarity gate blocked an implementation step ---
+    # If the clarity check just set clarity_blocked and we're on an implementation
+    # step (9-14), don't render that step's guidance — redirect to step 15.
+    # Without this, step 9 would render a full "Write Plan" briefing that the
+    # LLM might act on before reading the footer's "Next: Step 15".
+    if state.get("clarity_blocked") and not config.get("skip_clarity_gate") and 9 <= step <= 14:
+        active = get_active_steps(mode, config, state, context)
+        next_info = compute_next_step(step, active)
+        skipped_titles = []
+        for s in range(step, 15):
+            if s in _STEP_MAP:
+                skipped_titles.append(f"Step {s} ({_STEP_MAP[s]['title']})")
+        skip_reason = f"Skipped (clarity gate blocked): {', '.join(skipped_titles)}" if skipped_titles else None
+        guidance = {
+            "phase": "INVESTIGATION",
+            "title": "Clarity Gate — Blocked",
+            "situation": [
+                "The clarity assessment determined this issue lacks sufficient clarity for implementation.",
+                "Implementation steps are skipped. Proceeding to Present Results.",
+            ],
+            "actions": [
+                f"Call the pipeline for step 15 (Present Results).",
+            ],
+            "handoff": None,
+            "next_step": next_info,
+            "skip_reason": skip_reason,
+        }
+        output = format_output(step, guidance)
+        print(output)
         return
 
     # --- Compute routing AFTER orchestration (state may have changed) ---
