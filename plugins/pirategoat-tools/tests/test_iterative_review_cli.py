@@ -25,6 +25,20 @@ class TestCLIParsing:
         assert result.returncode != 0
         assert "merge-base" in result.stderr.lower() or "required" in result.stderr.lower()
 
+    def test_review_round2_rejects_missing_state(self, tmp_path):
+        """Round 2+ fails fast when no persisted state exists."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "review", "--round", "2",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode != 0
+        assert "round 1 must run first" in result.stderr.lower()
+
     def test_advance_action_requires_output_dir(self):
         """Advance requires --output-dir."""
         result = subprocess.run(

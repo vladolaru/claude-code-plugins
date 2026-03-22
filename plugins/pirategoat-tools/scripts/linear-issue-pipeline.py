@@ -1015,7 +1015,7 @@ def _step_11_self_review(mode, state, context, config, output_dir):
         "   ```bash",
         "   BASE_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')",
         "   BASE_BRANCH=${BASE_BRANCH:-main}",
-        "   MERGE_BASE=$(git merge-base \"$BASE_BRANCH\" HEAD)",
+        "   MERGE_BASE=$(git merge-base \"origin/$BASE_BRANCH\" HEAD)",
         "   ```",
         "",
         "2. Start the review loop (run in background):",

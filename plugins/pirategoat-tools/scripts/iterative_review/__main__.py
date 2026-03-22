@@ -138,13 +138,21 @@ def action_review(args):
                                  diff_lines_relevant=state["diff_lines_relevant"],
                                  noise_files_excluded=state.get("noise_files_excluded", 0))
     else:
-        # Round 2+: read existing state
+        # Round 2+: validate persisted state exists
+        if not state.get("merge_base"):
+            print(
+                f"ERROR: No persisted loop state found for round {round_num}. "
+                "Round 1 must run first to initialize state.",
+                file=sys.stderr
+            )
+            sys.exit(2)
         if state["terminated"]:
+            rounds = state.get("rounds", [])
             print(format_completion_briefing(
-                state["termination"], len(state["rounds"]),
-                sum(r.get("fixed", 0) for r in state["rounds"]),
-                sum(r.get("rejected", 0) for r in state["rounds"]),
-                sum(r.get("deferred", 0) for r in state["rounds"]),
+                state["termination"], len(rounds),
+                sum(r.get("fixed", 0) for r in rounds),
+                sum(r.get("rejected", 0) for r in rounds),
+                sum(r.get("deferred", 0) for r in rounds),
             ))
             return
         state["current_round"] = round_num
