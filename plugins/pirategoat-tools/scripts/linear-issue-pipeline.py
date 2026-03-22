@@ -1408,7 +1408,10 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
     if config.get("skip_clarity_gate") and state.get("clarity_blocked") and state.get("verdict") == "needs_clarification":
         del state["verdict"]
 
-    _terminal = state.get("issue_resolved", False)
+    # Terminal verdicts: issue_resolved (already_fixed via merged PR) or any
+    # verdict already in state that indicates no implementation should happen.
+    _TERMINAL_VERDICTS = {"already_fixed", "duplicate", "invalid", "needs_more_info"}
+    _terminal = state.get("issue_resolved", False) or state.get("verdict") in _TERMINAL_VERDICTS
     _step8_ran = 8 in state.get("completed_steps", [])
     if step > 8 and _step8_ran and not state.get("clarity_blocked") and not state.get("_clarity_checked") and not _terminal:
         assessment_path = os.path.join(output_dir, "clarity-assessment.json")
@@ -1417,7 +1420,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             try:
                 with open(assessment_path) as f:
                     assessment = json.load(f)
-                if not assessment.get("clear_enough", True):
+                # Schema validation: required keys must exist. An LLM-written
+                # file may omit clear_enough or hard_gates. Treat missing
+                # required keys as malformed (fail closed).
+                if "clear_enough" not in assessment or "hard_gates" not in assessment:
+                    raise ValueError("Missing required keys: clear_enough, hard_gates")
+                if not assessment["clear_enough"]:
                     state["clarity_blocked"] = True
                     if not state.get("verdict"):
                         state["verdict"] = "needs_clarification"
@@ -1440,13 +1448,13 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
                             step=8,
                             summary="passed",
                         )
-            except (json.JSONDecodeError, OSError):
-                # Fail closed: malformed JSON = block. LLM-written files can be corrupt.
+            except (json.JSONDecodeError, ValueError, OSError) as exc:
+                # Fail closed: malformed JSON or missing schema keys = block.
                 state["clarity_blocked"] = True
                 if not state.get("verdict"):
                     state["verdict"] = "needs_clarification"
                 state.setdefault("degradation_notes", []).append(
-                    "Clarity assessment file was unreadable — blocking as precaution"
+                    f"Clarity assessment file was invalid — blocking as precaution ({exc})"
                 )
                 if events:
                     events.milestone(name="clarity_assessed", step=8, summary="blocked (file unreadable)")
