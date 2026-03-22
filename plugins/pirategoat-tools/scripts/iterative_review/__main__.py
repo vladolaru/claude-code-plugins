@@ -385,13 +385,25 @@ def action_advance(args):
 
     findings_by_id = {f["id"]: f for f in findings}
 
+    # Extend max rounds if P0/P1 findings exist at the limit
+    max_rounds = state.get("max_rounds", 3)
+    has_critical = any(
+        findings_by_id[o["id"]].get("severity") in ("P0", "P1")
+        for o in outcomes
+    ) if outcomes else False
+    if has_critical and round_num >= max_rounds:
+        max_rounds += 1
+        state["max_rounds"] = max_rounds
+        telemetry.pipeline_event("max_rounds_extended", round=round_num,
+                                 new_max=max_rounds, reason="p0_p1_at_limit")
+
     # Check convergence
     all_p3 = all(findings_by_id[o["id"]].get("severity") == "P3"
                  for o in outcomes) if outcomes else False
     all_rej = fixed == 0  # no code changed
     termination = check_convergence(
         findings_count=len(findings), all_p3=all_p3, all_rejected=all_rej,
-        current_round=round_num, max_rounds=state.get("max_rounds", 3)
+        current_round=round_num, max_rounds=max_rounds
     )
 
     telemetry.pipeline_event("evaluation_completed", round=round_num,

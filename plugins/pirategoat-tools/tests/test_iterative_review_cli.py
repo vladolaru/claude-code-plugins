@@ -205,7 +205,7 @@ class TestAdvanceConvergence:
     """Advance action detects convergence conditions."""
 
     def test_max_rounds_convergence(self, tmp_path):
-        """Terminates with max_rounds when round equals max_rounds."""
+        """Terminates with max_rounds when round equals max_rounds (P2 findings)."""
         d = tmp_path / "code-review"
         d.mkdir()
         state = {"current_round": 3, "max_rounds": 3, "rounds": [],
@@ -214,7 +214,7 @@ class TestAdvanceConvergence:
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
         (d / "review-loop-state.json").write_text(json.dumps(state))
         findings = [
-            {"id": "r3_f1", "severity": "P1", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r3_f1", "severity": "P2", "title": "A", "body": "X", "location": "a.py:1"},
         ]
         (d / "round-3-findings.json").write_text(json.dumps(findings))
         outcomes = [
@@ -297,6 +297,96 @@ class TestAdvanceConvergence:
         updated_state = json.loads((d / "review-loop-state.json").read_text())
         assert updated_state["terminated"] is False
         assert "round 2" in result.stdout.lower()
+
+    def test_p1_at_max_rounds_extends(self, tmp_path):
+        """P1 findings at max rounds extend the limit instead of terminating."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 3, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r3_f1", "severity": "P1", "title": "Bug", "body": "X", "location": "a.py:1"},
+        ]
+        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
+        ]
+        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "3",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert updated_state["terminated"] is False
+        assert updated_state["max_rounds"] == 4
+        assert "round 4" in result.stdout.lower()
+
+    def test_p0_at_max_rounds_extends(self, tmp_path):
+        """P0 findings at max rounds also extend."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 3, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r3_f1", "severity": "P0", "title": "Critical", "body": "X", "location": "a.py:1"},
+        ]
+        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
+        ]
+        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "3",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert updated_state["max_rounds"] == 4
+
+    def test_p2_at_max_rounds_does_not_extend(self, tmp_path):
+        """P2 findings at max rounds terminate normally."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        state = {"current_round": 3, "max_rounds": 3, "rounds": [],
+                 "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": "r3_f1", "severity": "P2", "title": "Minor", "body": "X", "location": "a.py:1"},
+        ]
+        (d / "round-3-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
+        ]
+        (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "3",
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        assert updated_state["terminated"] is True
+        assert updated_state["termination"] == "max_rounds"
 
 
 class TestAdvanceResultFile:
