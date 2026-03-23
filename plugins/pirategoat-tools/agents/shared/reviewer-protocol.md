@@ -64,16 +64,11 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted smallest-first (focused changes before large files). If many files exceed the budget, the `=== NOT DIFFED ===` section shows them with diffstat so you can selectively `git diff <range> -- <file>` the most important ones.
 
-### Quick Relevance Check (Do This BEFORE Deep Review)
+### Quick Relevance Check (BEFORE Deep Review)
 
-After reading the scope output, scan the diff hunks — the actual changed lines, not just file names. Ask yourself: **does anything in these changes relate to my domain?**
+Scan the diff hunks (changed lines, not just file names): **does anything relate to your domain?**
 
-- Security reviewer: any user input handling, auth logic, query construction, escaping, or trust boundaries?
-- Performance reviewer: any query patterns, loops over data, caching changes, or asset loading?
-- Architecture reviewer: any new abstractions, coupling changes, or layer boundary crossings?
-- (Apply the same principle for your specific domain.)
-
-**If nothing in the changed lines is relevant to your specialty**, do not force a review. Mark the review as not applicable and exit:
+**If nothing is relevant**, mark not-applicable and exit:
 
 ```python
 builder.mark_not_applicable("No changes relevant to [your domain] — diff contains only [brief description]")
@@ -83,25 +78,19 @@ result = builder.save(OUTPUT_DIR)
 # Then return STATUS: FINISHED signal as normal
 ```
 
-This is a backstop against false-positive dispatch. The triage system matched on file paths or keywords, but the actual code changes may not warrant your review. A 30-second scan that exits early saves minutes of wasted deep analysis.
+This backstops false-positive dispatch — triage matched on file paths/keywords, but the actual changes may not warrant your review.
 
-**Do NOT use this to skip reviews that seem small or simple.** A one-line change in a security-sensitive function still warrants full review. The check is about domain relevance, not change size.
+**Small changes still warrant review.** A one-line change in a security-sensitive function needs full review. The check is domain relevance, not change size.
 
-**For large PRs (100+ matched files):** Use `--summary` to get a diffstat overview of ALL files without any diffs. Pick the most important files and read their diffs selectively. This is more context-efficient than the default mode for very large PRs.
+**Large PRs (100+ matched files):** Use `--summary` for a diffstat overview, then selectively read the most important diffs.
 
 ### When You Need More Context
 
-The script provides diffs. If a finding needs surrounding context:
-```bash
-# Read specific lines around a finding
-# Use the Read tool with offset+limit, not cat/head/tail
-```
+Use the Read tool with offset+limit for surrounding context around a finding.
 
 ### Tool Selection for Search
 
-When searching file contents on the working tree, use the **Grep tool** instead of `grep`/`rg` via Bash. The Grep tool supports glob filtering (`glob: "!{node_modules,build,dist}/**"` for exclusions), `head_limit`, context lines (`-A`/`-B`/`-C`), and multiple output modes (`content`, `files_with_matches`, `count`).
-
-Use Bash `grep`/`rg` only when piping from another command (e.g., `git show ref:file | grep`), using `git grep` at a specific ref, or filtering non-file output.
+Use the **Grep tool** for working-tree searches (supports glob filtering, context lines, multiple output modes). Use Bash `grep`/`rg` only when piping from another command or using `git grep` at a specific ref.
 
 ### If the Script Is Not Available
 
@@ -121,54 +110,47 @@ git diff --name-only $RANGE | grep -v -E '\.(lock|png|jpg|jpeg|gif|svg|ico|woff|
 
 ## RULE: Reviewing vs Exploring
 
-Two distinct activities with different rules:
+| Activity | Scope | Generates findings? |
+|----------|-------|---------------------|
+| **Reviewing** | Changed files only (the diff) | YES |
+| **Exploring** | Any file in the codebase | NO |
 
-| Activity | Purpose | Scope | Generates findings? |
-|----------|---------|-------|---------------------|
-| **Reviewing** | Analyze code for issues | Changed files only (the diff) | YES |
-| **Exploring** | Understand context | Any file in the codebase | NO |
-
-Exploration is expected and encouraged: reading project conventions, understanding call sites, checking how similar code works elsewhere.
+Explore freely (conventions, call sites, similar patterns) — exploration informs review but never produces findings.
 
 **STOP CHECK — before every `add_issue()` call:**
 
-State the file path and line number for this finding. Then answer two questions:
-1. Is this file in `CHANGED_FILES`? (If NO → drop: not in diff)
-2. Is this line in a diff hunk? (If NO → drop: pre-existing code)
+State the file path and line number, then verify:
+1. Is this file in `CHANGED_FILES`? (NO → drop)
+2. Is this line in a diff hunk? (NO → drop)
 
-If either answer is NO, this is exploration context, not a finding. Do NOT call `add_issue()`. This check is mandatory — findings on unchanged code are false positives.
+Both must be YES. Findings on unchanged code are false positives.
 
-**CRITICAL — line numbers must be SOURCE FILE line numbers:**
+**CRITICAL — use SOURCE FILE line numbers only:**
 
-When you read a diff file (like `scoped-diff.patch`) with the Read tool, the tool adds its own display line numbers (e.g., `227→+class Foo`). These are the line numbers **within the patch file**, NOT the source file line numbers. Do NOT use them in `add_issue(line=...)`.
+The Read tool's display numbers (e.g., `227→+class Foo`) are positions *within the patch file*. Use `@@ ... @@` hunk headers for source lines:
+- `@@ -0,0 +1,116 @@` → new file starts at source line 1
+- `@@ -20,6 +20,11 @@` → changed section starts at source line 20
+- Count forward from `+N` through `+` and ` ` (context) lines
 
-To find the correct source file line number, use the `@@ ... @@` hunk headers in the diff:
-- `@@ -0,0 +1,116 @@` means the new file starts at source line 1
-- `@@ -20,6 +20,11 @@` means the changed section starts at source line 20
-- Count forward from the hunk header's `+N` value through `+` and ` ` (context) lines to find the source line for any specific change
+When uncertain, read the actual source file to confirm.
 
-If you are unsure of the source line number, read the actual file with the Read tool to confirm.
-
-For every finding that passes the STOP CHECK, also verify:
-1. **Is this in the changed code?** Issues in unchanged code are NOT findings.
-2. **Is this new or pre-existing?** Only report issues INTRODUCED by this change.
-3. **Would I bet my reputation on this?** If uncertain, verify deeper or drop it.
-4. **Am I reviewing the change, or the codebase?** Evaluate THIS CHANGE, not the entire codebase.
-5. **Is this a bug or a preference?** For LOW and MEDIUM findings: if this is a formatting choice, naming opinion, code organization style, or "I would have done it differently" without a concrete defect, regression, or security concern — it's a preference. Drop it.
-6. **Did I verify my factual claim?** If your finding says code does or doesn't do something specific (missing close, missing attribute, missing null check, O(N^2) complexity), you MUST read the actual implementation lines with the Read tool to confirm. Do not infer behavior from context or variable names. 47% of false positives come from factual claims that don't match the actual code.
-7. **Can I cite my source?** When stating specific facts — numbers, counts, line references, API behaviors, git metadata — cite the tool output that produced them. If you didn't run a command or read a file to obtain a fact, do not present it as verified.
+**Finding quality gates** (verify each before `add_issue()`):
+1. **Changed code only.** Report issues INTRODUCED by this change.
+2. **Bet your reputation.** Uncertain → verify deeper or drop.
+3. **Review the change, not the codebase.** Evaluate THIS CHANGE only.
+4. **Bug, not preference.** For LOW/MEDIUM: formatting opinions, naming style, "I'd do it differently" without a concrete defect → drop.
+5. **Verify factual claims.** Read the actual implementation with the Read tool before claiming missing checks, wrong complexity, etc. (47% of false positives are unverified factual claims.)
+6. **Cite your source.** Numbers, counts, line refs, API behaviors → cite the tool output. No command or file read = not verified.
 
 <example type="CORRECT">
-Finding: "process_payment() at line 42 concatenates user input into SQL query — this line was ADDED in this PR."
-Reason: Changed code, new issue, verified in diff.
+"process_payment() at line 42 concatenates user input into SQL query — this line was ADDED in this PR."
 </example>
 
 <example type="INCORRECT">
-Finding: "validate_email() at line 200 is missing sanitization — found while exploring the file for context."
-Reason: Unchanged code, pre-existing issue, discovered during exploration.
+"validate_email() at line 200 is missing sanitization — found while exploring the file for context."
 </example>
 
-**Agents that explore preexisting code** (patterns-reviewer, history-insights-reviewer): when searching for what already exists, search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes — searching HEAD would find the very code you're supposed to be comparing against.
+**Preexisting-code agents** (patterns-reviewer, history-insights-reviewer): search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes.
 
 ## Output Directory
 
@@ -240,11 +222,11 @@ Do NOT return full review text. The reconciliator reads your files.
 
 ## Project-Specific Knowledge
 
-Before reviewing, search for and READ project-specific documentation:
+Before reviewing, search for project-specific documentation:
 
 ```bash
 find . -type f \( -name "CLAUDE.md" -o -name "*.md" \) -path "*/.claude/*" 2>/dev/null | head -20
 ```
 
-Look for: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. Read and apply project-specific standards before generic patterns. **Project standards override generic patterns.** Apply project conventions before your own domain expertise. This is **exploration** — it informs your review but is not itself reviewable.
+Read: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. **Project standards override generic patterns.** Apply project conventions before domain expertise. This is exploration — it informs review but is not itself reviewable.
 

@@ -452,7 +452,7 @@ class TestAdditionalInstructionsInjection:
         )
         assert "=== REVIEWER-REQUESTED FOCUS ===" in output
         assert "Focus on error handling in the retry logic." in output
-        assert "Keep this front-of-mind" in output
+        assert "Prioritize findings" in output
 
     def test_section_absent_when_none(self):
         output = build_output(

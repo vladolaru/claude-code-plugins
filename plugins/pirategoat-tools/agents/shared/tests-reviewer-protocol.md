@@ -1,107 +1,68 @@
 # Shared Tests Reviewer Protocol
 
-Standard protocol for all test review agents. Read this AFTER `reviewer-protocol.md`.
+Read this AFTER `reviewer-protocol.md`.
 
-## RULE 0 (MOST IMPORTANT): Tests Must Verify Behavior, Not Implementation
+## RULE 0 (MOST IMPORTANT): Tests Verify Behavior, Not Implementation
 
-A test has value only if it would fail when the code is broken and pass when the code is correct.
+A test has value only if it fails when code is broken and passes when code is correct. Fewer meaningful tests beat many overprescriptive tests.
 
-**Corollary: Fewer meaningful tests beat many overprescriptive tests.** A test suite's value comes from testing meaningful business logic, not from test count. Overprescriptive tests create maintenance burden and erode trust.
-
-## Verification Protocol (Apply to Each Test)
+## Verification Protocol (Each Test)
 
 <verification_questions>
-1. What specific behavior does this test verify? [Not "what code does it call"]
-2. Under what condition would this test fail? [Must be a real code bug]
-3. Would this test pass if the implementation was refactored but behavior unchanged?
+1. What specific behavior does this test verify? [Not "what code it calls"]
+2. What condition would make this test fail? [Must be a real bug]
+3. Would this test pass after a behavior-preserving refactor?
 4. What is the single assertion's purpose?
-5. Is the test name accurate about what's actually tested?
-6. Could a non-buggy change (copy edit, rename, refactor) cause this test to fail? [If yes -> overprescriptive]
-7. Is there a structural or behavioral way to assert instead of matching exact strings?
+5. Is the test name accurate?
+6. Could a non-buggy change (rename, reword, add field) break this test? [Yes → overprescriptive]
+7. Can assertions use structural/behavioral checks instead of exact strings?
 </verification_questions>
 
-**Critical:** Ask these as open questions, not yes/no confirmations.
+Ask these as open questions, not yes/no confirmations.
 
 ## Overprescriptive Test Diagnosis
 
-Apply the **Refactoring Resilience Test:**
-1. Imagine three harmless changes: renaming internal variable, rewording string, adding new field
-2. Would any break this test? If yes -> overprescriptive
-3. What is the test ACTUALLY protecting?
-4. Can the assertion be structural? Error codes > messages, `toMatchObject` > `toEqual`, semantic selectors > CSS classes
+**Refactoring Resilience Test:** Imagine renaming an internal variable, rewording a string, adding a new field. Would any break this test?
+- Yes → overprescriptive. What is the test actually protecting?
+- Prefer: error codes over messages, `toMatchObject` over `toEqual`, semantic selectors over CSS classes
 
-## Test Quality Categories
+## Test Quality Severity
 
-### CRITICAL (False Confidence)
-- Tests without assertions (always pass)
-- Tests that assert on mock return values (tautology)
-- Tests with disabled/commented assertions
+**CRITICAL (False Confidence):** Tests without assertions (always pass), asserting on mock return values (tautology), disabled/commented assertions.
 
-### HIGH (Reduced Confidence)
-- Flaky tests (time/random dependencies without mocking)
-- Order-dependent tests (shared mutable state)
-- Tests verifying implementation details instead of behavior
-- Excessive mocking (testing mock wiring, not real code)
-- Overprescriptive tests (break on harmless refactoring, copy edits, new fields)
+**HIGH (Reduced Confidence):** Flaky tests (time/random), order-dependent (shared state), implementation-detail verification, excessive mocking, overprescriptive (break on harmless changes).
 
-### MEDIUM (Best Practice Violations)
-- Poor AAA structure
-- Vague test names
-- Missing edge cases
-- Magic values without context
+**MEDIUM (Best Practice):** Poor AAA structure, vague names, missing edge cases, magic values.
 
-## Test Quality Red Flags
+## Red Flags
 
 **Instant CRITICAL:**
 
-| Pattern | Why Critical | Look For |
-|---------|-------------|----------|
-| No assertion | Test always passes | `$this->assertTrue(true)`, missing expect |
-| Testing mocks | Tests nothing | `expect(mock.method()).toBe(mockedValue)` |
-| Commented assertions | Disabled verification | `// $this->assert...` |
+| Pattern | Look For |
+|---------|----------|
+| No assertion | `$this->assertTrue(true)`, missing expect |
+| Testing mocks | `expect(mock.method()).toBe(mockedValue)` |
+| Commented assertions | `// $this->assert...` |
 
-**HIGH—overprescriptive:**
+**HIGH — overprescriptive:**
 
-| Pattern | Why Harmful | Look For |
-|---------|------------|----------|
-| Exact error message assertions | Breaks on copy changes | `assertSame('The email...', $error)` when error codes exist |
-| Large snapshot tests | Never meaningfully reviewed | `toMatchSnapshot()` on full components/pages |
-| Full object equality for partial checks | Breaks when fields added | `toEqual({...20 fields...})` when testing 2-3 properties |
-| Call order assertions | Tests implementation | `toHaveBeenCalledBefore()` |
-| Exact HTML/markup assertions | Breaks on CSS refactoring | `assertStringContainsString('<div class="exact classes">')` |
+| Pattern | Look For |
+|---------|----------|
+| Exact error messages | `assertSame('The email...', $error)` when error codes exist |
+| Large snapshots | `toMatchSnapshot()` on full components/pages |
+| Full object equality | `toEqual({...20 fields...})` when testing 2-3 properties |
+| Call order assertions | `toHaveBeenCalledBefore()` |
+| Exact markup | `assertStringContainsString('<div class="exact classes">')` |
 
 ## Review Checklist
 
-**Test Quality (CRITICAL)**
-```
-[] Tests have meaningful assertions?
-[] Tests verify behavior, not implementation details?
-[] Tests are independent (no shared mutable state)?
-[] Tests are deterministic (no time/random without mocking)?
-```
+**CRITICAL:** Meaningful assertions? Behavior-based? Independent? Deterministic?
 
-**Test Resilience (HIGH)**
-```
-[] Tests survive refactoring?
-[] Assertions use structural checks over exact copy?
-[] No snapshot abuse?
-[] Assertions target specific properties, not entire data shapes?
-[] Copy changes won't break tests?
-```
+**HIGH:** Survives refactoring? Structural assertions? No snapshot abuse? Specific properties? Copy-safe?
 
-**Test Structure (HIGH)**
-```
-[] Clear AAA structure?
-[] Descriptive test names?
-[] Mocking at system boundaries only?
-```
+**HIGH:** Clear AAA? Descriptive names? Mocking at boundaries only?
 
-**Coverage (MEDIUM)**
-```
-[] Happy path covered?
-[] Error cases tested?
-[] Edge cases covered?
-```
+**MEDIUM:** Happy path? Error cases? Edge cases?
 
 ## Expected Situations
 

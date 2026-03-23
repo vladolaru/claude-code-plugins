@@ -498,9 +498,8 @@ def build_output(
     # understand the PR's purpose before reading the diff.
     if pr_intent:
         lines.append("=== PR INTENT ===")
-        lines.append("Use this context to calibrate severity — issues on the PR's")
-        lines.append("critical path deserve higher severity than issues on")
-        lines.append("tangentially touched code.")
+        lines.append("Calibrate severity: issues on the PR's critical path deserve")
+        lines.append("higher severity than tangentially touched code.")
         lines.append("")
         lines.append(pr_intent)
         lines.append("")
@@ -510,8 +509,7 @@ def build_output(
     # what changed, why, and what to focus on during review.
     if change_purpose:
         lines.append("=== REVIEW FOCUS (pipeline synthesis) ===")
-        lines.append("The review pipeline analyzed the full PR context and produced")
-        lines.append("this summary. Use it alongside PR INTENT to focus your review.")
+        lines.append("Pipeline-distilled summary of what changed, why, and review focus areas.")
         lines.append("")
         lines.append(change_purpose)
         lines.append("")
@@ -521,12 +519,11 @@ def build_output(
     # rules → context → steering → content.
     if additional_instructions:
         lines.append("=== REVIEWER-REQUESTED FOCUS ===")
-        lines.append("The person requesting this review specifically asked:")
+        lines.append("The requester specifically asked:")
         lines.append("")
         lines.append(f"> {additional_instructions}")
         lines.append("")
-        lines.append("Keep this front-of-mind throughout your analysis. Prioritize findings")
-        lines.append("related to this guidance.")
+        lines.append("Prioritize findings related to this guidance throughout your analysis.")
         lines.append("")
 
     # Review Budget — scope-proportionate tool call calibration
@@ -534,17 +531,10 @@ def build_output(
         ceiling = int(review_budget * 1.5)
         lines.append("=== REVIEW BUDGET ===")
         lines.append(f"Target: ~{review_budget} tool calls. Hard ceiling: {ceiling}.")
+        lines.append("Calibrated to YOUR scope. The pipeline waits for the slowest agent.")
         lines.append("")
-        lines.append("This budget is calibrated to YOUR scope, not the full PR.")
-        lines.append("- **You are on the critical path.** The pipeline waits for the")
-        lines.append("  slowest agent before reconciliation starts.")
-        lines.append("- **Diminishing returns.** After ~15-20 calls without new findings,")
-        lines.append("  each additional call is unlikely to surface anything.")
-        lines.append("")
-        lines.append(f"At **{review_budget} calls**, check: do I have open findings to write?")
-        lines.append("If yes, finish the current lead and write. If no, wrap up now.")
-        lines.append(f"At **{ceiling} calls** you MUST stop exploring and write your output")
-        lines.append("immediately — no exceptions, even if you feel there's more to find.")
+        lines.append(f"At {review_budget} calls: open findings → finish and write. No findings → wrap up.")
+        lines.append(f"At {ceiling} calls: STOP exploring. Write output immediately, no exceptions.")
         lines.append("")
 
     # Section 2: Review Content (middle position — processing zone)
@@ -582,16 +572,12 @@ def build_output(
         lines.append(f"Full scope written to: {scope_file}")
         if estimated_tokens > 20000:
             lines.append(
-                f"WARNING: This file (~{estimated_tokens:,} tokens) will EXCEED the Read tool's 25,000 token limit."
-            )
-            lines.append(
-                f"You MUST read it in chunks: use offset/limit (e.g., offset=0 limit=300, then offset=300 limit=300)."
-            )
-            lines.append(
-                "Interleave diff chunks with source file reads to keep context adjacent."
+                f"WARNING: ~{estimated_tokens:,} tokens exceeds Read tool's 25K limit. "
+                "Read in chunks: offset=0 limit=300, then offset=300 limit=300. "
+                "Interleave diff chunks with source file reads."
             )
         else:
-            lines.append("Read it with offset/limit parameters (e.g., offset=200, limit=200) to avoid re-truncation.")
+            lines.append("Read with offset/limit (e.g., offset=200, limit=200) to continue.")
     else:
         lines.append(scope_output)
 
@@ -643,16 +629,14 @@ def build_output(
     lines.append(f'      description="What is wrong", recommendation="How to fix",')
     lines.append(f'      category="category-name", line=42, confidence=0.9)')
     lines.append(f"")
-    lines.append(f"  IMPORTANT: line= must be the SOURCE FILE line number, not the patch file line number.")
-    lines.append(f"  If you read a diff/patch file, the Read tool's display line numbers (e.g., 227→) are")
-    lines.append(f"  positions within the patch, not the source. Use @@ hunk headers to find source lines.")
+    lines.append(f"  line= MUST be the SOURCE FILE line number (from @@ hunk headers),")
+    lines.append(f"  not the Read tool's display line numbers (e.g., 227→).")
     lines.append(f'  builder.add_positive("Positive observation text")')
     lines.append(f'  builder.set_files_reviewed(N)')
     lines.append(f'  builder.set_confidence(0.85)')
     lines.append(f'  result = builder.save("{output_dir}")  # returns {{"json": path, "markdown": path}}')
     lines.append(f"")
-    lines.append(f"  IMPORTANT: save() confirms success via its return value.")
-    lines.append(f"  Do NOT read the output files back to verify — proceed directly to the STATUS signal.")
+    lines.append(f"  save() confirms success via its return value. Proceed directly to the STATUS signal.")
     lines.append("")
     lines.append("Return signal format:")
     lines.append("  STATUS: FINISHED")

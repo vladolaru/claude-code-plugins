@@ -97,7 +97,7 @@ class TestCategoryRepresentatives:
         assert "=== REVIEW BUDGET ===" in stdout
         assert "Target: ~" in stdout
         assert "Hard ceiling:" in stdout
-        assert "MUST stop" in stdout
+        assert "STOP exploring" in stdout
 
         # Conditional sections absent for standard agents
         assert "=== DOMAIN RULES ===" not in stdout
@@ -362,7 +362,11 @@ class TestReviewOutputBuilderAPIExample:
         """The usage example must tell agents not to verify save() output."""
         output = self._build()
         lower = output.lower()
-        assert "do not" in lower and ("read" in lower or "verify" in lower) and ("output file" in lower or "save()" in lower)
+        # The instruction must convey "proceed directly after save()" — either
+        # via "do not read/verify" or "proceed directly to the status signal".
+        has_do_not = "do not" in lower and ("read" in lower or "verify" in lower) and ("output file" in lower or "save()" in lower)
+        has_proceed_directly = "proceed directly" in lower and "save()" in lower
+        assert has_do_not or has_proceed_directly
 
 
 class TestBootstrapOutputSizeCap:
