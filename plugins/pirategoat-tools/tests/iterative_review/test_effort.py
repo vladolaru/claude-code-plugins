@@ -43,7 +43,7 @@ class TestEffortTiers:
 class TestRoundPositionArc:
     @pytest.mark.parametrize("round_num,expected", [
         (1, "high"),
-        (2, "high"),
+        (2, "medium"),
         (3, "medium"),
         (4, "medium"),
         (5, "medium"),
@@ -54,7 +54,7 @@ class TestRoundPositionArc:
         (10, "medium"),
     ])
     def test_base_effort_from_round(self, round_num, expected):
-        """Rounds 1-2 start at high, rounds 3+ start at medium."""
+        """Round 1 starts at high, rounds 2+ start at medium."""
         effort, reason = resolve_effort(round_num, diff_lines=100)
         assert effort == expected
 
@@ -99,8 +99,8 @@ class TestDiffSizeOverride:
         """Diff size override applies regardless of round number."""
         for rnd in [1, 2, 3, 5, 10]:
             effort, _ = resolve_effort(rnd, diff_lines=5000)
-            # Round 1-2 start high, bump to xhigh; round 3+ start medium, bump to high
-            if rnd <= 2:
+            # Round 1 starts high, bump to xhigh; rounds 2+ start medium, bump to high
+            if rnd == 1:
                 assert effort == "xhigh", f"Round {rnd} with 5000 lines"
             else:
                 assert effort == "high", f"Round {rnd} with 5000 lines"
@@ -139,25 +139,42 @@ class TestSignalOverrides:
         assert effort == "high"
 
     def test_p0_rejected_bumps_high_to_xhigh(self):
-        """P0/P1 finding with action 'rejected' bumps high -> xhigh."""
+        """P0/P1 finding with action 'rejected' bumps high -> xhigh.
+
+        Round 2 base is medium, so we use a large diff to get to high first,
+        then the rejected signal bumps high -> xhigh.
+        """
         prior_findings = [{"id": "r1_f1", "severity": "P0", "title": "Bug"}]
         prior_outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "Not valid"}]
         effort, reason = resolve_effort(
-            2, diff_lines=100,
+            2, diff_lines=3000,
             prior_findings=prior_findings, prior_outcomes=prior_outcomes,
         )
+        # medium -> high (diff) -> xhigh (rejected)
         assert effort == "xhigh"
         assert "rejected" in reason
 
     def test_p1_rejected_bumps_high_to_xhigh(self):
-        """P1 rejected also bumps."""
+        """P1 rejected also bumps when at high tier."""
         prior_findings = [{"id": "r1_f1", "severity": "P1", "title": "Issue"}]
         prior_outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "Wrong"}]
         effort, reason = resolve_effort(
+            2, diff_lines=3000,
+            prior_findings=prior_findings, prior_outcomes=prior_outcomes,
+        )
+        # medium -> high (diff) -> xhigh (rejected)
+        assert effort == "xhigh"
+
+    def test_p0_rejected_on_medium_does_not_bump(self):
+        """Rejected only bumps high -> xhigh, not medium -> high."""
+        prior_findings = [{"id": "r1_f1", "severity": "P0", "title": "Bug"}]
+        prior_outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "No"}]
+        effort, _ = resolve_effort(
             2, diff_lines=100,
             prior_findings=prior_findings, prior_outcomes=prior_outcomes,
         )
-        assert effort == "xhigh"
+        # medium base, rejected doesn't apply at medium tier
+        assert effort == "medium"
 
     def test_p2_fixed_does_not_bump(self):
         """P2 findings don't trigger signal overrides."""
@@ -256,15 +273,15 @@ class TestOverrideStacking:
         # medium -> high (fixed) -> xhigh (rejected)
         assert effort == "xhigh"
 
-    def test_round_2_high_with_rejected_goes_xhigh(self):
-        """Round 2 (base=high) + rejected P0/P1 -> xhigh."""
+    def test_round_2_medium_with_fixed_goes_high(self):
+        """Round 2 (base=medium) + fixed P0/P1 -> high."""
         prior_findings = [{"id": "r1_f1", "severity": "P0", "title": "Bug"}]
-        prior_outcomes = [{"id": "r1_f1", "action": "rejected", "reasoning": "No"}]
+        prior_outcomes = [{"id": "r1_f1", "action": "fixed", "summary": "Done"}]
         effort, _ = resolve_effort(
             2, diff_lines=100,
             prior_findings=prior_findings, prior_outcomes=prior_outcomes,
         )
-        assert effort == "xhigh"
+        assert effort == "high"
 
     def test_never_exceeds_xhigh(self):
         """All overrides active: still capped at xhigh."""

@@ -58,8 +58,8 @@ def resolve_effort(round_num, diff_lines, prior_findings=None, prior_outcomes=No
     Resolution rules (applied in order, each step can only bump UP, never down):
 
     Step 1 - Base effort from round position:
-        Rounds 1-2: high
-        Rounds 3+:  medium
+        Round 1:  high
+        Round 2+: medium
 
     Step 2 - Diff size override (every round):
         diff_lines >= 3000: bump one tier
@@ -72,7 +72,7 @@ def resolve_effort(round_num, diff_lines, prior_findings=None, prior_outcomes=No
     reasons = []
 
     # Step 1: Base effort from round position
-    if round_num <= 2:
+    if round_num == 1:
         effort = "high"
     else:
         effort = "medium"
