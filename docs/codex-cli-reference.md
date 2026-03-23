@@ -333,6 +333,33 @@ Functionally equivalent — both are UUID conversation identifiers.
 
 ## 6. Additional Configuration
 
+### Reasoning Effort (`model_reasoning_effort`)
+
+Controls how deeply the model reasons before responding. Only applies to reasoning-capable models (o-series, gpt-5+).
+
+| Level | Description |
+|---|---|
+| `minimal` | Least reasoning; closest to pure instruction-following |
+| `low` | Light reasoning |
+| `medium` | **Default** |
+| `high` | Deep reasoning |
+| `xhigh` | Extra high — maximum reasoning depth |
+
+Three ways to set it:
+
+```bash
+# 1. Runtime override via -c flag
+codex exec -c 'model_reasoning_effort="high"' "Review this code"
+
+# 2. Combined with model flag
+codex exec -m gpt-5 -c 'model_reasoning_effort="xhigh"' "Analyze this architecture"
+
+# 3. Via config.toml (global default)
+# model_reasoning_effort = "high"
+```
+
+Interactive TUI: `/model` command lets you change model and reasoning effort mid-conversation.
+
 ### Configuration Profiles
 
 ```toml
@@ -340,12 +367,17 @@ Functionally equivalent — both are UUID conversation identifiers.
 model = "o3"
 model_reasoning_effort = "high"
 
+[profiles.deep]
+model = "gpt-5"
+model_reasoning_effort = "xhigh"
+
 [profiles.fast]
 model = "gpt-4.1-mini"
 ```
 
 ```bash
 codex exec -p review "Review this code"
+codex exec -p deep "Analyze this complex architecture"
 ```
 
 ### Approval Policies
