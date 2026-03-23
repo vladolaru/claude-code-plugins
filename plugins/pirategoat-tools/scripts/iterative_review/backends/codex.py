@@ -177,7 +177,8 @@ def get_rubric():
         return ""
 
 
-def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800):
+def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800,
+                        effort=None):
     """Invoke `codex exec` with a custom review prompt and structured output.
 
     Uses `codex exec` (NOT `codex exec review`) with --output-schema for
@@ -188,6 +189,9 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800):
         schema_file: Path to the JSON Schema for structured output
         output_file: Path for -o flag (captures structured JSON)
         timeout: Seconds before killing (default 1800 = 30 min)
+        effort: Optional reasoning effort level (e.g. 'high', 'xhigh').
+                When set, injects -c model_reasoning_effort="<effort>"
+                into the codex exec command. When None, behavior is unchanged.
 
     Returns:
         (output_string, success_bool)
@@ -203,8 +207,13 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800):
         "-o", output_file,
         "--sandbox", "workspace-write",
         "--ephemeral",
-        "-",  # read prompt from stdin
     ]
+
+    # Inject reasoning effort override before the stdin marker
+    if effort:
+        cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
+
+    cmd.append("-")  # read prompt from stdin
 
     # Run from repo root so Codex can write analysis docs to output_dir
     try:
