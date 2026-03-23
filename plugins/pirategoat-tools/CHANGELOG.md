@@ -5,7 +5,7 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.89.0] - 2026-03-23
 
 ### Added
 - **Iterative review: adaptive reasoning effort.** New `--adaptive-effort` flag dynamically adjusts Codex `model_reasoning_effort` per review round. Round 1 runs at `high`, rounds 2+ default to `medium`. Prior-round signals escalate: P0/P1 findings fixed bump `medium` → `high`, P0/P1 rejected bump `high` → `xhigh`. When effort is `high` or `xhigh`, `service_tier="fast"` is also injected to keep throughput manageable. The flag is persisted in `review-loop-state.json` so rounds 2+ pick it up automatically. New `effort.py` pure-logic module with `resolve_effort()`, `effort` parameter on `invoke_codex_review()`, per-round effort tracking in state, and `effort_profile` in `review-loop-result.json` and telemetry.
