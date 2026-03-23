@@ -4,6 +4,7 @@ import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -11,6 +12,13 @@ import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 FIXTURES_DIR = TESTS_DIR / "fixtures"
+SCRIPTS_DIR = TESTS_DIR.parent / "scripts"
+
+# Add scripts/ to sys.path so `from review.agent.output import ...` resolves
+# to scripts/review/ (not tests/review/). Must happen before test collection
+# caches the test package as `review`.
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 PIPELINE_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "review" / "pipeline.py"
 PIPELINE_TOTAL_STEPS = 12
