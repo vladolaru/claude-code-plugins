@@ -213,6 +213,8 @@ def action_review(args):
                 os.remove(f)
         if args.no_prior_analysis:
             state["pass_prior_analysis"] = False
+        if getattr(args, "adaptive_effort", False):
+            state["adaptive_effort"] = True
 
         # Read context file
         context = ""
@@ -343,15 +345,15 @@ def action_review(args):
     # Resolve adaptive effort level
     effort = None
     effort_reason = None
-    if getattr(args, "adaptive_effort", False):
+    adaptive_on = getattr(args, "adaptive_effort", False) or state.get("adaptive_effort", False)
+    if adaptive_on:
         # Recompute diff size for rounds 2+ — fixes between rounds change
         # the merge_base..HEAD diff, so the round-1 snapshot is stale.
         diff_lines_for_effort = state.get("diff_lines_relevant", 0)
         if round_num > 1 and state.get("merge_base"):
             fresh_lines, _ = _compute_diff_lines(state["merge_base"])
-            if fresh_lines > 0:
-                diff_lines_for_effort = fresh_lines
-                state["diff_lines_relevant"] = fresh_lines
+            diff_lines_for_effort = fresh_lines
+            state["diff_lines_relevant"] = fresh_lines
 
         # Load prior round findings/outcomes for signal overrides
         prior_findings = None
