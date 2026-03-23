@@ -24,11 +24,47 @@ from .briefing import (
     format_evaluation_briefing, format_completion_briefing,
     format_degraded_briefing,
 )
+from .effort import resolve_effort
 from .telemetry import ReviewTelemetry
 from .backends.codex import (
     parse_codex_output, write_prompt_file, get_schema_path, get_rubric,
     invoke_codex_review, check_codex_auth,
 )
+
+
+def _compute_diff_lines(merge_base):
+    """Compute noise-filtered diff line count for merge_base..HEAD.
+
+    Returns (diff_lines, excluded_count) or (0, 0) on failure.
+    Extracted so it can be called both at round 1 init and on later
+    rounds when adaptive effort needs a fresh diff size.
+    """
+    try:
+        toplevel = sp.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True
+        ).stdout.strip()
+        git_cwd = toplevel if toplevel else None
+
+        result = sp.run(
+            ["git", "diff", "--name-only", f"{merge_base}..HEAD"],
+            capture_output=True, text=True, cwd=git_cwd
+        )
+        all_files = [f for f in result.stdout.strip().split("\n") if f]
+        relevant, excluded = compute_relevant_diff_size(all_files)
+        if relevant:
+            stat_result = sp.run(
+                ["git", "diff", "--stat", f"{merge_base}..HEAD", "--"] + relevant,
+                capture_output=True, text=True, cwd=git_cwd
+            )
+            m = re.search(r'(\d+) insertions?\(\+\)', stat_result.stdout)
+            ins = int(m.group(1)) if m else 0
+            m = re.search(r'(\d+) deletions?\(-\)', stat_result.stdout)
+            dels = int(m.group(1)) if m else 0
+            return ins + dels, excluded
+        return 0, excluded
+    except Exception:
+        return 0, 0
 
 
 def _sanitize_filename(name):
@@ -87,6 +123,7 @@ def _write_loop_result(output_dir, state, termination):
         "total_rejected": sum(r.get("rejected", 0) for r in rounds),
         "total_deferred": sum(r.get("deferred", 0) for r in rounds),
         "deferred_items": deferred_items,
+        "effort_profile": [r.get("effort") for r in rounds],
         "rounds": rounds,
     }
     result_path = os.path.join(output_dir, "review-loop-result.json")
@@ -176,6 +213,8 @@ def action_review(args):
                 os.remove(f)
         if args.no_prior_analysis:
             state["pass_prior_analysis"] = False
+        if getattr(args, "adaptive_effort", False):
+            state["adaptive_effort"] = True
 
         # Read context file
         context = ""
@@ -186,40 +225,10 @@ def action_review(args):
             state["context"] = context
 
         # Compute diff size (noise-filtered)
-        # Git paths are repo-root-relative, so run git commands from the repo root
-        try:
-            toplevel = sp.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True
-            ).stdout.strip()
-            git_cwd = toplevel if toplevel else None
-
-            result = sp.run(
-                ["git", "diff", "--name-only", f"{args.merge_base}..HEAD"],
-                capture_output=True, text=True, cwd=git_cwd
-            )
-            all_files = [f for f in result.stdout.strip().split("\n") if f]
-            relevant, excluded = compute_relevant_diff_size(all_files)
-            # Count actual diff lines for relevant files only
-            if relevant:
-                stat_result = sp.run(
-                    ["git", "diff", "--stat", f"{args.merge_base}..HEAD", "--"] + relevant,
-                    capture_output=True, text=True, cwd=git_cwd
-                )
-                # Parse last line: " N files changed, X insertions(+), Y deletions(-)"
-                m = re.search(r'(\d+) insertions?\(\+\)', stat_result.stdout)
-                ins = int(m.group(1)) if m else 0
-                m = re.search(r'(\d+) deletions?\(-\)', stat_result.stdout)
-                dels = int(m.group(1)) if m else 0
-                diff_lines = ins + dels
-            else:
-                diff_lines = 0
-            state["diff_lines_relevant"] = diff_lines
-            state["diff_lines_total"] = diff_lines + excluded  # approximate
-            state["noise_files_excluded"] = excluded
-        except Exception:
-            diff_lines = 0
-            state["diff_lines_relevant"] = 0
+        diff_lines, excluded = _compute_diff_lines(args.merge_base)
+        state["diff_lines_relevant"] = diff_lines
+        state["diff_lines_total"] = diff_lines + excluded  # approximate
+        state["noise_files_excluded"] = excluded
 
         computed = compute_max_rounds(state["diff_lines_relevant"])
         if args.max_rounds:
@@ -333,6 +342,42 @@ def action_review(args):
         telemetry.progress("context_size_warning", round=round_num,
                            context_chars=context_chars)
 
+    # Resolve adaptive effort level
+    effort = None
+    effort_reason = None
+    adaptive_on = getattr(args, "adaptive_effort", False) or state.get("adaptive_effort", False)
+    if adaptive_on:
+        # Recompute diff size for rounds 2+ — fixes between rounds change
+        # the merge_base..HEAD diff, so the round-1 snapshot is stale.
+        diff_lines_for_effort = state.get("diff_lines_relevant", 0)
+        if round_num > 1 and state.get("merge_base"):
+            fresh_lines, _ = _compute_diff_lines(state["merge_base"])
+            diff_lines_for_effort = fresh_lines
+            state["diff_lines_relevant"] = fresh_lines
+
+        # Load prior round findings/outcomes for signal overrides
+        prior_findings = None
+        prior_outcomes = None
+        if round_num > 1:
+            prev = round_num - 1
+            prior_findings_path = os.path.join(output_dir, f"round-{prev}-findings.json")
+            prior_outcomes_path = os.path.join(output_dir, f"round-{prev}-outcomes.json")
+            try:
+                with open(prior_findings_path) as f:
+                    prior_findings = json.load(f)
+                with open(prior_outcomes_path) as f:
+                    prior_outcomes = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass  # No prior data — resolve without signals
+
+        effort, effort_reason = resolve_effort(
+            round_num=round_num,
+            diff_lines=diff_lines_for_effort,
+            prior_findings=prior_findings,
+            prior_outcomes=prior_outcomes,
+        )
+        print(f"[adaptive-effort] Round {round_num}: {effort} ({effort_reason})")
+
     # Invoke Codex
     merge_base = state["merge_base"]
     codex_output_file = os.path.join(output_dir, f"round-{round_num}-codex-output.json")
@@ -340,13 +385,16 @@ def action_review(args):
 
     telemetry.progress("codex_invoked", round=round_num,
                        diff_lines=state.get("diff_lines_relevant", 0),
+                       effort=effort, effort_reason=effort_reason,
                        msg=f"Reviewing against {merge_base}")
-    telemetry.pipeline_event("review_round_started", round=round_num)
+    telemetry.pipeline_event("review_round_started", round=round_num,
+                             effort=effort, effort_reason=effort_reason)
 
     raw_output, success = invoke_codex_review(
         prompt_file=prompt_file,
         schema_file=schema_file,
         output_file=codex_output_file,
+        effort=effort,
     )
 
     if not success and not raw_output:
@@ -390,6 +438,7 @@ def action_review(args):
             "fixed": 0,
             "rejected": 0,
             "deferred": 0,
+            "effort": effort,
         })
         state["terminated"] = True
         state["termination"] = "zero_findings"
@@ -398,13 +447,15 @@ def action_review(args):
         result_data = _write_loop_result(output_dir, state, "zero_findings")
         telemetry.pipeline_event("review_loop_completed",
                                  termination="zero_findings",
-                                 rounds_completed=result_data["rounds_completed"])
+                                 rounds_completed=result_data["rounds_completed"],
+                                 effort_profile=result_data.get("effort_profile", []))
         print(format_completion_briefing("zero_findings", result_data["rounds_completed"],
                                          result_data["total_fixed"],
                                          result_data["total_rejected"],
                                          result_data["total_deferred"]))
         return
 
+    state["current_effort"] = effort
     write_loop_state(output_dir, state)
 
     # Produce briefing
@@ -510,6 +561,7 @@ def action_advance(args):
             "fixed": fixed,
             "rejected": rejected,
             "deferred": deferred,
+            "effort": state.get("current_effort"),
         })
 
     findings_by_id = {f["id"]: f for f in findings}
@@ -553,7 +605,8 @@ def action_advance(args):
                                  rounds_completed=result_data["rounds_completed"],
                                  total_fixed=result_data["total_fixed"],
                                  total_rejected=result_data["total_rejected"],
-                                 total_deferred=result_data["total_deferred"])
+                                 total_deferred=result_data["total_deferred"],
+                                 effort_profile=result_data.get("effort_profile", []))
 
         print(format_completion_briefing(
             termination, result_data["rounds_completed"],
@@ -578,6 +631,8 @@ def main():
                         help="Override max rounds (capped at hard limit of 20)")
     parser.add_argument("--no-prior-analysis", action="store_true",
                         help="Disable reading prior round analysis docs")
+    parser.add_argument("--adaptive-effort", action="store_true",
+                        help="Enable adaptive reasoning effort per round")
 
     args = parser.parse_args()
 

@@ -534,6 +534,39 @@ class TestStep12SelfReview:
         assert "validation" in text or "validate" in text
 
 
+class TestStep12AdaptiveEffort:
+    """Step 12 passes --adaptive-effort when config enables it."""
+
+    def test_includes_flag_when_config_true(self, mod):
+        config = {"mode": "fix", "adaptive_iterative_review": True}
+        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
+                                  config=config, output_dir="/tmp/test")
+        actions_text = "\n".join(g["actions"])
+        assert "--adaptive-effort" in actions_text
+
+    def test_omits_flag_when_config_false(self, mod):
+        config = {"mode": "fix", "adaptive_iterative_review": False}
+        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
+                                  config=config, output_dir="/tmp/test")
+        actions_text = "\n".join(g["actions"])
+        assert "--adaptive-effort" not in actions_text
+
+    def test_omits_flag_when_config_absent(self, mod):
+        config = {"mode": "fix"}
+        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
+                                  config=config, output_dir="/tmp/test")
+        actions_text = "\n".join(g["actions"])
+        assert "--adaptive-effort" not in actions_text
+
+    def test_flag_appears_in_both_round1_and_roundN_commands(self, mod):
+        config = {"mode": "fix", "adaptive_iterative_review": True}
+        g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
+                                  config=config, output_dir="/tmp/test")
+        actions_text = "\n".join(g["actions"])
+        # Should appear at least twice: round 1 command and round N command
+        assert actions_text.count("--adaptive-effort") >= 2
+
+
 class TestStep13ReVerify:
     def test_verification_already_handled(self, mod):
         g = mod.get_step_guidance(13, "fix", {}, FIX_CTX,

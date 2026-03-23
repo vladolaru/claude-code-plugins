@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -12,6 +13,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from iterative_review.backends.codex import (
+    invoke_codex_review,
     parse_codex_output,
     write_prompt_file,
     get_rubric,
@@ -142,3 +144,70 @@ class TestRubric:
     def test_rubric_contains_conservative_threshold(self):
         rubric = get_rubric()
         assert "no findings" in rubric.lower()
+
+
+class TestInvokeCodexReviewEffort:
+    """Tests for the effort parameter in invoke_codex_review()."""
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_no_effort_omits_config_flag(self, mock_run, tmp_path):
+        """When effort is None (default), -c is not in the command."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_codex_review(str(prompt), "schema.json", str(tmp_path / "out.json"))
+
+        # The second call is the actual codex exec (first is git rev-parse)
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        assert "-c" not in cmd
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_effort_high_injects_config_flag(self, mock_run, tmp_path):
+        """When effort='high', cmd contains -c followed by model_reasoning_effort="high"."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_codex_review(
+            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        )
+
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        c_idx = cmd.index("-c")
+        assert cmd[c_idx + 1] == 'model_reasoning_effort="high"'
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_effort_xhigh_injects_config_flag(self, mock_run, tmp_path):
+        """When effort='xhigh', cmd contains -c followed by model_reasoning_effort="xhigh"."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_codex_review(
+            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="xhigh"
+        )
+
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        c_idx = cmd.index("-c")
+        assert cmd[c_idx + 1] == 'model_reasoning_effort="xhigh"'
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_effort_flag_before_stdin_marker(self, mock_run, tmp_path):
+        """The -c flag and its value come before the - stdin marker (always last)."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_codex_review(
+            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        )
+
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        assert cmd[-1] == "-", "stdin marker '-' must be last element"
+        c_idx = cmd.index("-c")
+        assert c_idx < len(cmd) - 1, "-c flag must come before the stdin marker"

@@ -754,6 +754,39 @@ class TestPreflightCodexCli:
         assert "not installed" in result or "not on PATH" in result
 
 
+class TestAdaptiveEffortFlag:
+    """--adaptive-effort flag is accepted by the CLI."""
+
+    def test_flag_accepted_with_review_action(self, tmp_path):
+        """Parser accepts --adaptive-effort without error (exits due to missing merge-base, not flag)."""
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "review", "--round", "1",
+             "--output-dir", str(tmp_path / "code-review"),
+             "--adaptive-effort"],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        # Should fail because of missing --merge-base, NOT because of --adaptive-effort
+        assert "unrecognized" not in result.stderr.lower()
+        assert "merge-base" in result.stderr.lower() or result.returncode != 0
+
+    def test_flag_accepted_with_advance_action(self, tmp_path):
+        """Parser accepts --adaptive-effort with advance action."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", "1",
+             "--output-dir", str(d),
+             "--adaptive-effort"],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        # Should fail because of missing outcomes, NOT because of --adaptive-effort
+        assert "unrecognized" not in result.stderr.lower()
+
+
 class TestPreflightIntegration:
     """Pre-flight failure writes result file and exits cleanly."""
 
