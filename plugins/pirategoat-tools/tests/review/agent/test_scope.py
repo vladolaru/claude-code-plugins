@@ -404,24 +404,52 @@ class TestMergeBaseGatingIntegration:
         cls._repos[cache_key] = tmp
         return tmp
 
+    _scope_cache: dict = {}
+
     @classmethod
     def teardown_class(cls):
         for path in cls._repos.values():
             shutil.rmtree(path, ignore_errors=True)
         cls._repos.clear()
+        cls._scope_cache.clear()
 
-    def _run_scope(self, repo: str, extra_args: list = None) -> subprocess.CompletedProcess:
-        cmd = [
-            sys.executable, str(REVIEW_SCOPE_SCRIPT),
-            "--domain", "code",
-            "--range", "main..HEAD",
-            "--format", "json",
-        ]
-        if extra_args:
-            cmd.extend(extra_args)
-        return subprocess.run(
-            cmd, cwd=repo, capture_output=True, text=True, timeout=30,
+    @classmethod
+    def _build_scope_in_repo(cls, repo, domain="code", range_spec="main..HEAD",
+                             no_merge_base=False):
+        """Call build_scope() directly, cached by (repo, no_merge_base)."""
+        cache_key = (repo, no_merge_base)
+        if cache_key in cls._scope_cache:
+            return cls._scope_cache[cache_key]
+
+        args = argparse.Namespace(
+            domain=domain,
+            range=range_spec,
+            format="json",
+            max_lines=2000,
+            base_ref_only=False,
+            summary=False,
+            output_dir=None,
+            no_merge_base=no_merge_base,
+            no_semantic_filter=False,
         )
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(repo)
+            scope = review_scope.build_scope(args)
+        finally:
+            os.chdir(saved_cwd)
+        cls._scope_cache[cache_key] = scope
+        return scope
+
+    def _scope_json(self, repo, **kwargs):
+        """Build scope and return parsed JSON dict."""
+        scope = self._build_scope_in_repo(repo, **kwargs)
+        return json.loads(review_scope.format_json_output(scope))
+
+    def _scope_text(self, repo, **kwargs):
+        """Build scope and return text output."""
+        scope = self._build_scope_in_repo(repo, **kwargs)
+        return review_scope.format_text_output(scope)
 
     # -- The critical fix: non-stale branches also get rebased --
 
@@ -432,9 +460,7 @@ class TestMergeBaseGatingIntegration:
         behind would use the raw two-dot range, including unrelated trunk files.
         """
         repo = self._setup_repo(3)
-        result = self._run_scope(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
         bf = data["branch_freshness"]
 
         assert bf["is_stale"] is False, "3 behind should NOT be stale"
@@ -449,9 +475,7 @@ class TestMergeBaseGatingIntegration:
     def test_1_commit_behind_still_rebased(self):
         """Even 1 commit behind should rebase (any divergence matters)."""
         repo = self._setup_repo(1)
-        result = self._run_scope(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
 
         assert data["branch_freshness"]["range_rebased"] is True
         assert data["total_changed"] == 1
@@ -459,9 +483,7 @@ class TestMergeBaseGatingIntegration:
     def test_stale_branch_still_rebased(self):
         """Stale branches (>10 behind) continue to work as before."""
         repo = self._setup_repo(15)
-        result = self._run_scope(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
         bf = data["branch_freshness"]
 
         assert bf["is_stale"] is True
@@ -473,9 +495,7 @@ class TestMergeBaseGatingIntegration:
     def test_no_merge_base_flag_prevents_rebase(self):
         """--no-merge-base should prevent rebase even when merge-base exists."""
         repo = self._setup_repo(3)
-        result = self._run_scope(repo, extra_args=["--no-merge-base"])
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo, no_merge_base=True)
 
         assert data["branch_freshness"]["range_rebased"] is False
         # Without merge-base rebase, we see trunk files + feature file
@@ -484,9 +504,7 @@ class TestMergeBaseGatingIntegration:
     def test_no_merge_base_stale_branch(self):
         """--no-merge-base on stale branch shows ALL files."""
         repo = self._setup_repo(15)
-        result = self._run_scope(repo, extra_args=["--no-merge-base"])
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo, no_merge_base=True)
 
         assert data["branch_freshness"]["range_rebased"] is False
         assert data["total_changed"] == 16  # 15 trunk + 1 feature
@@ -496,9 +514,7 @@ class TestMergeBaseGatingIntegration:
     def test_stale_warning_still_present(self):
         """Stale branches show is_stale=True even though rebase is unconditional."""
         repo = self._setup_repo(15)
-        result = self._run_scope(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
 
         assert data["branch_freshness"]["is_stale"] is True
         assert data["branch_freshness"]["behind"] == 15
@@ -506,9 +522,7 @@ class TestMergeBaseGatingIntegration:
     def test_non_stale_no_warning(self):
         """Non-stale branches show is_stale=False."""
         repo = self._setup_repo(3)
-        result = self._run_scope(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
 
         assert data["branch_freshness"]["is_stale"] is False
         assert data["branch_freshness"]["behind"] == 3
@@ -518,36 +532,24 @@ class TestMergeBaseGatingIntegration:
     def test_text_output_shows_range_rebased_for_non_stale(self):
         """Text output includes RANGE_REBASED even when not stale."""
         repo = self._setup_repo(3)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        assert "RANGE_REBASED: true" in result.stdout
+        text = self._scope_text(repo)
+        assert "RANGE_REBASED: true" in text
         # Should NOT show stale warning
-        assert "BRANCH_FRESHNESS: STALE" not in result.stdout
+        assert "BRANCH_FRESHNESS: STALE" not in text
 
     def test_text_output_shows_both_for_stale(self):
         """Text output shows both RANGE_REBASED and STALE warning when stale."""
         repo = self._setup_repo(15)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        assert "RANGE_REBASED: true" in result.stdout
-        assert "BRANCH_FRESHNESS: STALE" in result.stdout
+        text = self._scope_text(repo)
+        assert "RANGE_REBASED: true" in text
+        assert "BRANCH_FRESHNESS: STALE" in text
 
     # -- Merge-base SHA is present --
 
     def test_merge_base_sha_present(self):
         """branch_freshness includes a valid merge_base SHA."""
         repo = self._setup_repo(3)
-        result = self._run_scope(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
 
         merge_base = data["branch_freshness"]["merge_base"]
         assert len(merge_base) >= 7, f"merge_base too short: {merge_base}"
@@ -559,9 +561,7 @@ class TestMergeBaseGatingIntegration:
     def test_range_uses_merge_base_sha(self):
         """The range in the output should start with the merge-base SHA."""
         repo = self._setup_repo(3)
-        result = self._run_scope(repo)
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
 
         merge_base = data["branch_freshness"]["merge_base"]
         expected_prefix = merge_base[:7]  # At least first 7 chars

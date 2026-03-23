@@ -441,18 +441,60 @@ def _setup_stale_branch_repo(behind_count: int) -> str:
 # Branch Freshness tests
 # ---------------------------------------------------------------------------
 class TestBranchFreshness:
-    """Tests for stale branch detection and merge-base range rebasing."""
+    """Tests for stale branch detection and merge-base range rebasing.
+
+    Uses direct build_scope() calls with os.chdir to the temp repo.
+    Results are cached by (repo, no_merge_base) — multiple tests asserting
+    on different fields of the same scope reuse one build_scope() call.
+    """
+
+    _scope_cache: dict = {}
+
+    @classmethod
+    def _build_scope_in_repo(cls, repo, domain="code", range_spec="main..HEAD",
+                             no_merge_base=False):
+        """Call build_scope() directly, cached by (repo, no_merge_base)."""
+        cache_key = (repo, no_merge_base)
+        if cache_key in cls._scope_cache:
+            return cls._scope_cache[cache_key]
+
+        import argparse
+        args = argparse.Namespace(
+            domain=domain,
+            range=range_spec,
+            format="json",
+            max_lines=2000,
+            base_ref_only=False,
+            summary=False,
+            output_dir=None,
+            no_merge_base=no_merge_base,
+            no_semantic_filter=False,
+        )
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(repo)
+            scope = _review_scope.build_scope(args)
+        finally:
+            os.chdir(saved_cwd)
+        cls._scope_cache[cache_key] = scope
+        return scope
+
+    @classmethod
+    def teardown_class(cls):
+        cls._scope_cache.clear()
+
+    def _scope_json(self, repo, **kwargs):
+        scope = self._build_scope_in_repo(repo, **kwargs)
+        return json.loads(_review_scope.format_json_output(scope))
+
+    def _scope_text(self, repo, **kwargs):
+        scope = self._build_scope_in_repo(repo, **kwargs)
+        return _review_scope.format_text_output(scope)
 
     def test_freshness_detects_stale_branch(self):
         """15 commits behind → is_stale: true, behind: 15."""
         repo = _setup_stale_branch_repo(15)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
         bf = data["branch_freshness"]
         assert bf["is_stale"] is True
         assert bf["behind"] == 15
@@ -460,51 +502,29 @@ class TestBranchFreshness:
     def test_freshness_not_stale_when_close(self):
         """3 commits behind → is_stale: false."""
         repo = _setup_stale_branch_repo(3)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
         bf = data["branch_freshness"]
         assert bf["is_stale"] is False
 
     def test_stale_branch_range_is_rebased_to_merge_base(self):
         """15 behind → RANGE_REBASED: true, only feature file in scope."""
         repo = _setup_stale_branch_repo(15)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        assert "RANGE_REBASED: true" in result.stdout
+        text = self._scope_text(repo)
+        assert "RANGE_REBASED: true" in text
         # Only the feature file should be in scope (not trunk files)
-        assert "FILES_CHANGED: 1" in result.stdout
+        assert "FILES_CHANGED: 1" in text
 
     def test_no_merge_base_includes_trunk_files(self):
         """--no-merge-base → all trunk + feature files in scope."""
         repo = _setup_stale_branch_repo(15)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD", "--no-merge-base"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
+        text = self._scope_text(repo, no_merge_base=True)
         # 15 trunk .php files + 1 feature .php file = 16
-        assert "FILES_CHANGED: 16" in result.stdout
+        assert "FILES_CHANGED: 16" in text
 
     def test_freshness_in_json_output(self):
         """JSON output has branch_freshness with all expected fields."""
         repo = _setup_stale_branch_repo(15)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
         assert "branch_freshness" in data
         bf = data["branch_freshness"]
         assert bf["ahead"] == 1
@@ -516,13 +536,7 @@ class TestBranchFreshness:
     def test_non_stale_branch_still_rebased(self):
         """3 behind → range_rebased: true (merge-base rebase is unconditional)."""
         repo = _setup_stale_branch_repo(3)
-        result = subprocess.run(
-            [sys.executable, str(REVIEW_SCOPE_SCRIPT),
-             "--domain", "code", "--range", "main..HEAD", "--format", "json"],
-            cwd=repo, capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        data = json.loads(result.stdout)
+        data = self._scope_json(repo)
         bf = data["branch_freshness"]
         assert bf["is_stale"] is False
         assert bf["range_rebased"] is True
