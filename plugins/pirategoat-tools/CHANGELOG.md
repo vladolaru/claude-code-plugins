@@ -5,6 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.89.1] - 2026-03-23
+
+### Changed
+- **Review pipeline: prompt-optimize all 12-step briefings.** Applied 7 research-backed prompt engineering techniques (Affirmative Directives, Scope Limitation, Concise CoT, Emphasis Hierarchy, Hint-Based Guidance, Conditional Sections, Format Strictness) across identity constants, phase transitions, and all step functions. Tightened `_PIPELINE_MISSION` and `_PHASE_TRANSITIONS` (~35% token reduction on text injected at 5 steps). Converted negative framing to affirmative directives, separated informational text from action directives, compressed Step 5 triage override (15→5 lines), Step 7 wait instructions (10→7 lines), Step 10 verdict paths to structured format, Step 8 reconciliation to numbered actions. Net -79 lines.
+- **Linear pipeline: prompt-optimize all 15-step briefings.** Same technique set applied to identity constants, phase transitions, and step functions. Removed redundant `_PIPELINE_MISSION` re-injection at Step 8 clarity gate (~60 tokens). Compressed Step 1 mismatch path (7→2 lines), Step 3 repo verification checks to single-line items, deduplicated Step 9 plan spec (merged 3 overlapping actions into 1), compressed Step 11 complexity routing (10→4 lines). Net -45 lines.
+- **Pipeline test resilience.** Updated keyword-brittle tests in both review and linear test suites to check semantic intent with broader keyword sets, preventing breakage from future prompt rephrasing.
+
 ## [1.89.0] - 2026-03-23
 
 ### Added
