@@ -24,6 +24,7 @@ from .briefing import (
     format_evaluation_briefing, format_completion_briefing,
     format_degraded_briefing,
 )
+from .effort import resolve_effort
 from .telemetry import ReviewTelemetry
 from .backends.codex import (
     parse_codex_output, write_prompt_file, get_schema_path, get_rubric,
@@ -333,6 +334,33 @@ def action_review(args):
         telemetry.progress("context_size_warning", round=round_num,
                            context_chars=context_chars)
 
+    # Resolve adaptive effort level
+    effort = None
+    effort_reason = None
+    if getattr(args, "adaptive_effort", False):
+        # Load prior round findings/outcomes for signal overrides
+        prior_findings = None
+        prior_outcomes = None
+        if round_num > 1:
+            prev = round_num - 1
+            prior_findings_path = os.path.join(output_dir, f"round-{prev}-findings.json")
+            prior_outcomes_path = os.path.join(output_dir, f"round-{prev}-outcomes.json")
+            try:
+                with open(prior_findings_path) as f:
+                    prior_findings = json.load(f)
+                with open(prior_outcomes_path) as f:
+                    prior_outcomes = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass  # No prior data — resolve without signals
+
+        effort, effort_reason = resolve_effort(
+            round_num=round_num,
+            diff_lines=state.get("diff_lines_relevant", 0),
+            prior_findings=prior_findings,
+            prior_outcomes=prior_outcomes,
+        )
+        print(f"[adaptive-effort] Round {round_num}: {effort} ({effort_reason})")
+
     # Invoke Codex
     merge_base = state["merge_base"]
     codex_output_file = os.path.join(output_dir, f"round-{round_num}-codex-output.json")
@@ -340,13 +368,16 @@ def action_review(args):
 
     telemetry.progress("codex_invoked", round=round_num,
                        diff_lines=state.get("diff_lines_relevant", 0),
+                       effort=effort, effort_reason=effort_reason,
                        msg=f"Reviewing against {merge_base}")
-    telemetry.pipeline_event("review_round_started", round=round_num)
+    telemetry.pipeline_event("review_round_started", round=round_num,
+                             effort=effort, effort_reason=effort_reason)
 
     raw_output, success = invoke_codex_review(
         prompt_file=prompt_file,
         schema_file=schema_file,
         output_file=codex_output_file,
+        effort=effort,
     )
 
     if not success and not raw_output:
@@ -578,6 +609,8 @@ def main():
                         help="Override max rounds (capped at hard limit of 20)")
     parser.add_argument("--no-prior-analysis", action="store_true",
                         help="Disable reading prior round analysis docs")
+    parser.add_argument("--adaptive-effort", action="store_true",
+                        help="Enable adaptive reasoning effort per round")
 
     args = parser.parse_args()
 
