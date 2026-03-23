@@ -220,6 +220,9 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800,
     # Inject reasoning effort override before the stdin marker
     if effort:
         cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
+        # Activate fast mode for high/xhigh to keep throughput manageable
+        if effort in ("high", "xhigh"):
+            cmd.extend(["-c", 'service_tier="fast"'])
 
     cmd.append("-")  # read prompt from stdin
 

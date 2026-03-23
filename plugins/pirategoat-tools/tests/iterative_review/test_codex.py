@@ -211,3 +211,48 @@ class TestInvokeCodexReviewEffort:
         assert cmd[-1] == "-", "stdin marker '-' must be last element"
         c_idx = cmd.index("-c")
         assert c_idx < len(cmd) - 1, "-c flag must come before the stdin marker"
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_high_effort_activates_fast_mode(self, mock_run, tmp_path):
+        """When effort='high', service_tier='fast' is also injected."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_codex_review(
+            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        )
+
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        assert 'service_tier="fast"' in cmd
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_xhigh_effort_activates_fast_mode(self, mock_run, tmp_path):
+        """When effort='xhigh', service_tier='fast' is also injected."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_codex_review(
+            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="xhigh"
+        )
+
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        assert 'service_tier="fast"' in cmd
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_medium_effort_no_fast_mode(self, mock_run, tmp_path):
+        """When effort='medium', service_tier is not injected."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_codex_review(
+            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="medium"
+        )
+
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        assert 'service_tier="fast"' not in cmd
