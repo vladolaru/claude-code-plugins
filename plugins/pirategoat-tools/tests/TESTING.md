@@ -1,6 +1,6 @@
 # Testing Framework
 
-Testing for pirategoat-tools follows a two-level eval architecture: fast deterministic script evals and slower agent compliance evals. Both levels use code-based graders — no model calls in the core test suite.
+Testing for pirategoat-tools uses fast, deterministic code-based graders — no model calls. All tests are pytest-based and run in under 25 seconds.
 
 ## Architecture Overview
 
@@ -8,7 +8,7 @@ Testing for pirategoat-tools follows a two-level eval architecture: fast determi
 tests/
 ├── TESTING.md                        # This file
 ├── __init__.py                       # Package marker
-├── conftest.py                       # Shared fixtures (setup_temp_git_repo, bootstrap_repo, pipeline_mod)
+├── conftest.py                       # Shared fixtures + sys.path setup (SCRIPTS_DIR on path)
 ├── review/                           # Tests for scripts/review/
 │   ├── test_pipeline.py              # Pipeline briefing tests (get_step_guidance)
 │   ├── test_pipeline_infra.py        # Pipeline infrastructure (step sequence, routing, state, CLI)
@@ -42,9 +42,9 @@ tests/
 │   └── test_session_analyzer.py      # Session analyzer tests
 ├── commands/                         # Tests for commands/
 │   └── test_commands.py              # Structural + review command tests (incl. pr-update, switch-to)
-├── grading/                          # Test graders and compliance evals
+├── grading/                          # Test graders and offline compliance grading
 │   ├── test_graders.py               # Tests for the graders themselves
-│   └── eval_agent_compliance.py      # Level 2: Agent compliance evals
+│   └── eval_agent_compliance.py      # Offline grading tool for review output files
 ├── helpers/                          # Shared test utilities
 │   ├── graders.py                    # Shared grading functions
 │   ├── command_helpers.py            # Shared helpers for command tests
@@ -61,11 +61,11 @@ tests/
     └── multi-file-realistic.diff     # 7 files across all 9 domains
 ```
 
-### Level 1: Bootstrap Unit Tests (`review/agent/test_bootstrap.py`)
+###Bootstrap Unit Tests (`review/agent/test_bootstrap.py`)
 
 Deterministic pytest suite. Tests `review/agent/bootstrap.py` pure functions by importing them directly — `extract_protocol_sections`, `build_output`, `compute_review_budget`, `load_pr_intent`, and others. No network or model calls.
 
-### Level 1: Bootstrap Integration Tests (`review/agent/test_bootstrap_integration.py`)
+###Bootstrap Integration Tests (`review/agent/test_bootstrap_integration.py`)
 
 Integration tests that run `review/agent/bootstrap.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7):
 
@@ -80,7 +80,7 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestDynamicDispatchRisk` | 4 | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK; PHP → high, no PHP → low (direct `build_output()` call) |
 | `TestOutputFilenameConsistency` | 2 | Output filenames from `save()` match bootstrap expectations (direct `build_output()` call) |
 
-### Level 1: Domain Routing Evals (`review/agent/test_scope_routing.py`)
+###Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
 Deterministic pytest suite that verifies `review/agent/scope.py` domain routing logic by calling `filter_noise()` + `filter_domain()` directly (pure functions, no subprocess). For each fixture, creates a temp git repo, gets the changed file list via `git diff --name-only`, and runs the filter functions for each domain.
 
@@ -90,7 +90,7 @@ Also includes `TestBranchFreshness` — 6 integration tests that run `review/age
 
 **Fixture domain coverage:** See `ROUTING_MATRIX` dict in `review/agent/test_scope_routing.py` for the complete 12×14 matrix. Each entry maps `(fixture, domain) → "OK" | "NO_DOMAIN_FILES"`.
 
-### Level 1: Command Structure Evals (`commands/test_commands.py`)
+###Command Structure Evals (`commands/test_commands.py`)
 
 Deterministic pytest suite that validates structural properties of command files. Shared helpers live in `helpers/command_helpers.py`. No network or model calls.
 
@@ -108,7 +108,7 @@ Deterministic pytest suite that validates structural properties of command files
 | `TestPrUpdate` | `pr-update.md` structural validation: file exists, frontmatter, marketplace registration, not in review commands |
 | `TestSwitchTo` | `switch-to.md` structural validation: file exists, frontmatter, marketplace registration |
 
-### Level 1: ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
+###ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
 Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, JSON, markdown), and file output.
 
@@ -155,12 +155,11 @@ class GradeResult:
 | `grade_output_pair(output_dir, reviewer_name)` | Output directory + reviewer name | Both `.json` and `.md` exist, delegates to json + markdown graders, reviewer name matches |
 | `grade_review_baseline(path)` | Path to `.branch-review-baseline.json` | File exists, valid JSON, required fields (`last_reviewed_sha`, `last_reviewed_at`, `review_type`, `review_count`, `base_ref`, `git_range_used`), SHA format (7-40 hex), positive review_count, range contains `..` |
 
-### Level 2: Agent Compliance Evals (`grading/eval_agent_compliance.py`)
+### Agent Compliance Grading (`grading/eval_agent_compliance.py`)
 
-Tests that agents actually produce correct output when dispatched. Two modes:
+Offline grading tool for review output files — not part of the pytest suite.
 
-- **`--grade-only /path/to/output`** — Scans an existing output directory for `*-review.json` and `*-review.md` files, grades each pair. Fast, no model calls. Use after a real review run.
-- **`--dispatch --agent <name>`** — Full pipeline: creates temp git repo, applies fixture diff, runs bootstrap, dispatches agent via `claude -p`, grades output files. Slow, requires `claude` CLI, makes model calls.
+- **`--grade-only /path/to/output`** — Scans an existing output directory for `*-review.json` and `*-review.md` files, grades each pair. Fast, no model calls. Use after a real review run to validate agent output format.
 
 ## Design Principles
 
@@ -168,9 +167,7 @@ These principles guide all testing decisions. Follow them when adding or modifyi
 
 ### 1. Code-based graders, not model-based
 
-All graders are deterministic Python functions. No LLM calls in the grading path. This keeps tests fast (~15s for the full suite), reproducible (same input = same result), and cheap (no API costs).
-
-Model-based evaluation is reserved for `--dispatch` mode which intentionally makes model calls to test end-to-end agent behavior.
+All graders are deterministic Python functions. No LLM calls in the grading path. This keeps tests fast (~20s for the full suite), reproducible (same input = same result), and cheap (no API costs).
 
 ### 2. Grade outcomes, not paths
 
@@ -223,6 +220,71 @@ If a function is importable and deterministic, test it as a unit test — don't 
 
 The `build_output()`-based test classes (`TestReviewOutputBuilderAPIExample`, `TestBootstrapOutputSizeCap`, `TestDynamicDispatchRisk`, `TestOutputFilenameConsistency`) demonstrate the right pattern: import the function, call it directly, assert on the result. Fast and focused.
 
+**When to keep subprocess tests:**
+- Testing `sys.exit()` paths (CLI argument validation)
+- Testing cross-process state persistence (e.g., marker files read by a separate process)
+- Testing the full `main()` orchestration that can't be called directly (calls `sys.exit()`)
+**When to replace subprocess with direct calls:**
+- Config round-trip tests — call `write_config()` + `read_config()` directly instead of spawning two `pipeline.py` processes
+- Context loading — call `load_and_fill()` directly
+- Functions that need a git repo CWD — call `build_scope()` directly with `os.chdir()` (saves ~0.15s interpreter spawn per test while keeping real git behavior)
+- Any test already covered by a unit test on the same function — delete the subprocess duplicate
+
+**Example — config round-trip (from `TestQuickModeConfig`):**
+```python
+# Wrong: two subprocess spawns to verify config persistence (~1.5s)
+self._run("--step", "1", "--mode", "pr", "--output-dir", str(tmp_path), "--pr-number", "42", "--quick")
+r = self._run("--step", "3", "--output-dir", str(tmp_path))
+config = json.loads((tmp_path / "run-config.json").read_text())
+assert config["quick"] is True
+
+# Right: direct function calls (~0.001s)
+mod.write_config(str(tmp_path), {"mode": "pr", "pr_number": "42", "interactive": True, "quick": True})
+config = mod.read_config(str(tmp_path))
+assert config["quick"] is True
+```
+
+**Example — git-dependent functions (from `TestMergeBaseGatingIntegration`):**
+```python
+# Wrong: subprocess spawn per test (~0.3s overhead on top of git ops)
+result = subprocess.run([sys.executable, str(SCOPE_SCRIPT), "--domain", "code",
+                         "--range", "main..HEAD", "--format", "json"], cwd=repo, ...)
+data = json.loads(result.stdout)
+
+# Right: direct call with os.chdir (~0.15s saved per test, real git behavior preserved)
+saved_cwd = os.getcwd()
+try:
+    os.chdir(repo)
+    scope = review_scope.build_scope(args)
+finally:
+    os.chdir(saved_cwd)
+data = json.loads(review_scope.format_json_output(scope))
+```
+
+### 7a. Avoid `time.sleep()` — mock timestamps instead
+
+`time.sleep()` adds real wall-clock delay to every test run. When tests need different timestamps (e.g., for filename uniqueness with 1-second resolution), mock `datetime.now()` instead.
+
+**Pattern:** Subclass `datetime` (the C type can't be patched directly) and patch it on the module under test:
+
+```python
+from unittest.mock import patch
+
+class FakeDatetime(datetime):
+    _times = iter([...])
+    @classmethod
+    def now(cls, tz=None):
+        return next(cls._times)
+
+with patch.object(mod, "datetime", FakeDatetime):
+    # Code that calls datetime.now() gets controlled timestamps
+```
+
+**Acceptable uses of `time.sleep()`:** Small sleeps (0.05s) to ensure measurable duration in tests that verify elapsed-time calculations (e.g., `TestLogStep.test_calculates_duration_since_prev`). These are testing that the code measures real time correctly, not just generating unique identifiers.
+
+**Wrong:** `time.sleep(1.1)` to ensure 1-second-resolution timestamps differ (2.2s wasted per test pair).
+**Right:** Mock `datetime.now()` to return timestamps 2 seconds apart (0.001s).
+
 ### 8. Tests read real protocol files
 
 Integration tests run the actual bootstrap script against real `reviewer-protocol.md` and `tests-reviewer-protocol.md` files. This means tests catch heading drift (e.g., someone renames a section that the skip-list references).
@@ -250,20 +312,6 @@ Integration tests that shell out to scripts (which run git commands) use tempora
    - Return `_grade(checks)`
 2. Add tests in `grading/test_graders.py` with at least one positive and one negative case
 3. If the grader validates output files, use `ReviewOutputBuilder` from `scripts/review/agent/output.py` to create valid test fixtures
-
-### Add a new compliance scenario
-
-1. Add a scenario dict to `SCENARIOS` in `grading/eval_agent_compliance.py`:
-   ```python
-   "scenario_name": {
-       "description": "What this scenario tests",
-       "agents": ["security-reviewer"],  # or ALL_AGENTS
-       "diff": str(FIXTURES_DIR / "my-fixture.diff"),
-       "grader": "output_pair",  # or "no_domain_files", "error_exit", "signal_format"
-   }
-   ```
-2. Create any needed diff fixtures in `tests/fixtures/`
-3. If a new grader type is needed, add it to `helpers/graders.py` first
 
 ### Add a test for a new script
 
@@ -298,15 +346,33 @@ Follow the pattern in `review/agent/test_bootstrap.py`:
 
 ### Importing from scripts/
 
-Scripts are organized in domain packages (`review/`, `linear/`, `figma/`, `analysis/`). Use `importlib` with the full path:
+Scripts are organized in domain packages (`review/`, `linear/`, `figma/`, `analysis/`). `conftest.py` adds `scripts/` to `sys.path`, so standard `from` imports work:
 
 ```python
-import importlib
+from review.agent.output import ReviewOutputBuilder
+from review.agent.scope import build_scope, filter_domain
+```
+
+For scripts with hyphenated filenames (not valid Python identifiers), use `importlib`:
+
+```python
+import importlib.util
 _spec = importlib.util.spec_from_file_location("module_name", str(SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"))
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 function_under_test = _mod.function_name
 ```
+
+### Package namespace rule
+
+**Test directories that mirror `scripts/` package names MUST NOT have `__init__.py` files.**
+
+`scripts/review/` is a Python package (has `__init__.py`). If `tests/review/` also has `__init__.py`, Python caches whichever `review` package it discovers first — making `from review.agent.output import ...` resolve to the wrong package depending on test execution order.
+
+- `tests/review/` — NO `__init__.py` (would shadow `scripts/review/`)
+- `tests/review/agent/` — NO `__init__.py` (same reason)
+- `tests/helpers/` — HAS `__init__.py` (no collision, unique name)
+- `tests/commands/` — HAS `__init__.py` (no collision)
 
 ### Importing from helpers/
 
@@ -346,8 +412,7 @@ Never hardcode absolute paths. Tests run from any working directory.
 ### Dependencies
 
 - **pytest** — the only external dependency (stdlib otherwise)
-- **Zero model calls** in `review/agent/test_bootstrap.py`, `commands/test_commands.py`, and `grading/test_graders.py`
-- `grading/eval_agent_compliance.py --dispatch` requires the `claude` CLI
+- **Zero model calls** in the entire test suite
 
 ## Valid Values Reference
 

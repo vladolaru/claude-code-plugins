@@ -232,13 +232,10 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 - Parameterize on the axis of variation — ALL_AGENTS only for smoke tests (see `tests/TESTING.md` §6-7)
 - Test pure functions directly; use subprocess only for orchestration that unit tests can't cover
 
-**Agent compliance eval** (requires `claude` CLI, makes model calls):
+**Offline compliance grading** (no model calls):
 ```bash
 # Grade existing review output files
 python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --grade-only /tmp/pr-review-<N>
-
-# Full dispatch eval (slow, model calls)
-python3 plugins/pirategoat-tools/tests/grading/eval_agent_compliance.py --dispatch --agent security-reviewer
 ```
 
 ### yoloing-safe
