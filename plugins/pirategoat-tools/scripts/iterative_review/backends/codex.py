@@ -111,18 +111,31 @@ def write_prompt_file(output_dir, round_num, rubric, merge_base,
                       prior_analysis_path=None):
     """Compose and write the review prompt file for codex exec.
 
-    The prompt includes Codex's review rubric verbatim, the diff task,
-    and iterative context (pushback log, analysis doc instructions).
+    The prompt is ordered for optimal server-side prompt caching:
+    static content first (rubric, context, task), dynamic content last
+    (pushback log, analysis paths). OpenAI caches the longest matching
+    prefix across API calls — keeping the stable prefix long maximizes
+    cache hits on rounds 2+.
+
     Returns the file path.
     """
+    # --- Static prefix (cacheable across rounds) ---
     parts = [rubric]
 
+    # Original context (investigation report, PR goal) — static across rounds
+    if context:
+        parts.append("\n## Additional Context\n")
+        parts.append(context)
+
+    # Task description — merge_base is static across rounds
     parts.append("\n---\n")
     parts.append("## Your Task\n")
     parts.append(
         f"Review the code changes between merge base `{merge_base}` and HEAD. "
         f"Run `git diff {merge_base}..HEAD` to inspect the changes.\n"
     )
+
+    # --- Dynamic suffix (changes each round) ---
 
     # Pushback log from prior rounds
     if pushback_log:
@@ -148,11 +161,6 @@ def write_prompt_file(output_dir, round_num, rubric, merge_base,
         f"review. Include what you checked, your reasoning for each finding, "
         f"and what you considered but chose not to flag.\n"
     )
-
-    # Original context (investigation report, PR goal)
-    if context:
-        parts.append("\n## Additional Context\n")
-        parts.append(context)
 
     path = os.path.join(output_dir, f"round-{round_num}-prompt.md")
     with open(path, "w") as f:

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Iterative review: prompt ordering for cache efficiency.** Reordered `write_prompt_file` to place static content (rubric, context, task description) before dynamic content (pushback log, analysis paths). OpenAI's automatic server-side prefix caching can now cache the stable prefix across review rounds, reducing input token costs on rounds 2+.
+
 ## [1.88.0] - 2026-03-23
 
 ### Changed
