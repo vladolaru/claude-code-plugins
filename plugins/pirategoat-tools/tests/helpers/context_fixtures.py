@@ -22,6 +22,7 @@ COMPLETE_CONTEXT = {
         "number": 42,
         "title": "Fix the thing",
         "author": "octocat",
+        "author_name": "The Octocat",
         "state": "OPEN",
         "is_draft": False,
         "base_ref_name": "main",

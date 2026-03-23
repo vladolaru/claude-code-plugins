@@ -404,6 +404,9 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
 
 def _detect_staleness(ctx):
     """Detect if the branch is stale (behind the base branch)."""
+    if "staleness" in ctx:
+        return
+
     git = ctx.get("git", {})
     merge_base = git.get("merge_base")
     base_ref = git.get("base_ref", "main")
