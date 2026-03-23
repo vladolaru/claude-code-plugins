@@ -360,13 +360,19 @@ codex exec -m gpt-5 -c 'model_reasoning_effort="xhigh"' "Analyze this architectu
 
 Interactive TUI: `/model` command lets you change model and reasoning effort mid-conversation.
 
-### Fast Mode (`service_tier`)
+### Service Tier (`service_tier`)
 
-Routes requests to faster API infrastructure for lower-latency responses with the same model and reasoning. Independent of reasoning effort — can be combined with any effort level.
+Controls API infrastructure routing. Independent of reasoning effort — can be combined with any effort level. When omitted, Codex uses the default API tier.
+
+| Value | Description |
+|---|---|
+| `fast` | Lower-latency responses, same model and reasoning |
+| `flex` | ~50% cheaper, higher latency — good for batch/background work |
 
 ```bash
 # Runtime via -c flag
 codex exec -c 'service_tier="fast"' "Quick task"
+codex exec -c 'service_tier="flex"' "Background analysis"
 
 # Combined with reasoning effort
 codex exec -c 'service_tier="fast"' -c 'model_reasoning_effort="high"' "Review this"
