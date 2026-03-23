@@ -1119,6 +1119,10 @@ def _step_12_self_review(mode, state, context, config, output_dir):
 
     code_review_dir = os.path.join(output_dir, 'code-review')
 
+    adaptive_flag = ""
+    if config and config.get("adaptive_iterative_review"):
+        adaptive_flag = " \\\n     --adaptive-effort"
+
     actions = [
         "1. Ensure all implementation changes are committed (the review tool only sees committed changes):",
         "   - Run `git status` to check for uncommitted work",
@@ -1150,7 +1154,7 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         f"     --output-dir {code_review_dir} \\",
         f"     --merge-base $MERGE_BASE \\",
         f"     --context-file {os.path.join(output_dir, 'investigation-report.md')} \\",
-        f"     --analysis-prefix {issue_id.lower()}",
+        f"     --analysis-prefix {issue_id.lower()}{adaptive_flag}",
         f"   ```",
         f"   (Run from the target repo root — PYTHONPATH makes the module importable.)",
         "",
@@ -1172,7 +1176,7 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         "7. If advance says 'Proceed to review round M', run the next review:",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action review --round M \\",
-        f"     --output-dir {code_review_dir}",
+        f"     --output-dir {code_review_dir}{adaptive_flag}",
         f"   ```",
         "   Then repeat from step 5. Only round 1 needs --merge-base and --context-file.",
         "",
