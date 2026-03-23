@@ -32,6 +32,41 @@ from .backends.codex import (
 )
 
 
+def _compute_diff_lines(merge_base):
+    """Compute noise-filtered diff line count for merge_base..HEAD.
+
+    Returns (diff_lines, excluded_count) or (0, 0) on failure.
+    Extracted so it can be called both at round 1 init and on later
+    rounds when adaptive effort needs a fresh diff size.
+    """
+    try:
+        toplevel = sp.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True
+        ).stdout.strip()
+        git_cwd = toplevel if toplevel else None
+
+        result = sp.run(
+            ["git", "diff", "--name-only", f"{merge_base}..HEAD"],
+            capture_output=True, text=True, cwd=git_cwd
+        )
+        all_files = [f for f in result.stdout.strip().split("\n") if f]
+        relevant, excluded = compute_relevant_diff_size(all_files)
+        if relevant:
+            stat_result = sp.run(
+                ["git", "diff", "--stat", f"{merge_base}..HEAD", "--"] + relevant,
+                capture_output=True, text=True, cwd=git_cwd
+            )
+            m = re.search(r'(\d+) insertions?\(\+\)', stat_result.stdout)
+            ins = int(m.group(1)) if m else 0
+            m = re.search(r'(\d+) deletions?\(-\)', stat_result.stdout)
+            dels = int(m.group(1)) if m else 0
+            return ins + dels, excluded
+        return 0, excluded
+    except Exception:
+        return 0, 0
+
+
 def _sanitize_filename(name):
     """Convert a string to a filesystem-safe slug."""
     slug = name.lower().strip()
@@ -188,40 +223,10 @@ def action_review(args):
             state["context"] = context
 
         # Compute diff size (noise-filtered)
-        # Git paths are repo-root-relative, so run git commands from the repo root
-        try:
-            toplevel = sp.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True
-            ).stdout.strip()
-            git_cwd = toplevel if toplevel else None
-
-            result = sp.run(
-                ["git", "diff", "--name-only", f"{args.merge_base}..HEAD"],
-                capture_output=True, text=True, cwd=git_cwd
-            )
-            all_files = [f for f in result.stdout.strip().split("\n") if f]
-            relevant, excluded = compute_relevant_diff_size(all_files)
-            # Count actual diff lines for relevant files only
-            if relevant:
-                stat_result = sp.run(
-                    ["git", "diff", "--stat", f"{args.merge_base}..HEAD", "--"] + relevant,
-                    capture_output=True, text=True, cwd=git_cwd
-                )
-                # Parse last line: " N files changed, X insertions(+), Y deletions(-)"
-                m = re.search(r'(\d+) insertions?\(\+\)', stat_result.stdout)
-                ins = int(m.group(1)) if m else 0
-                m = re.search(r'(\d+) deletions?\(-\)', stat_result.stdout)
-                dels = int(m.group(1)) if m else 0
-                diff_lines = ins + dels
-            else:
-                diff_lines = 0
-            state["diff_lines_relevant"] = diff_lines
-            state["diff_lines_total"] = diff_lines + excluded  # approximate
-            state["noise_files_excluded"] = excluded
-        except Exception:
-            diff_lines = 0
-            state["diff_lines_relevant"] = 0
+        diff_lines, excluded = _compute_diff_lines(args.merge_base)
+        state["diff_lines_relevant"] = diff_lines
+        state["diff_lines_total"] = diff_lines + excluded  # approximate
+        state["noise_files_excluded"] = excluded
 
         computed = compute_max_rounds(state["diff_lines_relevant"])
         if args.max_rounds:
@@ -339,6 +344,15 @@ def action_review(args):
     effort = None
     effort_reason = None
     if getattr(args, "adaptive_effort", False):
+        # Recompute diff size for rounds 2+ — fixes between rounds change
+        # the merge_base..HEAD diff, so the round-1 snapshot is stale.
+        diff_lines_for_effort = state.get("diff_lines_relevant", 0)
+        if round_num > 1 and state.get("merge_base"):
+            fresh_lines, _ = _compute_diff_lines(state["merge_base"])
+            if fresh_lines > 0:
+                diff_lines_for_effort = fresh_lines
+                state["diff_lines_relevant"] = fresh_lines
+
         # Load prior round findings/outcomes for signal overrides
         prior_findings = None
         prior_outcomes = None
@@ -356,7 +370,7 @@ def action_review(args):
 
         effort, effort_reason = resolve_effort(
             round_num=round_num,
-            diff_lines=state.get("diff_lines_relevant", 0),
+            diff_lines=diff_lines_for_effort,
             prior_findings=prior_findings,
             prior_outcomes=prior_outcomes,
         )
