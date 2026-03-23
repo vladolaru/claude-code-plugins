@@ -38,41 +38,34 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 # ---------------------------------------------------------------------------
 
 _PIPELINE_MISSION = (
-    "You are a code review orchestrator. Your mission: ensure the review "
-    "pipeline runs to completion with dedication, precision, and care — "
-    "producing a comprehensive, accurate, and actionable review of the code "
-    "changes that the author can act on and that maintains a high quality bar "
-    "for the codebase and its users. Every step has required artifacts; treat "
-    "each as a contract. Do not approximate, skip, or move on until the "
-    "step's outputs are verified."
+    "You are a code review orchestrator. Run the pipeline to completion, "
+    "producing an accurate and actionable review the author can act on. "
+    "Every step has required artifacts; treat each as a contract. Verify "
+    "each step's outputs before proceeding."
 )
 
 _PHASE_TRANSITIONS = {
     "EXECUTION": (
-        "You now understand what these changes do and why. The next phase "
-        "dispatches specialist reviewers — your job is to ensure every planned "
-        "agent launches correctly and nothing falls through the cracks. "
-        "Precision here determines the quality of everything downstream."
+        "You understand the changes. Now dispatch specialist reviewers — "
+        "launch every planned agent correctly. Precision here determines "
+        "downstream quality."
     ),
     "SYNTHESIS": (
-        "The specialist agents have produced their findings. Your job now "
-        "shifts to synthesis — deduplicating, reconciling, and producing a "
-        "coherent picture without losing signal or introducing bias. Every "
-        "finding that survives reconciliation must be traceable to an agent's "
-        "work. Write structured data cleanly; the files you produce are the "
-        "source of truth for the remaining steps."
+        "Agents have produced findings. Deduplicate, reconcile, and produce "
+        "a coherent picture. Every surviving finding must trace to an agent's "
+        "work. Write structured data cleanly — these files are the source of "
+        "truth for remaining steps."
     ),
     "VALIDATION": (
-        "The review report is written. Before it goes to the author, the "
-        "decision critic will challenge your conclusions. Take the critic's "
-        "verdict seriously — if it says REVISE, revise. Persist all verdicts "
-        "to their files precisely. The goal is a review the author can trust."
+        "Report is written. The decision critic will challenge your "
+        "conclusions. Act on the critic's verdict: REVISE means revise. "
+        "Persist all verdicts to their files precisely. Deliver a review "
+        "the author can trust."
     ),
     "OUTPUT": (
-        "The review is validated. Present it clearly, confirm all artifacts "
-        "are written, and verify the pipeline result is complete. This is what "
-        "the author or the calling system receives — make sure nothing is "
-        "missing."
+        "Review is validated. Present clearly, confirm all artifacts are "
+        "written, verify the pipeline result is complete. This is what the "
+        "author or calling system receives."
     ),
 }
 
@@ -367,10 +360,7 @@ def _step_1_parse_input(mode, state, context, config, output_dir):
         pr_number = config.get("pr_number")
         if pr_number:
             situation.append(f"Mode: PR review (PR #{pr_number})")
-            actions.append(f"PR #{pr_number} confirmed. The pipeline will review this pull request.")
-            actions.append("")
-            actions.append("The pipeline script will run context.py at step 3 to "
-                           "collect git context, PR metadata, and review history.")
+            actions.append(f"PR #{pr_number} confirmed. Proceed to context gathering.")
         else:
             situation.append("Mode: PR review (no PR number provided)")
             actions.append("A PR number or URL is required for PR review mode.")
@@ -388,7 +378,7 @@ def _step_1_parse_input(mode, state, context, config, output_dir):
                 actions.append(f"Explicit git range provided: `{git_range}`")
             else:
                 actions.append("The branch range will be auto-detected from the merge base.")
-            actions.append("The pipeline will review all changes on this branch against the base branch.")
+            actions.append("Reviewing all changes on this branch against the base branch.")
 
     elif mode == "incremental":
         situation.append("Mode: Incremental branch review")
@@ -396,8 +386,7 @@ def _step_1_parse_input(mode, state, context, config, output_dir):
             actions.append("⛔ PIPELINE STOPPED: No new commits since the last review.")
             actions.append("There is nothing new to review. Make more commits and try again.")
         else:
-            actions.append("Running in incremental mode — the pipeline will review only new commits since the last review.")
-            actions.append("If no previous review state exists, this will behave like a full review.")
+            actions.append("Incremental mode — reviewing only new commits since the last review.")
 
     return {
         "phase": "SETUP",
@@ -418,48 +407,37 @@ def _step_2_repo_setup(mode, state, context, config, output_dir):
     gh_cmd = context.get("github_cli_command", "gh")
     ws_result = state.get("workspace_setup_result")
 
+    manual_fallback = [
+        "1. `git status` — check for uncommitted changes",
+        "2. If dirty: `git stash push -u -m 'pr-review-auto-stash'`",
+        "3. `git branch --show-current` — record current branch",
+        f"4. `{gh_cmd} pr checkout {pr_number}`",
+    ]
+
     if ws_result and ws_result.get("checkout_ok"):
         # Success path
         original_branch = ws_result.get("original_branch", "unknown")
         situation = [
-            f"Workspace successfully set up for PR #{pr_number} review.",
-            f"Was on branch `{original_branch}`, now on PR branch.",
+            f"Workspace set up for PR #{pr_number}. Was on `{original_branch}`, now on PR branch.",
         ]
         stash_ref = ws_result.get("stash_ref")
         if stash_ref:
-            situation.append(f"Stashed uncommitted changes (stash ref: `{stash_ref}`).")
-
-        actions = [
-            "Workspace is ready. Proceed to the next step.",
-        ]
+            situation.append(f"Stashed uncommitted changes (ref: `{stash_ref}`).")
+        actions = ["Workspace ready. Proceed to next step."]
 
     elif ws_result and ws_result.get("error"):
         # Failure path
-        error_msg = ws_result["error"]
         situation = [
-            f"Automatic workspace setup for PR #{pr_number} failed.",
-            f"Error: {error_msg}",
+            f"Automatic workspace setup for PR #{pr_number} failed: {ws_result['error']}",
         ]
-        actions = [
-            "Manual fallback — run these commands:",
-            "1. Check for uncommitted changes with `git status`",
-            "2. If dirty: run `git stash push -u -m 'pr-review-auto-stash'`",
-            "3. Record the current branch name with `git branch --show-current`",
-            f"4. Checkout the PR branch: `{gh_cmd} pr checkout {pr_number}`",
-        ]
+        actions = ["Manual fallback:"] + manual_fallback
 
     else:
         # No result path
         situation = [
-            f"Setting up workspace for PR #{pr_number} review.",
-            "Automatic setup did not run. Manual steps required.",
+            f"Setting up workspace for PR #{pr_number}. Automatic setup did not run.",
         ]
-        actions = [
-            "1. Check for uncommitted changes with `git status`",
-            "2. If dirty: run `git stash push -u -m 'pr-review-auto-stash'`",
-            "3. Record the current branch name with `git branch --show-current`",
-            f"4. Checkout the PR branch: `{gh_cmd} pr checkout {pr_number}`",
-        ]
+        actions = ["Manual setup required:"] + manual_fallback
 
     return {
         "phase": "SETUP",
@@ -649,9 +627,7 @@ def _step_3_gather_context(mode, state, context, config, output_dir):
         situation.append(f"**Diff stats:**\n```\n{diff_stats}\n```")
 
     # Actions
-    actions.append("Review the context above. The pipeline has gathered all available data.")
-    if not git_range:
-        actions.append("The git range will be determined by context.py.")
+    actions.append("Review the context above and write the change-purpose summary.")
 
     # Change-purpose handoff — only when no unfetched issues
     has_unfetched = state.get("resolved_params", {}).get("has_unfetched_issues", False)
@@ -766,24 +742,18 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         situation.append("(Dispatch plan will be computed by the script at runtime.)")
 
     actions.append(
-        "**The planner is authoritative for keyword and file-type signals.** "
-        "But you have context it doesn't — you've read the diff and understand the change "
-        "semantically. Use that understanding to actively prune agents that won't contribute."
+        "**Override rule: Lean toward skipping.** The planner handles keyword/file-type "
+        "signals, but you've read the diff and understand the change semantically. "
+        "Use that to prune:"
     )
-    actions.append("")
     actions.append(
-        "**Actively skip low-signal dispatches.** Look for agents dispatched with reason "
-        '"conditional (domain has files, no triage signal to skip)" — this means no keywords '
-        "matched and no special checks triggered. The planner dispatched by default, not by "
-        "evidence. If you've read the diff and the agent's focus area is clearly irrelevant, "
-        "skip it. Every unnecessary agent costs time and adds reconciliation noise."
+        '- Agents with reason "conditional (domain has files, no triage signal to skip)" '
+        "were dispatched by default, not evidence — skip if their focus is clearly "
+        "irrelevant to the change."
     )
-    actions.append("")
     actions.append(
-        "**Override guidance:** Lean toward skipping over dispatching. "
-        "A skipped agent costs nothing. An unnecessary agent costs tokens, time, "
-        "and produces low-confidence findings that dilute the real issues. "
-        "Only force-dispatch a skipped agent when you're confident it will find something."
+        "- Only force-dispatch a skipped agent when you're confident it will find "
+        "something the plan missed."
     )
     actions.append("")
     actions.append(f"To override, edit `{od}/dispatch-plan.json`:")
@@ -793,24 +763,18 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
     if config and config.get("quick"):
         actions.append("")
         actions.append(
-            "**Quick review mode is active.** Be aggressive with skips — if an agent's "
-            "value is uncertain for this change, skip it. The goal is a fast, focused "
-            "review covering the most likely risk areas."
+            "**Quick mode active.** Be aggressive with skips — uncertain value means skip."
         )
 
     additional = config.get("additional_instructions") if config else None
     if additional:
         actions.append("")
         actions.append("## Reviewer-Requested Focus")
-        actions.append("")
-        actions.append("The person requesting this review gave specific instructions:")
-        actions.append("")
         actions.append(f"> {additional}")
         actions.append("")
         actions.append(
-            "Consider whether the dispatch plan adequately covers this focus area. "
-            "If relevant agents were skipped by automated triage, consider overriding "
-            "to include them."
+            "Ensure the dispatch plan covers this focus. Override skipped agents if "
+            "they're relevant to this guidance."
         )
 
     return {
@@ -855,14 +819,10 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
             actions.append(f"```")
             actions.append("")
 
-    actions.append("After dispatching all agents, you can monitor their progress at any time:")
+    actions.append("Monitor progress at any time:")
     actions.append(f"```")
     actions.append(f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"")
     actions.append(f"```")
-    actions.append("")
-    actions.append("Use the Agent tool for dispatching. Each agent should run via "
-                   "`agent/bootstrap.py` which handles scope discovery, protocol extraction, "
-                   "and output instructions.")
 
     return {
         "phase": "EXECUTION",
@@ -903,21 +863,14 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
                    "timestamp, review type, and git range.")
 
     actions.append("")
-    actions.append("**Before proceeding to step 8:** Wait for all review agents to complete.")
-    actions.append("")
-    actions.append("Agents were dispatched with `run_in_background: true` — you will receive automatic "
-                   "notifications as each finishes. **Do NOT poll in a sleep loop.** Instead:")
-    actions.append("")
-    actions.append("1. Wait for background agent notifications to arrive.")
-    actions.append("2. Once the first few agents report back, run the status check as a safety measure:")
-    actions.append(f"   ```")
-    actions.append(f"   python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
-    actions.append(f"   ```")
-    actions.append("3. If ALL_DONE is true (exit code 0): proceed to step 8 immediately.")
-    actions.append("   Step 8 will TaskStop any remaining background agents before reconciliation.")
-    actions.append("4. If agents are still running (exit code 2): wait for more notifications, then re-check.")
-    actions.append("")
-    actions.append("If any agents show NOT_DISPATCHED: dispatch them now, then re-check.")
+    actions.append("**Wait for agents before step 8.** Agents run in the background — "
+                   "wait for notifications, then check status:")
+    actions.append(f"```")
+    actions.append(f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
+    actions.append(f"```")
+    actions.append("- Exit code 0 (ALL_DONE): proceed to step 8")
+    actions.append("- Exit code 2 (still running): wait for more notifications, re-check")
+    actions.append("- NOT_DISPATCHED agents: dispatch them first, then re-check")
 
     return {
         "phase": "EXECUTION",
@@ -1025,21 +978,15 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         situation.insert(1, "")
 
     actions = [
-        ("**First:** TaskStop these stuck agents that exceeded their timeout — "
-         "they will not produce useful output at this point.")
-        if escalation else
-        ("**First:** Stop any remaining background review agents. Their work has either completed "
-         "(review files written) or will not be incorporated. Use TaskStop to force-stop all "
-         "remaining agents before proceeding."),
+        ("**1. TaskStop** stuck agents that exceeded their timeout."
+         if escalation else
+         "**1. TaskStop** all remaining background review agents."),
         "",
-        f"**Then:** Dispatch the `review-reconciliator` agent to deduplicate, verify, and produce "
-        f"consolidated findings.",
-        "",
-        "The reconciliator needs:",
-        f"- **Git range:** `{git_range}`",
-        f"- **Changed files:** `{changed_files_csv}`",
-        f"- **Output directory:** `{od}`",
-        f"- **Dispatch plan:** `{od}/dispatch-plan.json`",
+        "**2. Dispatch `review-reconciliator`** with:",
+        f"- Git range: `{git_range}`",
+        f"- Changed files: `{changed_files_csv}`",
+        f"- Output directory: `{od}`",
+        f"- Dispatch plan: `{od}/dispatch-plan.json`",
     ]
 
     if change_purpose:
@@ -1058,21 +1005,14 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         actions.append("**Completed review files:** Check output directory for `*-review.json` files.")
 
     actions.append("")
-    actions.append("The reconciliator will produce:")
-    actions.append(f"- `{od}/review-findings.json` — structured findings")
-    actions.append(f"- `{od}/review-findings.md` — human-readable findings")
+    actions.append(f"**Expected output:** `{od}/review-findings.json` + `{od}/review-findings.md`")
 
     additional = config.get("additional_instructions") if config else None
     if additional:
         actions.append("")
         actions.append("**Reviewer-Requested Focus:**")
-        actions.append("")
         actions.append(f"> {additional}")
-        actions.append("")
-        actions.append(
-            "When prioritizing and deduplicating findings, give additional weight "
-            "to findings that address this guidance."
-        )
+        actions.append("Give additional weight to findings addressing this guidance.")
 
     handoff = [
         f"Verify `{od}/review-findings.json` and `{od}/review-findings.md` both exist before proceeding.",
@@ -1171,15 +1111,9 @@ def _step_9_review_report(mode, state, context, config, output_dir):
             actions.append(_DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH)
 
     actions.append("")
-    actions.append(f"Write the review report to `{od}/review-report.md`.")
-    actions.append("")
-    actions.append("The report should include:")
-    actions.append("- A summary of the review findings")
-    actions.append("- Critical and important issues highlighted")
-    actions.append("- A clear verdict recommendation (APPROVE, REQUEST_CHANGES, or COMMENT)")
-    actions.append("")
-    actions.append(f"Reference `{od}/review-findings.json` and `{od}/review-findings.md` "
-                   "for the consolidated findings from the reconciliator.")
+    actions.append(f"Write `{od}/review-report.md` with: findings summary, critical/important "
+                   "issues highlighted, and a verdict (APPROVE, REQUEST_CHANGES, or COMMENT).")
+    actions.append(f"Source: `{od}/review-findings.json` and `{od}/review-findings.md`.")
 
     handoff = [
         f"Verify `{od}/review-report.md` exists before proceeding.",
@@ -1272,38 +1206,33 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("```")
     if has_findings:
         actions.append("")
-        actions.append(f"The structured findings give the critic targeted verification anchors —")
-        actions.append(f"specific files, lines, agent sources, and confidence scores — so it can")
-        actions.append(f"verify claims directly rather than re-discovering evidence from scratch.")
+        actions.append(f"The structured findings give the critic targeted verification anchors "
+                       f"(files, lines, agent sources, confidence scores) for direct claim verification.")
     actions.append("")
-    actions.append("**IMPORTANT:** Wait for the critic to finish — do NOT run in background.")
-    actions.append("You need the critic's verdict before proceeding to the next step.")
+    actions.append("**Wait for the critic to finish — do not run in background.**")
     actions.append("")
-    actions.append("The critic will return one of three verdicts:")
+    actions.append("Act on the critic's verdict:")
     actions.append("")
-    actions.append("- **STAND** — Conclusions are sound. No changes needed. Proceed to writing the verdict files.")
+    actions.append("**STAND** — No changes needed. Proceed to writing verdict files.")
     actions.append("")
-    actions.append("- **REVISE** — The critic found issues. You MUST:")
-    actions.append("  1. Read the critic's specific recommendations in their findings")
-    actions.append("  2. Spot-check their factual claims (verify with `git grep`, `Read`, etc. before acting)")
-    actions.append(f"  3. Edit `{od}/review-report.md` to fix verified issues (correct factual errors, reframe findings, add missed items)")
-    actions.append("  4. Then proceed to writing the verdict files")
+    actions.append(f"**REVISE** — 1) Read critic's recommendations → 2) Spot-check claims "
+                   f"with `git grep`/`Read` → 3) Edit `{od}/review-report.md` to fix verified "
+                   f"issues → 4) Write verdict files.")
     actions.append("")
-    actions.append("- **ESCALATE** — The critic flags serious validity concerns. Override the review verdict to COMMENT regardless of what the report says.")
+    actions.append("**ESCALATE** — Override review verdict to **COMMENT** regardless of report, "
+                   "then write verdict files.")
     actions.append("")
-    actions.append("Write the critic's own verdict (before any adjustments):")
+    actions.append("Write the critic's verdict (before any adjustments):")
     actions.append(f"```json")
     actions.append(f'// Save to: {od}/decision-critic-verdict.json')
     actions.append(f'{{"verdict": "<STAND | REVISE | ESCALATE>"}}')
     actions.append(f"```")
     actions.append("")
-    actions.append("After acting on the critic's verdict, write the final review verdict:")
+    actions.append("Then write the final review verdict:")
     actions.append(f"```json")
     actions.append(f'// Save to: {od}/review-verdict.json')
     actions.append(f'{{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}}')
     actions.append(f"```")
-    actions.append("")
-    actions.append("Before proceeding, verify both files exist and contain valid JSON.")
 
     handoff = [
         f"`{od}/decision-critic-verdict.json` and `{od}/review-verdict.json` must both exist with valid JSON.",
@@ -1335,48 +1264,31 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     actions = []
 
     if is_interactive:
-        actions.append(f"Present to the user: read `{od}/review-report.md` and present "
-                       "a formatted summary of the review findings.")
-        actions.append("")
-        actions.append(f"Show the verdict and any key findings.")
+        actions.append(f"Read `{od}/review-report.md` and present a formatted summary "
+                       "with verdict and key findings.")
 
         if critic_verdict == "unavailable" or degradation.get("critic_failed"):
-            actions.append("")
-            actions.append("⚠️ Decision critic verdict is unavailable — present the review as-is.")
+            actions.append("⚠️ Critic verdict unavailable — present review as-is.")
 
         if forced_verdict:
-            actions.append("")
-            actions.append(f"⚠️ Verdict forced to **{forced_verdict}** due to pipeline degradation.")
-            if degradation.get("reconciliation_failed") or degradation.get("report_synthesis_failed"):
-                actions.append("Both reconciliation and report synthesis failed — presenting degraded results.")
+            actions.append(f"⚠️ Verdict forced to **{forced_verdict}** — degraded pipeline.")
+
+        actions.append("To drill down on a specific topic, re-invoke the reconciliator "
+                       "in focused mode.")
 
         if mode == "incremental":
-            actions.append("")
-            actions.append("Note: Review baseline saved. Next `/code-review` will only review new commits.")
-
-        actions.append("")
-        actions.append("If you want to drill down on a specific topic, re-invoke the reconciliator "
-                       "in focused mode for a deeper analysis of specific findings.")
+            actions.append("Baseline saved. Next `/code-review` reviews only new commits.")
 
     else:
         # Non-interactive: list output files
         actions.append("PIPELINE COMPLETE. Output files:")
-        actions.append(f"- `{od}/review-report.md` — review report")
-        actions.append(f"- `{od}/review-findings.json` — structured findings")
-        actions.append(f"- `{od}/review-findings.md` — human-readable findings")
-        actions.append(f"- `{od}/pipeline-result.json` — structured result for callers")
-        actions.append("")
-        actions.append("`pipeline-result.json` contains:")
-        actions.append("- `status` — pipeline completion status (success/degraded/failed)")
-        actions.append("- `verdict` — final review verdict (APPROVE/REQUEST_CHANGES/COMMENT)")
-        actions.append("- `report_path` — path to the review report")
-        actions.append("- `findings_path` — path to the structured findings")
-        actions.append("- `critic_verdict` — decision critic verdict (STAND/REVISE/ESCALATE/unavailable)")
-        actions.append("- `degradation_notes` — list of degradation reasons (empty if clean)")
+        actions.append(f"- `{od}/review-report.md`")
+        actions.append(f"- `{od}/review-findings.json` + `review-findings.md`")
+        actions.append(f"- `{od}/pipeline-result.json` — status, verdict, report_path, "
+                       "findings_path, critic_verdict, degradation_notes")
 
         if mode == "incremental":
-            actions.append("")
-            actions.append("Review baseline saved. Next run will only review new commits.")
+            actions.append("Baseline saved. Next run reviews only new commits.")
 
     return {
         "phase": "OUTPUT",
@@ -1401,16 +1313,13 @@ def _step_12_cleanup(mode, state, context, config, output_dir):
     actions = []
 
     if original_branch:
-        situation.append(f"Workspace was modified: original branch was `{original_branch}`.")
-        if stash_ref:
-            situation.append(f"Changes were stashed (ref: {stash_ref}).")
+        situation.append(f"Original branch: `{original_branch}`"
+                         + (f". Stashed changes: `{stash_ref}`" if stash_ref else ""))
 
-        actions.append(f"Ask the user if they want to restore the workspace:")
-        actions.append(f"- Checkout original branch: `git checkout {original_branch}`")
+        actions.append("Ask user before restoring workspace:")
+        actions.append(f"- `git checkout {original_branch}`")
         if stash_ref:
-            actions.append(f"- Restore stashed changes: `git stash pop`")
-        actions.append("")
-        actions.append("Confirm with the user before making changes.")
+            actions.append("- `git stash pop`")
     else:
         actions.append("No workspace changes to restore.")
 

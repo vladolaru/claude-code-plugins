@@ -1026,13 +1026,16 @@ class TestStep10DecisionCritic:
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        # Find the REVISE section specifically — lines between REVISE and ESCALATE
+        # Find all REVISE-related text — the line containing REVISE plus any
+        # continuation lines before ESCALATE (handles both multi-line and
+        # single-line formats)
         lines = text.split("\n")
         revise_lines = []
         in_revise = False
         for line in lines:
             if "REVISE" in line and "**" in line:
                 in_revise = True
+                revise_lines.append(line)  # include the REVISE line itself
             elif "ESCALATE" in line and "**" in line:
                 in_revise = False
             elif in_revise:
@@ -1048,12 +1051,15 @@ class TestStep10DecisionCritic:
         )
 
     def test_stand_instructs_no_changes(self, mod, tmp_path):
-        """STAND verdict instructions must say no changes needed."""
+        """STAND verdict instructions must convey that no edits are needed."""
         state = {"completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "no changes" in text.lower() or "no action" in text.lower()
+        lower = text.lower()
+        assert any(phrase in lower for phrase in [
+            "no changes", "no action", "proceed to writing",
+        ]), "STAND must convey no report edits needed"
 
     def test_includes_findings_json_for_critic(self, mod, tmp_path):
         """Step 10 must include review-findings.json path so critic can target verification."""
@@ -1205,7 +1211,10 @@ class TestStep11PresentResults:
         ctx = {}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
         text = "\n".join(g["actions"])
-        assert "focused" in text.lower() or "drill down" in text.lower()
+        lower = text.lower()
+        assert any(phrase in lower for phrase in [
+            "focused", "drill down", "re-invoke", "reconciliator",
+        ]), "Interactive mode should offer follow-up analysis option"
 
     def test_step11_reads_verdict_into_state(self, mod, tmp_path):
         """Step 11 orchestration must read review-verdict.json into state['verdict']."""
@@ -1309,7 +1318,10 @@ class TestDegradedPaths:
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
         text = "\n".join(g["actions"])
         assert "COMMENT" in text
-        assert "failed" in text.lower() or "degraded" in text.lower()
+        lower = text.lower()
+        assert any(word in lower for word in ["failed", "degraded", "degradation"]), (
+            "Forced verdict must indicate pipeline degradation"
+        )
 
     def test_missing_review_verdict_json(self, mod, tmp_path):
         """Step 11 should handle gracefully when review-verdict.json not written."""
