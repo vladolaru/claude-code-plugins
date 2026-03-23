@@ -40,36 +40,32 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 # ---------------------------------------------------------------------------
 
 _PIPELINE_MISSION = (
-    "You are a Linear issue investigator and implementer. Your mission: "
-    "investigate the given issue thoroughly and accurately, verify before "
-    "assuming, and produce a trustworthy report with root cause analysis. "
-    "In fix mode, plan and implement a solution with verification and "
-    "self-review, delivering a draft PR ready for human review. Every step "
-    "has required artifacts; treat each as a contract. Do not approximate, "
-    "skip, or move on until the step's outputs are verified."
+    "You are a Linear issue investigator and implementer. Investigate "
+    "accurately, verify before assuming, produce a trustworthy report with "
+    "root cause analysis. In fix mode, implement and deliver a draft PR "
+    "ready for human review. Every step has required artifacts; treat each "
+    "as a contract. Verify outputs before proceeding."
 )
 
 _PHASE_TRANSITIONS = {
     "INVESTIGATION": (
-        "You now have the issue details and repo context. The next phase "
-        "is investigation — your job is to verify the issue, understand "
-        "the root cause, and produce a clear report. Be thorough but "
-        "focused. Verify your findings against the actual code."
+        "You have the issue details and repo context. Verify the issue, "
+        "understand the root cause, produce a clear report. Verify "
+        "findings against actual code."
     ),
     "IMPLEMENTATION": (
-        "The investigation is complete. You now shift to implementation — "
-        "plan carefully, execute methodically, and verify after each step. "
-        "The quality of the draft PR depends on the discipline you bring here."
+        "Investigation complete. Plan carefully, execute methodically, "
+        "verify after each step. Draft PR quality depends on discipline "
+        "here."
     ),
     "VALIDATION": (
-        "Implementation is complete. Now validate — run the iterative review "
-        "loop for multi-round independent review with pushback tracking and "
-        "convergence detection. The goal is a draft PR the author can trust."
+        "Implementation complete. Validate via the iterative review loop "
+        "for multi-round independent review. Deliver a draft PR the "
+        "author can trust."
     ),
     "OUTPUT": (
-        "All work is done. Present results clearly, confirm all artifacts "
-        "are written, and verify the pipeline result is complete. This is "
-        "what the bot and the user receive — make sure nothing is missing."
+        "All work done. Present results clearly, confirm all artifacts "
+        "are written, verify the pipeline result is complete."
     ),
 }
 
@@ -478,13 +474,9 @@ def _step_1_parse_input(mode, state, context, config, output_dir):
 
         if interactive:
             actions = [
-                f"⛔ PIPELINE STOPPED: You are in the wrong repository.",
-                f"",
-                f"This issue ({issue_id}) belongs to **{expected}**, but the current",
-                f"working directory is **{actual}**.",
-                f"",
-                f"Switch to the correct repository and try again:",
-                f"  `cd /path/to/{expected.split('/')[-1] if '/' in expected else expected}`",
+                f"⛔ PIPELINE STOPPED: Wrong repository. Issue {issue_id} belongs to "
+                f"**{expected}**, current repo is **{actual}**.",
+                f"Switch: `cd /path/to/{expected.split('/')[-1] if '/' in expected else expected}`",
             ]
         else:
             actions = [
@@ -501,14 +493,13 @@ def _step_1_parse_input(mode, state, context, config, output_dir):
         }
 
     actions = [
-        f"1. Read `{output_dir}/issue-context.json` — this contains pre-computed issue and repo context from the bot.",
-        f"2. Read `{output_dir}/run-config.json` — this contains the pipeline mode and configuration.",
-        "3. Confirm the issue ID and mode are correct.",
-        "4. If issue-context.json is missing or empty, the pipeline cannot proceed — report failure.",
+        f"1. Read `{output_dir}/issue-context.json` (issue + repo context).",
+        f"2. Read `{output_dir}/run-config.json` (mode + configuration).",
+        "3. Confirm issue ID and mode are correct.",
+        "4. If issue-context.json is missing or empty, report failure.",
         "",
-        "5. **Repo sanity check:** Run `git remote get-url origin` and confirm the repo matches",
-        "   the `repo_slug` in issue-context.json. If they don't match, STOP — you are in the",
-        "   wrong codebase. Report the mismatch and do not proceed.",
+        "5. **Repo sanity check:** Run `git remote get-url origin` and confirm it matches",
+        "   `repo_slug` in issue-context.json. Mismatch → STOP and report.",
     ]
 
     return {
@@ -576,35 +567,24 @@ def _step_3_check_existing(mode, state, context, config, output_dir):
     repo_slug = context.get("repo_slug", "")
 
     situation = [
-        f"Before investigating, check if work on **{issue_id}** already exists,",
-        "and verify this issue actually belongs to the current repository.",
-        "",
-        "A Linear team prefix (e.g., TRAPLAT) can map to multiple repos. The bot",
-        "picks one based on config, but the issue may actually be about a different",
-        "codebase. You must verify before investing time in investigation.",
+        f"Before investigating, verify **{issue_id}** belongs to this repo and check for existing work.",
+        "A team prefix can map to multiple repos — verify before investing time.",
     ]
 
     actions = [
         "**A. Verify this issue belongs to this repo**",
         "",
-        "Cross-reference the issue content (from step 2) against this codebase:",
+        "Cross-reference issue content against this codebase:",
+        "1. **Linked PRs** — which repo do they target?",
+        "2. **File paths** in description/comments — do they exist here?",
+        "3. **Components** (class names, hooks, endpoints) — do they exist here?",
+        "4. **Labels/project** — do they reference a different codebase?",
         "",
-        "1. **Linked PRs:** Which repo are they in? If all linked PRs target a",
-        "   different repo, that's strong signal this issue doesn't belong here.",
-        "2. **File paths mentioned** in description/comments: Do they exist in this",
-        "   repo? Run `ls` or `find` on a few key paths.",
-        "3. **Component/module names:** Do the components mentioned in the issue",
-        "   (class names, hook names, API endpoints, admin pages) exist here?",
-        "4. **Labels or project context:** Do they reference a specific codebase",
-        "   or deployment target that doesn't match this repo?",
-        "",
-        "If 2+ signals point to a different repo, **STOP the pipeline:**",
-        f"- Write `{os.path.join(output_dir, 'pipeline-result.json') if output_dir else 'pipeline-result.json'}` with:",
+        "**2+ signals pointing elsewhere → STOP:** Write "
+        f"`{os.path.join(output_dir, 'pipeline-result.json') if output_dir else 'pipeline-result.json'}` with:",
         '  `{"status": "failed", "degradation_notes": ["Wrong repo: issue appears to be about <REPO>, not ' + (repo_slug or '<current>') + '"]}`',
-        "- Output the JSON and stop. Do NOT continue to step 4.",
         "",
-        "If the evidence is ambiguous (some paths exist, some don't), note the",
-        "uncertainty and proceed — the investigation itself will clarify.",
+        "Ambiguous evidence → note uncertainty and proceed.",
         "",
         "**B. Check for existing work**",
         "",
@@ -649,9 +629,7 @@ def _step_4_gather_context(mode, state, context, config, output_dir):
     situation = [
         _PHASE_TRANSITIONS["INVESTIGATION"],
         "",
-        f"Gathering code context for **{issue_id}**.",
-        "The goal is to understand the current state of the code related to the issue",
-        "before diving into type-specific investigation.",
+        f"Gathering code context for **{issue_id}** before type-specific investigation.",
     ]
 
     actions = [
@@ -730,7 +708,7 @@ def _step_5_investigate(mode, state, context, config, output_dir):
         "2. Clarify acceptance criteria from issue + comments",
         "3. Identify affected areas and estimate effort",
         "",
-        "**Verify your findings against the actual code** — do not re-read your own analysis.",
+        "**Verify findings against actual code**, not your own analysis.",
     ]
 
     return {
@@ -830,13 +808,12 @@ def _step_7_post_to_linear(mode, state, context, config, output_dir):
 
     actions = [
         "1. Read the investigation report from the previous step.",
-        "2. Format it for Linear (markdown is supported).",
-        "3. Post as a comment using Linear MCP:",
+        "2. Post as a comment using Linear MCP:",
         f"   `mcp__linear-server__save_comment` on issue `{issue_id}`",
         "",
-        "4. If posting fails:",
-        "   - Note the failure as a degradation (the report is still saved locally)",
-        "   - Continue to the next step — this is not a blocking failure",
+        "3. If posting fails:",
+        "   - Note as degradation (report is still saved locally)",
+        "   - Continue — this is not a blocking failure",
         "",
         *([ "**Investigate mode:** After this step, the pipeline continues to the clarity assessment (step 8), then jumps to step 15 (Present Results)."] if mode == "investigate" else []),
     ]
@@ -862,15 +839,11 @@ def _step_8_assess_clarity(mode, state, context, config, output_dir):
     assessment_path = os.path.join(output_dir, "clarity-assessment.json") if output_dir else "clarity-assessment.json"
 
     situation = [
-        _PIPELINE_MISSION,
+        f"Investigation of **{issue_id}** is complete. Assess whether the issue has "
+        "sufficient clarity for implementation.",
         "",
-        f"Investigation of **{issue_id}** is complete. Before proceeding to implementation,",
-        "assess whether the issue provides sufficient clarity for a successful fix.",
-        "",
-        "You have the full context: the raw issue description, all comments (from step 2),",
-        "codebase analysis (from step 4), investigation findings (from step 5), and the",
-        "investigation report (from step 6). Use ALL of this — especially the raw comments,",
-        "which may contain contradictions the report summarized away.",
+        "Use all available context — especially raw comments from step 2, which may "
+        "contain contradictions the report summarized away.",
     ]
 
     actions = [
@@ -970,22 +943,15 @@ def _step_9_write_plan(mode, state, context, config, output_dir):
 
     actions = [
         "1. Review the investigation report from step 6.",
-        "2. Use the `superpowers:writing-plans` skill to create a structured plan:",
-        "   - Break the fix into bite-sized tasks with exact file paths",
-        "   - Include code examples where helpful",
-        "   - Include test steps for each task",
-        "   - Scope to minimal fix — no extra refactoring or 'while we're here' changes",
-        "",
-        f"3. Write the plan to `{plan_path}`",
-        "",
-        "4. The plan should include:",
-        "   - Problem statement (from investigation)",
-        "   - Solution approach (from RCA)",
-        "   - Task breakdown (numbered, with file paths)",
-        "   - Test strategy",
+        "2. Use the `superpowers:writing-plans` skill to create a structured plan.",
+        f"   Write to `{plan_path}` with:",
+        "   - Problem statement + solution approach (from investigation)",
+        "   - Task breakdown: bite-sized, numbered, exact file paths",
+        "   - Test strategy per task",
         "   - Risks and mitigation",
+        "   Scope to minimal fix — no extra refactoring.",
         "",
-        "5. **Assess complexity** based on the plan you just wrote:",
+        "3. **Assess complexity** based on the plan you just wrote:",
         "   - **small**: ≤3 files, single concern, straightforward fix, no architectural changes",
         "   - **medium**: 4-10 files, multiple concerns, or subtle logic changes",
         "   - **large**: 10+ files, architectural changes, cross-cutting concerns",
@@ -1073,16 +1039,10 @@ def _step_11_verify(mode, state, context, config, output_dir):
         "",
         "3. Record verification results for the pipeline result.",
         "",
-        "4. **Decide whether to run the iterative review loop (steps 12-13):**",
-        f"   Read `{complexity_path}` (written at step 9).",
-        "   - **small complexity** → Skip steps 12-13, proceed directly to step 14.",
-        "     The `superpowers:code-reviewer` from subagent-driven-development (step 10)",
-        "     already validated each task — a multi-round independent review adds cost",
-        "     without proportional value for small, single-concern changes.",
-        "   - **medium or large complexity** → Continue to step 12 for iterative",
-        "     independent review. Multi-file changes with subtle interactions benefit",
-        "     from a fresh perspective that the per-task code-reviewer cannot provide.",
-        "   - **complexity.json missing** → Treat as medium (err toward more review).",
+        f"4. **Route based on complexity** — read `{complexity_path}`:",
+        "   - **small** → Skip steps 12-13, proceed to step 14",
+        "   - **medium or large** → Continue to step 12 (iterative review)",
+        "   - **missing** → Treat as medium",
     ]
 
     return {
@@ -1126,9 +1086,7 @@ def _step_12_self_review(mode, state, context, config, output_dir):
     actions = [
         "1. Ensure all implementation changes are committed (the review tool only sees committed changes):",
         "   - Run `git status` to check for uncommitted work",
-        "   - If there are staged/unstaged changes, commit them with semantic commit messages",
-        "   - Do NOT create blanket WIP commits — each commit should be a logical unit",
-        "   - The review loop warns about uncommitted changes but does not auto-commit",
+        "   - If there are staged/unstaged changes, commit them — each commit a logical unit",
         "",
         "2. Compute the merge base (detect default branch dynamically):",
         "   ```bash",
@@ -1245,23 +1203,18 @@ def _step_14_create_draft_pr(mode, state, context, config, output_dir):
         f"   - Use conventional commit: `fix: <description>`",
         f"   - Include `Refs {issue_id}` in the commit body",
         "",
-        "3. Check for deferred review items (if the iterative review ran):",
-        f"   - If `{review_result_path}` exists, read the `deferred_items` array",
-        "   - This list is pre-pruned, but cross-round matching is approximate (by title+location)",
-        "   - Before adding to the PR, deduplicate: if a deferred item describes the same issue",
-        "     as something you fixed in a later round (even with different wording or shifted lines),",
-        "     drop it — the fix already addresses it",
-        "   - If any remain, include them in the PR description under a `## Follow-ups` section",
-        "   - Each item has severity, title, location, and reasoning",
-        "   - If the file doesn't exist (small complexity, step 12 skipped), skip this step",
+        f"3. Check for deferred review items (if `{review_result_path}` exists):",
+        "   - Read the `deferred_items` array",
+        "   - Deduplicate against later-round fixes before adding to PR",
+        "   - If any remain, include in PR description under `## Follow-ups`",
+        "   - If the file doesn't exist (step 12 skipped), skip this step",
         "",
         "4. Push and create draft PR:",
         "   ```bash",
         "   git push -u origin HEAD",
         f"   gh pr create --draft --title 'fix: <description>' --body-file <pr-body.md>",
         "   ```",
-        f"   Include in the PR body: Summary, `Refs {issue_id}`, and if deferred items exist,",
-        "   a Follow-ups section listing each deferred finding (severity, title, location, reason).",
+        f"   PR body: Summary, `Refs {issue_id}`, and Follow-ups (if deferred items exist).",
         "",
         "5. If PR creation fails:",
         "   - Save the diff locally (`git diff > changes.diff`)",

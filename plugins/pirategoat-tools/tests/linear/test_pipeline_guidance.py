@@ -531,7 +531,9 @@ class TestStep12SelfReview:
         g = mod.get_step_guidance(12, "fix", {}, FIX_CTX,
                                   config={}, output_dir="/tmp/test")
         text = _guidance_text(g).lower()
-        assert "validation" in text or "validate" in text
+        assert any(word in text for word in [
+            "validation", "validate", "review loop", "independent review",
+        ]), "Step 12 must reference validation phase activity"
 
 
 class TestStep12AdaptiveEffort:
