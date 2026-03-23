@@ -360,6 +360,23 @@ codex exec -m gpt-5 -c 'model_reasoning_effort="xhigh"' "Analyze this architectu
 
 Interactive TUI: `/model` command lets you change model and reasoning effort mid-conversation.
 
+### Fast Mode (`service_tier`)
+
+Routes requests to faster API infrastructure. Independent of reasoning effort — can be combined with any effort level. Trades potential quality/throughput differences for lower latency.
+
+```bash
+# Runtime via -c flag
+codex exec -c 'service_tier="fast"' "Quick task"
+
+# Combined with reasoning effort
+codex exec -c 'service_tier="fast"' -c 'model_reasoning_effort="high"' "Review this"
+
+# Via config.toml (global default)
+service_tier = "fast"
+```
+
+Interactive TUI: `/fast` toggles fast mode. **Caution:** `/fast` currently writes to `config.toml` (global), not session-scoped — it affects all future sessions until toggled again.
+
 ### Configuration Profiles
 
 ```toml
