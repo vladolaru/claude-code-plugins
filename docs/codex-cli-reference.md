@@ -362,7 +362,7 @@ Interactive TUI: `/model` command lets you change model and reasoning effort mid
 
 ### Fast Mode (`service_tier`)
 
-Routes requests to faster API infrastructure. Independent of reasoning effort — can be combined with any effort level. Trades potential quality/throughput differences for lower latency.
+Routes requests to faster API infrastructure for lower-latency responses with the same model and reasoning. Independent of reasoning effort — can be combined with any effort level.
 
 ```bash
 # Runtime via -c flag
