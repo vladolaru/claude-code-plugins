@@ -347,14 +347,6 @@ def action_review(args):
     effort_reason = None
     adaptive_on = getattr(args, "adaptive_effort", False) or state.get("adaptive_effort", False)
     if adaptive_on:
-        # Recompute diff size for rounds 2+ — fixes between rounds change
-        # the merge_base..HEAD diff, so the round-1 snapshot is stale.
-        diff_lines_for_effort = state.get("diff_lines_relevant", 0)
-        if round_num > 1 and state.get("merge_base"):
-            fresh_lines, _ = _compute_diff_lines(state["merge_base"])
-            diff_lines_for_effort = fresh_lines
-            state["diff_lines_relevant"] = fresh_lines
-
         # Load prior round findings/outcomes for signal overrides
         prior_findings = None
         prior_outcomes = None
@@ -372,7 +364,6 @@ def action_review(args):
 
         effort, effort_reason = resolve_effort(
             round_num=round_num,
-            diff_lines=diff_lines_for_effort,
             prior_findings=prior_findings,
             prior_outcomes=prior_outcomes,
         )

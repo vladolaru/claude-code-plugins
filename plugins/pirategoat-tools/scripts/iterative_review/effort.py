@@ -1,7 +1,7 @@
 """Adaptive reasoning effort resolution for iterative review.
 
 Pure-logic module with no I/O. Determines the effort tier for a review round
-based on round position, diff size, and prior round signals.
+based on round position and prior round signals.
 """
 
 # ---------------------------------------------------------------------------
@@ -11,8 +11,6 @@ based on round position, diff size, and prior round signals.
 EFFORT_TIERS = ("medium", "high", "xhigh")  # ordered low to high
 
 _TIER_INDEX = {tier: i for i, tier in enumerate(EFFORT_TIERS)}
-
-_DIFF_SIZE_THRESHOLD = 3000  # lines
 
 _SIGNAL_SEVERITIES = {"P0", "P1"}
 
@@ -49,7 +47,7 @@ def _has_signal(prior_findings, prior_outcomes, action):
 # ---------------------------------------------------------------------------
 
 
-def resolve_effort(round_num, diff_lines, prior_findings=None, prior_outcomes=None):
+def resolve_effort(round_num, prior_findings=None, prior_outcomes=None):
     """Resolve the reasoning effort tier for a review round.
 
     Returns (effort, reason) tuple where effort is one of EFFORT_TIERS
@@ -61,10 +59,7 @@ def resolve_effort(round_num, diff_lines, prior_findings=None, prior_outcomes=No
         Round 1:  high
         Round 2+: medium
 
-    Step 2 - Diff size override (every round):
-        diff_lines >= 3000: bump one tier
-
-    Step 3 - Signal overrides (round 2+ only):
+    Step 2 - Signal overrides (round 2+ only):
         P0/P1 fixed in prior round:    bump medium -> high
         P0/P1 rejected in prior round: bump high -> xhigh
         (rejected checked second so it stacks on top of fixed)
@@ -78,12 +73,7 @@ def resolve_effort(round_num, diff_lines, prior_findings=None, prior_outcomes=No
         effort = "medium"
     reasons.append(f"arc:round{round_num}")
 
-    # Step 2: Diff size override
-    if diff_lines >= _DIFF_SIZE_THRESHOLD:
-        effort = _bump(effort)
-        reasons.append(f"diff_size:{diff_lines}_lines")
-
-    # Step 3: Signal overrides (round 2+ only)
+    # Step 2: Signal overrides (round 2+ only)
     if round_num >= 2 and prior_findings and prior_outcomes:
         # Check fixed first (weaker signal)
         has_fixed = _has_signal(prior_findings, prior_outcomes, "fixed")
