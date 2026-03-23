@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Iterative review: adaptive reasoning effort.** New `--adaptive-effort` flag dynamically adjusts Codex `model_reasoning_effort` per review round. Round 1 runs at `high`, rounds 2+ default to `medium`. Prior-round signals escalate: P0/P1 findings fixed bump `medium` → `high`, P0/P1 rejected bump `high` → `xhigh`. When effort is `high` or `xhigh`, `service_tier="fast"` is also injected to keep throughput manageable. The flag is persisted in `review-loop-state.json` so rounds 2+ pick it up automatically. New `effort.py` pure-logic module with `resolve_effort()`, `effort` parameter on `invoke_codex_review()`, per-round effort tracking in state, and `effort_profile` in `review-loop-result.json` and telemetry.
+- **Codex CLI reference: reasoning effort and service tier docs.** Documented all five `model_reasoning_effort` levels (`minimal`, `low`, `medium`, `high`, `xhigh`) and both `service_tier` values (`fast`, `flex`) with invocation examples.
+
 ### Changed
 - **Iterative review: prompt ordering for cache efficiency.** Reordered `write_prompt_file` to place static content (rubric, context, task description) before dynamic content (pushback log, analysis paths). OpenAI's automatic server-side prefix caching can now cache the stable prefix across review rounds, reducing input token costs on rounds 2+.
+- **Linear pipeline step 12: adaptive effort passthrough.** When `run-config.json` has `adaptive_iterative_review: true`, step 12 appends `--adaptive-effort` to all iterative review CLI invocations (both round 1 and round N).
 
 ## [1.88.0] - 2026-03-23
 
