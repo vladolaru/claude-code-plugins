@@ -367,7 +367,7 @@ Controls API infrastructure routing. Independent of reasoning effort — can be 
 | Value | Description |
 |---|---|
 | `fast` | Lower-latency responses, same model and reasoning |
-| `flex` | ~50% cheaper, higher latency — good for batch/background work |
+| `flex` | ~50% cheaper than default tier, higher latency — good for batch/background work |
 
 ```bash
 # Runtime via -c flag
