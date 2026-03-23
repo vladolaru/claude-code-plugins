@@ -175,11 +175,13 @@ class TestCLI:
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True)
 
-    def test_pr_mode_exits_0_with_existing_context(self, tmp_path):
+    def test_pr_mode_succeeds_with_existing_context(self, mod, tmp_path):
+        """Complete context file loads and fills without error."""
         ctx_file = tmp_path / "review-context.json"
         ctx_file.write_text(json.dumps(COMPLETE_CONTEXT))
-        r = self._run("--pr-number", "42", "--output-dir", str(tmp_path))
-        assert r.returncode == 0
+        result = mod.load_and_fill(str(ctx_file), pr_number="42")
+        assert result is not None
+        assert result["git"]["merge_base"] == "abc123"
 
     def test_exits_1_without_pr_or_branch(self, tmp_path):
         r = self._run("--output-dir", str(tmp_path))

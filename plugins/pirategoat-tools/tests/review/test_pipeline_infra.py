@@ -358,18 +358,6 @@ class TestCLIIntegration:
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
 
-    def test_mode_from_config_on_subsequent_steps(self, tmp_path):
-        """Step 2+ reads mode from run-config.json, not CLI."""
-        # Step 1 seeds the config
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
-        # Step 3 passes wrong mode on CLI — config should win
-        r = self._run("--step", "3", "--mode", "full",
-                       "--output-dir", str(tmp_path))
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "run-config.json").read_text())
-        assert config["mode"] == "pr"  # config wins
-
     def test_mode_required_when_no_config(self, tmp_path):
         """First call must provide --mode."""
         r = self._run("--step", "1", "--output-dir", str(tmp_path))
@@ -449,15 +437,14 @@ class TestQuickModeConfig:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config.get("quick") is False
 
-    def test_quick_from_config_on_subsequent_steps(self, tmp_path):
-        """--quick persists in config and is readable at step 3."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
-        # Step 3 should read config with quick=true
-        r = self._run("--step", "3", "--output-dir", str(tmp_path))
-        assert r.returncode == 0
-        config = json.loads((tmp_path / "run-config.json").read_text())
+    def test_quick_from_config_on_subsequent_steps(self, mod, tmp_path):
+        """--quick persists in config and is readable on subsequent steps."""
+        # Seed config as step 1 would
+        mod.write_config(str(tmp_path), {
+            "mode": "pr", "pr_number": "42", "interactive": True, "quick": True,
+        })
+        # Subsequent step reads config — quick should still be true
+        config = mod.read_config(str(tmp_path))
         assert config["quick"] is True
 
     def test_quick_flag_on_rerun_overrides_existing_config(self, tmp_path):

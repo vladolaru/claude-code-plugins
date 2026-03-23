@@ -356,17 +356,37 @@ class TestSnapshot:
 class TestReReviews:
     """Multiple review runs for the same PR create separate log files."""
 
+    @staticmethod
+    def _mock_datetime_sequence(mod, times):
+        """Return a patch that makes mod.datetime.now() cycle through `times`."""
+        call_count = [0]
+        real_datetime = datetime
+
+        class FakeDatetime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                idx = min(call_count[0], len(times) - 1)
+                call_count[0] += 1
+                return times[idx]
+
+        return patch.object(mod, "datetime", FakeDatetime)
+
     def test_separate_files_per_run(self, mod, tmp_path):
         output_dir = tmp_path / "pr-review-org-repo-42"
         output_dir.mkdir()
         log_dir = tmp_path / "logs"
 
-        t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        path1 = t1.start(pr_number="42")
-        time.sleep(1.1)  # Ensure different timestamp (1-second resolution)
+        # Two timestamps 2s apart (filename uses 1-second resolution).
+        # start() calls datetime.now() once per invocation.
+        t1_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        t2_time = datetime(2026, 1, 1, 12, 0, 2, tzinfo=timezone.utc)
 
-        t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        path2 = t2.start(pr_number="42")
+        with self._mock_datetime_sequence(mod, [t1_time, t2_time]):
+            t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+            path1 = t1.start(pr_number="42")
+
+            t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+            path2 = t2.start(pr_number="42")
 
         assert path1 != path2
         assert os.path.isfile(path1)
@@ -377,12 +397,15 @@ class TestReReviews:
         output_dir.mkdir()
         log_dir = tmp_path / "logs"
 
-        t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t1.start(pr_number="42")
-        time.sleep(1.1)
+        t1_time = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        t2_time = datetime(2026, 1, 1, 12, 0, 2, tzinfo=timezone.utc)
 
-        t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
-        t2.start(pr_number="42")
+        with self._mock_datetime_sequence(mod, [t1_time, t2_time]):
+            t1 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+            t1.start(pr_number="42")
+
+            t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+            t2.start(pr_number="42")
 
         pattern = str(log_dir / "pr-review-org-repo-42--*.jsonl")
         matches = glob.glob(pattern)
