@@ -88,6 +88,7 @@ def _write_loop_result(output_dir, state, termination):
         "total_rejected": sum(r.get("rejected", 0) for r in rounds),
         "total_deferred": sum(r.get("deferred", 0) for r in rounds),
         "deferred_items": deferred_items,
+        "effort_profile": [r.get("effort") for r in rounds],
         "rounds": rounds,
     }
     result_path = os.path.join(output_dir, "review-loop-result.json")
@@ -421,6 +422,7 @@ def action_review(args):
             "fixed": 0,
             "rejected": 0,
             "deferred": 0,
+            "effort": effort,
         })
         state["terminated"] = True
         state["termination"] = "zero_findings"
@@ -429,13 +431,15 @@ def action_review(args):
         result_data = _write_loop_result(output_dir, state, "zero_findings")
         telemetry.pipeline_event("review_loop_completed",
                                  termination="zero_findings",
-                                 rounds_completed=result_data["rounds_completed"])
+                                 rounds_completed=result_data["rounds_completed"],
+                                 effort_profile=result_data.get("effort_profile", []))
         print(format_completion_briefing("zero_findings", result_data["rounds_completed"],
                                          result_data["total_fixed"],
                                          result_data["total_rejected"],
                                          result_data["total_deferred"]))
         return
 
+    state["current_effort"] = effort
     write_loop_state(output_dir, state)
 
     # Produce briefing
@@ -541,6 +545,7 @@ def action_advance(args):
             "fixed": fixed,
             "rejected": rejected,
             "deferred": deferred,
+            "effort": state.get("current_effort"),
         })
 
     findings_by_id = {f["id"]: f for f in findings}
@@ -584,7 +589,8 @@ def action_advance(args):
                                  rounds_completed=result_data["rounds_completed"],
                                  total_fixed=result_data["total_fixed"],
                                  total_rejected=result_data["total_rejected"],
-                                 total_deferred=result_data["total_deferred"])
+                                 total_deferred=result_data["total_deferred"],
+                                 effort_profile=result_data.get("effort_profile", []))
 
         print(format_completion_briefing(
             termination, result_data["rounds_completed"],
