@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.89.2] - 2026-03-23
+
+### Changed
+- **Bootstrap prompts & shared protocols: prompt-optimize.** Applied same 7-technique treatment from v1.89.1 to the prompts each reviewer agent receives via `bootstrap.py`, `reviewer-protocol.md`, and `tests-reviewer-protocol.md`. Tightened STOP CHECK and verification items into numbered quality gates, promoted 47% false-positive stat as directional stimulus, compressed PR INTENT/REVIEW FOCUS/BUDGET preambles, collapsed test severity categories and checklists. ~33% token reduction per agent prompt (~18K tokens saved across a full 20-agent pipeline). Net -68 lines across 3 source files.
+
 ## [1.89.1] - 2026-03-23
 
 ### Changed
