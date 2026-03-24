@@ -861,6 +861,33 @@ class TestPreflightBackend:
         assert "not installed" in err or "not on PATH" in err
 
 
+class TestTryFallback:
+    """_try_fallback selects the other backend after a runtime failure."""
+
+    @patch("iterative_review.backends.claude.check_auth", return_value=(True, '{"loggedIn": true}'))
+    @patch("shutil.which", return_value="/usr/local/bin/claude")
+    def test_codex_failure_falls_back_to_claude(self, mock_which, mock_auth):
+        from iterative_review.__main__ import _try_fallback
+        backend, name = _try_fallback("codex")
+        assert name == "claude"
+        assert backend is not None
+
+    @patch("iterative_review.backends.codex.check_auth", return_value=(True, ""))
+    @patch("shutil.which", return_value="/usr/local/bin/codex")
+    def test_claude_failure_falls_back_to_codex(self, mock_which, mock_auth):
+        from iterative_review.__main__ import _try_fallback
+        backend, name = _try_fallback("claude")
+        assert name == "codex"
+        assert backend is not None
+
+    @patch("shutil.which", return_value=None)
+    def test_no_fallback_when_other_not_available(self, mock_which):
+        from iterative_review.__main__ import _try_fallback
+        backend, name = _try_fallback("codex")
+        assert backend is None
+        assert name is None
+
+
 class TestAdaptiveEffortFlag:
     """--adaptive-effort flag is accepted by the CLI."""
 

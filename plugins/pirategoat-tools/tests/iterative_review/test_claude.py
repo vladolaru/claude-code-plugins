@@ -550,6 +550,44 @@ class TestInvokeReview:
         assert "git diff" in tools
 
     @patch("iterative_review.backends.claude.subprocess.run")
+    def test_add_dir_when_output_dir_provided(self, mock_run, tmp_path):
+        """When output_dir= is passed, --add-dir grants access to the workspace."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        schema = tmp_path / "schema.json"
+        schema.write_text('{"type":"object"}')
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=str(tmp_path)),
+            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
+        ]
+
+        invoke_review(str(prompt), str(schema), timeout=60,
+                      output_dir="/tmp/iterative-review-test")
+
+        claude_call = mock_run.call_args_list[1]
+        cmd = claude_call[0][0]
+        idx = cmd.index("--add-dir")
+        assert cmd[idx + 1] == "/tmp/iterative-review-test"
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_no_add_dir_when_output_dir_absent(self, mock_run, tmp_path):
+        """When output_dir= is not passed, --add-dir is not in the command."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        schema = tmp_path / "schema.json"
+        schema.write_text('{"type":"object"}')
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=str(tmp_path)),
+            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
+        ]
+
+        invoke_review(str(prompt), str(schema), timeout=60)
+
+        claude_call = mock_run.call_args_list[1]
+        cmd = claude_call[0][0]
+        assert "--add-dir" not in cmd
+
+    @patch("iterative_review.backends.claude.subprocess.run")
     def test_invoke_review_ignores_extra_kwargs(self, mock_run, tmp_path):
         """invoke_review silently ignores output_file= kwarg (CC doesn't use it)."""
         prompt = tmp_path / "prompt.md"

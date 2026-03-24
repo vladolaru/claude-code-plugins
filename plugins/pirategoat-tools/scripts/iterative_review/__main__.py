@@ -62,6 +62,29 @@ def _select_backend():
     return codex, "codex"
 
 
+def _try_fallback(failed_backend_name):
+    """Try the other backend after a runtime failure.
+
+    Returns (backend_module, backend_name) or (None, None) if no fallback.
+    """
+    import shutil
+
+    if failed_backend_name == "codex":
+        from .backends import claude
+        if shutil.which("claude"):
+            authenticated, _ = claude.check_auth()
+            if authenticated:
+                return claude, "claude"
+    elif failed_backend_name == "claude":
+        from .backends import codex
+        if shutil.which("codex"):
+            authenticated, _ = codex.check_auth()
+            if authenticated:
+                return codex, "codex"
+
+    return None, None
+
+
 def _compute_diff_lines(merge_base):
     """Compute noise-filtered diff line count for merge_base..HEAD.
 
@@ -441,11 +464,11 @@ def action_review(args):
                              effort=effort, effort_reason=effort_reason,
                              backend=backend_name)
 
-    # Codex accepts output_file= for on-disk structured output;
-    # Claude ignores it (returns structured output in JSON response).
     # Both backends accept **kwargs via the common invoke_review interface.
+    # output_dir= grants CC access to the workspace via --add-dir.
+    # output_file= tells Codex where to write structured JSON on disk.
     invoke_kwargs = dict(prompt_file=prompt_file, schema_file=schema_file,
-                         effort=effort)
+                         effort=effort, output_dir=output_dir)
     if backend_name == "codex":
         invoke_kwargs["output_file"] = os.path.join(
             output_dir, f"round-{round_num}-codex-output.json")
@@ -509,22 +532,47 @@ def action_review(args):
         return
 
     elif not success and not raw_output:
-        telemetry.progress("backend_unavailable", round=round_num,
-                           backend=backend_name)
-        telemetry.pipeline_event("backend_unavailable", round=round_num,
-                                 backend=backend_name)
-        # Write empty findings
-        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
-        with open(findings_path, "w") as f:
-            json.dump([], f)
-        state["terminated"] = True
-        state["termination"] = "backend_unavailable"
-        write_loop_state(output_dir, state)
+        # Primary backend failed at runtime — try the fallback before giving up.
+        # This covers transient Codex failures (network, server errors) where
+        # preflight passed but invoke_review returned nothing.
+        fallback_backend, fallback_name = _try_fallback(backend_name)
+        if fallback_backend:
+            telemetry.progress("backend_runtime_fallback", round=round_num,
+                               primary=backend_name, fallback=fallback_name)
+            telemetry.pipeline_event("backend_runtime_fallback", round=round_num,
+                                     primary=backend_name, fallback=fallback_name)
+            # Rebuild invoke kwargs for fallback backend
+            fallback_kwargs = dict(prompt_file=prompt_file, schema_file=schema_file,
+                                   effort=effort, output_dir=output_dir)
+            if fallback_name == "codex":
+                fallback_kwargs["output_file"] = os.path.join(
+                    output_dir, f"round-{round_num}-codex-output.json")
+            raw_output, success = fallback_backend.invoke_review(**fallback_kwargs)
+            if raw_output and raw_output != fallback_backend.TIMEOUT_SENTINEL:
+                # Fallback succeeded — switch backend for this round's parsing
+                backend = fallback_backend
+                backend_name = fallback_name
+                # Fall through to normal parsing below
+            else:
+                # Fallback also failed — terminate
+                success = False
+                raw_output = ""
 
-        _write_loop_result(output_dir, state, "backend_unavailable")
-        backend_label = backend_name.title()
-        print(f"{backend_label} CLI is unavailable. Review loop cannot proceed.")
-        return
+        if not success and not raw_output:
+            telemetry.progress("backend_unavailable", round=round_num,
+                               backend=backend_name)
+            telemetry.pipeline_event("backend_unavailable", round=round_num,
+                                     backend=backend_name)
+            findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+            with open(findings_path, "w") as f:
+                json.dump([], f)
+            state["terminated"] = True
+            state["termination"] = "backend_unavailable"
+            write_loop_state(output_dir, state)
+
+            _write_loop_result(output_dir, state, "backend_unavailable")
+            print("No review backend available. Review loop cannot proceed.")
+            return
 
     # Backend responded — reset consecutive timeout counter
     state["consecutive_timeouts"] = 0

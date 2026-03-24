@@ -223,17 +223,15 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
     Uses flag-based isolation (hooks, MCP, skills disabled) instead of
     --bare since bare mode doesn't support OAuth/subscription auth.
 
-    Extra **kwargs are accepted for interface compatibility with the Codex
-    backend (which takes output_file=) but ignored here — CC returns
-    structured output in the JSON response envelope.
-
     Args:
         prompt_file: Path to the review prompt markdown file
         schema_file: Path to the JSON Schema for structured output
         timeout: Seconds before killing (default 1800 = 30 min)
         effort: Optional reasoning effort level (e.g. 'high', 'xhigh').
                 Mapped via _EFFORT_MAP (xhigh -> high for Sonnet capping).
-        **kwargs: Ignored (interface compat with Codex backend's output_file=)
+        **kwargs: output_dir= grants CC access to the workspace directory
+                  via --add-dir (required when output_dir is outside the repo
+                  tree, e.g. /tmp/iterative-review-*). Other kwargs ignored.
 
     Returns:
         (raw_stdout_string, success_bool)
@@ -262,6 +260,13 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
         "--disable-slash-commands",
         "--model", "sonnet",
     ]
+
+    # Grant access to the output directory if it's outside the repo tree.
+    # Without this, Read/Write to analysis files under /tmp/iterative-review-*
+    # are denied by --permission-mode dontAsk.
+    output_dir = kwargs.get("output_dir")
+    if output_dir:
+        cmd.extend(["--add-dir", os.path.abspath(output_dir)])
 
     if effort:
         cc_effort = _EFFORT_MAP.get(effort, "high")
