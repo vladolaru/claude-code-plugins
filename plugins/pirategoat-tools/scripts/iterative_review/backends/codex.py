@@ -11,6 +11,35 @@ import subprocess
 TIMEOUT = 1800  # 30 minutes — used by invoke_review and timeout briefings
 TIMEOUT_SENTINEL = "__CODEX_TIMEOUT__"
 
+# Patterns that indicate quota/rate-limit exhaustion in Codex stderr.
+# When detected, the orchestrator can fall back to Claude immediately
+# instead of treating it as a generic failure.
+_RATE_LIMIT_PATTERNS = [
+    "rate_limit_exceeded",
+    "rate limit reached",
+    "you've hit your usage limit",
+    "you've exceeded the rate limit",
+    "quota exceeded",
+    "429 too many requests",
+    "usage limit",
+]
+
+
+def detect_failure_reason(stderr):
+    """Classify a Codex failure from its stderr output.
+
+    Returns a reason string for telemetry:
+    - "rate_limit" if quota/rate-limit exhaustion detected
+    - "unknown" otherwise
+    """
+    if not stderr:
+        return "unknown"
+    lower = stderr.lower()
+    for pattern in _RATE_LIMIT_PATTERNS:
+        if pattern in lower:
+            return "rate_limit"
+    return "unknown"
+
 
 # ---------------------------------------------------------------------------
 # Output Parsing
@@ -254,6 +283,8 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
                 cmd, stdin=pf, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd
             )
+        # Store stderr for post-failure diagnosis (rate limits, etc.)
+        invoke_review.last_stderr = result.stderr
         # Read from -o output file
         if os.path.isfile(output_file):
             with open(output_file) as f:
@@ -263,6 +294,8 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
         # Fall back to stdout (structured output also goes to stdout)
         return result.stdout, result.returncode == 0
     except subprocess.TimeoutExpired:
+        invoke_review.last_stderr = ""
         return TIMEOUT_SENTINEL, False
     except FileNotFoundError:
+        invoke_review.last_stderr = ""
         return "", False

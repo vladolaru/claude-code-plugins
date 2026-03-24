@@ -495,13 +495,22 @@ def action_review(args):
             pass
 
     if is_timeout or is_empty_failure or is_error_envelope:
+        # Diagnose why the primary failed (rate limits, quota, etc.)
+        failure_stderr = getattr(backend.invoke_review, "last_stderr", "")
+        failure_reason = backend.detect_failure_reason(failure_stderr)
+        telemetry.progress("backend_failed", round=round_num,
+                           backend=backend_name, reason=failure_reason,
+                           is_timeout=is_timeout, is_error_envelope=is_error_envelope)
+
         # Try fallback backend before handling the failure
         fallback_backend, fallback_name = _try_fallback(backend_name)
         if fallback_backend:
             telemetry.progress("backend_runtime_fallback", round=round_num,
-                               primary=backend_name, fallback=fallback_name)
+                               primary=backend_name, fallback=fallback_name,
+                               primary_failure_reason=failure_reason)
             telemetry.pipeline_event("backend_runtime_fallback", round=round_num,
-                                     primary=backend_name, fallback=fallback_name)
+                                     primary=backend_name, fallback=fallback_name,
+                                     primary_failure_reason=failure_reason)
             # Use the FALLBACK backend's schema — each backend has its own
             # (e.g. file_path vs absolute_file_path, additionalProperties rules).
             fallback_schema = fallback_backend.get_schema_path()

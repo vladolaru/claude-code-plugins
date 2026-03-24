@@ -15,6 +15,20 @@ TIMEOUT_SENTINEL = "__CLAUDE_TIMEOUT__"
 _EFFORT_MAP = {"medium": "medium", "high": "high", "xhigh": "high"}
 
 
+def detect_failure_reason(stderr):
+    """Classify a Claude CLI failure from its stderr output.
+
+    Returns a reason string for telemetry. CC surfaces most errors via
+    the JSON envelope (is_error field), so stderr is rarely the signal.
+    """
+    if not stderr:
+        return "unknown"
+    lower = stderr.lower()
+    if "rate limit" in lower or "quota" in lower:
+        return "rate_limit"
+    return "unknown"
+
+
 # ---------------------------------------------------------------------------
 # Output Parsing
 # ---------------------------------------------------------------------------
@@ -287,8 +301,11 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
             cmd, input=prompt_content, capture_output=True, text=True,
             timeout=timeout, cwd=cwd
         )
+        invoke_review.last_stderr = result.stderr
         return result.stdout, result.returncode == 0
     except subprocess.TimeoutExpired:
+        invoke_review.last_stderr = ""
         return TIMEOUT_SENTINEL, False
     except FileNotFoundError:
+        invoke_review.last_stderr = ""
         return "", False

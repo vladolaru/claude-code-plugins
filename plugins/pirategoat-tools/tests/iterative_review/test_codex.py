@@ -19,6 +19,7 @@ from iterative_review.backends.codex import (
     check_auth,
     write_prompt_file,
     get_rubric,
+    detect_failure_reason,
     TIMEOUT_SENTINEL,
     TIMEOUT,
 )
@@ -325,3 +326,29 @@ class TestInvokeReviewOutputFile:
         codex_call = mock_run.call_args_list[1]
         cmd = codex_call[0][0]
         assert out_file in cmd
+
+
+class TestDetectFailureReason:
+    """detect_failure_reason classifies Codex stderr for telemetry."""
+
+    def test_rate_limit_exceeded(self):
+        stderr = 'ERROR codex_api: error=http 429 Too Many Requests: {"error": {"code": "rate_limit_exceeded"}}'
+        assert detect_failure_reason(stderr) == "rate_limit"
+
+    def test_usage_limit_message(self):
+        stderr = "You've hit your usage limit. Upgrade to Pro or try again in 4h."
+        assert detect_failure_reason(stderr) == "rate_limit"
+
+    def test_quota_exceeded(self):
+        stderr = "Quota exceeded. Check your plan and billing details."
+        assert detect_failure_reason(stderr) == "rate_limit"
+
+    def test_generic_error_is_unknown(self):
+        stderr = "Error: connection refused"
+        assert detect_failure_reason(stderr) == "unknown"
+
+    def test_empty_stderr_is_unknown(self):
+        assert detect_failure_reason("") == "unknown"
+
+    def test_none_stderr_is_unknown(self):
+        assert detect_failure_reason(None) == "unknown"
