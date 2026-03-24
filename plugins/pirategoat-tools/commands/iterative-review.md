@@ -11,6 +11,10 @@ the code converges or the round limit is reached.
 Your judgment on each finding directly determines code quality.
 Rubber-stamping wastes rounds; overcorrecting wastes scope.
 
+Each Codex invocation has a 30-minute timeout. If Codex times out, the
+script emits a timeout briefing with mode-appropriate instructions — follow
+them instead of the three standard outcomes below.
+
 ## Setup
 
 **Parse arguments:** `$ARGUMENTS`
@@ -92,12 +96,16 @@ PYTHONPATH=$SCRIPTS_DIR:$PYTHONPATH python3 -m iterative_review \
   --output-dir "$OUTPUT_DIR" \
   --merge-base "$MERGE_BASE" \
   --context-file "$OUTPUT_DIR/review-context.md" \
-  [--max-rounds $MAX_ROUNDS]
+  [--max-rounds $MAX_ROUNDS] \
+  [--autonomous]
 ```
 
 Only include `--max-rounds` if the user specified a round limit or quick mode.
+Include `--autonomous` when running without a human present (e.g., from
+pirategoat-bot). This changes timeout and stalemate behavior — the loop
+self-manages instead of asking for input.
 
-Read the stdout. Three possible outcomes:
+Read the stdout. Four possible outcomes:
 
 **A) UNAVAILABLE message** — Codex CLI is not installed or not authenticated.
 Report the specific reason to the user and stop. This is a setup issue, not
@@ -107,6 +115,15 @@ a review failure — do not attempt workarounds or apologize.
 Report the result and stop.
 
 **C) Evaluation briefing** — Codex found issues. Proceed to triage below.
+
+**D) Timeout briefing** — Codex timed out. The briefing contains
+mode-specific instructions:
+- **Interactive (default):** Surface the timeout to the user with three
+  options: retry this round, skip to next round, or stop the loop.
+  Wait for the user's decision before proceeding.
+- **Autonomous:** Follow the briefing's skip instruction — write empty
+  outcomes and advance. The script tracks consecutive timeouts and will
+  terminate the loop automatically after two in a row.
 
 ### Triage and Fix
 
@@ -152,13 +169,13 @@ Write `$OUTPUT_DIR/round-N-outcomes.json` — an array where each entry has:
 
 ```json
 [
-  {"id": "r1_f1", "action": "fixed", "summary": "Added null check."},
-  {"id": "r1_f2", "action": "rejected", "reasoning": "Input is pre-validated at caller."},
-  {"id": "r1_f3", "action": "deferred", "reasoning": "Valid but out of scope for this PR."}
+  {"id": "r1_f1", "severity": "P1", "action": "fixed", "summary": "Added null check."},
+  {"id": "r1_f2", "severity": "P0", "action": "rejected", "reasoning": "Input is pre-validated at caller."},
+  {"id": "r1_f3", "severity": "P3", "action": "deferred", "reasoning": "Valid but out of scope for this PR."}
 ]
 ```
 
-Every finding ID must have an outcome. No extra IDs.
+Every finding ID must have an outcome. Copy severity from the finding. No extra IDs.
 
 ### Advance
 
