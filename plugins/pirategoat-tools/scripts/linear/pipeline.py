@@ -1083,6 +1083,10 @@ def _step_12_self_review(mode, state, context, config, output_dir):
     if config and config.get("adaptive_iterative_review"):
         adaptive_flag = " \\\n     --adaptive-effort"
 
+    autonomous_flag = ""
+    if config and config.get("autonomous_iterative_review"):
+        autonomous_flag = " \\\n     --autonomous"
+
     actions = [
         "1. Ensure all implementation changes are committed (the review tool only sees committed changes):",
         "   - Run `git status` to check for uncommitted work",
@@ -1112,7 +1116,7 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         f"     --output-dir {code_review_dir} \\",
         f"     --merge-base $MERGE_BASE \\",
         f"     --context-file {os.path.join(output_dir, 'investigation-report.md')} \\",
-        f"     --analysis-prefix {issue_id.lower()}{adaptive_flag}",
+        f"     --analysis-prefix {issue_id.lower()}{adaptive_flag}{autonomous_flag}",
         f"   ```",
         f"   (Run from the target repo root — PYTHONPATH makes the module importable.)",
         "",
@@ -1123,22 +1127,26 @@ def _step_12_self_review(mode, state, context, config, output_dir):
         "   and skip to step 14 (draft PR). Include in the PR description that the",
         "   iterative code review was skipped.",
         "",
-        "5. When the review completes, follow the evaluation briefing.",
+        "5. If the script prints a **Timeout briefing** — Codex timed out.",
+        "   In autonomous mode, the briefing says to proceed to the next round.",
+        "   Follow the briefing's instructions.",
         "",
-        "6. After writing outcomes, advance (replace N with the current round number):",
+        "6. When the review completes, follow the evaluation briefing.",
+        "",
+        "7. After writing outcomes, advance (replace N with the current round number):",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action advance --round N \\",
         f"     --output-dir {code_review_dir}",
         f"   ```",
         "",
-        "7. If advance says 'Proceed to review round M', run the next review:",
+        "8. If advance says 'Proceed to review round M', run the next review:",
         f"   ```bash",
         f"   PYTHONPATH={scripts_dir}:$PYTHONPATH python3 -m iterative_review --action review --round M \\",
-        f"     --output-dir {code_review_dir}{adaptive_flag}",
+        f"     --output-dir {code_review_dir}{adaptive_flag}{autonomous_flag}",
         f"   ```",
-        "   Then repeat from step 5. Only round 1 needs --merge-base and --context-file.",
+        "   Then repeat from step 6. Only round 1 needs --merge-base and --context-file.",
         "",
-        "8. When advance returns 'loop complete', proceed to step 13.",
+        "9. When advance returns 'loop complete', proceed to step 13.",
     ]
 
     return {
