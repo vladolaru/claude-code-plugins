@@ -33,6 +33,14 @@ A finding must meet ALL of these criteria:
 - **P2**: Normal. Fix eventually. Edge cases, error handling gaps, minor correctness issues.
 - **P3**: Low. Nice to have. Suggestions, minor improvements, non-blocking observations.
 
+## Finding Scope
+
+Report ALL P0, P1, and P2 findings you identify — thoroughness in a single round reduces total review rounds, even at the cost of a longer response.
+
+When any P0, P1, or P2 findings exist, omit P3 findings. P3 suggestions add triage noise when real issues need attention. They surface naturally in later rounds once actionable issues are resolved.
+
+When only P3-level observations exist, report them — this signals the code is nearly clean.
+
 ## Conservative Threshold
 
 If there is no finding that a person would definitely love to see and fix, prefer outputting no findings. An empty findings list is a valid and good outcome — it means the code is solid.
