@@ -9,16 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Iterative review: `--autonomous` mode.** New flag for bot-driven pipelines where no human is present. Defaults to interactive (safe). Persisted in loop state so advance steps inherit the mode.
-- **Iterative review: Codex timeout handling.** Distinguishes timeout from generic unavailability via sentinel return value. Timeout handler bypasses advance — records skipped rounds directly in state. Interactive mode surfaces timeout to user with retry/skip/stop options. Autonomous mode auto-skips; two consecutive timeouts terminate the loop with `codex_timeout` reason.
+- **Iterative review: timeout handling.** Distinguishes timeout from generic unavailability via sentinel return value. Autonomous mode: timeout handler bypasses advance — records skipped rounds directly in state, auto-skips; two consecutive timeouts terminate the loop. Interactive mode: defers round recording until the user chooses retry/skip/stop (no state pollution).
 - **Iterative review: stalemate escalation (round 3+).** Evaluation briefings now instruct the LLM to force-defer recurring rejection patterns rather than burning rounds on disagreements.
 - **Iterative review: severity in outcomes.** Outcomes format now includes severity (P0-P3) copied from findings. `outcome_severity()` pure function in `loop.py` falls back to outcome severity when findings join fails, making convergence decisions resilient.
-- **Codex rubric: finding scope guidance.** Instructs Codex to report all P0-P2 findings for thoroughness (reduces total rounds) and suppress P3 when higher-severity findings exist (reduces triage noise).
+- **Review rubric: finding scope guidance.** Instructs the reviewer to report all P0-P2 findings for thoroughness (reduces total rounds) and suppress P3 when higher-severity findings exist (reduces triage noise).
 - **Iterative review: tiered round extension.** P0/P1 fixes at the round limit now extend by +2 rounds (signals something seriously wrong). P2 fixes extend by +1 (real issues in new code). P3-only does not extend. Previously all extensions were +1 and P2 didn't trigger extension.
 - **Linear pipeline: `--autonomous` passthrough.** Step 12 reads `autonomous_iterative_review` from run-config.json and passes `--autonomous` to the iterative review CLI (same pattern as `adaptive_iterative_review`).
 
 ### Changed
-- **Iterative review command.** Documents `--autonomous` flag, timeout expectations, fourth outcome type (timeout briefing), severity in outcomes format, and tiered round extension behavior.
-- **Codex backend.** Extracts `CODEX_TIMEOUT = 1800` constant, replacing hardcoded values.
+- **Iterative review command.** Documents timeout expectations, fourth outcome type (timeout briefing), severity in outcomes format, and tiered round extension behavior.
+- **Reviewer backend.** Extracts `CODEX_TIMEOUT = 1800` constant, replacing hardcoded values.
 
 ## [1.89.2] - 2026-03-23
 

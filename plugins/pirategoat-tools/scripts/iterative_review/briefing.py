@@ -162,17 +162,17 @@ def format_timeout_briefing(round_num, timeout_seconds, autonomous=False):
     timeout_min = timeout_seconds // 60
     lines = []
     lines.append(f"{'═' * 55}")
-    lines.append(f"ITERATIVE REVIEW — Review Round {round_num}: Codex Timeout")
+    lines.append(f"ITERATIVE REVIEW — Review Round {round_num}: Reviewer Timeout")
     lines.append(f"{'═' * 55}")
     lines.append("")
-    lines.append(f"Codex did not respond within {timeout_min} minutes.")
+    lines.append(f"The independent reviewer did not respond within {timeout_min} minutes.")
     lines.append("This is an infrastructure issue, not a code quality signal.")
     lines.append("")
 
     if autonomous:
         lines.append("## ACTION (autonomous mode)")
         lines.append("")
-        lines.append(f"Codex timed out. Round {round_num} was skipped due to timeout.")
+        lines.append(f"The reviewer timed out. Round {round_num} was skipped.")
         lines.append(f"Proceed to review round {round_num + 1} by running:")
         lines.append(f"  --action review --round {round_num + 1}")
     else:
@@ -180,7 +180,7 @@ def format_timeout_briefing(round_num, timeout_seconds, autonomous=False):
         lines.append("")
         lines.append("Surface this to the user and ask how to proceed:")
         lines.append("")
-        lines.append(f"  **Codex timed out** after {timeout_min} minutes on review round {round_num}.")
+        lines.append(f"  **The independent reviewer timed out** after {timeout_min} minutes on review round {round_num}.")
         lines.append("  Options:")
         lines.append(f"  1. **Retry** — re-run `--action review --round {round_num}` (same round)")
         lines.append(f"  2. **Skip** — proceed directly to round {round_num + 1} via `--action review --round {round_num + 1}`")
@@ -196,7 +196,7 @@ _TERMINATION_REASONS = {
     "max_rounds": "Maximum review rounds reached.",
     "hard_limit": "Hard round limit reached.",
     "codex_unavailable": "Codex CLI became unavailable.",
-    "codex_timeout": "Codex timed out on consecutive rounds.",
+    "codex_timeout": "The independent reviewer timed out on consecutive rounds.",
 }
 
 

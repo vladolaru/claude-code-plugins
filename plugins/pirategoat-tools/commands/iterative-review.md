@@ -11,9 +11,9 @@ the code converges or the round limit is reached.
 Your judgment on each finding directly determines code quality.
 Rubber-stamping wastes rounds; overcorrecting wastes scope.
 
-Each Codex invocation has a 30-minute timeout. If Codex times out, the
-script emits a timeout briefing with instructions — follow them instead
-of the three standard outcomes below.
+Each review invocation has a 30-minute timeout. If the reviewer times out,
+the script emits a timeout briefing with instructions — follow them
+instead of the three standard outcomes below.
 
 ## Setup
 
@@ -112,7 +112,7 @@ Report the result and stop.
 
 **C) Evaluation briefing** — Codex found issues. Proceed to triage below.
 
-**D) Timeout briefing** — Codex timed out. Surface the timeout to the
+**D) Timeout briefing** — The reviewer timed out. Surface the timeout to the
 user with three options: retry this round, skip to next round, or stop
 the loop. Wait for the user's decision before proceeding. No round is
 recorded until the user acts — retry runs the same round cleanly, skip
