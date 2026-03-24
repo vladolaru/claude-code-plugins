@@ -144,6 +144,42 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     return "\n".join(lines)
 
 
+def format_timeout_briefing(round_num, timeout_seconds, autonomous=False):
+    """Format briefing when Codex times out.
+
+    Interactive: asks the LLM to surface the timeout to the user with options.
+    Autonomous: instructs the LLM to skip this round and advance.
+    """
+    timeout_min = timeout_seconds // 60
+    lines = []
+    lines.append(f"{'═' * 55}")
+    lines.append(f"ITERATIVE REVIEW — Review Round {round_num}: Codex Timeout")
+    lines.append(f"{'═' * 55}")
+    lines.append("")
+    lines.append(f"Codex did not respond within {timeout_min} minutes.")
+    lines.append("This is an infrastructure issue, not a code quality signal.")
+    lines.append("")
+
+    if autonomous:
+        lines.append("## ACTION (autonomous mode)")
+        lines.append("")
+        lines.append(f"Codex timed out. Round {round_num} was skipped due to timeout.")
+        lines.append(f"Proceed to review round {round_num + 1} by running:")
+        lines.append(f"  --action review --round {round_num + 1}")
+    else:
+        lines.append("## ACTION (interactive mode)")
+        lines.append("")
+        lines.append("Surface this to the user and ask how to proceed:")
+        lines.append("")
+        lines.append(f"  **Codex timed out** after {timeout_min} minutes on review round {round_num}.")
+        lines.append("  Options:")
+        lines.append(f"  1. **Retry** — re-run `--action review --round {round_num}` (same round)")
+        lines.append(f"  2. **Skip** — write empty outcomes and advance to round {round_num + 1}")
+        lines.append("  3. **Stop** — end the review loop here")
+
+    return "\n".join(lines)
+
+
 _TERMINATION_REASONS = {
     "zero_findings": "Codex found no issues — the code is clean.",
     "all_rejected": "No code changes needed — findings were rejected or deferred.",
@@ -151,6 +187,7 @@ _TERMINATION_REASONS = {
     "max_rounds": "Maximum review rounds reached.",
     "hard_limit": "Hard round limit reached.",
     "codex_unavailable": "Codex CLI became unavailable.",
+    "codex_timeout": "Codex timed out on consecutive rounds.",
 }
 
 

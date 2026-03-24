@@ -14,6 +14,7 @@ from iterative_review.briefing import (
     format_evaluation_briefing,
     format_completion_briefing,
     format_degraded_briefing,
+    format_timeout_briefing,
     _TERMINATION_REASONS,
 )
 
@@ -139,7 +140,8 @@ class TestCompletionBriefing:
 
     def test_all_termination_reasons_have_descriptions(self):
         for key in ["zero_findings", "all_rejected", "nitpicks_only",
-                     "max_rounds", "hard_limit", "codex_unavailable"]:
+                     "max_rounds", "hard_limit", "codex_unavailable",
+                     "codex_timeout"]:
             assert key in _TERMINATION_REASONS
 
     def test_unknown_termination_falls_back_to_raw(self):
@@ -175,3 +177,36 @@ class TestDegradedBriefing:
         text = format_degraded_briefing(round_num=3, raw_id="r3_raw")
         assert "round-3-outcomes.json" in text
         assert "r3_raw" in text
+
+
+class TestTimeoutBriefing:
+    def test_interactive_asks_user(self):
+        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=False)
+        assert "timed out" in text.lower()
+        assert "user" in text.lower() or "ask" in text.lower()
+
+    def test_interactive_offers_options(self):
+        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=False)
+        assert "retry" in text.lower()
+        assert "skip" in text.lower()
+        assert "stop" in text.lower()
+
+    def test_autonomous_skips_round(self):
+        text = format_timeout_briefing(round_num=2, timeout_seconds=1800, autonomous=True)
+        assert "timed out" in text.lower()
+        assert "skip" in text.lower()
+        assert "advance" in text.lower() or "proceed" in text.lower()
+
+    def test_autonomous_no_user_prompt(self):
+        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=True)
+        lower = text.lower()
+        assert "ask the user" not in lower
+        assert "ask the human" not in lower
+
+    def test_contains_round_number(self):
+        text = format_timeout_briefing(round_num=3, timeout_seconds=1800, autonomous=False)
+        assert "3" in text
+
+    def test_contains_timeout_duration(self):
+        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=False)
+        assert "30" in text  # 30 minutes
