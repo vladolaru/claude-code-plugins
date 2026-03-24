@@ -5,6 +5,14 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.91.0] - 2026-03-24
+
+### Added
+- **Claude Code CLI as fallback review backend.** When Codex is unavailable, iterative review now falls back to Claude Code CLI. New `backends/claude.py` module uses `--json-schema` for structured output, flag-based isolation (`--allowedTools`, `--disallowedTools`), and OAuth-compatible auth. New `claude-review-schema.json` provides a CC-adapted JSON Schema (no `additionalProperties` requirement). Backend selection runs at preflight: Codex (primary) → Claude Code (fallback).
+
+### Changed
+- **Normalized backend interface.** Extracted `check_auth`, `parse_output`, `invoke_review` as the canonical backend contract. Old codex-specific function names kept as aliases for backward compatibility.
+
 ## [1.90.0] - 2026-03-24
 
 ### Added
