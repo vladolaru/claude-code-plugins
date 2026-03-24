@@ -22,13 +22,13 @@ from .loop import (
 )
 from .briefing import (
     format_evaluation_briefing, format_completion_briefing,
-    format_degraded_briefing,
+    format_degraded_briefing, format_timeout_briefing,
 )
 from .effort import resolve_effort
 from .telemetry import ReviewTelemetry
 from .backends.codex import (
     parse_codex_output, write_prompt_file, get_schema_path, get_rubric,
-    invoke_codex_review, check_codex_auth,
+    invoke_codex_review, check_codex_auth, TIMEOUT_SENTINEL, CODEX_TIMEOUT,
 )
 
 
@@ -390,7 +390,47 @@ def action_review(args):
         effort=effort,
     )
 
-    if not success and not raw_output:
+    if raw_output == TIMEOUT_SENTINEL:
+        # Codex timed out — bypass advance, record round directly
+        autonomous = state.get("autonomous", False)
+        consecutive = state.get("consecutive_timeouts", 0) + 1
+        state["consecutive_timeouts"] = consecutive
+
+        telemetry.progress("codex_timeout", round=round_num,
+                           consecutive=consecutive, autonomous=autonomous)
+        telemetry.pipeline_event("codex_timeout", round=round_num,
+                                 consecutive=consecutive)
+
+        # Write empty findings so the round is complete on disk
+        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+        with open(findings_path, "w") as f:
+            json.dump([], f)
+
+        # Record round in state (skipped — not routed through advance)
+        state.setdefault("rounds", []).append({
+            "round": round_num, "findings": 0, "fixed": 0,
+            "rejected": 0, "deferred": 0, "skipped": True,
+            "effort": state.get("current_effort"),
+        })
+
+        if autonomous and consecutive >= 2:
+            # Two consecutive timeouts in autonomous mode → terminate
+            state["terminated"] = True
+            state["termination"] = "codex_timeout"
+            write_loop_state(output_dir, state)
+            result_data = _write_loop_result(output_dir, state, "codex_timeout")
+            print(format_completion_briefing(
+                "codex_timeout", result_data["rounds_completed"],
+                result_data["total_fixed"], result_data["total_rejected"],
+                result_data["total_deferred"]))
+            return
+
+        write_loop_state(output_dir, state)
+        print(format_timeout_briefing(round_num, timeout_seconds=CODEX_TIMEOUT,
+                                       autonomous=autonomous))
+        return
+
+    elif not success and not raw_output:
         telemetry.progress("codex_unavailable", round=round_num)
         telemetry.pipeline_event("codex_unavailable", round=round_num)
         # Write empty findings
@@ -404,6 +444,9 @@ def action_review(args):
         _write_loop_result(output_dir, state, "codex_unavailable")
         print("Codex CLI is unavailable. Review loop cannot proceed.")
         return
+
+    # Codex responded — reset consecutive timeout counter
+    state["consecutive_timeouts"] = 0
 
     # Parse output
     findings, degraded = parse_codex_output(raw_output, round_num)

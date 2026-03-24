@@ -10,6 +10,9 @@ import subprocess
 import re
 from datetime import datetime, timezone
 
+CODEX_TIMEOUT = 1800  # 30 minutes — used by invoke_codex_review and timeout briefings
+TIMEOUT_SENTINEL = "__CODEX_TIMEOUT__"
+
 
 # ---------------------------------------------------------------------------
 # Output Parsing
@@ -185,7 +188,7 @@ def get_rubric():
         return ""
 
 
-def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800,
+def invoke_codex_review(prompt_file, schema_file, output_file, timeout=CODEX_TIMEOUT,
                         effort=None):
     """Invoke `codex exec` with a custom review prompt and structured output.
 
@@ -251,6 +254,6 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=1800,
         # Fall back to stdout (structured output also goes to stdout)
         return result.stdout, result.returncode == 0
     except subprocess.TimeoutExpired:
-        return "", False
+        return TIMEOUT_SENTINEL, False
     except FileNotFoundError:
         return "", False

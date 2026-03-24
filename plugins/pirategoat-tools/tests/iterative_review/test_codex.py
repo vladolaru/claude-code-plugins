@@ -1,6 +1,7 @@
 """Tests for iterative_review.backends.codex — output parsing and context composition."""
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -17,6 +18,8 @@ from iterative_review.backends.codex import (
     parse_codex_output,
     write_prompt_file,
     get_rubric,
+    TIMEOUT_SENTINEL,
+    CODEX_TIMEOUT,
 )
 
 
@@ -256,3 +259,29 @@ class TestInvokeCodexReviewEffort:
         codex_call = mock_run.call_args_list[1]
         cmd = codex_call[0][0]
         assert 'service_tier="fast"' not in cmd
+
+
+class TestTimeoutSentinel:
+    """TIMEOUT_SENTINEL and CODEX_TIMEOUT constants."""
+
+    def test_sentinel_is_string(self):
+        assert isinstance(TIMEOUT_SENTINEL, str)
+
+    def test_codex_timeout_is_1800(self):
+        assert CODEX_TIMEOUT == 1800
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_timeout_returns_sentinel(self, mock_run, tmp_path):
+        """invoke_codex_review returns TIMEOUT_SENTINEL on TimeoutExpired."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        # First call is git rev-parse (succeeds), second raises TimeoutExpired
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=str(tmp_path)),
+            subprocess.TimeoutExpired(cmd="codex", timeout=CODEX_TIMEOUT),
+        ]
+        result, success = invoke_codex_review(
+            str(prompt), "schema.json", str(tmp_path / "out.json")
+        )
+        assert result == TIMEOUT_SENTINEL
+        assert success is False

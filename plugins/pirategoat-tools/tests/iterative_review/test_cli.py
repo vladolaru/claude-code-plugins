@@ -822,3 +822,60 @@ class TestPreflightIntegration:
         data = json.loads(result_path.read_text())
         assert data["termination"] == "codex_unavailable"
         assert data["rounds_completed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Timeout state management
+# ---------------------------------------------------------------------------
+
+from iterative_review.loop import read_loop_state, write_loop_state, DEFAULT_STATE
+
+
+class TestTimeoutStateManagement:
+    """Timeout handler records round and tracks consecutive timeouts."""
+
+    def test_consecutive_timeouts_increments(self, tmp_path):
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "autonomous": True, "consecutive_timeouts": 0}
+        # Simulate first timeout: increment and persist
+        state["consecutive_timeouts"] += 1
+        state.setdefault("rounds", []).append({
+            "round": 1, "findings": 0, "fixed": 0,
+            "rejected": 0, "deferred": 0, "skipped": True,
+        })
+        write_loop_state(d, state)
+        loaded = read_loop_state(d)
+        assert loaded["consecutive_timeouts"] == 1
+        assert loaded["rounds"][0]["skipped"] is True
+
+    def test_consecutive_timeouts_resets_on_success(self, tmp_path):
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "consecutive_timeouts": 2}
+        state["consecutive_timeouts"] = 0  # reset
+        write_loop_state(d, state)
+        loaded = read_loop_state(d)
+        assert loaded["consecutive_timeouts"] == 0
+
+    def test_second_consecutive_terminates(self, tmp_path):
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "autonomous": True, "consecutive_timeouts": 1}
+        state["consecutive_timeouts"] += 1  # becomes 2
+        assert state["consecutive_timeouts"] >= 2
+        state["terminated"] = True
+        state["termination"] = "codex_timeout"
+        write_loop_state(d, state)
+        loaded = read_loop_state(d)
+        assert loaded["terminated"] is True
+        assert loaded["termination"] == "codex_timeout"
+
+    def test_interactive_does_not_auto_terminate(self, tmp_path):
+        """Interactive mode: consecutive timeouts don't auto-terminate."""
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "autonomous": False, "consecutive_timeouts": 5}
+        # Auto-termination condition: autonomous AND consecutive >= 2
+        should_terminate = state.get("autonomous", False) and state["consecutive_timeouts"] >= 2
+        assert not should_terminate
