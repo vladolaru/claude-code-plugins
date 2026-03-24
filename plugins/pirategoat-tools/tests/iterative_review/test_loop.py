@@ -297,3 +297,11 @@ class TestOutcomeSeverity:
     def test_degraded_round_severity(self):
         """Degraded rounds have severity='unknown' in findings."""
         assert outcome_severity({}, {"severity": "unknown"}) == "unknown"
+
+    def test_degraded_finding_defers_to_outcome_severity(self):
+        """When finding has 'unknown' severity, outcome's assessed severity wins."""
+        assert outcome_severity({"severity": "P1"}, {"severity": "unknown"}) == "P1"
+
+    def test_degraded_finding_no_outcome_severity(self):
+        """When finding has 'unknown' and outcome has no severity, returns 'unknown'."""
+        assert outcome_severity({}, {"severity": "unknown"}) == "unknown"

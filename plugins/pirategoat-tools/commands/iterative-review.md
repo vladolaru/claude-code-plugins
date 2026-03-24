@@ -120,10 +120,12 @@ Report the result and stop.
 mode-specific instructions:
 - **Interactive (default):** Surface the timeout to the user with three
   options: retry this round, skip to next round, or stop the loop.
-  Wait for the user's decision before proceeding.
-- **Autonomous:** Follow the briefing's skip instruction — write empty
-  outcomes and advance. The script tracks consecutive timeouts and will
-  terminate the loop automatically after two in a row.
+  Wait for the user's decision before proceeding. No round is recorded
+  until the user acts — retry runs the same round cleanly, skip proceeds
+  directly to the next round (bypassing advance).
+- **Autonomous:** The script records the skipped round and advances
+  automatically. Two consecutive timeouts terminate the loop with
+  `codex_timeout` reason.
 
 ### Triage and Fix
 

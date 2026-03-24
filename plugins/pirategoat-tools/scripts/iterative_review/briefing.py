@@ -183,7 +183,7 @@ def format_timeout_briefing(round_num, timeout_seconds, autonomous=False):
         lines.append(f"  **Codex timed out** after {timeout_min} minutes on review round {round_num}.")
         lines.append("  Options:")
         lines.append(f"  1. **Retry** — re-run `--action review --round {round_num}` (same round)")
-        lines.append(f"  2. **Skip** — write empty outcomes and advance to round {round_num + 1}")
+        lines.append(f"  2. **Skip** — proceed directly to round {round_num + 1} via `--action review --round {round_num + 1}`")
         lines.append("  3. **Stop** — end the review loop here")
 
     return "\n".join(lines)

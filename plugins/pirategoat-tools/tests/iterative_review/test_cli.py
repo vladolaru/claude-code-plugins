@@ -959,3 +959,35 @@ class TestTimeoutStateManagement:
         # Auto-termination condition: autonomous AND consecutive >= 2
         should_terminate = state.get("autonomous", False) and state["consecutive_timeouts"] >= 2
         assert not should_terminate
+
+    def test_interactive_timeout_does_not_record_round(self, tmp_path):
+        """Interactive mode: timeout increments counter but does NOT record round.
+
+        Recording eagerly would break retry (duplicate entry) and
+        skip-via-advance (empty findings → false zero_findings convergence).
+        """
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "autonomous": False, "consecutive_timeouts": 0}
+        # Simulate interactive timeout: only increment counter
+        state["consecutive_timeouts"] += 1
+        write_loop_state(d, state)
+        loaded = read_loop_state(d)
+        assert loaded["consecutive_timeouts"] == 1
+        assert loaded["rounds"] == []  # No round recorded
+
+    def test_autonomous_timeout_records_skipped_round(self, tmp_path):
+        """Autonomous mode: timeout records skipped round immediately."""
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "autonomous": True, "consecutive_timeouts": 0}
+        state["consecutive_timeouts"] += 1
+        state.setdefault("rounds", []).append({
+            "round": 1, "findings": 0, "fixed": 0,
+            "rejected": 0, "deferred": 0, "skipped": True,
+        })
+        write_loop_state(d, state)
+        loaded = read_loop_state(d)
+        assert loaded["consecutive_timeouts"] == 1
+        assert len(loaded["rounds"]) == 1
+        assert loaded["rounds"][0]["skipped"] is True

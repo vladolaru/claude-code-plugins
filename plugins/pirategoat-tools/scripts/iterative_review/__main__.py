@@ -391,7 +391,11 @@ def action_review(args):
     )
 
     if raw_output == TIMEOUT_SENTINEL:
-        # Codex timed out — bypass advance, record round directly
+        # Codex timed out — mode determines how the round is handled.
+        # Autonomous: record skipped round immediately (auto-skip is the only path).
+        # Interactive: defer recording — the user may retry (same round) or skip.
+        #   Eager recording would poison retry (duplicate round entry) and
+        #   skip-via-advance (empty findings → false zero_findings convergence).
         autonomous = state.get("autonomous", False)
         consecutive = state.get("consecutive_timeouts", 0) + 1
         state["consecutive_timeouts"] = consecutive
@@ -401,29 +405,30 @@ def action_review(args):
         telemetry.pipeline_event("codex_timeout", round=round_num,
                                  consecutive=consecutive)
 
-        # Write empty findings so the round is complete on disk
-        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
-        with open(findings_path, "w") as f:
-            json.dump([], f)
+        if autonomous:
+            # Write empty findings so the round is complete on disk
+            findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+            with open(findings_path, "w") as f:
+                json.dump([], f)
 
-        # Record round in state (skipped — not routed through advance)
-        state.setdefault("rounds", []).append({
-            "round": round_num, "findings": 0, "fixed": 0,
-            "rejected": 0, "deferred": 0, "skipped": True,
-            "effort": state.get("current_effort"),
-        })
+            # Record round in state (skipped — not routed through advance)
+            state.setdefault("rounds", []).append({
+                "round": round_num, "findings": 0, "fixed": 0,
+                "rejected": 0, "deferred": 0, "skipped": True,
+                "effort": state.get("current_effort"),
+            })
 
-        if autonomous and consecutive >= 2:
-            # Two consecutive timeouts in autonomous mode → terminate
-            state["terminated"] = True
-            state["termination"] = "codex_timeout"
-            write_loop_state(output_dir, state)
-            result_data = _write_loop_result(output_dir, state, "codex_timeout")
-            print(format_completion_briefing(
-                "codex_timeout", result_data["rounds_completed"],
-                result_data["total_fixed"], result_data["total_rejected"],
-                result_data["total_deferred"]))
-            return
+            if consecutive >= 2:
+                # Two consecutive timeouts in autonomous mode → terminate
+                state["terminated"] = True
+                state["termination"] = "codex_timeout"
+                write_loop_state(output_dir, state)
+                result_data = _write_loop_result(output_dir, state, "codex_timeout")
+                print(format_completion_briefing(
+                    "codex_timeout", result_data["rounds_completed"],
+                    result_data["total_fixed"], result_data["total_rejected"],
+                    result_data["total_deferred"]))
+                return
 
         write_loop_state(output_dir, state)
         print(format_timeout_briefing(round_num, timeout_seconds=CODEX_TIMEOUT,

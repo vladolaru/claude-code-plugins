@@ -189,12 +189,14 @@ def outcome_severity(outcome, finding=None):
     Falls back to outcome's own severity field (LLM-provided copy).
     Returns "unknown" when neither has severity data.
 
-    Note: "unknown" intentionally prevents nitpicks_only and has_critical_fixed
+    The "unknown" placeholder (used by degraded findings) is treated as
+    absent so the outcome's assessed severity can take precedence.
+    "unknown" in the final return prevents nitpicks_only and has_critical_fixed
     from triggering — the loop errs toward continuing when severity is unavailable.
     """
     if finding:
         sev = finding.get("severity")
-        if sev:
+        if sev and sev != "unknown":
             return sev
     return outcome.get("severity", "unknown")
 
