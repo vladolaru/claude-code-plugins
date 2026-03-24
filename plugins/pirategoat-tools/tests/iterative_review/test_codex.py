@@ -14,12 +14,14 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from iterative_review.backends.codex import (
-    invoke_codex_review,
-    parse_codex_output,
+    invoke_review,
+    parse_output,
+    check_auth,
     write_prompt_file,
     get_rubric,
+    detect_failure_reason,
     TIMEOUT_SENTINEL,
-    CODEX_TIMEOUT,
+    TIMEOUT,
 )
 
 
@@ -52,9 +54,9 @@ SAMPLE_JSON_OUTPUT = json.dumps({
 })
 
 
-class TestParseCodexOutput:
+class TestParseOutput:
     def test_parses_structured_json(self):
-        findings, degraded = parse_codex_output(SAMPLE_JSON_OUTPUT, round_num=1)
+        findings, degraded = parse_output(SAMPLE_JSON_OUTPUT, round_num=1)
         assert len(findings) == 2
         assert findings[0]["id"] == "r1_f1"
         assert findings[0]["severity"] == "P1"
@@ -65,13 +67,13 @@ class TestParseCodexOutput:
         assert degraded is False
 
     def test_assigns_round_prefix_to_ids(self):
-        findings, _ = parse_codex_output(SAMPLE_JSON_OUTPUT, round_num=3)
+        findings, _ = parse_output(SAMPLE_JSON_OUTPUT, round_num=3)
         assert findings[0]["id"] == "r3_f1"
         assert findings[1]["id"] == "r3_f2"
 
     def test_plain_text_fallback(self):
         raw = "Some review prose that is not JSON."
-        findings, degraded = parse_codex_output(raw, round_num=2)
+        findings, degraded = parse_output(raw, round_num=2)
         assert len(findings) == 1
         assert findings[0]["id"] == "r2_raw"
         assert findings[0]["severity"] == "unknown"
@@ -80,7 +82,7 @@ class TestParseCodexOutput:
 
     def test_empty_findings_returns_empty(self):
         output = json.dumps({"findings": [], "overall_correctness": "clean"})
-        findings, degraded = parse_codex_output(output, round_num=1)
+        findings, degraded = parse_output(output, round_num=1)
         assert len(findings) == 0
         assert degraded is False
 
@@ -91,7 +93,7 @@ class TestParseCodexOutput:
             "confidence_score": 0.5,
             "priority": 2,
         }]})
-        findings, _ = parse_codex_output(output, round_num=1)
+        findings, _ = parse_output(output, round_num=1)
         assert findings[0]["location"] == "unknown"
 
 
@@ -149,8 +151,8 @@ class TestRubric:
         assert "no findings" in rubric.lower()
 
 
-class TestInvokeCodexReviewEffort:
-    """Tests for the effort parameter in invoke_codex_review()."""
+class TestInvokeReviewEffort:
+    """Tests for the effort parameter in invoke_review()."""
 
     @patch("iterative_review.backends.codex.subprocess.run")
     def test_no_effort_omits_config_flag(self, mock_run, tmp_path):
@@ -159,7 +161,8 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(str(prompt), "schema.json", str(tmp_path / "out.json"))
+        invoke_review(str(prompt), "schema.json",
+                      output_file=str(tmp_path / "out.json"))
 
         # The second call is the actual codex exec (first is git rev-parse)
         codex_call = mock_run.call_args_list[1]
@@ -173,8 +176,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="high"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -189,8 +193,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="xhigh"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="xhigh"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -205,8 +210,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="high"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -222,8 +228,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="high"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -237,8 +244,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="xhigh"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="xhigh"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -252,8 +260,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="medium"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="medium"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -262,26 +271,84 @@ class TestInvokeCodexReviewEffort:
 
 
 class TestTimeoutSentinel:
-    """TIMEOUT_SENTINEL and CODEX_TIMEOUT constants."""
+    """TIMEOUT_SENTINEL and TIMEOUT constants."""
 
     def test_sentinel_is_string(self):
         assert isinstance(TIMEOUT_SENTINEL, str)
 
-    def test_codex_timeout_is_1800(self):
-        assert CODEX_TIMEOUT == 1800
+    def test_timeout_is_1800(self):
+        assert TIMEOUT == 1800
 
     @patch("iterative_review.backends.codex.subprocess.run")
     def test_timeout_returns_sentinel(self, mock_run, tmp_path):
-        """invoke_codex_review returns TIMEOUT_SENTINEL on TimeoutExpired."""
+        """invoke_review returns TIMEOUT_SENTINEL on TimeoutExpired."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         # First call is git rev-parse (succeeds), second raises TimeoutExpired
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout=str(tmp_path)),
-            subprocess.TimeoutExpired(cmd="codex", timeout=CODEX_TIMEOUT),
+            subprocess.TimeoutExpired(cmd="codex", timeout=TIMEOUT),
         ]
-        result, success = invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json")
+        result, success = invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json")
         )
         assert result == TIMEOUT_SENTINEL
         assert success is False
+
+
+class TestInvokeReviewOutputFile:
+    """invoke_review handles output_file kwarg."""
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_invoke_review_auto_creates_output_file(self, mock_run, tmp_path):
+        """invoke_review creates a temp output file when none is specified."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_review(str(prompt), "schema.json")
+
+        # Should have called subprocess.run (git rev-parse + codex exec)
+        assert mock_run.call_count == 2
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_invoke_review_accepts_output_file_kwarg(self, mock_run, tmp_path):
+        """invoke_review passes output_file through to the codex exec command."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        out_file = str(tmp_path / "explicit-output.json")
+
+        invoke_review(str(prompt), "schema.json", output_file=out_file)
+
+        # The codex exec call should reference the explicit output file
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        assert out_file in cmd
+
+
+class TestDetectFailureReason:
+    """detect_failure_reason classifies Codex stderr for telemetry."""
+
+    def test_rate_limit_exceeded(self):
+        stderr = 'ERROR codex_api: error=http 429 Too Many Requests: {"error": {"code": "rate_limit_exceeded"}}'
+        assert detect_failure_reason(stderr) == "rate_limit"
+
+    def test_usage_limit_message(self):
+        stderr = "You've hit your usage limit. Upgrade to Pro or try again in 4h."
+        assert detect_failure_reason(stderr) == "rate_limit"
+
+    def test_quota_exceeded(self):
+        stderr = "Quota exceeded. Check your plan and billing details."
+        assert detect_failure_reason(stderr) == "rate_limit"
+
+    def test_generic_error_is_unknown(self):
+        stderr = "Error: connection refused"
+        assert detect_failure_reason(stderr) == "unknown"
+
+    def test_empty_stderr_is_unknown(self):
+        assert detect_failure_reason("") == "unknown"
+
+    def test_none_stderr_is_unknown(self):
+        assert detect_failure_reason(None) == "unknown"

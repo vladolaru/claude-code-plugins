@@ -1,7 +1,7 @@
-"""Codex CLI backend — invocation, output parsing, developer_instructions composition.
+"""Claude Code CLI backend — invocation, output parsing, prompt composition.
 
-This is the ONLY file that knows about `codex exec review`, `--base`,
-`-c developer_instructions`, or Codex's structured JSON output format.
+This is the ONLY file that knows about `claude -p`, `--json-schema`,
+`--allowedTools`, or Claude Code's JSON response envelope format.
 """
 
 import json
@@ -9,35 +9,23 @@ import os
 import subprocess
 
 TIMEOUT = 1800  # 30 minutes — used by invoke_review and timeout briefings
-TIMEOUT_SENTINEL = "__CODEX_TIMEOUT__"
+TIMEOUT_SENTINEL = "__CLAUDE_TIMEOUT__"
 
-# Patterns that indicate quota/rate-limit exhaustion in Codex stderr.
-# When detected, the orchestrator can fall back to Claude immediately
-# instead of treating it as a generic failure.
-_RATE_LIMIT_PATTERNS = [
-    "rate_limit_exceeded",
-    "rate limit reached",
-    "you've hit your usage limit",
-    "you've exceeded the rate limit",
-    "quota exceeded",
-    "429 too many requests",
-    "usage limit",
-]
+# Sonnet caps at "high" — no "xhigh" or "max" support
+_EFFORT_MAP = {"medium": "medium", "high": "high", "xhigh": "high"}
 
 
 def detect_failure_reason(stderr):
-    """Classify a Codex failure from its stderr output.
+    """Classify a Claude CLI failure from its stderr output.
 
-    Returns a reason string for telemetry:
-    - "rate_limit" if quota/rate-limit exhaustion detected
-    - "unknown" otherwise
+    Returns a reason string for telemetry. CC surfaces most errors via
+    the JSON envelope (is_error field), so stderr is rarely the signal.
     """
     if not stderr:
         return "unknown"
     lower = stderr.lower()
-    for pattern in _RATE_LIMIT_PATTERNS:
-        if pattern in lower:
-            return "rate_limit"
+    if "rate limit" in lower or "quota" in lower:
+        return "rate_limit"
     return "unknown"
 
 
@@ -45,33 +33,15 @@ def detect_failure_reason(stderr):
 # Output Parsing
 # ---------------------------------------------------------------------------
 
-def _get_repo_root():
-    """Get the repo root for stripping absolute paths. Cached."""
-    if not hasattr(_get_repo_root, "_cache"):
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True)
-            _get_repo_root._cache = result.stdout.strip() if result.returncode == 0 else ""
-        except Exception:
-            _get_repo_root._cache = ""
-    return _get_repo_root._cache
-
-
-def _to_relative_path(absolute_path):
-    """Convert an absolute file path to repo-relative."""
-    root = _get_repo_root()
-    if root and absolute_path.startswith(root):
-        rel = absolute_path[len(root):]
-        return rel.lstrip("/")
-    return absolute_path
-
-
 def _format_location(code_location):
-    """Extract file:line from Codex's code_location dict, repo-relative."""
+    """Extract file:line from CC's code_location dict.
+
+    CC uses relative paths via file_path (not absolute_file_path like Codex),
+    so no path conversion is needed.
+    """
     if not code_location:
         return "unknown"
-    path = _to_relative_path(code_location.get("absolute_file_path", "unknown"))
+    path = code_location.get("file_path", "unknown")
     lr = code_location.get("line_range", {})
     start = lr.get("start")
     end = lr.get("end")
@@ -83,18 +53,30 @@ def _format_location(code_location):
 
 
 def parse_output(raw_output, round_num):
-    """Parse Codex review output into normalized findings.
+    """Parse Claude Code review output into normalized findings.
+
+    CC returns a JSON envelope on stdout:
+    {
+      "type": "result",
+      "result": "text response",
+      "structured_output": { ...findings schema... },
+      ...
+    }
+
+    This function:
+    1. Parses the raw stdout as JSON
+    2. Extracts structured_output (schema-validated findings)
+    3. Falls back to result field as plain text if structured_output missing
 
     Returns:
         (findings_list, degraded_bool)
         findings_list: list of dicts with id, severity, title, body, location
-        degraded_bool: True if JSON parsing failed (plain text fallback)
+        degraded_bool: True if structured output was unavailable (plain text fallback)
     """
     try:
-        data = json.loads(raw_output)
-        raw_findings = data.get("findings", [])
+        envelope = json.loads(raw_output)
     except (json.JSONDecodeError, TypeError):
-        # Plain text fallback
+        # Not even valid JSON — full degraded mode
         return [{
             "id": f"r{round_num}_raw",
             "severity": "unknown",
@@ -104,6 +86,27 @@ def parse_output(raw_output, round_num):
             "confidence": None,
         }], True
 
+    # Reject error envelopes — these are CLI failures (auth errors, budget
+    # exhaustion, etc.), not review findings. Returning empty findings with
+    # degraded=True lets the caller handle it as a backend failure.
+    if envelope.get("is_error"):
+        return [], True
+
+    # Try structured_output first (schema-validated findings)
+    data = envelope.get("structured_output")
+    if data is None:
+        # No structured output — fall back to result field as plain text
+        result_text = envelope.get("result", raw_output)
+        return [{
+            "id": f"r{round_num}_raw",
+            "severity": "unknown",
+            "title": "Unstructured review output",
+            "body": result_text,
+            "location": "unknown",
+            "confidence": None,
+        }], True
+
+    raw_findings = data.get("findings", [])
     findings = []
     for i, f in enumerate(raw_findings, 1):
         findings.append({
@@ -123,29 +126,41 @@ def parse_output(raw_output, round_num):
 # ---------------------------------------------------------------------------
 
 def check_auth():
-    """Quick auth check. Returns (authenticated, error_message)."""
+    """Check that Claude CLI is installed and authenticated.
+
+    Uses `claude auth status` which returns JSON with a `loggedIn` field.
+    `claude --version` is NOT sufficient — it exits 0 even when unauthenticated.
+
+    Returns (authenticated, message).
+    """
     try:
         result = subprocess.run(
-            ["codex", "login", "status"],
+            ["claude", "auth", "status"],
             capture_output=True, text=True, timeout=10,
         )
-        return result.returncode == 0, result.stderr.strip()
+        if result.returncode != 0:
+            return False, result.stderr.strip() or "claude auth status failed"
+        try:
+            data = json.loads(result.stdout)
+            if data.get("loggedIn"):
+                return True, result.stdout.strip()
+            return False, "claude CLI is not logged in"
+        except (json.JSONDecodeError, TypeError):
+            return False, f"unexpected auth status output: {result.stdout.strip()}"
     except FileNotFoundError:
-        return False, "codex CLI not found in PATH"
+        return False, "claude CLI not found in PATH"
     except subprocess.TimeoutExpired:
-        return False, "codex login status timed out"
+        return False, "claude auth status timed out"
 
 
 def write_prompt_file(output_dir, round_num, rubric, merge_base,
                       context, pushback_log, analysis_doc_path,
                       prior_analysis_path=None):
-    """Compose and write the review prompt file for codex exec.
+    """Compose and write the review prompt file.
 
-    The prompt is ordered for optimal server-side prompt caching:
+    The prompt is ordered for optimal prompt caching:
     static content first (rubric, context, task), dynamic content last
-    (pushback log, analysis paths). OpenAI caches the longest matching
-    prefix across API calls — keeping the stable prefix long maximizes
-    cache hits on rounds 2+.
+    (pushback log, analysis paths).
 
     Returns the file path.
     """
@@ -199,13 +214,13 @@ def write_prompt_file(output_dir, round_num, rubric, merge_base,
 
 
 def get_schema_path():
-    """Return the path to the review output JSON Schema file."""
+    """Return the path to the Claude Code review output JSON Schema file."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "codex-review-schema.json")
+                        "claude-review-schema.json")
 
 
 def get_rubric():
-    """Read the review rubric from codex-review-rubric.md."""
+    """Read the review rubric (shared with Codex backend)."""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "codex-review-rubric.md")
     try:
@@ -217,57 +232,61 @@ def get_rubric():
 
 def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
                   **kwargs):
-    """Invoke `codex exec` with a custom review prompt and structured output.
+    """Invoke `claude -p` with a review prompt and structured output schema.
 
-    Uses `codex exec` (NOT `codex exec review`) with --output-schema for
-    guaranteed structured JSON. The prompt file is piped via stdin.
-
-    Accepts optional output_file= kwarg. When omitted, a temp file is
-    created automatically. This keeps the common signature compatible
-    with the Claude backend (which has no output_file parameter) while
-    preserving the caller's ability to control the output path.
+    Uses flag-based isolation (hooks, MCP, skills disabled) instead of
+    --bare since bare mode doesn't support OAuth/subscription auth.
 
     Args:
         prompt_file: Path to the review prompt markdown file
         schema_file: Path to the JSON Schema for structured output
         timeout: Seconds before killing (default 1800 = 30 min)
         effort: Optional reasoning effort level (e.g. 'high', 'xhigh').
-                When set, injects -c model_reasoning_effort="<effort>"
-                into the codex exec command. When None, behavior is unchanged.
-        **kwargs: output_file= path for -o flag (auto-created if omitted)
+                Mapped via _EFFORT_MAP (xhigh -> high for Sonnet capping).
+        **kwargs: output_dir= grants CC access to the workspace directory
+                  via --add-dir (required when output_dir is outside the repo
+                  tree, e.g. /tmp/iterative-review-*). Other kwargs ignored.
 
     Returns:
-        (output_string, success_bool)
+        (raw_stdout_string, success_bool)
     """
-    output_file = kwargs.get("output_file")
-    if output_file is None:
-        import tempfile
-        fd, output_file = tempfile.mkstemp(suffix="-codex-output.json")
-        os.close(fd)
-
-    # Resolve all paths to absolute before changing cwd to repo root
     prompt_file = os.path.abspath(prompt_file)
     schema_file = os.path.abspath(schema_file)
-    output_file = os.path.abspath(output_file)
+
+    # Read schema content for inline passing
+    with open(schema_file) as f:
+        schema_json = f.read().strip()
+
+    # Read prompt content for input= kwarg
+    with open(prompt_file) as f:
+        prompt_content = f.read()
 
     cmd = [
-        "codex", "exec",
-        "--output-schema", schema_file,
-        "-o", output_file,
-        "--sandbox", "workspace-write",
-        "--ephemeral",
+        "claude", "-p",
+        "--output-format", "json",
+        "--json-schema", schema_json,
+        "--permission-mode", "dontAsk",
+        "--allowedTools",
+        "Read,Grep,Glob,Write,Bash(git diff *,git log *,git show *,git blame *)",
+        "--settings", '{"disableAllHooks": true}',
+        "--mcp-config", '{"mcpServers":{}}',
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--model", "sonnet",
     ]
 
-    # Inject reasoning effort override before the stdin marker
+    # Grant access to the output directory if it's outside the repo tree.
+    # Without this, Read/Write to analysis files under /tmp/iterative-review-*
+    # are denied by --permission-mode dontAsk.
+    output_dir = kwargs.get("output_dir")
+    if output_dir:
+        cmd.extend(["--add-dir", os.path.abspath(output_dir)])
+
     if effort:
-        cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
-        # Activate fast mode for high/xhigh to keep throughput manageable
-        if effort in ("high", "xhigh"):
-            cmd.extend(["-c", 'service_tier="fast"'])
+        cc_effort = _EFFORT_MAP.get(effort, "high")
+        cmd.extend(["--effort", cc_effort])
 
-    cmd.append("-")  # read prompt from stdin
-
-    # Run from repo root so Codex can write analysis docs to output_dir
+    # Run from repo root so CC can access all project files
     try:
         toplevel = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -278,20 +297,11 @@ def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
     cwd = toplevel if toplevel else None
 
     try:
-        with open(prompt_file) as pf:
-            result = subprocess.run(
-                cmd, stdin=pf, capture_output=True, text=True,
-                timeout=timeout, cwd=cwd
-            )
-        # Store stderr for post-failure diagnosis (rate limits, etc.)
+        result = subprocess.run(
+            cmd, input=prompt_content, capture_output=True, text=True,
+            timeout=timeout, cwd=cwd
+        )
         invoke_review.last_stderr = result.stderr
-        # Read from -o output file
-        if os.path.isfile(output_file):
-            with open(output_file) as f:
-                content = f.read()
-                if content.strip():
-                    return content, result.returncode == 0
-        # Fall back to stdout (structured output also goes to stdout)
         return result.stdout, result.returncode == 0
     except subprocess.TimeoutExpired:
         invoke_review.last_stderr = ""

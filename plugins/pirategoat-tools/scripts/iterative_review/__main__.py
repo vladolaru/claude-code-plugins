@@ -1,7 +1,7 @@
 """CLI entry point for the iterative review loop.
 
 Two actions:
-  review  -- Invoke Codex and produce evaluation briefing (run in background)
+  review  -- Invoke review backend and produce evaluation briefing (run in background)
   advance -- Read outcomes, update pushback log, check convergence
 """
 
@@ -26,10 +26,63 @@ from .briefing import (
 )
 from .effort import resolve_effort
 from .telemetry import ReviewTelemetry
-from .backends.codex import (
-    parse_codex_output, write_prompt_file, get_schema_path, get_rubric,
-    invoke_codex_review, check_codex_auth, TIMEOUT_SENTINEL, CODEX_TIMEOUT,
-)
+
+
+# ---------------------------------------------------------------------------
+# Backend selection and adaptation
+# ---------------------------------------------------------------------------
+
+def _select_backend():
+    """Select review backend: Codex (primary) -> Claude Code (fallback).
+
+    Returns (backend_module, backend_name_string).
+    The backend_name is used for telemetry and logging.
+
+    Both backends export the same common interface (check_auth, parse_output,
+    invoke_review, write_prompt_file, get_schema_path, get_rubric, TIMEOUT,
+    TIMEOUT_SENTINEL) so the caller can use backend.xxx() directly.
+    """
+    import shutil
+    from .backends import codex
+
+    # Try Codex first
+    if shutil.which("codex"):
+        authenticated, _ = codex.check_auth()
+        if authenticated:
+            return codex, "codex"
+
+    # Fall back to Claude Code
+    from .backends import claude
+    if shutil.which("claude"):
+        authenticated, _ = claude.check_auth()
+        if authenticated:
+            return claude, "claude"
+
+    # Neither available — return codex so the existing error path fires
+    return codex, "codex"
+
+
+def _try_fallback(failed_backend_name):
+    """Try the other backend after a runtime failure.
+
+    Returns (backend_module, backend_name) or (None, None) if no fallback.
+    """
+    import shutil
+
+    if failed_backend_name == "codex":
+        from .backends import claude
+        if shutil.which("claude"):
+            authenticated, _ = claude.check_auth()
+            if authenticated:
+                return claude, "claude"
+    elif failed_backend_name == "claude":
+        from .backends import codex
+        if shutil.which("codex"):
+            authenticated, _ = codex.check_auth()
+            if authenticated:
+                return codex, "codex"
+
+    return None, None
 
 
 def _compute_diff_lines(merge_base):
@@ -132,46 +185,56 @@ def _write_loop_result(output_dir, state, termination):
     return result_data
 
 
-def _preflight_codex_cli():
-    """Check that Codex CLI is available and authenticated.
+def _preflight_backend():
+    """Select the best available backend and verify it's ready.
 
-    Returns None on success, or an error message string on failure.
-    Called once before any expensive work (prompt composition, diff computation).
+    Returns (backend_module, backend_name, error_message).
+    On success: (module, name_str, None).
+    On failure: (None, name_str, error_string).
+
+    _select_backend() tries each candidate's auth, but falls back to codex
+    when neither is available. We verify the selected backend here so the
+    fallback case produces a clear error.
     """
+    backend, backend_name = _select_backend()
+
     import shutil
-    if not shutil.which("codex"):
-        return (
-            "UNAVAILABLE: Codex CLI is not installed or not on PATH.\n"
-            "The iterative review loop requires the Codex CLI to run."
+    cli_name = "codex" if backend_name == "codex" else "claude"
+    if not shutil.which(cli_name):
+        return None, backend_name, (
+            f"UNAVAILABLE: {cli_name.title()} CLI is not installed or not on PATH.\n"
+            "The iterative review loop requires a review CLI (Codex or Claude Code) to run."
         )
-    authenticated, err = check_codex_auth()
+    authenticated, err = backend.check_auth()
     if not authenticated:
-        return (
-            "UNAVAILABLE: Codex CLI is not authenticated.\n"
+        return None, backend_name, (
+            f"UNAVAILABLE: {cli_name.title()} CLI is not authenticated.\n"
             f"Auth check failed: {err}\n"
-            "The iterative review loop requires an authenticated Codex CLI."
+            "The iterative review loop requires an authenticated review CLI."
         )
-    return None
+    return backend, backend_name, None
 
 
 def action_review(args):
-    """REVIEW action -- invoke Codex, parse output, produce evaluation briefing."""
+    """REVIEW action -- invoke review backend, parse output, produce evaluation briefing."""
     output_dir = args.output_dir
     round_num = args.round
     os.makedirs(output_dir, exist_ok=True)
 
-    # Pre-flight: verify Codex CLI is available and authenticated before
-    # spending time on prompt composition, diff computation, etc.
-    preflight_err = _preflight_codex_cli()
+    # Pre-flight: select the best available backend and verify it's ready.
+    # Tries Codex first, then falls back to Claude Code CLI.
+    backend, backend_name, preflight_err = _preflight_backend()
     if preflight_err:
         # Log telemetry before writing result
         telemetry = ReviewTelemetry(output_dir)
-        telemetry.progress("codex_unavailable", round=round_num)
-        telemetry.pipeline_event("codex_unavailable", round=round_num)
+        telemetry.progress("backend_unavailable", round=round_num,
+                           backend=backend_name)
+        telemetry.pipeline_event("backend_unavailable", round=round_num,
+                                 backend=backend_name)
         # Write structured result so callers can detect the condition
         # programmatically (same shape as normal termination).
         result_data = {
-            "termination": "codex_unavailable",
+            "termination": "backend_unavailable",
             "rounds_completed": 0,
             "total_findings": 0,
             "total_fixed": 0,
@@ -208,7 +271,8 @@ def action_review(args):
         # Remove all round-specific files (findings, outcomes, prompts, raw output, analysis)
         for pattern in ["round-*-findings.json", "round-*-outcomes.json",
                         "round-*-prompt.md", "round-*-codex-output.json",
-                        "round-*-codex-raw.md", "*-analysis.md"]:
+                        "round-*-codex-raw.md", "round-*-claude-raw.md",
+                        "round-*-backend-raw.md", "*-analysis.md"]:
             for f in glob.glob(os.path.join(output_dir, pattern)):
                 os.remove(f)
         if args.no_prior_analysis:
@@ -248,7 +312,8 @@ def action_review(args):
                                  max_rounds=state["max_rounds"],
                                  diff_lines_total=state.get("diff_lines_total", 0),
                                  diff_lines_relevant=state["diff_lines_relevant"],
-                                 noise_files_excluded=state.get("noise_files_excluded", 0))
+                                 noise_files_excluded=state.get("noise_files_excluded", 0),
+                                 backend=backend_name)
     else:
         # Round 2+: validate persisted state exists
         if not state.get("merge_base"):
@@ -284,8 +349,8 @@ def action_review(args):
         state["current_round"] = round_num
         context = state.get("context", "")
 
-    # Backstop: detect uncommitted changes before Codex reviews.
-    # Codex reviews git diff merge_base..HEAD — uncommitted work is invisible.
+    # Backstop: detect uncommitted changes before the review backend runs.
+    # Backends review git diff merge_base..HEAD — uncommitted work is invisible.
     # We warn but do NOT auto-commit: the operator should commit semantically.
     try:
         status = sp.run(["git", "status", "--porcelain"],
@@ -296,20 +361,21 @@ def action_review(args):
             untracked = [line[3:] for line in status.splitlines()
                          if line and line.startswith("??")]
             parts = []
+            backend_label = backend_name.title()
             if tracked:
                 parts.append(
-                    f"{len(tracked)} uncommitted tracked change(s) — invisible to Codex:\n"
+                    f"{len(tracked)} uncommitted tracked change(s) — invisible to {backend_label}:\n"
                     + "\n".join(f"  {line}" for line in tracked[:10])
                     + ("\n  ..." if len(tracked) > 10 else ""))
             if untracked:
                 parts.append(
-                    f"{len(untracked)} untracked file(s) — invisible to Codex:\n"
+                    f"{len(untracked)} untracked file(s) — invisible to {backend_label}:\n"
                     + "\n".join(f"  {f}" for f in untracked[:10])
                     + ("\n  ..." if len(untracked) > 10 else ""))
             print(
                 f"BLOCKED: Uncommitted changes detected before review round {round_num}.\n"
                 + "\n".join(parts)
-                + "\n\nCodex only reviews committed changes (merge_base..HEAD)."
+                + f"\n\n{backend_label} only reviews committed changes (merge_base..HEAD)."
                 "\nCommit these files with semantic commit messages, then re-run"
                 f" this same command (--action review --round {round_num})."
             )
@@ -317,7 +383,7 @@ def action_review(args):
                                tracked=len(tracked), untracked=len(untracked))
             sys.exit(1)
     except Exception:
-        pass  # git not available — proceed, Codex will review what's committed
+        pass  # git not available — proceed, backend will review what's committed
 
     # Reset progress log
     telemetry.reset_progress()
@@ -337,11 +403,11 @@ def action_review(args):
             telemetry.progress("analysis_doc_missing", round=round_num,
                                msg=f"Prior analysis doc not found: {candidate}")
 
-    # Write the prompt file using write_prompt_file from codex backend
-    prompt_file = write_prompt_file(
+    # Write the prompt file using the selected backend
+    prompt_file = backend.write_prompt_file(
         output_dir=output_dir,
         round_num=round_num,
-        rubric=get_rubric(),
+        rubric=backend.get_rubric(),
         merge_base=state["merge_base"],
         context=context if round_num == 1 else state.get("context", ""),
         pushback_log=pushback_log if pushback_log else None,
@@ -385,64 +451,137 @@ def action_review(args):
         )
         print(f"[adaptive-effort] Round {round_num}: {effort} ({effort_reason})")
 
-    # Invoke Codex
+    # Invoke backend
     merge_base = state["merge_base"]
-    codex_output_file = os.path.join(output_dir, f"round-{round_num}-codex-output.json")
-    schema_file = get_schema_path()
+    schema_file = backend.get_schema_path()
 
-    telemetry.progress("codex_invoked", round=round_num,
+    telemetry.progress("backend_invoked", round=round_num,
+                       backend=backend_name,
                        diff_lines=state.get("diff_lines_relevant", 0),
                        effort=effort, effort_reason=effort_reason,
                        msg=f"Reviewing against {merge_base}")
     telemetry.pipeline_event("review_round_started", round=round_num,
-                             effort=effort, effort_reason=effort_reason)
+                             effort=effort, effort_reason=effort_reason,
+                             backend=backend_name)
 
-    raw_output, success = invoke_codex_review(
-        prompt_file=prompt_file,
-        schema_file=schema_file,
-        output_file=codex_output_file,
-        effort=effort,
-    )
+    # Both backends accept **kwargs via the common invoke_review interface.
+    # output_dir= grants CC access to the workspace via --add-dir.
+    # output_file= tells Codex where to write structured JSON on disk.
+    invoke_kwargs = dict(prompt_file=prompt_file, schema_file=schema_file,
+                         effort=effort, output_dir=output_dir)
+    if backend_name == "codex":
+        invoke_kwargs["output_file"] = os.path.join(
+            output_dir, f"round-{round_num}-codex-output.json")
+    raw_output, success = backend.invoke_review(**invoke_kwargs)
 
-    if raw_output == TIMEOUT_SENTINEL:
-        # Codex timed out — mode determines how the round is handled.
-        # Autonomous: record skipped round immediately (auto-skip is the only path).
-        # Interactive: defer recording — the user may retry (same round) or skip.
-        #   Eager recording would poison retry (duplicate round entry) and
-        #   skip-via-advance (empty findings → false zero_findings convergence).
+    # --- Failure detection and runtime fallback ---
+    #
+    # Three failure modes trigger a fallback attempt:
+    # 1. Empty output: invoke returned ("", False) — transient CLI error
+    # 2. Timeout: invoke returned (TIMEOUT_SENTINEL, False)
+    # 3. Error envelope: invoke returned JSON with is_error=true (CC-specific)
+    #
+    # For each, we try _try_fallback() with the fallback backend's OWN schema
+    # before falling through to the original failure handler.
+
+    is_timeout = (raw_output == backend.TIMEOUT_SENTINEL)
+    is_empty_failure = (not success and not raw_output)
+    is_error_envelope = False
+    if raw_output and not is_timeout:
+        try:
+            _envelope = json.loads(raw_output)
+            is_error_envelope = bool(_envelope.get("is_error"))
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if is_timeout or is_empty_failure or is_error_envelope:
+        # Diagnose why the primary failed (rate limits, quota, etc.)
+        failure_stderr = getattr(backend.invoke_review, "last_stderr", "")
+        failure_reason = backend.detect_failure_reason(failure_stderr)
+        telemetry.progress("backend_failed", round=round_num,
+                           backend=backend_name, reason=failure_reason,
+                           is_timeout=is_timeout, is_error_envelope=is_error_envelope)
+
+        # Try fallback backend before handling the failure
+        fallback_backend, fallback_name = _try_fallback(backend_name)
+        if fallback_backend:
+            telemetry.progress("backend_runtime_fallback", round=round_num,
+                               primary=backend_name, fallback=fallback_name,
+                               primary_failure_reason=failure_reason)
+            telemetry.pipeline_event("backend_runtime_fallback", round=round_num,
+                                     primary=backend_name, fallback=fallback_name,
+                                     primary_failure_reason=failure_reason)
+            # Use the FALLBACK backend's schema — each backend has its own
+            # (e.g. file_path vs absolute_file_path, additionalProperties rules).
+            fallback_schema = fallback_backend.get_schema_path()
+            fallback_kwargs = dict(prompt_file=prompt_file,
+                                   schema_file=fallback_schema,
+                                   effort=effort, output_dir=output_dir)
+            if fallback_name == "codex":
+                fallback_kwargs["output_file"] = os.path.join(
+                    output_dir, f"round-{round_num}-codex-output.json")
+            fb_output, fb_success = fallback_backend.invoke_review(**fallback_kwargs)
+
+            # Check if fallback produced a usable result
+            fb_is_timeout = (fb_output == fallback_backend.TIMEOUT_SENTINEL)
+            fb_is_empty = (not fb_success and not fb_output)
+            fb_is_error = False
+            if fb_output and not fb_is_timeout:
+                try:
+                    _fb_env = json.loads(fb_output)
+                    fb_is_error = bool(_fb_env.get("is_error"))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if not fb_is_timeout and not fb_is_empty and not fb_is_error:
+                # Fallback succeeded — switch to it for parsing
+                backend = fallback_backend
+                backend_name = fallback_name
+                raw_output = fb_output
+                success = fb_success
+                # Clear failure flags so we fall through to normal parsing
+                is_timeout = False
+                is_empty_failure = False
+                is_error_envelope = False
+            elif fb_is_timeout:
+                # Fallback timed out — route through timeout handler below
+                # with the fallback as the active backend
+                backend = fallback_backend
+                backend_name = fallback_name
+                raw_output = fb_output
+                is_timeout = True
+                is_empty_failure = False
+                is_error_envelope = False
+
+    # --- Handle timeout (primary or fallback) ---
+    if is_timeout:
         autonomous = state.get("autonomous", False)
         consecutive = state.get("consecutive_timeouts", 0) + 1
         state["consecutive_timeouts"] = consecutive
 
-        telemetry.progress("codex_timeout", round=round_num,
-                           consecutive=consecutive, autonomous=autonomous)
-        telemetry.pipeline_event("codex_timeout", round=round_num,
-                                 consecutive=consecutive)
+        telemetry.progress("review_timeout", round=round_num,
+                           consecutive=consecutive, autonomous=autonomous,
+                           backend=backend_name)
+        telemetry.pipeline_event("review_timeout", round=round_num,
+                                 consecutive=consecutive,
+                                 backend=backend_name)
 
-        # Check if at the round cap — skip would exceed the configured budget.
         max_rounds = state.get("max_rounds", 3)
         at_round_cap = round_num >= max_rounds or round_num >= MAX_ROUNDS_HARD_LIMIT
 
         if autonomous:
-            # Write empty findings so the round is complete on disk
             findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
             with open(findings_path, "w") as f:
                 json.dump([], f)
 
-            # Record round in state (skipped — not routed through advance)
             state.setdefault("rounds", []).append({
                 "round": round_num, "findings": 0, "fixed": 0,
                 "rejected": 0, "deferred": 0, "skipped": True,
                 "effort": state.get("current_effort"),
             })
 
-            # Terminate if: consecutive timeouts OR at the round cap.
-            # Terminate on consecutive timeouts or at the round cap.
-            # Use distinct reasons so downstream renderers report accurately:
-            # - codex_timeout: consecutive timeouts (infrastructure failure)
-            # - codex_timeout_at_cap: single timeout on the last round
             if consecutive >= 2 or at_round_cap:
-                reason = "codex_timeout" if consecutive >= 2 else "codex_timeout_at_cap"
+                reason = "backend_timeout" if consecutive >= 2 else "backend_timeout_at_cap"
                 state["terminated"] = True
                 state["termination"] = reason
                 write_loop_state(output_dir, state)
@@ -454,39 +593,41 @@ def action_review(args):
                 return
 
         write_loop_state(output_dir, state)
-        print(format_timeout_briefing(round_num, timeout_seconds=CODEX_TIMEOUT,
+        print(format_timeout_briefing(round_num, timeout_seconds=backend.TIMEOUT,
                                        autonomous=autonomous,
                                        at_round_cap=at_round_cap))
         return
 
-    elif not success and not raw_output:
-        telemetry.progress("codex_unavailable", round=round_num)
-        telemetry.pipeline_event("codex_unavailable", round=round_num)
-        # Write empty findings
+    # --- Handle unrecoverable failure (no backend produced output) ---
+    if is_empty_failure or is_error_envelope:
+        telemetry.progress("backend_unavailable", round=round_num,
+                           backend=backend_name)
+        telemetry.pipeline_event("backend_unavailable", round=round_num,
+                                 backend=backend_name)
         findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
         with open(findings_path, "w") as f:
             json.dump([], f)
         state["terminated"] = True
-        state["termination"] = "codex_unavailable"
+        state["termination"] = "backend_unavailable"
         write_loop_state(output_dir, state)
-
-        _write_loop_result(output_dir, state, "codex_unavailable")
-        print("Codex CLI is unavailable. Review loop cannot proceed.")
+        _write_loop_result(output_dir, state, "backend_unavailable")
+        print("No review backend available. Review loop cannot proceed.")
         return
 
-    # Codex responded — reset consecutive timeout counter
+    # --- Backend produced output — process it ---
     state["consecutive_timeouts"] = 0
 
-    # Parse output
-    findings, degraded = parse_codex_output(raw_output, round_num)
+    findings, degraded = backend.parse_output(raw_output, round_num)
 
-    telemetry.progress("codex_completed", round=round_num,
-                       findings_count=len(findings))
-    telemetry.pipeline_event("codex_completed", round=round_num,
-                             findings_count=len(findings))
+    telemetry.progress("review_completed", round=round_num,
+                       findings_count=len(findings),
+                       backend=backend_name)
+    telemetry.pipeline_event("review_completed", round=round_num,
+                             findings_count=len(findings),
+                             backend=backend_name)
 
     if degraded:
-        raw_path = os.path.join(output_dir, f"round-{round_num}-codex-raw.md")
+        raw_path = os.path.join(output_dir, f"round-{round_num}-{backend_name}-raw.md")
         with open(raw_path, "w") as f:
             f.write(raw_output)
 
@@ -706,7 +847,7 @@ def action_advance(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Iterative Codex review loop")
+    parser = argparse.ArgumentParser(description="Iterative review loop (Codex / Claude Code)")
     parser.add_argument("--action", choices=["review", "advance"], required=True)
     parser.add_argument("--round", type=int, required=True)
     parser.add_argument("--output-dir", required=True)

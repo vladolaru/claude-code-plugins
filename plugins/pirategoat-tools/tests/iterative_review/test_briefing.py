@@ -154,8 +154,8 @@ class TestCompletionBriefing:
 
     def test_all_termination_reasons_have_descriptions(self):
         for key in ["zero_findings", "all_rejected", "nitpicks_only",
-                     "max_rounds", "hard_limit", "codex_unavailable",
-                     "codex_timeout", "codex_timeout_at_cap"]:
+                     "max_rounds", "hard_limit", "backend_unavailable",
+                     "backend_timeout", "backend_timeout_at_cap"]:
             assert key in _TERMINATION_REASONS
 
     def test_unknown_termination_falls_back_to_raw(self):

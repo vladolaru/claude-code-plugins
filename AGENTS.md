@@ -100,7 +100,7 @@ Code review orchestration with 25 agents (20 domain reviewers, 2 pipeline, 2 cro
 | `agents/` | 25 agent definitions (20 reviewers, 2 pipeline, 2 cross-validators, 1 utility) + 2 shared protocols in `agents/shared/` |
 | `skills/` | 19 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, PR creation, etc.) |
 | `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Domain packages: `review/` (pipeline, dispatch, context, telemetry + `agent/` bootstrap, scope, output), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` |
+| `scripts/` | Domain packages: `review/` (pipeline, dispatch, context, telemetry + `agent/` bootstrap, scope, output), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
 | `AGENTS.md` | Full development instructions, architecture, agent registry reference |
@@ -215,6 +215,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/iterative_review/__main__.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_cli.py -v` |
 | `scripts/iterative_review/briefing.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_briefing.py -v` |
 | `scripts/iterative_review/backends/codex.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_codex.py -v` |
+| `scripts/iterative_review/backends/claude.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_claude.py -v` |
 | `scripts/iterative_review/loop.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_loop.py -v` |
 | `scripts/iterative_review/effort.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_effort.py -v` |
 | `scripts/iterative_review/*.py` (other / multiple) | `pytest plugins/pirategoat-tools/tests/iterative_review/ -v` |
@@ -309,6 +310,7 @@ All AI-generated artifacts (plans, analysis, research, decisions, learnings) go 
 | Reference | When to use |
 |---|---|
 | [codex-cli-reference](docs/codex-cli-reference.md) | Integrating with the OpenAI Codex CLI — prompting contracts, structured output, headless review invocation, cross-CLI comparison with Claude Code, sandbox behavior, and Structured Outputs schema constraints. Based on source analysis + runtime testing. |
+| [claude-code-cli-reference](docs/claude-code-cli-reference.md) | Spawning Claude Code CLI as a subprocess — nesting guard status, isolation flags, structured output via `--json-schema`, settings hierarchy, Python integration pattern, and cross-CLI comparison with Codex. Based on v2.1.81 source analysis + runtime testing. |
 
 **Knowledge capture:** After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using `/dex:grok` to capture the knowledge.
 
