@@ -153,11 +153,14 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     return "\n".join(lines)
 
 
-def format_timeout_briefing(round_num, timeout_seconds, autonomous=False):
+def format_timeout_briefing(round_num, timeout_seconds, autonomous=False,
+                            at_round_cap=False):
     """Format briefing when Codex times out.
 
     Interactive: asks the LLM to surface the timeout to the user with options.
-    Autonomous: instructs the LLM to skip this round and advance.
+    At the round cap, skip is not offered (would exceed the configured budget).
+    Autonomous at-cap termination is handled by the caller — this function
+    only emits the autonomous briefing when there are rounds remaining.
     """
     timeout_min = timeout_seconds // 60
     lines = []
@@ -183,8 +186,11 @@ def format_timeout_briefing(round_num, timeout_seconds, autonomous=False):
         lines.append(f"  **The independent reviewer timed out** after {timeout_min} minutes on review round {round_num}.")
         lines.append("  Options:")
         lines.append(f"  1. **Retry** — re-run `--action review --round {round_num}` (same round)")
-        lines.append(f"  2. **Skip** — proceed directly to round {round_num + 1} via `--action review --round {round_num + 1}`")
-        lines.append("  3. **Stop** — end the review loop here")
+        if not at_round_cap:
+            lines.append(f"  2. **Skip** — proceed directly to round {round_num + 1} via `--action review --round {round_num + 1}`")
+            lines.append("  3. **Stop** — end the review loop here")
+        else:
+            lines.append("  2. **Stop** — end the review loop here (this is the last configured round)")
 
     return "\n".join(lines)
 

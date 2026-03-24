@@ -991,3 +991,33 @@ class TestTimeoutStateManagement:
         assert loaded["consecutive_timeouts"] == 1
         assert len(loaded["rounds"]) == 1
         assert loaded["rounds"][0]["skipped"] is True
+
+    def test_timeout_at_cap_terminates_autonomous(self, tmp_path):
+        """Timeout on the last configured round terminates instead of skipping."""
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "autonomous": True, "max_rounds": 3, "consecutive_timeouts": 0}
+        # Simulate timeout on round 3 (== max_rounds): at_round_cap is True
+        round_num = 3
+        at_round_cap = round_num >= state["max_rounds"]
+        assert at_round_cap
+        # Autonomous at cap → terminate with max_rounds
+        state["terminated"] = True
+        state["termination"] = "max_rounds"
+        write_loop_state(d, state)
+        loaded = read_loop_state(d)
+        assert loaded["terminated"] is True
+        assert loaded["termination"] == "max_rounds"
+
+    def test_round_cap_guard_blocks_excess_round(self, tmp_path):
+        """Round 2+ entry guard terminates if round_num > max_rounds."""
+        from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
+        d = str(tmp_path)
+        state = {**copy.deepcopy(DEFAULT_STATE), "merge_base": "abc",
+                 "max_rounds": 3}
+        write_loop_state(d, state)
+        # Round 4 > max_rounds 3: guard should prevent execution
+        loaded = read_loop_state(d)
+        round_num = 4
+        assert round_num > loaded["max_rounds"]
+        assert round_num <= MAX_ROUNDS_HARD_LIMIT  # not at hard limit

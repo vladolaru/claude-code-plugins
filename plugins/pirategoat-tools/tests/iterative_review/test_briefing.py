@@ -224,3 +224,19 @@ class TestTimeoutBriefing:
     def test_contains_timeout_duration(self):
         text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=False)
         assert "30" in text  # 30 minutes
+
+    def test_interactive_at_cap_no_skip_option(self):
+        """At the round cap, skip is not offered — would exceed the budget."""
+        text = format_timeout_briefing(round_num=3, timeout_seconds=1800,
+                                        autonomous=False, at_round_cap=True)
+        assert "retry" in text.lower()
+        assert "stop" in text.lower()
+        assert "skip" not in text.lower()
+
+    def test_interactive_under_cap_has_skip_option(self):
+        """Under the round cap, all three options are offered."""
+        text = format_timeout_briefing(round_num=1, timeout_seconds=1800,
+                                        autonomous=False, at_round_cap=False)
+        assert "retry" in text.lower()
+        assert "skip" in text.lower()
+        assert "stop" in text.lower()

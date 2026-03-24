@@ -267,6 +267,20 @@ def action_review(args):
                 sum(r.get("deferred", 0) for r in rounds),
             ))
             return
+        # Enforce round cap — no review should run beyond the configured limit.
+        # Normally action_advance checks this, but timeout skips bypass advance.
+        max_rounds = state.get("max_rounds", 3)
+        if round_num > max_rounds or round_num > MAX_ROUNDS_HARD_LIMIT:
+            reason = "hard_limit" if round_num > MAX_ROUNDS_HARD_LIMIT else "max_rounds"
+            state["terminated"] = True
+            state["termination"] = reason
+            write_loop_state(output_dir, state)
+            result_data = _write_loop_result(output_dir, state, reason)
+            print(format_completion_briefing(
+                reason, result_data["rounds_completed"],
+                result_data["total_fixed"], result_data["total_rejected"],
+                result_data["total_deferred"]))
+            return
         state["current_round"] = round_num
         context = state.get("context", "")
 
@@ -405,6 +419,10 @@ def action_review(args):
         telemetry.pipeline_event("codex_timeout", round=round_num,
                                  consecutive=consecutive)
 
+        # Check if at the round cap — skip would exceed the configured budget.
+        max_rounds = state.get("max_rounds", 3)
+        at_round_cap = round_num >= max_rounds or round_num >= MAX_ROUNDS_HARD_LIMIT
+
         if autonomous:
             # Write empty findings so the round is complete on disk
             findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
@@ -418,21 +436,24 @@ def action_review(args):
                 "effort": state.get("current_effort"),
             })
 
-            if consecutive >= 2:
-                # Two consecutive timeouts in autonomous mode → terminate
+            # Terminate if: consecutive timeouts OR at the round cap
+            if consecutive >= 2 or at_round_cap:
+                reason = "codex_timeout" if consecutive >= 2 else (
+                    "hard_limit" if round_num >= MAX_ROUNDS_HARD_LIMIT else "max_rounds")
                 state["terminated"] = True
-                state["termination"] = "codex_timeout"
+                state["termination"] = reason
                 write_loop_state(output_dir, state)
-                result_data = _write_loop_result(output_dir, state, "codex_timeout")
+                result_data = _write_loop_result(output_dir, state, reason)
                 print(format_completion_briefing(
-                    "codex_timeout", result_data["rounds_completed"],
+                    reason, result_data["rounds_completed"],
                     result_data["total_fixed"], result_data["total_rejected"],
                     result_data["total_deferred"]))
                 return
 
         write_loop_state(output_dir, state)
         print(format_timeout_briefing(round_num, timeout_seconds=CODEX_TIMEOUT,
-                                       autonomous=autonomous))
+                                       autonomous=autonomous,
+                                       at_round_cap=at_round_cap))
         return
 
     elif not success and not raw_output:
