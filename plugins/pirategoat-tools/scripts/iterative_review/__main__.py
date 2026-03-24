@@ -544,6 +544,23 @@ def action_review(args):
         with open(raw_path, "w") as f:
             f.write(raw_output)
 
+    # Degraded with no findings = backend error (auth failure, budget exhaustion,
+    # etc.), not a clean review. Treat as backend unavailable.
+    if degraded and not findings:
+        telemetry.progress("backend_unavailable", round=round_num,
+                           backend=backend_name)
+        telemetry.pipeline_event("backend_unavailable", round=round_num,
+                                 backend=backend_name)
+        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+        with open(findings_path, "w") as f:
+            json.dump([], f)
+        state["terminated"] = True
+        state["termination"] = "backend_unavailable"
+        write_loop_state(output_dir, state)
+        _write_loop_result(output_dir, state, "backend_unavailable")
+        print(f"Review backend ({backend_name}) returned an error. Review loop cannot proceed.")
+        return
+
     # Write findings
     findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
     with open(findings_path, "w") as f:

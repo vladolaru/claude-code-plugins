@@ -202,6 +202,25 @@ class TestParseOutput:
         findings, _ = parse_output(response, round_num=1)
         assert findings[0]["location"] == "src/foo.py:10-20"
 
+    def test_is_error_envelope_returns_empty_findings(self):
+        """CLI error envelopes (auth failures, budget, etc.) return empty findings, not pseudo-findings."""
+        error_response = json.dumps({
+            "type": "result",
+            "subtype": "error",
+            "is_error": True,
+            "result": "Not logged in · Please run /login",
+            "session_id": "test"
+        })
+        findings, degraded = parse_output(error_response, round_num=1)
+        assert len(findings) == 0
+        assert degraded is True
+
+    def test_is_error_false_not_rejected(self):
+        """Normal responses with is_error=false are not rejected."""
+        findings, degraded = parse_output(SAMPLE_CC_RESPONSE, round_num=1)
+        assert len(findings) == 2
+        assert degraded is False
+
     def test_no_line_range_returns_path_only(self):
         """When line_range is missing, returns just the file path."""
         response = json.dumps({
@@ -551,16 +570,31 @@ class TestInvokeReview:
 
 
 class TestCheckAuth:
-    """Tests for check_auth — verifies CC is available."""
+    """Tests for check_auth — uses `claude auth status` for real auth check."""
 
     @patch("iterative_review.backends.claude.subprocess.run")
-    def test_version_succeeds(self, mock_run):
-        """When claude --version succeeds, returns (True, version_string)."""
+    def test_logged_in_returns_true(self, mock_run):
+        """When claude auth status reports loggedIn=true, returns (True, ...)."""
         mock_run.return_value = MagicMock(
-            returncode=0, stdout="claude v2.1.81\n", stderr=""
+            returncode=0,
+            stdout='{"loggedIn": true, "authMethod": "claude.ai", "email": "test@test.com"}',
+            stderr=""
         )
         ok, msg = check_auth()
         assert ok is True
+        assert "loggedIn" in msg
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_not_logged_in_returns_false(self, mock_run):
+        """When claude auth status reports loggedIn=false, returns (False, ...)."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout='{"loggedIn": false}',
+            stderr=""
+        )
+        ok, msg = check_auth()
+        assert ok is False
+        assert "not logged in" in msg
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_not_found_returns_error(self, mock_run):
@@ -571,18 +605,28 @@ class TestCheckAuth:
         assert "not found" in msg
 
     @patch("iterative_review.backends.claude.subprocess.run")
-    def test_version_fails_returns_error(self, mock_run):
-        """When claude --version fails, returns (False, stderr)."""
+    def test_nonzero_exit_returns_error(self, mock_run):
+        """When claude auth status exits non-zero, returns (False, stderr)."""
         mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="some error"
+            returncode=1, stdout="", stderr="auth command failed"
         )
         ok, msg = check_auth()
         assert ok is False
-        assert "some error" in msg
+        assert "auth command failed" in msg
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_unparseable_json_returns_error(self, mock_run):
+        """When auth status output isn't valid JSON, returns (False, ...)."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="not json at all", stderr=""
+        )
+        ok, msg = check_auth()
+        assert ok is False
+        assert "unexpected" in msg
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_timeout_returns_error(self, mock_run):
-        """When claude --version times out, returns (False, timeout message)."""
+        """When claude auth status times out, returns (False, timeout message)."""
         mock_run.side_effect = subprocess.TimeoutExpired(
             cmd="claude", timeout=10
         )

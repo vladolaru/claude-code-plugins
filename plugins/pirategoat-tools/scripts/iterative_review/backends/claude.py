@@ -72,6 +72,12 @@ def parse_output(raw_output, round_num):
             "confidence": None,
         }], True
 
+    # Reject error envelopes — these are CLI failures (auth errors, budget
+    # exhaustion, etc.), not review findings. Returning empty findings with
+    # degraded=True lets the caller handle it as a backend failure.
+    if envelope.get("is_error"):
+        return [], True
+
     # Try structured_output first (schema-validated findings)
     data = envelope.get("structured_output")
     if data is None:
@@ -106,19 +112,31 @@ def parse_output(raw_output, round_num):
 # ---------------------------------------------------------------------------
 
 def check_auth():
-    """Quick availability check. Returns (available, message)."""
+    """Check that Claude CLI is installed and authenticated.
+
+    Uses `claude auth status` which returns JSON with a `loggedIn` field.
+    `claude --version` is NOT sufficient — it exits 0 even when unauthenticated.
+
+    Returns (authenticated, message).
+    """
     try:
         result = subprocess.run(
-            ["claude", "--version"],
+            ["claude", "auth", "status"],
             capture_output=True, text=True, timeout=10,
         )
-        if result.returncode == 0:
-            return True, result.stdout.strip()
-        return False, result.stderr.strip()
+        if result.returncode != 0:
+            return False, result.stderr.strip() or "claude auth status failed"
+        try:
+            data = json.loads(result.stdout)
+            if data.get("loggedIn"):
+                return True, result.stdout.strip()
+            return False, "claude CLI is not logged in"
+        except (json.JSONDecodeError, TypeError):
+            return False, f"unexpected auth status output: {result.stdout.strip()}"
     except FileNotFoundError:
         return False, "claude CLI not found in PATH"
     except subprocess.TimeoutExpired:
-        return False, "claude --version timed out"
+        return False, "claude auth status timed out"
 
 
 def write_prompt_file(output_dir, round_num, rubric, merge_base,
