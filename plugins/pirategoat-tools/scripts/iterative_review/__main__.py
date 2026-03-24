@@ -436,16 +436,18 @@ def action_review(args):
                 "effort": state.get("current_effort"),
             })
 
-            # Terminate if: consecutive timeouts OR at the round cap
+            # Terminate if: consecutive timeouts OR at the round cap.
+            # Always use codex_timeout as the reason — the trigger is a timeout,
+            # even if we also happen to be at the cap. This ensures the pipeline
+            # reports the review as degraded (infrastructure failure), not as a
+            # normal round-budget exit.
             if consecutive >= 2 or at_round_cap:
-                reason = "codex_timeout" if consecutive >= 2 else (
-                    "hard_limit" if round_num >= MAX_ROUNDS_HARD_LIMIT else "max_rounds")
                 state["terminated"] = True
-                state["termination"] = reason
+                state["termination"] = "codex_timeout"
                 write_loop_state(output_dir, state)
-                result_data = _write_loop_result(output_dir, state, reason)
+                result_data = _write_loop_result(output_dir, state, "codex_timeout")
                 print(format_completion_briefing(
-                    reason, result_data["rounds_completed"],
+                    "codex_timeout", result_data["rounds_completed"],
                     result_data["total_fixed"], result_data["total_rejected"],
                     result_data["total_deferred"]))
                 return

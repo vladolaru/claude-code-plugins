@@ -188,9 +188,7 @@ def format_timeout_briefing(round_num, timeout_seconds, autonomous=False,
         lines.append(f"  1. **Retry** — re-run `--action review --round {round_num}` (same round)")
         if not at_round_cap:
             lines.append(f"  2. **Skip** — proceed directly to round {round_num + 1} via `--action review --round {round_num + 1}`")
-            lines.append("  3. **Stop** — end the review loop here")
-        else:
-            lines.append("  2. **Stop** — end the review loop here (this is the last configured round)")
+        lines.append(f"  {'3' if not at_round_cap else '2'}. **Stop** — do not run any more review commands; report the timeout to the user and end the review")
 
     return "\n".join(lines)
 
