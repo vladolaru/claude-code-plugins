@@ -201,6 +201,7 @@ _TERMINATION_REASONS = {
     "hard_limit": "Hard round limit reached.",
     "codex_unavailable": "Codex CLI became unavailable.",
     "codex_timeout": "The independent reviewer timed out on consecutive rounds.",
+    "codex_timeout_at_cap": "The independent reviewer timed out on the last allowed round.",
 }
 
 

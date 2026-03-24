@@ -437,17 +437,18 @@ def action_review(args):
             })
 
             # Terminate if: consecutive timeouts OR at the round cap.
-            # Always use codex_timeout as the reason — the trigger is a timeout,
-            # even if we also happen to be at the cap. This ensures the pipeline
-            # reports the review as degraded (infrastructure failure), not as a
-            # normal round-budget exit.
+            # Terminate on consecutive timeouts or at the round cap.
+            # Use distinct reasons so downstream renderers report accurately:
+            # - codex_timeout: consecutive timeouts (infrastructure failure)
+            # - codex_timeout_at_cap: single timeout on the last round
             if consecutive >= 2 or at_round_cap:
+                reason = "codex_timeout" if consecutive >= 2 else "codex_timeout_at_cap"
                 state["terminated"] = True
-                state["termination"] = "codex_timeout"
+                state["termination"] = reason
                 write_loop_state(output_dir, state)
-                result_data = _write_loop_result(output_dir, state, "codex_timeout")
+                result_data = _write_loop_result(output_dir, state, reason)
                 print(format_completion_briefing(
-                    "codex_timeout", result_data["rounds_completed"],
+                    reason, result_data["rounds_completed"],
                     result_data["total_fixed"], result_data["total_rejected"],
                     result_data["total_deferred"]))
                 return
@@ -606,13 +607,15 @@ def action_advance(args):
         if entries:
             append_pushback_log(output_dir, round_header + "\n".join(entries) + "\n")
 
-        # Append deferred items
+        # Append deferred items — use outcome_severity for degraded rounds
+        # where the finding has severity="unknown" but the outcome may have
+        # the operator's assessed severity.
         for o in outcomes:
             if o["action"] == "deferred":
                 finding = findings_by_id.get(o["id"], {})
                 append_deferred_item(output_dir, {
                     "id": o["id"],
-                    "severity": finding.get("severity", "unknown"),
+                    "severity": outcome_severity(o, finding),
                     "title": finding.get("title", ""),
                     "location": finding.get("location", ""),
                     "reasoning": o.get("reasoning", ""),
