@@ -212,7 +212,12 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/linear/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline.py -v` |
 | `scripts/linear/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/linear/test_pipeline_guidance.py -v` |
 | `scripts/linear/events.py` | `pytest plugins/pirategoat-tools/tests/linear/test_events.py -v` |
-| `scripts/iterative_review/*.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/ -v` |
+| `scripts/iterative_review/__main__.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_cli.py -v` |
+| `scripts/iterative_review/briefing.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_briefing.py -v` |
+| `scripts/iterative_review/backends/codex.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_codex.py -v` |
+| `scripts/iterative_review/loop.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_loop.py -v` |
+| `scripts/iterative_review/effort.py` | `pytest plugins/pirategoat-tools/tests/iterative_review/test_effort.py -v` |
+| `scripts/iterative_review/*.py` (other / multiple) | `pytest plugins/pirategoat-tools/tests/iterative_review/ -v` |
 | `scripts/analysis/session_metrics.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_metrics.py -v` |
 | `scripts/analysis/session_analyzer.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_analyzer.py -v` |
 | `tests/helpers/graders.py` | `pytest plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
