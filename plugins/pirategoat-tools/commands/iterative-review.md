@@ -12,8 +12,8 @@ Your judgment on each finding directly determines code quality.
 Rubber-stamping wastes rounds; overcorrecting wastes scope.
 
 Each Codex invocation has a 30-minute timeout. If Codex times out, the
-script emits a timeout briefing with mode-appropriate instructions — follow
-them instead of the three standard outcomes below.
+script emits a timeout briefing with instructions — follow them instead
+of the three standard outcomes below.
 
 ## Setup
 
@@ -96,14 +96,10 @@ PYTHONPATH=$SCRIPTS_DIR:$PYTHONPATH python3 -m iterative_review \
   --output-dir "$OUTPUT_DIR" \
   --merge-base "$MERGE_BASE" \
   --context-file "$OUTPUT_DIR/review-context.md" \
-  [--max-rounds $MAX_ROUNDS] \
-  [--autonomous]
+  [--max-rounds $MAX_ROUNDS]
 ```
 
 Only include `--max-rounds` if the user specified a round limit or quick mode.
-Include `--autonomous` when running without a human present (e.g., from
-pirategoat-bot). This changes timeout and stalemate behavior — the loop
-self-manages instead of asking for input.
 
 Read the stdout. Four possible outcomes:
 
@@ -116,16 +112,11 @@ Report the result and stop.
 
 **C) Evaluation briefing** — Codex found issues. Proceed to triage below.
 
-**D) Timeout briefing** — Codex timed out. The briefing contains
-mode-specific instructions:
-- **Interactive (default):** Surface the timeout to the user with three
-  options: retry this round, skip to next round, or stop the loop.
-  Wait for the user's decision before proceeding. No round is recorded
-  until the user acts — retry runs the same round cleanly, skip proceeds
-  directly to the next round (bypassing advance).
-- **Autonomous:** The script records the skipped round and advances
-  automatically. Two consecutive timeouts terminate the loop with
-  `codex_timeout` reason.
+**D) Timeout briefing** — Codex timed out. Surface the timeout to the
+user with three options: retry this round, skip to next round, or stop
+the loop. Wait for the user's decision before proceeding. No round is
+recorded until the user acts — retry runs the same round cleanly, skip
+proceeds directly to the next round (bypassing advance).
 
 ### Triage and Fix
 
