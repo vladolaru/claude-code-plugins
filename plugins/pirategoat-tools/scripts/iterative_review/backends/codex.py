@@ -11,6 +11,7 @@ import re
 from datetime import datetime, timezone
 
 CODEX_TIMEOUT = 1800  # 30 minutes — used by invoke_codex_review and timeout briefings
+TIMEOUT = CODEX_TIMEOUT  # common interface name (Task 4 normalization)
 TIMEOUT_SENTINEL = "__CODEX_TIMEOUT__"
 
 
@@ -257,3 +258,36 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=CODEX_TIM
         return TIMEOUT_SENTINEL, False
     except FileNotFoundError:
         return "", False
+
+
+# ---------------------------------------------------------------------------
+# Common interface aliases (Task 4 normalization)
+# ---------------------------------------------------------------------------
+# Both backends export the same names so the orchestrator can call
+# backend.check_auth() instead of going through an adapter dict.
+
+def check_auth():
+    """Common interface — delegates to check_codex_auth."""
+    return check_codex_auth()
+
+
+def parse_output(raw_output, round_num):
+    """Common interface — delegates to parse_codex_output."""
+    return parse_codex_output(raw_output, round_num)
+
+
+def invoke_review(prompt_file, schema_file, timeout=CODEX_TIMEOUT, effort=None,
+                  **kwargs):
+    """Common interface wrapper around invoke_codex_review.
+
+    Accepts optional output_file= kwarg. When omitted, a temp file is
+    created automatically. This keeps the common signature compatible
+    with the Claude backend (which has no output_file parameter) while
+    preserving the caller's ability to control the output path.
+    """
+    output_file = kwargs.get("output_file")
+    if output_file is None:
+        import tempfile
+        fd, output_file = tempfile.mkstemp(suffix="-codex-output.json")
+        os.close(fd)
+    return invoke_codex_review(prompt_file, schema_file, output_file, timeout, effort)

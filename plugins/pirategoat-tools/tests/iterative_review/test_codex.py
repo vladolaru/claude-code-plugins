@@ -20,6 +20,11 @@ from iterative_review.backends.codex import (
     get_rubric,
     TIMEOUT_SENTINEL,
     CODEX_TIMEOUT,
+    # Common interface aliases (Task 4 normalization)
+    TIMEOUT,
+    check_auth,
+    parse_output,
+    invoke_review,
 )
 
 
@@ -285,3 +290,55 @@ class TestTimeoutSentinel:
         )
         assert result == TIMEOUT_SENTINEL
         assert success is False
+
+
+class TestCommonInterfaceAliases:
+    """Common interface names point to the backend-specific implementations."""
+
+    def test_timeout_equals_codex_timeout(self):
+        assert TIMEOUT == CODEX_TIMEOUT
+
+    def test_check_auth_delegates_to_check_codex_auth(self):
+        """check_auth delegates to check_codex_auth (mockable)."""
+        with patch("iterative_review.backends.codex.check_codex_auth",
+                    return_value=(True, "ok")) as mock:
+            ok, msg = check_auth()
+            assert ok is True
+            mock.assert_called_once()
+
+    def test_parse_output_delegates_to_parse_codex_output(self):
+        """parse_output delegates to parse_codex_output."""
+        assert callable(parse_output)
+
+    def test_parse_output_returns_same_result(self):
+        """parse_output delegates to parse_codex_output."""
+        findings, degraded = parse_output(SAMPLE_JSON_OUTPUT, round_num=1)
+        expected, _ = parse_codex_output(SAMPLE_JSON_OUTPUT, round_num=1)
+        assert findings == expected
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_invoke_review_delegates_to_invoke_codex_review(self, mock_run, tmp_path):
+        """invoke_review wraps invoke_codex_review with auto output_file."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        invoke_review(str(prompt), "schema.json")
+
+        # Should have called subprocess.run (git rev-parse + codex exec)
+        assert mock_run.call_count == 2
+
+    @patch("iterative_review.backends.codex.subprocess.run")
+    def test_invoke_review_accepts_output_file_kwarg(self, mock_run, tmp_path):
+        """invoke_review passes output_file through to invoke_codex_review."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        out_file = str(tmp_path / "explicit-output.json")
+
+        invoke_review(str(prompt), "schema.json", output_file=out_file)
+
+        # The codex exec call should reference the explicit output file
+        codex_call = mock_run.call_args_list[1]
+        cmd = codex_call[0][0]
+        assert out_file in cmd

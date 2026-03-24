@@ -36,7 +36,11 @@ def _select_backend():
     """Select review backend: Codex (primary) -> Claude Code (fallback).
 
     Returns (backend_module, backend_name_string).
-    The backend_name is used for telemetry and adapter dispatch.
+    The backend_name is used for telemetry and logging.
+
+    Both backends export the same common interface (check_auth, parse_output,
+    invoke_review, write_prompt_file, get_schema_path, get_rubric, TIMEOUT,
+    TIMEOUT_SENTINEL) so the caller can use backend.xxx() directly.
     """
     import shutil
     from .backends import codex
@@ -56,36 +60,6 @@ def _select_backend():
 
     # Neither available — return codex so the existing error path fires
     return codex, "codex"
-
-
-def _get_backend_funcs(backend, backend_name):
-    """Return a dict mapping common names to backend-specific functions.
-
-    This is temporary glue — Task 4 will normalize the backend interface
-    so all backends export the same function names.
-    """
-    if backend_name == "codex":
-        return {
-            "check_auth": backend.check_codex_auth,
-            "parse_output": backend.parse_codex_output,
-            "invoke_review": backend.invoke_codex_review,
-            "write_prompt_file": backend.write_prompt_file,
-            "get_schema_path": backend.get_schema_path,
-            "get_rubric": backend.get_rubric,
-            "TIMEOUT_SENTINEL": backend.TIMEOUT_SENTINEL,
-            "TIMEOUT": backend.CODEX_TIMEOUT,
-        }
-    else:
-        return {
-            "check_auth": backend.check_claude_auth,
-            "parse_output": backend.parse_claude_output,
-            "invoke_review": backend.invoke_claude_review,
-            "write_prompt_file": backend.write_prompt_file,
-            "get_schema_path": backend.get_schema_path,
-            "get_rubric": backend.get_rubric,
-            "TIMEOUT_SENTINEL": backend.TIMEOUT_SENTINEL,
-            "TIMEOUT": backend.CLAUDE_TIMEOUT,
-        }
 
 
 def _compute_diff_lines(merge_base):
@@ -191,15 +165,15 @@ def _write_loop_result(output_dir, state, termination):
 def _preflight_backend():
     """Select the best available backend and verify it's ready.
 
-    Returns (backend_funcs, backend_name, error_message).
-    On success: (funcs_dict, name_str, None).
+    Returns (backend_module, backend_name, error_message).
+    On success: (module, name_str, None).
     On failure: (None, name_str, error_string).
 
-    Uses _select_backend() which tries Codex first, then Claude Code.
-    If neither is available, falls back to Codex so the existing error path fires.
+    _select_backend() tries each candidate's auth, but falls back to codex
+    when neither is available. We verify the selected backend here so the
+    fallback case produces a clear error.
     """
     backend, backend_name = _select_backend()
-    funcs = _get_backend_funcs(backend, backend_name)
 
     import shutil
     cli_name = "codex" if backend_name == "codex" else "claude"
@@ -208,14 +182,14 @@ def _preflight_backend():
             f"UNAVAILABLE: {cli_name.title()} CLI is not installed or not on PATH.\n"
             "The iterative review loop requires a review CLI (Codex or Claude Code) to run."
         )
-    authenticated, err = funcs["check_auth"]()
+    authenticated, err = backend.check_auth()
     if not authenticated:
         return None, backend_name, (
             f"UNAVAILABLE: {cli_name.title()} CLI is not authenticated.\n"
             f"Auth check failed: {err}\n"
             "The iterative review loop requires an authenticated review CLI."
         )
-    return funcs, backend_name, None
+    return backend, backend_name, None
 
 
 def action_review(args):
@@ -226,7 +200,7 @@ def action_review(args):
 
     # Pre-flight: select the best available backend and verify it's ready.
     # Tries Codex first, then falls back to Claude Code CLI.
-    bk, backend_name, preflight_err = _preflight_backend()
+    backend, backend_name, preflight_err = _preflight_backend()
     if preflight_err:
         # Log telemetry before writing result
         telemetry = ReviewTelemetry(output_dir)
@@ -407,10 +381,10 @@ def action_review(args):
                                msg=f"Prior analysis doc not found: {candidate}")
 
     # Write the prompt file using the selected backend
-    prompt_file = bk["write_prompt_file"](
+    prompt_file = backend.write_prompt_file(
         output_dir=output_dir,
         round_num=round_num,
-        rubric=bk["get_rubric"](),
+        rubric=backend.get_rubric(),
         merge_base=state["merge_base"],
         context=context if round_num == 1 else state.get("context", ""),
         pushback_log=pushback_log if pushback_log else None,
@@ -456,7 +430,7 @@ def action_review(args):
 
     # Invoke backend
     merge_base = state["merge_base"]
-    schema_file = bk["get_schema_path"]()
+    schema_file = backend.get_schema_path()
 
     telemetry.progress("backend_invoked", round=round_num,
                        backend=backend_name,
@@ -467,23 +441,17 @@ def action_review(args):
                              effort=effort, effort_reason=effort_reason,
                              backend=backend_name)
 
-    # Codex needs output_file; Claude Code writes to stdout only.
+    # Codex accepts output_file= for on-disk structured output;
+    # Claude ignores it (returns structured output in JSON response).
+    # Both backends accept **kwargs via the common invoke_review interface.
+    invoke_kwargs = dict(prompt_file=prompt_file, schema_file=schema_file,
+                         effort=effort)
     if backend_name == "codex":
-        output_file = os.path.join(output_dir, f"round-{round_num}-codex-output.json")
-        raw_output, success = bk["invoke_review"](
-            prompt_file=prompt_file,
-            schema_file=schema_file,
-            output_file=output_file,
-            effort=effort,
-        )
-    else:
-        raw_output, success = bk["invoke_review"](
-            prompt_file=prompt_file,
-            schema_file=schema_file,
-            effort=effort,
-        )
+        invoke_kwargs["output_file"] = os.path.join(
+            output_dir, f"round-{round_num}-codex-output.json")
+    raw_output, success = backend.invoke_review(**invoke_kwargs)
 
-    if raw_output == bk["TIMEOUT_SENTINEL"]:
+    if raw_output == backend.TIMEOUT_SENTINEL:
         # Backend timed out — mode determines how the round is handled.
         # Autonomous: record skipped round immediately (auto-skip is the only path).
         # Interactive: defer recording — the user may retry (same round) or skip.
@@ -535,7 +503,7 @@ def action_review(args):
                 return
 
         write_loop_state(output_dir, state)
-        print(format_timeout_briefing(round_num, timeout_seconds=bk["TIMEOUT"],
+        print(format_timeout_briefing(round_num, timeout_seconds=backend.TIMEOUT,
                                        autonomous=autonomous,
                                        at_round_cap=at_round_cap))
         return
@@ -562,7 +530,7 @@ def action_review(args):
     state["consecutive_timeouts"] = 0
 
     # Parse output
-    findings, degraded = bk["parse_output"](raw_output, round_num)
+    findings, degraded = backend.parse_output(raw_output, round_num)
 
     telemetry.progress("codex_completed", round=round_num,
                        findings_count=len(findings),

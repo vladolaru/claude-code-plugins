@@ -808,17 +808,19 @@ class TestPreflightBackend:
 
     @patch("iterative_review.backends.codex.check_codex_auth", return_value=(True, ""))
     @patch("shutil.which", return_value="/usr/local/bin/codex")
-    def test_returns_funcs_when_codex_available_and_authed(self, mock_which, mock_auth):
-        funcs, name, err = _preflight_backend()
+    def test_returns_module_when_codex_available_and_authed(self, mock_which, mock_auth):
+        backend, name, err = _preflight_backend()
         assert err is None
         assert name == "codex"
-        assert funcs is not None
-        assert callable(funcs["invoke_review"])
+        assert backend is not None
+        # Common interface: module has callable check_auth and invoke_review
+        assert callable(backend.check_auth)
+        assert callable(backend.invoke_review)
 
     @patch("shutil.which", return_value=None)
     def test_returns_error_when_nothing_installed(self, mock_which):
-        funcs, name, err = _preflight_backend()
-        assert funcs is None
+        backend, name, err = _preflight_backend()
+        assert backend is None
         assert err is not None
         assert "UNAVAILABLE" in err
         assert "not installed" in err or "not on PATH" in err
@@ -828,15 +830,15 @@ class TestPreflightBackend:
     def test_returns_error_when_codex_not_authenticated(self, mock_which, mock_auth):
         """Codex on PATH but not authenticated, Claude not on PATH -> error."""
         # shutil.which returns truthy for any arg, but _select_backend
-        # calls check_codex_auth which fails, then tries claude which also
+        # calls check_auth which fails, then tries claude which also
         # gets truthy which but we need to make it fail too.
         # With mock returning "/usr/local/bin/codex" for all calls,
         # _select_backend tries codex auth (fails), then claude auth.
         # We need claude auth to also fail for this test.
         with patch("iterative_review.backends.claude.check_claude_auth",
                     return_value=(False, "not authenticated")):
-            funcs, name, err = _preflight_backend()
-            assert funcs is None
+            backend, name, err = _preflight_backend()
+            assert backend is None
             assert err is not None
             assert "UNAVAILABLE" in err
 
@@ -845,15 +847,16 @@ class TestPreflightBackend:
     @patch("shutil.which", return_value="/usr/local/bin/codex")
     def test_falls_back_to_claude_when_codex_unauthed(self, mock_which, mock_codex_auth, mock_claude_auth):
         """Codex not authenticated -> falls back to Claude Code."""
-        funcs, name, err = _preflight_backend()
+        backend, name, err = _preflight_backend()
         assert err is None
         assert name == "claude"
-        assert funcs is not None
+        assert backend is not None
+        assert callable(backend.check_auth)
 
     @patch("shutil.which", return_value=None)
     def test_skips_auth_check_when_not_installed(self, mock_which):
         """Auth check should not run if no CLI is on PATH."""
-        funcs, name, err = _preflight_backend()
+        backend, name, err = _preflight_backend()
         assert err is not None
         assert "not installed" in err or "not on PATH" in err
 

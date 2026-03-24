@@ -22,6 +22,11 @@ from iterative_review.backends.claude import (
     TIMEOUT_SENTINEL,
     CLAUDE_TIMEOUT,
     _EFFORT_MAP,
+    # Common interface aliases (Task 4 normalization)
+    TIMEOUT,
+    check_auth,
+    parse_output,
+    invoke_review,
 )
 
 
@@ -612,3 +617,63 @@ class TestRubric:
         assert "P1" in rubric
         assert "P2" in rubric
         assert "P3" in rubric
+
+
+class TestCommonInterfaceAliases:
+    """Common interface names point to the backend-specific implementations."""
+
+    def test_timeout_equals_claude_timeout(self):
+        assert TIMEOUT == CLAUDE_TIMEOUT
+
+    def test_check_auth_delegates_to_check_claude_auth(self):
+        """check_auth delegates to check_claude_auth (mockable)."""
+        with patch("iterative_review.backends.claude.check_claude_auth",
+                    return_value=(True, "v2.0")) as mock:
+            ok, msg = check_auth()
+            assert ok is True
+            mock.assert_called_once()
+
+    def test_parse_output_delegates_to_parse_claude_output(self):
+        """parse_output delegates to parse_claude_output."""
+        assert callable(parse_output)
+
+    def test_parse_output_returns_same_result(self):
+        """parse_output delegates to parse_claude_output."""
+        findings, degraded = parse_output(SAMPLE_CC_RESPONSE, round_num=1)
+        expected, _ = parse_claude_output(SAMPLE_CC_RESPONSE, round_num=1)
+        assert findings == expected
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_invoke_review_delegates_to_invoke_claude_review(self, mock_run, tmp_path):
+        """invoke_review wraps invoke_claude_review."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        schema = tmp_path / "schema.json"
+        schema.write_text('{"type":"object"}')
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=str(tmp_path)),
+            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
+        ]
+
+        result, success = invoke_review(str(prompt), str(schema), timeout=60)
+        assert result == SAMPLE_CC_RESPONSE
+        assert success is True
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_invoke_review_ignores_extra_kwargs(self, mock_run, tmp_path):
+        """invoke_review silently ignores output_file= kwarg (CC doesn't use it)."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Review this code.")
+        schema = tmp_path / "schema.json"
+        schema.write_text('{"type":"object"}')
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=str(tmp_path)),
+            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
+        ]
+
+        # Should not raise TypeError for unexpected keyword argument
+        result, success = invoke_review(
+            str(prompt), str(schema), timeout=60,
+            output_file="/tmp/ignored.json"
+        )
+        assert success is True

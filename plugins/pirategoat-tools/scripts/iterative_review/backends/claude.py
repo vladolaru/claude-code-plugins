@@ -9,6 +9,7 @@ import os
 import subprocess
 
 CLAUDE_TIMEOUT = 1800  # 30 minutes — used by invoke_claude_review and timeout briefings
+TIMEOUT = CLAUDE_TIMEOUT  # common interface name (Task 4 normalization)
 TIMEOUT_SENTINEL = "__CLAUDE_TIMEOUT__"
 
 # Sonnet caps at "high" — no "xhigh" or "max" support
@@ -264,3 +265,30 @@ def invoke_claude_review(prompt_file, schema_file, timeout=CLAUDE_TIMEOUT,
         return TIMEOUT_SENTINEL, False
     except FileNotFoundError:
         return "", False
+
+
+# ---------------------------------------------------------------------------
+# Common interface aliases (Task 4 normalization)
+# ---------------------------------------------------------------------------
+# Both backends export the same names so the orchestrator can call
+# backend.check_auth() instead of going through an adapter dict.
+
+def check_auth():
+    """Common interface — delegates to check_claude_auth."""
+    return check_claude_auth()
+
+
+def parse_output(raw_output, round_num):
+    """Common interface — delegates to parse_claude_output."""
+    return parse_claude_output(raw_output, round_num)
+
+
+def invoke_review(prompt_file, schema_file, timeout=CLAUDE_TIMEOUT, effort=None,
+                  **kwargs):
+    """Common interface wrapper around invoke_claude_review.
+
+    Extra **kwargs are accepted for interface compatibility with the Codex
+    backend (which takes output_file=) but ignored here — CC returns
+    structured output in the JSON response envelope.
+    """
+    return invoke_claude_review(prompt_file, schema_file, timeout, effort)
