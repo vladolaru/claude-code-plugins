@@ -1486,7 +1486,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
         clarity_overridden = config.get("skip_clarity_gate", False)
 
         # Read iterative review result — surface the outcome, not just whether it ran.
-        # Values: "not_run" (skipped/small complexity), "unavailable" (tool missing),
+        # Values: "not_run" (skipped/small complexity), "unavailable" (tool missing/timeout),
         # "clean" (zero_findings), "converged" (all_rejected/nitpicks_only),
         # "max_rounds" (hit round limit), "hard_limit" (hit absolute ceiling).
         _REVIEW_OUTCOME_MAP = {
@@ -1496,21 +1496,26 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "max_rounds": "max_rounds",
             "hard_limit": "hard_limit",
             "codex_unavailable": "unavailable",
+            "codex_timeout": "unavailable",
         }
         review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
         review_outcome = "not_run"
+        _review_termination = ""
         if os.path.isfile(review_result_path):
             try:
                 with open(review_result_path) as _rf:
                     _rdata = json.load(_rf)
-                termination = _rdata.get("termination", "")
-                review_outcome = _REVIEW_OUTCOME_MAP.get(termination, termination or "not_run")
+                _review_termination = _rdata.get("termination", "")
+                review_outcome = _REVIEW_OUTCOME_MAP.get(_review_termination, _review_termination or "not_run")
             except (json.JSONDecodeError, OSError):
                 pass
 
         # Mark unavailable review as degradation so status reflects reality
         if review_outcome == "unavailable":
-            note = "Independent code review skipped — review tool unavailable"
+            if _review_termination == "codex_timeout":
+                note = "Independent code review incomplete — reviewer timed out on consecutive rounds"
+            else:
+                note = "Independent code review skipped — review tool unavailable"
             if note not in degradation_notes:
                 degradation_notes.append(note)
 
