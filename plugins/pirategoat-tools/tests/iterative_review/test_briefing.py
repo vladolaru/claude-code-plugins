@@ -126,6 +126,10 @@ class TestEvaluationBriefing:
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
         assert "force-defer" not in text.lower()
 
+    def test_outcomes_format_includes_severity(self):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
+        assert '"severity"' in text
+
     def test_contains_commit_instruction(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
         assert "commit" in text.lower()

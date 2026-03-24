@@ -18,7 +18,7 @@ from .loop import (
     read_loop_state, write_loop_state, DEFAULT_STATE, MAX_ROUNDS_HARD_LIMIT,
     compute_max_rounds, compute_relevant_diff_size, check_convergence,
     build_pushback_entry, append_pushback_log, read_pushback_log,
-    append_deferred_item, validate_outcomes,
+    append_deferred_item, validate_outcomes, outcome_severity,
 )
 from .briefing import (
     format_evaluation_briefing, format_completion_briefing,
@@ -606,7 +606,7 @@ def action_advance(args):
     # (deferred/rejected P0/P1 won't be addressed next round — no point extending)
     max_rounds = state.get("max_rounds", 3)
     has_critical_fixed = any(
-        findings_by_id[o["id"]].get("severity") in ("P0", "P1")
+        outcome_severity(o, findings_by_id.get(o["id"])) in ("P0", "P1")
         and o["action"] == "fixed"
         for o in outcomes
     ) if outcomes else False
@@ -617,8 +617,10 @@ def action_advance(args):
                                  new_max=max_rounds, reason="p0_p1_at_limit")
 
     # Check convergence
-    all_p3 = all(findings_by_id[o["id"]].get("severity") == "P3"
-                 for o in outcomes) if outcomes else False
+    all_p3 = all(
+        outcome_severity(o, findings_by_id.get(o["id"])) == "P3"
+        for o in outcomes
+    ) if outcomes else False
     all_rej = fixed == 0  # no code changed
     termination = check_convergence(
         findings_count=len(findings), all_p3=all_p3, all_rejected=all_rej,

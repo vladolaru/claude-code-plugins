@@ -24,6 +24,7 @@ from iterative_review.loop import (
     read_deferred_items,
     validate_outcomes,
     compute_relevant_diff_size,
+    outcome_severity,
 )
 
 
@@ -272,3 +273,27 @@ class TestDiffSizing:
         relevant, excluded = compute_relevant_diff_size([])
         assert relevant == []
         assert excluded == 0
+
+
+class TestOutcomeSeverity:
+    """outcome_severity prefers finding severity, falls back to outcome."""
+
+    def test_finding_severity_preferred(self):
+        assert outcome_severity({"severity": "P3"}, {"severity": "P0"}) == "P0"
+
+    def test_outcome_fallback_when_finding_missing(self):
+        assert outcome_severity({"severity": "P1"}, None) == "P1"
+
+    def test_outcome_fallback_when_finding_has_no_severity(self):
+        assert outcome_severity({"severity": "P2"}, {"id": "r1_f1"}) == "P2"
+
+    def test_unknown_when_neither_has_severity(self):
+        assert outcome_severity({}, None) == "unknown"
+        assert outcome_severity({}, {}) == "unknown"
+
+    def test_unknown_when_finding_severity_empty_string(self):
+        assert outcome_severity({"severity": "P1"}, {"severity": ""}) == "P1"
+
+    def test_degraded_round_severity(self):
+        """Degraded rounds have severity='unknown' in findings."""
+        assert outcome_severity({}, {"severity": "unknown"}) == "unknown"

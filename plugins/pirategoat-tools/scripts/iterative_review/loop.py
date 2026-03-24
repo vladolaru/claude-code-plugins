@@ -182,6 +182,23 @@ def read_deferred_items(output_dir):
 # Outcome Validation
 # ---------------------------------------------------------------------------
 
+def outcome_severity(outcome, finding=None):
+    """Get severity for an outcome, with finding as primary source.
+
+    Prefers finding's severity (canonical source from Codex).
+    Falls back to outcome's own severity field (LLM-provided copy).
+    Returns "unknown" when neither has severity data.
+
+    Note: "unknown" intentionally prevents nitpicks_only and has_critical_fixed
+    from triggering — the loop errs toward continuing when severity is unavailable.
+    """
+    if finding:
+        sev = finding.get("severity")
+        if sev:
+            return sev
+    return outcome.get("severity", "unknown")
+
+
 def validate_outcomes(findings, outcomes):
     """Check that every finding has an outcome and no stray IDs exist.
 
