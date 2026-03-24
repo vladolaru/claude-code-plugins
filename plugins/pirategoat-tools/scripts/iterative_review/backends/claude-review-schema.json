@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "confidence_score": { "type": "number" },
+          "priority": { "type": "integer" },
+          "code_location": {
+            "type": "object",
+            "properties": {
+              "file_path": { "type": "string" },
+              "line_range": {
+                "type": "object",
+                "properties": {
+                  "start": { "type": "integer" },
+                  "end": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "required": ["title", "body", "priority", "code_location"]
+      }
+    },
+    "overall_correctness": { "type": "string" },
+    "overall_explanation": { "type": "string" },
+    "overall_confidence_score": { "type": "number" }
+  },
+  "required": ["findings", "overall_correctness", "overall_explanation"]
+}
