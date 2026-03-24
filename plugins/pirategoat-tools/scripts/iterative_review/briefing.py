@@ -141,6 +141,14 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
         lines.append("  Decisions that depart from the original spec go in the PR description.")
         lines.append("  Stalemates waste rounds.")
 
+        if round_num >= 3:
+            lines.append("")
+            lines.append("Stalemate escalation (round 3+):")
+            lines.append("  If you are rejecting the same type of finding for the third time,")
+            lines.append("  force-defer it with a note for the PR author rather than burning")
+            lines.append("  another round. Repeated rejection of a recurring theme means you and")
+            lines.append("  the reviewer disagree — escalate to a human, don't loop.")
+
     return "\n".join(lines)
 
 

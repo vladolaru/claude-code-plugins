@@ -116,6 +116,16 @@ class TestEvaluationBriefing:
         assert "prior reasoning" in text.lower()
         assert "correction" in text.lower()
 
+    def test_round_3_includes_stalemate_escalation(self):
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=3, merge_base="abc", diff_lines=100)
+        assert "force-defer" in text.lower()
+        assert "stalemate escalation" in text.lower()
+
+    def test_round_2_no_stalemate_escalation(self):
+        """Round 2 has correction prompt but not the escalation guidance."""
+        text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=2, merge_base="abc", diff_lines=100)
+        assert "force-defer" not in text.lower()
+
     def test_contains_commit_instruction(self):
         text = format_evaluation_briefing(SAMPLE_FINDINGS, round_num=1, merge_base="abc", diff_lines=100)
         assert "commit" in text.lower()
