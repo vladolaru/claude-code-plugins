@@ -77,6 +77,17 @@ class TestStateManagement:
         state = read_loop_state(str(d))
         assert state["current_round"] == 0
 
+    def test_default_state_has_autonomous_false(self):
+        assert DEFAULT_STATE["autonomous"] is False
+
+    def test_autonomous_flag_persists(self, tmp_path):
+        d = str(tmp_path / "code-review")
+        Path(d).mkdir()
+        state = {**DEFAULT_STATE, "autonomous": True, "merge_base": "abc"}
+        write_loop_state(d, state)
+        loaded = read_loop_state(d)
+        assert loaded["autonomous"] is True
+
 
 class TestConvergence:
     """Four convergence conditions + none-met case."""

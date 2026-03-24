@@ -215,6 +215,8 @@ def action_review(args):
             state["pass_prior_analysis"] = False
         if getattr(args, "adaptive_effort", False):
             state["adaptive_effort"] = True
+        if getattr(args, "autonomous", False):
+            state["autonomous"] = True
 
         # Read context file
         context = ""
@@ -624,6 +626,8 @@ def main():
                         help="Disable reading prior round analysis docs")
     parser.add_argument("--adaptive-effort", action="store_true",
                         help="Enable adaptive reasoning effort per round")
+    parser.add_argument("--autonomous", action="store_true",
+                        help="Autonomous mode (no human present). Timeouts auto-skip; consecutive timeouts terminate.")
 
     args = parser.parse_args()
 

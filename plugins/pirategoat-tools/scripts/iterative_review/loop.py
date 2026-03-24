@@ -72,6 +72,8 @@ DEFAULT_STATE = {
     "rounds": [],
     "terminated": False,
     "termination": None,
+    "autonomous": False,
+    "consecutive_timeouts": 0,
 }
 
 
