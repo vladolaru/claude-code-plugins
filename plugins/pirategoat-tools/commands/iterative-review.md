@@ -40,15 +40,9 @@ mkdir -p "$OUTPUT_DIR"
 
 **Resolve the scripts directory:**
 
-The `iterative_review` module lives inside the pirategoat-tools plugin. Resolve
-the path so you can set PYTHONPATH:
-
 ```bash
-SCRIPTS_DIR="<pirategoat-tools-plugin-root>/scripts"
+SCRIPTS_DIR="${CLAUDE_PLUGIN_ROOT}/scripts"
 ```
-
-Use the plugin root from your environment (the directory containing this command
-file, two levels up: `commands/` → plugin root, then into `scripts/`).
 
 **Ensure all changes are committed:**
 
