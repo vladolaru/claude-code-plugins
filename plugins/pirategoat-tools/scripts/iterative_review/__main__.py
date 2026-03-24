@@ -474,12 +474,78 @@ def action_review(args):
             output_dir, f"round-{round_num}-codex-output.json")
     raw_output, success = backend.invoke_review(**invoke_kwargs)
 
-    if raw_output == backend.TIMEOUT_SENTINEL:
-        # Backend timed out — mode determines how the round is handled.
-        # Autonomous: record skipped round immediately (auto-skip is the only path).
-        # Interactive: defer recording — the user may retry (same round) or skip.
-        #   Eager recording would poison retry (duplicate round entry) and
-        #   skip-via-advance (empty findings → false zero_findings convergence).
+    # --- Failure detection and runtime fallback ---
+    #
+    # Three failure modes trigger a fallback attempt:
+    # 1. Empty output: invoke returned ("", False) — transient CLI error
+    # 2. Timeout: invoke returned (TIMEOUT_SENTINEL, False)
+    # 3. Error envelope: invoke returned JSON with is_error=true (CC-specific)
+    #
+    # For each, we try _try_fallback() with the fallback backend's OWN schema
+    # before falling through to the original failure handler.
+
+    is_timeout = (raw_output == backend.TIMEOUT_SENTINEL)
+    is_empty_failure = (not success and not raw_output)
+    is_error_envelope = False
+    if raw_output and not is_timeout:
+        try:
+            _envelope = json.loads(raw_output)
+            is_error_envelope = bool(_envelope.get("is_error"))
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if is_timeout or is_empty_failure or is_error_envelope:
+        # Try fallback backend before handling the failure
+        fallback_backend, fallback_name = _try_fallback(backend_name)
+        if fallback_backend:
+            telemetry.progress("backend_runtime_fallback", round=round_num,
+                               primary=backend_name, fallback=fallback_name)
+            telemetry.pipeline_event("backend_runtime_fallback", round=round_num,
+                                     primary=backend_name, fallback=fallback_name)
+            # Use the FALLBACK backend's schema — each backend has its own
+            # (e.g. file_path vs absolute_file_path, additionalProperties rules).
+            fallback_schema = fallback_backend.get_schema_path()
+            fallback_kwargs = dict(prompt_file=prompt_file,
+                                   schema_file=fallback_schema,
+                                   effort=effort, output_dir=output_dir)
+            if fallback_name == "codex":
+                fallback_kwargs["output_file"] = os.path.join(
+                    output_dir, f"round-{round_num}-codex-output.json")
+            fb_output, fb_success = fallback_backend.invoke_review(**fallback_kwargs)
+
+            # Check if fallback produced a usable result
+            fb_is_timeout = (fb_output == fallback_backend.TIMEOUT_SENTINEL)
+            fb_is_empty = (not fb_success and not fb_output)
+            fb_is_error = False
+            if fb_output and not fb_is_timeout:
+                try:
+                    _fb_env = json.loads(fb_output)
+                    fb_is_error = bool(_fb_env.get("is_error"))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if not fb_is_timeout and not fb_is_empty and not fb_is_error:
+                # Fallback succeeded — switch to it for parsing
+                backend = fallback_backend
+                backend_name = fallback_name
+                raw_output = fb_output
+                success = fb_success
+                # Clear failure flags so we fall through to normal parsing
+                is_timeout = False
+                is_empty_failure = False
+                is_error_envelope = False
+            elif fb_is_timeout:
+                # Fallback timed out — route through timeout handler below
+                # with the fallback as the active backend
+                backend = fallback_backend
+                backend_name = fallback_name
+                raw_output = fb_output
+                is_timeout = True
+                is_empty_failure = False
+                is_error_envelope = False
+
+    # --- Handle timeout (primary or fallback) ---
+    if is_timeout:
         autonomous = state.get("autonomous", False)
         consecutive = state.get("consecutive_timeouts", 0) + 1
         state["consecutive_timeouts"] = consecutive
@@ -491,28 +557,20 @@ def action_review(args):
                                  consecutive=consecutive,
                                  backend=backend_name)
 
-        # Check if at the round cap — skip would exceed the configured budget.
         max_rounds = state.get("max_rounds", 3)
         at_round_cap = round_num >= max_rounds or round_num >= MAX_ROUNDS_HARD_LIMIT
 
         if autonomous:
-            # Write empty findings so the round is complete on disk
             findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
             with open(findings_path, "w") as f:
                 json.dump([], f)
 
-            # Record round in state (skipped — not routed through advance)
             state.setdefault("rounds", []).append({
                 "round": round_num, "findings": 0, "fixed": 0,
                 "rejected": 0, "deferred": 0, "skipped": True,
                 "effort": state.get("current_effort"),
             })
 
-            # Terminate if: consecutive timeouts OR at the round cap.
-            # Terminate on consecutive timeouts or at the round cap.
-            # Use distinct reasons so downstream renderers report accurately:
-            # - backend_timeout: consecutive timeouts (infrastructure failure)
-            # - backend_timeout_at_cap: single timeout on the last round
             if consecutive >= 2 or at_round_cap:
                 reason = "backend_timeout" if consecutive >= 2 else "backend_timeout_at_cap"
                 state["terminated"] = True
@@ -531,53 +589,25 @@ def action_review(args):
                                        at_round_cap=at_round_cap))
         return
 
-    elif not success and not raw_output:
-        # Primary backend failed at runtime — try the fallback before giving up.
-        # This covers transient Codex failures (network, server errors) where
-        # preflight passed but invoke_review returned nothing.
-        fallback_backend, fallback_name = _try_fallback(backend_name)
-        if fallback_backend:
-            telemetry.progress("backend_runtime_fallback", round=round_num,
-                               primary=backend_name, fallback=fallback_name)
-            telemetry.pipeline_event("backend_runtime_fallback", round=round_num,
-                                     primary=backend_name, fallback=fallback_name)
-            # Rebuild invoke kwargs for fallback backend
-            fallback_kwargs = dict(prompt_file=prompt_file, schema_file=schema_file,
-                                   effort=effort, output_dir=output_dir)
-            if fallback_name == "codex":
-                fallback_kwargs["output_file"] = os.path.join(
-                    output_dir, f"round-{round_num}-codex-output.json")
-            raw_output, success = fallback_backend.invoke_review(**fallback_kwargs)
-            if raw_output and raw_output != fallback_backend.TIMEOUT_SENTINEL:
-                # Fallback succeeded — switch backend for this round's parsing
-                backend = fallback_backend
-                backend_name = fallback_name
-                # Fall through to normal parsing below
-            else:
-                # Fallback also failed — terminate
-                success = False
-                raw_output = ""
+    # --- Handle unrecoverable failure (no backend produced output) ---
+    if is_empty_failure or is_error_envelope:
+        telemetry.progress("backend_unavailable", round=round_num,
+                           backend=backend_name)
+        telemetry.pipeline_event("backend_unavailable", round=round_num,
+                                 backend=backend_name)
+        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
+        with open(findings_path, "w") as f:
+            json.dump([], f)
+        state["terminated"] = True
+        state["termination"] = "backend_unavailable"
+        write_loop_state(output_dir, state)
+        _write_loop_result(output_dir, state, "backend_unavailable")
+        print("No review backend available. Review loop cannot proceed.")
+        return
 
-        if not success and not raw_output:
-            telemetry.progress("backend_unavailable", round=round_num,
-                               backend=backend_name)
-            telemetry.pipeline_event("backend_unavailable", round=round_num,
-                                     backend=backend_name)
-            findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
-            with open(findings_path, "w") as f:
-                json.dump([], f)
-            state["terminated"] = True
-            state["termination"] = "backend_unavailable"
-            write_loop_state(output_dir, state)
-
-            _write_loop_result(output_dir, state, "backend_unavailable")
-            print("No review backend available. Review loop cannot proceed.")
-            return
-
-    # Backend responded — reset consecutive timeout counter
+    # --- Backend produced output — process it ---
     state["consecutive_timeouts"] = 0
 
-    # Parse output
     findings, degraded = backend.parse_output(raw_output, round_num)
 
     telemetry.progress("review_completed", round=round_num,
@@ -591,23 +621,6 @@ def action_review(args):
         raw_path = os.path.join(output_dir, f"round-{round_num}-{backend_name}-raw.md")
         with open(raw_path, "w") as f:
             f.write(raw_output)
-
-    # Degraded with no findings = backend error (auth failure, budget exhaustion,
-    # etc.), not a clean review. Treat as backend unavailable.
-    if degraded and not findings:
-        telemetry.progress("backend_unavailable", round=round_num,
-                           backend=backend_name)
-        telemetry.pipeline_event("backend_unavailable", round=round_num,
-                                 backend=backend_name)
-        findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
-        with open(findings_path, "w") as f:
-            json.dump([], f)
-        state["terminated"] = True
-        state["termination"] = "backend_unavailable"
-        write_loop_state(output_dir, state)
-        _write_loop_result(output_dir, state, "backend_unavailable")
-        print(f"Review backend ({backend_name}) returned an error. Review loop cannot proceed.")
-        return
 
     # Write findings
     findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
