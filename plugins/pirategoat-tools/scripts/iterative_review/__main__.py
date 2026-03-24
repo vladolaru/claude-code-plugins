@@ -47,14 +47,14 @@ def _select_backend():
 
     # Try Codex first
     if shutil.which("codex"):
-        authenticated, _ = codex.check_codex_auth()
+        authenticated, _ = codex.check_auth()
         if authenticated:
             return codex, "codex"
 
     # Fall back to Claude Code
     from .backends import claude
     if shutil.which("claude"):
-        authenticated, _ = claude.check_claude_auth()
+        authenticated, _ = claude.check_auth()
         if authenticated:
             return claude, "claude"
 
@@ -204,14 +204,14 @@ def action_review(args):
     if preflight_err:
         # Log telemetry before writing result
         telemetry = ReviewTelemetry(output_dir)
-        telemetry.progress("codex_unavailable", round=round_num,
+        telemetry.progress("backend_unavailable", round=round_num,
                            backend=backend_name)
-        telemetry.pipeline_event("codex_unavailable", round=round_num,
+        telemetry.pipeline_event("backend_unavailable", round=round_num,
                                  backend=backend_name)
         # Write structured result so callers can detect the condition
         # programmatically (same shape as normal termination).
         result_data = {
-            "termination": "codex_unavailable",
+            "termination": "backend_unavailable",
             "rounds_completed": 0,
             "total_findings": 0,
             "total_fixed": 0,
@@ -249,7 +249,7 @@ def action_review(args):
         for pattern in ["round-*-findings.json", "round-*-outcomes.json",
                         "round-*-prompt.md", "round-*-codex-output.json",
                         "round-*-codex-raw.md", "round-*-claude-raw.md",
-                        "*-analysis.md"]:
+                        "round-*-backend-raw.md", "*-analysis.md"]:
             for f in glob.glob(os.path.join(output_dir, pattern)):
                 os.remove(f)
         if args.no_prior_analysis:
@@ -461,10 +461,10 @@ def action_review(args):
         consecutive = state.get("consecutive_timeouts", 0) + 1
         state["consecutive_timeouts"] = consecutive
 
-        telemetry.progress("codex_timeout", round=round_num,
+        telemetry.progress("review_timeout", round=round_num,
                            consecutive=consecutive, autonomous=autonomous,
                            backend=backend_name)
-        telemetry.pipeline_event("codex_timeout", round=round_num,
+        telemetry.pipeline_event("review_timeout", round=round_num,
                                  consecutive=consecutive,
                                  backend=backend_name)
 
@@ -488,10 +488,10 @@ def action_review(args):
             # Terminate if: consecutive timeouts OR at the round cap.
             # Terminate on consecutive timeouts or at the round cap.
             # Use distinct reasons so downstream renderers report accurately:
-            # - codex_timeout: consecutive timeouts (infrastructure failure)
-            # - codex_timeout_at_cap: single timeout on the last round
+            # - backend_timeout: consecutive timeouts (infrastructure failure)
+            # - backend_timeout_at_cap: single timeout on the last round
             if consecutive >= 2 or at_round_cap:
-                reason = "codex_timeout" if consecutive >= 2 else "codex_timeout_at_cap"
+                reason = "backend_timeout" if consecutive >= 2 else "backend_timeout_at_cap"
                 state["terminated"] = True
                 state["termination"] = reason
                 write_loop_state(output_dir, state)
@@ -509,19 +509,19 @@ def action_review(args):
         return
 
     elif not success and not raw_output:
-        telemetry.progress("codex_unavailable", round=round_num,
+        telemetry.progress("backend_unavailable", round=round_num,
                            backend=backend_name)
-        telemetry.pipeline_event("codex_unavailable", round=round_num,
+        telemetry.pipeline_event("backend_unavailable", round=round_num,
                                  backend=backend_name)
         # Write empty findings
         findings_path = os.path.join(output_dir, f"round-{round_num}-findings.json")
         with open(findings_path, "w") as f:
             json.dump([], f)
         state["terminated"] = True
-        state["termination"] = "codex_unavailable"
+        state["termination"] = "backend_unavailable"
         write_loop_state(output_dir, state)
 
-        _write_loop_result(output_dir, state, "codex_unavailable")
+        _write_loop_result(output_dir, state, "backend_unavailable")
         backend_label = backend_name.title()
         print(f"{backend_label} CLI is unavailable. Review loop cannot proceed.")
         return
@@ -532,10 +532,10 @@ def action_review(args):
     # Parse output
     findings, degraded = backend.parse_output(raw_output, round_num)
 
-    telemetry.progress("codex_completed", round=round_num,
+    telemetry.progress("review_completed", round=round_num,
                        findings_count=len(findings),
                        backend=backend_name)
-    telemetry.pipeline_event("codex_completed", round=round_num,
+    telemetry.pipeline_event("review_completed", round=round_num,
                              findings_count=len(findings),
                              backend=backend_name)
 

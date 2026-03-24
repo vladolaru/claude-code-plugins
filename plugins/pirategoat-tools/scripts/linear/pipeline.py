@@ -1495,9 +1495,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
             "nitpicks_only": "converged",
             "max_rounds": "max_rounds",
             "hard_limit": "hard_limit",
-            "codex_unavailable": "unavailable",
-            "codex_timeout": "unavailable",
-            "codex_timeout_at_cap": "unavailable",
+            "backend_unavailable": "unavailable",
+            "backend_timeout": "unavailable",
+            "backend_timeout_at_cap": "unavailable",
         }
         review_result_path = os.path.join(output_dir, "code-review", "review-loop-result.json")
         review_outcome = "not_run"
@@ -1513,9 +1513,9 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
 
         # Mark unavailable review as degradation so status reflects reality
         if review_outcome == "unavailable":
-            if _review_termination == "codex_timeout":
+            if _review_termination == "backend_timeout":
                 note = "Independent code review incomplete — reviewer timed out on consecutive rounds"
-            elif _review_termination == "codex_timeout_at_cap":
+            elif _review_termination == "backend_timeout_at_cap":
                 note = "Independent code review incomplete — reviewer timed out on the last allowed round"
             else:
                 note = "Independent code review skipped — review tool unavailable"

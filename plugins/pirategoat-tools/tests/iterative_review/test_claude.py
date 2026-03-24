@@ -14,19 +14,14 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from iterative_review.backends.claude import (
-    invoke_claude_review,
-    parse_claude_output,
+    invoke_review,
+    parse_output,
     write_prompt_file,
     get_rubric,
-    check_claude_auth,
-    TIMEOUT_SENTINEL,
-    CLAUDE_TIMEOUT,
-    _EFFORT_MAP,
-    # Common interface aliases (Task 4 normalization)
-    TIMEOUT,
     check_auth,
-    parse_output,
-    invoke_review,
+    TIMEOUT_SENTINEL,
+    TIMEOUT,
+    _EFFORT_MAP,
 )
 
 
@@ -99,11 +94,11 @@ SAMPLE_CC_RESPONSE_EMPTY = json.dumps({
 })
 
 
-class TestParseClaudeOutput:
-    """parse_claude_output receives raw CC stdout (JSON envelope) and extracts findings."""
+class TestParseOutput:
+    """parse_output receives raw CC stdout (JSON envelope) and extracts findings."""
 
     def test_parses_structured_output(self):
-        findings, degraded = parse_claude_output(SAMPLE_CC_RESPONSE, round_num=1)
+        findings, degraded = parse_output(SAMPLE_CC_RESPONSE, round_num=1)
         assert len(findings) == 2
         assert findings[0]["id"] == "r1_f1"
         assert findings[0]["severity"] == "P1"
@@ -116,13 +111,13 @@ class TestParseClaudeOutput:
         assert degraded is False
 
     def test_assigns_round_prefix_to_ids(self):
-        findings, _ = parse_claude_output(SAMPLE_CC_RESPONSE, round_num=3)
+        findings, _ = parse_output(SAMPLE_CC_RESPONSE, round_num=3)
         assert findings[0]["id"] == "r3_f1"
         assert findings[1]["id"] == "r3_f2"
 
     def test_degraded_fallback_no_structured_output(self):
         """When structured_output is missing, falls back to result field as plain text."""
-        findings, degraded = parse_claude_output(SAMPLE_CC_RESPONSE_DEGRADED, round_num=2)
+        findings, degraded = parse_output(SAMPLE_CC_RESPONSE_DEGRADED, round_num=2)
         assert len(findings) == 1
         assert findings[0]["id"] == "r2_raw"
         assert findings[0]["severity"] == "unknown"
@@ -132,7 +127,7 @@ class TestParseClaudeOutput:
     def test_plain_text_fallback(self):
         """Non-JSON raw output triggers degraded mode."""
         raw = "Some review prose that is not JSON at all."
-        findings, degraded = parse_claude_output(raw, round_num=2)
+        findings, degraded = parse_output(raw, round_num=2)
         assert len(findings) == 1
         assert findings[0]["id"] == "r2_raw"
         assert findings[0]["severity"] == "unknown"
@@ -140,7 +135,7 @@ class TestParseClaudeOutput:
         assert degraded is True
 
     def test_empty_findings_returns_empty(self):
-        findings, degraded = parse_claude_output(SAMPLE_CC_RESPONSE_EMPTY, round_num=1)
+        findings, degraded = parse_output(SAMPLE_CC_RESPONSE_EMPTY, round_num=1)
         assert len(findings) == 0
         assert degraded is False
 
@@ -162,7 +157,7 @@ class TestParseClaudeOutput:
             },
             "session_id": "test"
         })
-        findings, _ = parse_claude_output(response, round_num=1)
+        findings, _ = parse_output(response, round_num=1)
         assert findings[0]["location"] == "unknown"
 
     def test_file_path_used_instead_of_absolute(self):
@@ -183,7 +178,7 @@ class TestParseClaudeOutput:
                 "overall_explanation": "ok",
             }
         })
-        findings, _ = parse_claude_output(response, round_num=1)
+        findings, _ = parse_output(response, round_num=1)
         assert findings[0]["location"] == "lib/utils.js:5"
 
     def test_line_range_with_different_start_end(self):
@@ -204,7 +199,7 @@ class TestParseClaudeOutput:
                 "overall_explanation": "ok",
             }
         })
-        findings, _ = parse_claude_output(response, round_num=1)
+        findings, _ = parse_output(response, round_num=1)
         assert findings[0]["location"] == "src/foo.py:10-20"
 
     def test_no_line_range_returns_path_only(self):
@@ -224,7 +219,7 @@ class TestParseClaudeOutput:
                 "overall_explanation": "ok",
             }
         })
-        findings, _ = parse_claude_output(response, round_num=1)
+        findings, _ = parse_output(response, round_num=1)
         assert findings[0]["location"] == "README.md"
 
 
@@ -267,7 +262,7 @@ class TestWritePromptFile:
         assert "round-3-prompt.md" in path
 
 
-class TestInvokeClaudeReview:
+class TestInvokeReview:
     """Tests for subprocess command construction and response handling."""
 
     @patch("iterative_review.backends.claude.subprocess.run")
@@ -283,7 +278,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60)
+        invoke_review(str(prompt), str(schema), timeout=60)
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -307,7 +302,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60)
+        invoke_review(str(prompt), str(schema), timeout=60)
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -327,7 +322,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60)
+        invoke_review(str(prompt), str(schema), timeout=60)
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -347,7 +342,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60)
+        invoke_review(str(prompt), str(schema), timeout=60)
 
         claude_call = mock_run.call_args_list[1]
         kwargs = claude_call[1]
@@ -365,7 +360,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60)
+        invoke_review(str(prompt), str(schema), timeout=60)
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -383,7 +378,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60, effort="high")
+        invoke_review(str(prompt), str(schema), timeout=60, effort="high")
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -402,12 +397,12 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60, effort="xhigh")
+        invoke_review(str(prompt), str(schema), timeout=60, effort="xhigh")
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
         idx = cmd.index("--effort")
-        assert cmd[idx + 1] == "high"  # xhigh → high
+        assert cmd[idx + 1] == "high"  # xhigh -> high
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_effort_medium_stays_medium(self, mock_run, tmp_path):
@@ -421,7 +416,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60, effort="medium")
+        invoke_review(str(prompt), str(schema), timeout=60, effort="medium")
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -430,17 +425,17 @@ class TestInvokeClaudeReview:
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_timeout_returns_sentinel(self, mock_run, tmp_path):
-        """invoke_claude_review returns TIMEOUT_SENTINEL on TimeoutExpired."""
+        """invoke_review returns TIMEOUT_SENTINEL on TimeoutExpired."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         schema = tmp_path / "schema.json"
         schema.write_text('{"type":"object"}')
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout=str(tmp_path)),
-            subprocess.TimeoutExpired(cmd="claude", timeout=CLAUDE_TIMEOUT),
+            subprocess.TimeoutExpired(cmd="claude", timeout=TIMEOUT),
         ]
 
-        result, success = invoke_claude_review(str(prompt), str(schema))
+        result, success = invoke_review(str(prompt), str(schema))
         assert result == TIMEOUT_SENTINEL
         assert success is False
 
@@ -456,13 +451,13 @@ class TestInvokeClaudeReview:
             FileNotFoundError("claude not found"),
         ]
 
-        result, success = invoke_claude_review(str(prompt), str(schema))
+        result, success = invoke_review(str(prompt), str(schema))
         assert result == ""
         assert success is False
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_returns_raw_stdout(self, mock_run, tmp_path):
-        """invoke_claude_review returns the raw stdout string from CC."""
+        """invoke_review returns the raw stdout string from CC."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         schema = tmp_path / "schema.json"
@@ -472,7 +467,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        result, success = invoke_claude_review(str(prompt), str(schema))
+        result, success = invoke_review(str(prompt), str(schema))
         assert result == SAMPLE_CC_RESPONSE
         assert success is True
 
@@ -488,7 +483,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=1, stdout="partial output"),
         ]
 
-        result, success = invoke_claude_review(str(prompt), str(schema))
+        result, success = invoke_review(str(prompt), str(schema))
         assert result == "partial output"
         assert success is False
 
@@ -504,7 +499,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60)
+        invoke_review(str(prompt), str(schema), timeout=60)
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -523,7 +518,7 @@ class TestInvokeClaudeReview:
             MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
         ]
 
-        invoke_claude_review(str(prompt), str(schema), timeout=60)
+        invoke_review(str(prompt), str(schema), timeout=60)
 
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
@@ -534,130 +529,6 @@ class TestInvokeClaudeReview:
         assert "Glob" in tools
         assert "Write" in tools
         assert "git diff" in tools
-
-
-class TestCheckClaudeAuth:
-    """Tests for check_claude_auth — verifies CC is available."""
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_version_succeeds(self, mock_run):
-        """When claude --version succeeds, returns (True, version_string)."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="claude v2.1.81\n", stderr=""
-        )
-        ok, msg = check_claude_auth()
-        assert ok is True
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_not_found_returns_error(self, mock_run):
-        """When claude is not in PATH, returns (False, error message)."""
-        mock_run.side_effect = FileNotFoundError("claude not found")
-        ok, msg = check_claude_auth()
-        assert ok is False
-        assert "not found" in msg
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_version_fails_returns_error(self, mock_run):
-        """When claude --version fails, returns (False, stderr)."""
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="some error"
-        )
-        ok, msg = check_claude_auth()
-        assert ok is False
-        assert "some error" in msg
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_timeout_returns_error(self, mock_run):
-        """When claude --version times out, returns (False, timeout message)."""
-        mock_run.side_effect = subprocess.TimeoutExpired(
-            cmd="claude", timeout=10
-        )
-        ok, msg = check_claude_auth()
-        assert ok is False
-        assert "timed out" in msg
-
-
-class TestEffortMap:
-    """Effort mapping constants."""
-
-    def test_medium_maps_to_medium(self):
-        assert _EFFORT_MAP["medium"] == "medium"
-
-    def test_high_maps_to_high(self):
-        assert _EFFORT_MAP["high"] == "high"
-
-    def test_xhigh_maps_to_high(self):
-        assert _EFFORT_MAP["xhigh"] == "high"
-
-
-class TestTimeoutSentinel:
-    """TIMEOUT_SENTINEL and CLAUDE_TIMEOUT constants."""
-
-    def test_sentinel_is_string(self):
-        assert isinstance(TIMEOUT_SENTINEL, str)
-
-    def test_claude_timeout_is_1800(self):
-        assert CLAUDE_TIMEOUT == 1800
-
-    def test_sentinel_contains_claude(self):
-        """Sentinel is distinct from codex sentinel."""
-        assert "CLAUDE" in TIMEOUT_SENTINEL
-
-
-class TestRubric:
-    """get_rubric reads the shared rubric file."""
-
-    def test_rubric_file_exists(self):
-        rubric = get_rubric()
-        assert len(rubric) > 0, "Rubric file missing or empty"
-
-    def test_rubric_contains_severity_levels(self):
-        rubric = get_rubric()
-        assert "P0" in rubric
-        assert "P1" in rubric
-        assert "P2" in rubric
-        assert "P3" in rubric
-
-
-class TestCommonInterfaceAliases:
-    """Common interface names point to the backend-specific implementations."""
-
-    def test_timeout_equals_claude_timeout(self):
-        assert TIMEOUT == CLAUDE_TIMEOUT
-
-    def test_check_auth_delegates_to_check_claude_auth(self):
-        """check_auth delegates to check_claude_auth (mockable)."""
-        with patch("iterative_review.backends.claude.check_claude_auth",
-                    return_value=(True, "v2.0")) as mock:
-            ok, msg = check_auth()
-            assert ok is True
-            mock.assert_called_once()
-
-    def test_parse_output_delegates_to_parse_claude_output(self):
-        """parse_output delegates to parse_claude_output."""
-        assert callable(parse_output)
-
-    def test_parse_output_returns_same_result(self):
-        """parse_output delegates to parse_claude_output."""
-        findings, degraded = parse_output(SAMPLE_CC_RESPONSE, round_num=1)
-        expected, _ = parse_claude_output(SAMPLE_CC_RESPONSE, round_num=1)
-        assert findings == expected
-
-    @patch("iterative_review.backends.claude.subprocess.run")
-    def test_invoke_review_delegates_to_invoke_claude_review(self, mock_run, tmp_path):
-        """invoke_review wraps invoke_claude_review."""
-        prompt = tmp_path / "prompt.md"
-        prompt.write_text("Review this code.")
-        schema = tmp_path / "schema.json"
-        schema.write_text('{"type":"object"}')
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout=str(tmp_path)),
-            MagicMock(returncode=0, stdout=SAMPLE_CC_RESPONSE),
-        ]
-
-        result, success = invoke_review(str(prompt), str(schema), timeout=60)
-        assert result == SAMPLE_CC_RESPONSE
-        assert success is True
 
     @patch("iterative_review.backends.claude.subprocess.run")
     def test_invoke_review_ignores_extra_kwargs(self, mock_run, tmp_path):
@@ -677,3 +548,86 @@ class TestCommonInterfaceAliases:
             output_file="/tmp/ignored.json"
         )
         assert success is True
+
+
+class TestCheckAuth:
+    """Tests for check_auth — verifies CC is available."""
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_version_succeeds(self, mock_run):
+        """When claude --version succeeds, returns (True, version_string)."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="claude v2.1.81\n", stderr=""
+        )
+        ok, msg = check_auth()
+        assert ok is True
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_not_found_returns_error(self, mock_run):
+        """When claude is not in PATH, returns (False, error message)."""
+        mock_run.side_effect = FileNotFoundError("claude not found")
+        ok, msg = check_auth()
+        assert ok is False
+        assert "not found" in msg
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_version_fails_returns_error(self, mock_run):
+        """When claude --version fails, returns (False, stderr)."""
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="some error"
+        )
+        ok, msg = check_auth()
+        assert ok is False
+        assert "some error" in msg
+
+    @patch("iterative_review.backends.claude.subprocess.run")
+    def test_timeout_returns_error(self, mock_run):
+        """When claude --version times out, returns (False, timeout message)."""
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd="claude", timeout=10
+        )
+        ok, msg = check_auth()
+        assert ok is False
+        assert "timed out" in msg
+
+
+class TestEffortMap:
+    """Effort mapping constants."""
+
+    def test_medium_maps_to_medium(self):
+        assert _EFFORT_MAP["medium"] == "medium"
+
+    def test_high_maps_to_high(self):
+        assert _EFFORT_MAP["high"] == "high"
+
+    def test_xhigh_maps_to_high(self):
+        assert _EFFORT_MAP["xhigh"] == "high"
+
+
+class TestTimeoutSentinel:
+    """TIMEOUT_SENTINEL and TIMEOUT constants."""
+
+    def test_sentinel_is_string(self):
+        assert isinstance(TIMEOUT_SENTINEL, str)
+
+    def test_timeout_is_1800(self):
+        assert TIMEOUT == 1800
+
+    def test_sentinel_contains_claude(self):
+        """Sentinel is distinct from codex sentinel."""
+        assert "CLAUDE" in TIMEOUT_SENTINEL
+
+
+class TestRubric:
+    """get_rubric reads the shared rubric file."""
+
+    def test_rubric_file_exists(self):
+        rubric = get_rubric()
+        assert len(rubric) > 0, "Rubric file missing or empty"
+
+    def test_rubric_contains_severity_levels(self):
+        rubric = get_rubric()
+        assert "P0" in rubric
+        assert "P1" in rubric
+        assert "P2" in rubric
+        assert "P3" in rubric

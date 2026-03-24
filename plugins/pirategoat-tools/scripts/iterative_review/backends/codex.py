@@ -7,11 +7,8 @@ This is the ONLY file that knows about `codex exec review`, `--base`,
 import json
 import os
 import subprocess
-import re
-from datetime import datetime, timezone
 
-CODEX_TIMEOUT = 1800  # 30 minutes — used by invoke_codex_review and timeout briefings
-TIMEOUT = CODEX_TIMEOUT  # common interface name (Task 4 normalization)
+TIMEOUT = 1800  # 30 minutes — used by invoke_review and timeout briefings
 TIMEOUT_SENTINEL = "__CODEX_TIMEOUT__"
 
 
@@ -56,7 +53,7 @@ def _format_location(code_location):
     return path
 
 
-def parse_codex_output(raw_output, round_num):
+def parse_output(raw_output, round_num):
     """Parse Codex review output into normalized findings.
 
     Returns:
@@ -96,7 +93,7 @@ def parse_codex_output(raw_output, round_num):
 # Prompt Composition & CLI Invocation
 # ---------------------------------------------------------------------------
 
-def check_codex_auth():
+def check_auth():
     """Quick auth check. Returns (authenticated, error_message)."""
     try:
         result = subprocess.run(
@@ -189,25 +186,36 @@ def get_rubric():
         return ""
 
 
-def invoke_codex_review(prompt_file, schema_file, output_file, timeout=CODEX_TIMEOUT,
-                        effort=None):
+def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
+                  **kwargs):
     """Invoke `codex exec` with a custom review prompt and structured output.
 
     Uses `codex exec` (NOT `codex exec review`) with --output-schema for
     guaranteed structured JSON. The prompt file is piped via stdin.
 
+    Accepts optional output_file= kwarg. When omitted, a temp file is
+    created automatically. This keeps the common signature compatible
+    with the Claude backend (which has no output_file parameter) while
+    preserving the caller's ability to control the output path.
+
     Args:
         prompt_file: Path to the review prompt markdown file
         schema_file: Path to the JSON Schema for structured output
-        output_file: Path for -o flag (captures structured JSON)
         timeout: Seconds before killing (default 1800 = 30 min)
         effort: Optional reasoning effort level (e.g. 'high', 'xhigh').
                 When set, injects -c model_reasoning_effort="<effort>"
                 into the codex exec command. When None, behavior is unchanged.
+        **kwargs: output_file= path for -o flag (auto-created if omitted)
 
     Returns:
         (output_string, success_bool)
     """
+    output_file = kwargs.get("output_file")
+    if output_file is None:
+        import tempfile
+        fd, output_file = tempfile.mkstemp(suffix="-codex-output.json")
+        os.close(fd)
+
     # Resolve all paths to absolute before changing cwd to repo root
     prompt_file = os.path.abspath(prompt_file)
     schema_file = os.path.abspath(schema_file)
@@ -258,36 +266,3 @@ def invoke_codex_review(prompt_file, schema_file, output_file, timeout=CODEX_TIM
         return TIMEOUT_SENTINEL, False
     except FileNotFoundError:
         return "", False
-
-
-# ---------------------------------------------------------------------------
-# Common interface aliases (Task 4 normalization)
-# ---------------------------------------------------------------------------
-# Both backends export the same names so the orchestrator can call
-# backend.check_auth() instead of going through an adapter dict.
-
-def check_auth():
-    """Common interface — delegates to check_codex_auth."""
-    return check_codex_auth()
-
-
-def parse_output(raw_output, round_num):
-    """Common interface — delegates to parse_codex_output."""
-    return parse_codex_output(raw_output, round_num)
-
-
-def invoke_review(prompt_file, schema_file, timeout=CODEX_TIMEOUT, effort=None,
-                  **kwargs):
-    """Common interface wrapper around invoke_codex_review.
-
-    Accepts optional output_file= kwarg. When omitted, a temp file is
-    created automatically. This keeps the common signature compatible
-    with the Claude backend (which has no output_file parameter) while
-    preserving the caller's ability to control the output path.
-    """
-    output_file = kwargs.get("output_file")
-    if output_file is None:
-        import tempfile
-        fd, output_file = tempfile.mkstemp(suffix="-codex-output.json")
-        os.close(fd)
-    return invoke_codex_review(prompt_file, schema_file, output_file, timeout, effort)

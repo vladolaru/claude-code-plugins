@@ -42,7 +42,7 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     lines.append("")
     lines.append("### Phase 1: Evaluate Findings")
     lines.append("")
-    lines.append("Codex is an external reviewer. It may lack context, misread intent, or")
+    lines.append("The independent reviewer is an external process. It may lack context, misread intent, or")
     lines.append("flag code that's correct for reasons it can't see. Do not accept or reject")
     lines.append("findings on face value.")
     lines.append("")
@@ -119,7 +119,7 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
     lines.append("Commit — stage and commit fixes with semantic messages before advancing:")
     lines.append("  - Each fix should be its own logical commit (not a blanket 'fix review findings')")
     lines.append("  - The next review round reviews committed changes against the merge base")
-    lines.append("  - Uncommitted fixes are invisible to Codex")
+    lines.append("  - Uncommitted fixes are invisible to the independent reviewer")
     lines.append("")
     lines.append(f"Record — write round-{round_num}-outcomes.json with one entry per finding:")
     lines.append("")
@@ -155,7 +155,7 @@ def format_evaluation_briefing(findings, round_num, merge_base, diff_lines):
 
 def format_timeout_briefing(round_num, timeout_seconds, autonomous=False,
                             at_round_cap=False):
-    """Format briefing when Codex times out.
+    """Format briefing when the review backend times out.
 
     Interactive: asks the LLM to surface the timeout to the user with options.
     At the round cap, skip is not offered (would exceed the configured budget).
@@ -194,14 +194,14 @@ def format_timeout_briefing(round_num, timeout_seconds, autonomous=False,
 
 
 _TERMINATION_REASONS = {
-    "zero_findings": "Codex found no issues — the code is clean.",
+    "zero_findings": "The independent reviewer found no issues — the code is clean.",
     "all_rejected": "No code changes needed — findings were rejected or deferred.",
     "nitpicks_only": "Only P3 suggestions remain — addressed as appropriate.",
     "max_rounds": "Maximum review rounds reached.",
     "hard_limit": "Hard round limit reached.",
-    "codex_unavailable": "Codex CLI became unavailable.",
-    "codex_timeout": "The independent reviewer timed out on consecutive rounds.",
-    "codex_timeout_at_cap": "The independent reviewer timed out on the last allowed round.",
+    "backend_unavailable": "Review backend became unavailable.",
+    "backend_timeout": "The independent reviewer timed out on consecutive rounds.",
+    "backend_timeout_at_cap": "The independent reviewer timed out on the last allowed round.",
 }
 
 
@@ -223,14 +223,14 @@ def format_completion_briefing(termination, rounds_completed, total_fixed,
 
 
 def format_degraded_briefing(round_num, raw_id):
-    """Format briefing when Codex returned unstructured output."""
+    """Format briefing when the review backend returned unstructured output."""
     lines = []
     lines.append(f"{'═' * 55}")
     lines.append(f"ITERATIVE REVIEW — Review Round {round_num}: Evaluate (Degraded)")
     lines.append(f"{'═' * 55}")
     lines.append("")
     lines.append(
-        "Codex returned unstructured output instead of structured findings."
+        "The independent reviewer returned unstructured output instead of structured findings."
     )
     lines.append("")
     lines.append("Read the raw output below and evaluate it as a single finding:")

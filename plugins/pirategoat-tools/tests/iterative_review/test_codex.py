@@ -14,17 +14,13 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from iterative_review.backends.codex import (
-    invoke_codex_review,
-    parse_codex_output,
+    invoke_review,
+    parse_output,
+    check_auth,
     write_prompt_file,
     get_rubric,
     TIMEOUT_SENTINEL,
-    CODEX_TIMEOUT,
-    # Common interface aliases (Task 4 normalization)
     TIMEOUT,
-    check_auth,
-    parse_output,
-    invoke_review,
 )
 
 
@@ -57,9 +53,9 @@ SAMPLE_JSON_OUTPUT = json.dumps({
 })
 
 
-class TestParseCodexOutput:
+class TestParseOutput:
     def test_parses_structured_json(self):
-        findings, degraded = parse_codex_output(SAMPLE_JSON_OUTPUT, round_num=1)
+        findings, degraded = parse_output(SAMPLE_JSON_OUTPUT, round_num=1)
         assert len(findings) == 2
         assert findings[0]["id"] == "r1_f1"
         assert findings[0]["severity"] == "P1"
@@ -70,13 +66,13 @@ class TestParseCodexOutput:
         assert degraded is False
 
     def test_assigns_round_prefix_to_ids(self):
-        findings, _ = parse_codex_output(SAMPLE_JSON_OUTPUT, round_num=3)
+        findings, _ = parse_output(SAMPLE_JSON_OUTPUT, round_num=3)
         assert findings[0]["id"] == "r3_f1"
         assert findings[1]["id"] == "r3_f2"
 
     def test_plain_text_fallback(self):
         raw = "Some review prose that is not JSON."
-        findings, degraded = parse_codex_output(raw, round_num=2)
+        findings, degraded = parse_output(raw, round_num=2)
         assert len(findings) == 1
         assert findings[0]["id"] == "r2_raw"
         assert findings[0]["severity"] == "unknown"
@@ -85,7 +81,7 @@ class TestParseCodexOutput:
 
     def test_empty_findings_returns_empty(self):
         output = json.dumps({"findings": [], "overall_correctness": "clean"})
-        findings, degraded = parse_codex_output(output, round_num=1)
+        findings, degraded = parse_output(output, round_num=1)
         assert len(findings) == 0
         assert degraded is False
 
@@ -96,7 +92,7 @@ class TestParseCodexOutput:
             "confidence_score": 0.5,
             "priority": 2,
         }]})
-        findings, _ = parse_codex_output(output, round_num=1)
+        findings, _ = parse_output(output, round_num=1)
         assert findings[0]["location"] == "unknown"
 
 
@@ -154,8 +150,8 @@ class TestRubric:
         assert "no findings" in rubric.lower()
 
 
-class TestInvokeCodexReviewEffort:
-    """Tests for the effort parameter in invoke_codex_review()."""
+class TestInvokeReviewEffort:
+    """Tests for the effort parameter in invoke_review()."""
 
     @patch("iterative_review.backends.codex.subprocess.run")
     def test_no_effort_omits_config_flag(self, mock_run, tmp_path):
@@ -164,7 +160,8 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(str(prompt), "schema.json", str(tmp_path / "out.json"))
+        invoke_review(str(prompt), "schema.json",
+                      output_file=str(tmp_path / "out.json"))
 
         # The second call is the actual codex exec (first is git rev-parse)
         codex_call = mock_run.call_args_list[1]
@@ -178,8 +175,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="high"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -194,8 +192,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="xhigh"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="xhigh"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -210,8 +209,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="high"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -227,8 +227,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="high"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="high"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -242,8 +243,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="xhigh"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="xhigh"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -257,8 +259,9 @@ class TestInvokeCodexReviewEffort:
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
 
-        invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json"), effort="medium"
+        invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json"), effort="medium"
         )
 
         codex_call = mock_run.call_args_list[1]
@@ -267,58 +270,38 @@ class TestInvokeCodexReviewEffort:
 
 
 class TestTimeoutSentinel:
-    """TIMEOUT_SENTINEL and CODEX_TIMEOUT constants."""
+    """TIMEOUT_SENTINEL and TIMEOUT constants."""
 
     def test_sentinel_is_string(self):
         assert isinstance(TIMEOUT_SENTINEL, str)
 
-    def test_codex_timeout_is_1800(self):
-        assert CODEX_TIMEOUT == 1800
+    def test_timeout_is_1800(self):
+        assert TIMEOUT == 1800
 
     @patch("iterative_review.backends.codex.subprocess.run")
     def test_timeout_returns_sentinel(self, mock_run, tmp_path):
-        """invoke_codex_review returns TIMEOUT_SENTINEL on TimeoutExpired."""
+        """invoke_review returns TIMEOUT_SENTINEL on TimeoutExpired."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         # First call is git rev-parse (succeeds), second raises TimeoutExpired
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout=str(tmp_path)),
-            subprocess.TimeoutExpired(cmd="codex", timeout=CODEX_TIMEOUT),
+            subprocess.TimeoutExpired(cmd="codex", timeout=TIMEOUT),
         ]
-        result, success = invoke_codex_review(
-            str(prompt), "schema.json", str(tmp_path / "out.json")
+        result, success = invoke_review(
+            str(prompt), "schema.json",
+            output_file=str(tmp_path / "out.json")
         )
         assert result == TIMEOUT_SENTINEL
         assert success is False
 
 
-class TestCommonInterfaceAliases:
-    """Common interface names point to the backend-specific implementations."""
-
-    def test_timeout_equals_codex_timeout(self):
-        assert TIMEOUT == CODEX_TIMEOUT
-
-    def test_check_auth_delegates_to_check_codex_auth(self):
-        """check_auth delegates to check_codex_auth (mockable)."""
-        with patch("iterative_review.backends.codex.check_codex_auth",
-                    return_value=(True, "ok")) as mock:
-            ok, msg = check_auth()
-            assert ok is True
-            mock.assert_called_once()
-
-    def test_parse_output_delegates_to_parse_codex_output(self):
-        """parse_output delegates to parse_codex_output."""
-        assert callable(parse_output)
-
-    def test_parse_output_returns_same_result(self):
-        """parse_output delegates to parse_codex_output."""
-        findings, degraded = parse_output(SAMPLE_JSON_OUTPUT, round_num=1)
-        expected, _ = parse_codex_output(SAMPLE_JSON_OUTPUT, round_num=1)
-        assert findings == expected
+class TestInvokeReviewOutputFile:
+    """invoke_review handles output_file kwarg."""
 
     @patch("iterative_review.backends.codex.subprocess.run")
-    def test_invoke_review_delegates_to_invoke_codex_review(self, mock_run, tmp_path):
-        """invoke_review wraps invoke_codex_review with auto output_file."""
+    def test_invoke_review_auto_creates_output_file(self, mock_run, tmp_path):
+        """invoke_review creates a temp output file when none is specified."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")
@@ -330,7 +313,7 @@ class TestCommonInterfaceAliases:
 
     @patch("iterative_review.backends.codex.subprocess.run")
     def test_invoke_review_accepts_output_file_kwarg(self, mock_run, tmp_path):
-        """invoke_review passes output_file through to invoke_codex_review."""
+        """invoke_review passes output_file through to the codex exec command."""
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Review this code.")
         mock_run.return_value = MagicMock(returncode=0, stdout="")

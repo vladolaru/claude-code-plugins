@@ -806,7 +806,7 @@ from iterative_review.__main__ import _preflight_backend
 class TestPreflightBackend:
     """_preflight_backend selects best backend and verifies availability."""
 
-    @patch("iterative_review.backends.codex.check_codex_auth", return_value=(True, ""))
+    @patch("iterative_review.backends.codex.check_auth", return_value=(True, ""))
     @patch("shutil.which", return_value="/usr/local/bin/codex")
     def test_returns_module_when_codex_available_and_authed(self, mock_which, mock_auth):
         backend, name, err = _preflight_backend()
@@ -825,7 +825,7 @@ class TestPreflightBackend:
         assert "UNAVAILABLE" in err
         assert "not installed" in err or "not on PATH" in err
 
-    @patch("iterative_review.backends.codex.check_codex_auth", return_value=(False, "not logged in"))
+    @patch("iterative_review.backends.codex.check_auth", return_value=(False, "not logged in"))
     @patch("shutil.which", return_value="/usr/local/bin/codex")
     def test_returns_error_when_codex_not_authenticated(self, mock_which, mock_auth):
         """Codex on PATH but not authenticated, Claude not on PATH -> error."""
@@ -835,15 +835,15 @@ class TestPreflightBackend:
         # With mock returning "/usr/local/bin/codex" for all calls,
         # _select_backend tries codex auth (fails), then claude auth.
         # We need claude auth to also fail for this test.
-        with patch("iterative_review.backends.claude.check_claude_auth",
+        with patch("iterative_review.backends.claude.check_auth",
                     return_value=(False, "not authenticated")):
             backend, name, err = _preflight_backend()
             assert backend is None
             assert err is not None
             assert "UNAVAILABLE" in err
 
-    @patch("iterative_review.backends.claude.check_claude_auth", return_value=(True, "v2.0"))
-    @patch("iterative_review.backends.codex.check_codex_auth", return_value=(False, "not logged in"))
+    @patch("iterative_review.backends.claude.check_auth", return_value=(True, "v2.0"))
+    @patch("iterative_review.backends.codex.check_auth", return_value=(False, "not logged in"))
     @patch("shutil.which", return_value="/usr/local/bin/codex")
     def test_falls_back_to_claude_when_codex_unauthed(self, mock_which, mock_codex_auth, mock_claude_auth):
         """Codex not authenticated -> falls back to Claude Code."""
@@ -927,7 +927,7 @@ class TestPreflightIntegration:
         result_path = d / "review-loop-result.json"
         assert result_path.exists()
         data = json.loads(result_path.read_text())
-        assert data["termination"] == "codex_unavailable"
+        assert data["termination"] == "backend_unavailable"
         assert data["rounds_completed"] == 0
 
 
@@ -972,11 +972,11 @@ class TestTimeoutStateManagement:
         state["consecutive_timeouts"] += 1  # becomes 2
         assert state["consecutive_timeouts"] >= 2
         state["terminated"] = True
-        state["termination"] = "codex_timeout"
+        state["termination"] = "backend_timeout"
         write_loop_state(d, state)
         loaded = read_loop_state(d)
         assert loaded["terminated"] is True
-        assert loaded["termination"] == "codex_timeout"
+        assert loaded["termination"] == "backend_timeout"
 
     def test_interactive_does_not_auto_terminate(self, tmp_path):
         """Interactive mode: consecutive timeouts don't auto-terminate."""

@@ -8,8 +8,7 @@ import json
 import os
 import subprocess
 
-CLAUDE_TIMEOUT = 1800  # 30 minutes — used by invoke_claude_review and timeout briefings
-TIMEOUT = CLAUDE_TIMEOUT  # common interface name (Task 4 normalization)
+TIMEOUT = 1800  # 30 minutes — used by invoke_review and timeout briefings
 TIMEOUT_SENTINEL = "__CLAUDE_TIMEOUT__"
 
 # Sonnet caps at "high" — no "xhigh" or "max" support
@@ -39,7 +38,7 @@ def _format_location(code_location):
     return path
 
 
-def parse_claude_output(raw_output, round_num):
+def parse_output(raw_output, round_num):
     """Parse Claude Code review output into normalized findings.
 
     CC returns a JSON envelope on stdout:
@@ -106,7 +105,7 @@ def parse_claude_output(raw_output, round_num):
 # Prompt Composition & CLI Invocation
 # ---------------------------------------------------------------------------
 
-def check_claude_auth():
+def check_auth():
     """Quick availability check. Returns (available, message)."""
     try:
         result = subprocess.run(
@@ -199,19 +198,24 @@ def get_rubric():
         return ""
 
 
-def invoke_claude_review(prompt_file, schema_file, timeout=CLAUDE_TIMEOUT,
-                         effort=None):
+def invoke_review(prompt_file, schema_file, timeout=TIMEOUT, effort=None,
+                  **kwargs):
     """Invoke `claude -p` with a review prompt and structured output schema.
 
     Uses flag-based isolation (hooks, MCP, skills disabled) instead of
     --bare since bare mode doesn't support OAuth/subscription auth.
+
+    Extra **kwargs are accepted for interface compatibility with the Codex
+    backend (which takes output_file=) but ignored here — CC returns
+    structured output in the JSON response envelope.
 
     Args:
         prompt_file: Path to the review prompt markdown file
         schema_file: Path to the JSON Schema for structured output
         timeout: Seconds before killing (default 1800 = 30 min)
         effort: Optional reasoning effort level (e.g. 'high', 'xhigh').
-                Mapped via _EFFORT_MAP (xhigh → high for Sonnet capping).
+                Mapped via _EFFORT_MAP (xhigh -> high for Sonnet capping).
+        **kwargs: Ignored (interface compat with Codex backend's output_file=)
 
     Returns:
         (raw_stdout_string, success_bool)
@@ -265,30 +269,3 @@ def invoke_claude_review(prompt_file, schema_file, timeout=CLAUDE_TIMEOUT,
         return TIMEOUT_SENTINEL, False
     except FileNotFoundError:
         return "", False
-
-
-# ---------------------------------------------------------------------------
-# Common interface aliases (Task 4 normalization)
-# ---------------------------------------------------------------------------
-# Both backends export the same names so the orchestrator can call
-# backend.check_auth() instead of going through an adapter dict.
-
-def check_auth():
-    """Common interface — delegates to check_claude_auth."""
-    return check_claude_auth()
-
-
-def parse_output(raw_output, round_num):
-    """Common interface — delegates to parse_claude_output."""
-    return parse_claude_output(raw_output, round_num)
-
-
-def invoke_review(prompt_file, schema_file, timeout=CLAUDE_TIMEOUT, effort=None,
-                  **kwargs):
-    """Common interface wrapper around invoke_claude_review.
-
-    Extra **kwargs are accepted for interface compatibility with the Codex
-    backend (which takes output_file=) but ignored here — CC returns
-    structured output in the JSON response envelope.
-    """
-    return invoke_claude_review(prompt_file, schema_file, timeout, effort)

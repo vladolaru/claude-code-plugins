@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Claude Code CLI as fallback review backend.** When Codex is unavailable, iterative review now falls back to Claude Code CLI. New `backends/claude.py` module uses `--json-schema` for structured output, flag-based isolation (`--allowedTools`, `--disallowedTools`), and OAuth-compatible auth. New `claude-review-schema.json` provides a CC-adapted JSON Schema (no `additionalProperties` requirement). Backend selection runs at preflight: Codex (primary) → Claude Code (fallback).
 
 ### Changed
-- **Normalized backend interface.** Extracted `check_auth`, `parse_output`, `invoke_review` as the canonical backend contract. Old codex-specific function names kept as aliases for backward compatibility.
+- **Normalized backend interface.** `check_auth`, `parse_output`, `invoke_review`, `TIMEOUT` are now the primary function/constant names in both backends. Old codex/claude-prefixed names (`check_codex_auth`, `invoke_codex_review`, `parse_codex_output`, `CODEX_TIMEOUT`, etc.) removed entirely — no backward-compat aliases. `invoke_review` in codex.py now contains the merged logic (output_file kwarg handling built in).
+- **Backend-agnostic termination reasons.** Renamed `codex_unavailable` to `backend_unavailable`, `codex_timeout` to `backend_timeout`, `codex_timeout_at_cap` to `backend_timeout_at_cap`. Updated briefing display messages and linear pipeline outcome mapping to match.
+- **Backend-agnostic briefing text.** Evaluation and degraded briefings now say "independent reviewer" instead of "Codex".
 
 ## [1.90.0] - 2026-03-24
 
