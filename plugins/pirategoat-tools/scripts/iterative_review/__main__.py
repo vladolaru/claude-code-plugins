@@ -602,19 +602,36 @@ def action_advance(args):
 
     findings_by_id = {f["id"]: f for f in findings}
 
-    # Extend max rounds if P0/P1 findings were fixed at the limit
-    # (deferred/rejected P0/P1 won't be addressed next round — no point extending)
+    # Tiered round extension at the limit based on severity of fixed findings.
+    # P0/P1 fixed → +2 rounds (something seriously wrong, needs deeper review)
+    # P2 fixed → +1 round (real issues in new code deserve a follow-up pass)
+    # P3 only → no extension
+    # Only fixed findings trigger extension — rejected/deferred won't be addressed.
     max_rounds = state.get("max_rounds", 3)
-    has_critical_fixed = any(
-        outcome_severity(o, findings_by_id.get(o["id"])) in ("P0", "P1")
-        and o["action"] == "fixed"
-        for o in outcomes
-    ) if outcomes else False
-    if has_critical_fixed and round_num >= max_rounds and max_rounds < MAX_ROUNDS_HARD_LIMIT:
-        max_rounds += 1
-        state["max_rounds"] = max_rounds
-        telemetry.pipeline_event("max_rounds_extended", round=round_num,
-                                 new_max=max_rounds, reason="p0_p1_at_limit")
+
+    if round_num >= max_rounds and max_rounds < MAX_ROUNDS_HARD_LIMIT:
+        fixed_severities = [
+            outcome_severity(o, findings_by_id.get(o["id"]))
+            for o in outcomes if o["action"] == "fixed"
+        ]
+        has_critical = any(s in ("P0", "P1") for s in fixed_severities)
+        has_important = any(s == "P2" for s in fixed_severities)
+
+        if has_critical:
+            extension = 2
+            reason = "p0_p1_at_limit"
+        elif has_important:
+            extension = 1
+            reason = "p2_at_limit"
+        else:
+            extension = 0
+            reason = None
+
+        if extension > 0:
+            max_rounds = min(max_rounds + extension, MAX_ROUNDS_HARD_LIMIT)
+            state["max_rounds"] = max_rounds
+            telemetry.pipeline_event("max_rounds_extended", round=round_num,
+                                     new_max=max_rounds, reason=reason)
 
     # Check convergence
     all_p3 = all(

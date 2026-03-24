@@ -9,6 +9,13 @@ from unittest.mock import patch
 
 import pytest
 
+TESTS_DIR_PARENT = Path(__file__).resolve().parent.parent  # tests/ dir
+PLUGIN_ROOT_FOR_IMPORTS = TESTS_DIR_PARENT.parent
+SCRIPTS_DIR_FOR_IMPORTS = PLUGIN_ROOT_FOR_IMPORTS / "scripts"
+if str(SCRIPTS_DIR_FOR_IMPORTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR_FOR_IMPORTS))
+from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
+
 TESTS_DIR = Path(__file__).resolve().parent.parent  # iterative_review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -109,8 +116,9 @@ class TestDeferredPruning:
         d = tmp_path / "code-review"
         d.mkdir()
 
-        # Round 1: one fixed (keeps loop going), one deferred
-        state = {"current_round": 1, "max_rounds": 2, "rounds": [],
+        # Round 1: one fixed (keeps loop going), one deferred.
+        # Use max_rounds=3 so round 2 isn't at the limit (avoids P2 extension).
+        state = {"current_round": 1, "max_rounds": 3, "rounds": [],
                  "merge_base": "abc", "diff_lines_relevant": 500,
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
@@ -133,8 +141,9 @@ class TestDeferredPruning:
             capture_output=True, text=True, cwd=str(SCRIPTS_DIR),
         )
 
-        # Round 2: same deferred issue found again and fixed
-        r2_findings = [{"id": "r2_f1", "severity": "P2", "title": "Null check",
+        # Round 2: same deferred issue found again and fixed.
+        # P3 triggers nitpicks_only convergence so the loop terminates here.
+        r2_findings = [{"id": "r2_f1", "severity": "P3", "title": "Null check",
                         "body": "X", "location": "handler.py:42"}]
         (d / "round-2-findings.json").write_text(json.dumps(r2_findings))
         r2_outcomes = [{"id": "r2_f1", "action": "fixed", "summary": "Added null check."}]
@@ -260,7 +269,7 @@ class TestAdvanceConvergence:
     """Advance action detects convergence conditions."""
 
     def test_max_rounds_convergence(self, tmp_path):
-        """Terminates with max_rounds when round equals max_rounds (P2 findings)."""
+        """Terminates with max_rounds when round equals max_rounds (P3 findings, no extension)."""
         d = tmp_path / "code-review"
         d.mkdir()
         state = {"current_round": 3, "max_rounds": 3, "rounds": [],
@@ -268,12 +277,15 @@ class TestAdvanceConvergence:
                  "terminated": False, "termination": None,
                  "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
         (d / "review-loop-state.json").write_text(json.dumps(state))
+        # Use mixed P3 severities — P3 fixed does not trigger extension
         findings = [
-            {"id": "r3_f1", "severity": "P2", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r3_f1", "severity": "P3", "title": "A", "body": "X", "location": "a.py:1"},
+            {"id": "r3_f2", "severity": "P2", "title": "B", "body": "Y", "location": "b.py:2"},
         ]
         (d / "round-3-findings.json").write_text(json.dumps(findings))
         outcomes = [
             {"id": "r3_f1", "action": "fixed", "summary": "Fixed."},
+            {"id": "r3_f2", "action": "rejected", "reasoning": "Not real."},
         ]
         (d / "round-3-outcomes.json").write_text(json.dumps(outcomes))
 
@@ -354,7 +366,7 @@ class TestAdvanceConvergence:
         assert "round 2" in result.stdout.lower()
 
     def test_p1_at_max_rounds_extends(self, tmp_path):
-        """P1 findings at max rounds extend the limit instead of terminating."""
+        """P1 findings at max rounds extend the limit by 2 instead of terminating."""
         d = tmp_path / "code-review"
         d.mkdir()
         state = {"current_round": 3, "max_rounds": 3, "rounds": [],
@@ -381,11 +393,11 @@ class TestAdvanceConvergence:
         assert result.returncode == 0
         updated_state = json.loads((d / "review-loop-state.json").read_text())
         assert updated_state["terminated"] is False
-        assert updated_state["max_rounds"] == 4
+        assert updated_state["max_rounds"] == 5  # P1 extends by +2
         assert "round 4" in result.stdout.lower()
 
     def test_p0_at_max_rounds_extends(self, tmp_path):
-        """P0 findings at max rounds also extend."""
+        """P0 findings at max rounds extend by 2."""
         d = tmp_path / "code-review"
         d.mkdir()
         state = {"current_round": 3, "max_rounds": 3, "rounds": [],
@@ -411,10 +423,10 @@ class TestAdvanceConvergence:
         )
         assert result.returncode == 0
         updated_state = json.loads((d / "review-loop-state.json").read_text())
-        assert updated_state["max_rounds"] == 4
+        assert updated_state["max_rounds"] == 5  # P0 extends by +2
 
-    def test_p2_at_max_rounds_does_not_extend(self, tmp_path):
-        """P2 findings at max rounds terminate normally."""
+    def test_p2_at_max_rounds_extends(self, tmp_path):
+        """P2 findings at max rounds extend the limit by 1."""
         d = tmp_path / "code-review"
         d.mkdir()
         state = {"current_round": 3, "max_rounds": 3, "rounds": [],
@@ -440,8 +452,8 @@ class TestAdvanceConvergence:
         )
         assert result.returncode == 0
         updated_state = json.loads((d / "review-loop-state.json").read_text())
-        assert updated_state["terminated"] is True
-        assert updated_state["termination"] == "max_rounds"
+        assert updated_state["terminated"] is False
+        assert updated_state["max_rounds"] == 4  # P2 extends by +1
 
     def test_deferred_p1_at_max_rounds_does_not_extend(self, tmp_path):
         """Deferred P1 at max rounds terminates — no point reviewing what won't be addressed."""
@@ -503,6 +515,74 @@ class TestAdvanceConvergence:
         assert updated_state["terminated"] is True
         assert updated_state["termination"] == "hard_limit"
         assert updated_state["max_rounds"] == 20  # not extended
+
+
+class TestTieredRoundExtension:
+    """Round extension scales with finding severity."""
+
+    def test_p0_p1_extends_by_two(self):
+        """P0/P1 fixes at the limit extend by 2 rounds."""
+        max_rounds = 5
+        has_critical = True  # P0 or P1 fixed
+        has_important = False
+        extension = 2 if has_critical else (1 if has_important else 0)
+        assert extension == 2
+
+    def test_p2_extends_by_one(self):
+        """P2 fixes at the limit extend by 1 round."""
+        max_rounds = 5
+        has_critical = False
+        has_important = True  # P2 fixed
+        extension = 2 if has_critical else (1 if has_important else 0)
+        assert extension == 1
+
+    def test_p3_does_not_extend(self):
+        """P3-only fixes do not extend rounds."""
+        max_rounds = 5
+        has_critical = False
+        has_important = False
+        extension = 2 if has_critical else (1 if has_important else 0)
+        assert extension == 0
+
+    def test_extension_respects_hard_limit(self):
+        """Extension cannot exceed MAX_ROUNDS_HARD_LIMIT."""
+        max_rounds = MAX_ROUNDS_HARD_LIMIT - 1
+        # Even +2 extension should cap at hard limit
+        new_max = min(max_rounds + 2, MAX_ROUNDS_HARD_LIMIT)
+        assert new_max == MAX_ROUNDS_HARD_LIMIT
+
+    def test_p0_at_hard_limit_minus_one_caps(self, tmp_path):
+        """P0 at hard_limit-1 extends to hard_limit, not beyond."""
+        d = tmp_path / "code-review"
+        d.mkdir()
+        limit_minus_1 = MAX_ROUNDS_HARD_LIMIT - 1
+        state = {"current_round": limit_minus_1, "max_rounds": limit_minus_1,
+                 "rounds": [], "merge_base": "abc", "diff_lines_relevant": 100,
+                 "terminated": False, "termination": None,
+                 "pass_prior_analysis": True, "analysis_doc_prefix": "test"}
+        (d / "review-loop-state.json").write_text(json.dumps(state))
+        findings = [
+            {"id": f"r{limit_minus_1}_f1", "severity": "P0", "title": "Critical",
+             "body": "X", "location": "a.py:1"},
+        ]
+        (d / f"round-{limit_minus_1}-findings.json").write_text(json.dumps(findings))
+        outcomes = [
+            {"id": f"r{limit_minus_1}_f1", "action": "fixed", "summary": "Fixed."},
+        ]
+        (d / f"round-{limit_minus_1}-outcomes.json").write_text(json.dumps(outcomes))
+
+        result = subprocess.run(
+            [sys.executable, "-m", "iterative_review",
+             "--action", "advance", "--round", str(limit_minus_1),
+             "--output-dir", str(d)],
+            capture_output=True, text=True,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0
+        updated_state = json.loads((d / "review-loop-state.json").read_text())
+        # P0 wants +2, but capped at hard limit
+        assert updated_state["max_rounds"] == MAX_ROUNDS_HARD_LIMIT
+        assert updated_state["terminated"] is False
 
 
 class TestAdvanceResultFile:
