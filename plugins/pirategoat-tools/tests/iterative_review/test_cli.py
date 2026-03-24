@@ -796,42 +796,66 @@ class TestZeroFindingsArtifact:
 
 
 # ---------------------------------------------------------------------------
-# Pre-flight check — Codex CLI availability and auth
+# Pre-flight check — backend selection, availability and auth
 # ---------------------------------------------------------------------------
 
 sys.path.insert(0, str(SCRIPTS_DIR))
-from iterative_review.__main__ import _preflight_codex_cli
+from iterative_review.__main__ import _preflight_backend
 
 
-class TestPreflightCodexCli:
-    """_preflight_codex_cli checks availability and auth before any work."""
+class TestPreflightBackend:
+    """_preflight_backend selects best backend and verifies availability."""
 
-    @patch("iterative_review.__main__.check_codex_auth", return_value=(True, ""))
+    @patch("iterative_review.backends.codex.check_codex_auth", return_value=(True, ""))
     @patch("shutil.which", return_value="/usr/local/bin/codex")
-    def test_returns_none_when_available_and_authed(self, mock_which, mock_auth):
-        assert _preflight_codex_cli() is None
+    def test_returns_funcs_when_codex_available_and_authed(self, mock_which, mock_auth):
+        funcs, name, err = _preflight_backend()
+        assert err is None
+        assert name == "codex"
+        assert funcs is not None
+        assert callable(funcs["invoke_review"])
 
     @patch("shutil.which", return_value=None)
-    def test_returns_error_when_not_installed(self, mock_which):
-        result = _preflight_codex_cli()
-        assert result is not None
-        assert "UNAVAILABLE" in result
-        assert "not installed" in result or "not on PATH" in result
+    def test_returns_error_when_nothing_installed(self, mock_which):
+        funcs, name, err = _preflight_backend()
+        assert funcs is None
+        assert err is not None
+        assert "UNAVAILABLE" in err
+        assert "not installed" in err or "not on PATH" in err
 
-    @patch("iterative_review.__main__.check_codex_auth", return_value=(False, "not logged in"))
+    @patch("iterative_review.backends.codex.check_codex_auth", return_value=(False, "not logged in"))
     @patch("shutil.which", return_value="/usr/local/bin/codex")
-    def test_returns_error_when_not_authenticated(self, mock_which, mock_auth):
-        result = _preflight_codex_cli()
-        assert result is not None
-        assert "UNAVAILABLE" in result
-        assert "not authenticated" in result
-        assert "not logged in" in result
+    def test_returns_error_when_codex_not_authenticated(self, mock_which, mock_auth):
+        """Codex on PATH but not authenticated, Claude not on PATH -> error."""
+        # shutil.which returns truthy for any arg, but _select_backend
+        # calls check_codex_auth which fails, then tries claude which also
+        # gets truthy which but we need to make it fail too.
+        # With mock returning "/usr/local/bin/codex" for all calls,
+        # _select_backend tries codex auth (fails), then claude auth.
+        # We need claude auth to also fail for this test.
+        with patch("iterative_review.backends.claude.check_claude_auth",
+                    return_value=(False, "not authenticated")):
+            funcs, name, err = _preflight_backend()
+            assert funcs is None
+            assert err is not None
+            assert "UNAVAILABLE" in err
+
+    @patch("iterative_review.backends.claude.check_claude_auth", return_value=(True, "v2.0"))
+    @patch("iterative_review.backends.codex.check_codex_auth", return_value=(False, "not logged in"))
+    @patch("shutil.which", return_value="/usr/local/bin/codex")
+    def test_falls_back_to_claude_when_codex_unauthed(self, mock_which, mock_codex_auth, mock_claude_auth):
+        """Codex not authenticated -> falls back to Claude Code."""
+        funcs, name, err = _preflight_backend()
+        assert err is None
+        assert name == "claude"
+        assert funcs is not None
 
     @patch("shutil.which", return_value=None)
     def test_skips_auth_check_when_not_installed(self, mock_which):
-        """Auth check should not run if codex is not even on PATH."""
-        result = _preflight_codex_cli()
-        assert "not installed" in result or "not on PATH" in result
+        """Auth check should not run if no CLI is on PATH."""
+        funcs, name, err = _preflight_backend()
+        assert err is not None
+        assert "not installed" in err or "not on PATH" in err
 
 
 class TestAdaptiveEffortFlag:
