@@ -152,9 +152,9 @@ class TestConvergence:
         )
         assert result == "hard_limit"
 
-    def test_hard_limit_is_20(self):
+    def test_hard_limit_is_15(self):
         from iterative_review.loop import MAX_ROUNDS_HARD_LIMIT
-        assert MAX_ROUNDS_HARD_LIMIT == 20
+        assert MAX_ROUNDS_HARD_LIMIT == 15
 
 
 class TestPushbackLog:

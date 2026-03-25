@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.91.1] - 2026-03-25
+
+### Changed
+- **Iterative review: lower hard limit from 20 to 15 rounds.** 15 rounds is plenty for any review — reaching 20 was never productive.
+
 ## [1.91.0] - 2026-03-24
 
 ### Added

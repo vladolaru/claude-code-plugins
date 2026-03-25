@@ -855,7 +855,7 @@ def main():
     parser.add_argument("--context-file", help="Path to context file (round 1 only)")
     parser.add_argument("--analysis-prefix", help="Prefix for analysis doc filenames")
     parser.add_argument("--max-rounds", type=int,
-                        help="Override max rounds (capped at hard limit of 20)")
+                        help="Override max rounds (capped at hard limit of 15)")
     parser.add_argument("--no-prior-analysis", action="store_true",
                         help="Disable reading prior round analysis docs")
     parser.add_argument("--adaptive-effort", action="store_true",

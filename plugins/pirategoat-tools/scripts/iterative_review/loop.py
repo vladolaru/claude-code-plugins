@@ -21,7 +21,7 @@ _MAX_ROUNDS_TABLE = [
     (200, 4),
 ]
 _MAX_ROUNDS_DEFAULT = 3
-MAX_ROUNDS_HARD_LIMIT = 20
+MAX_ROUNDS_HARD_LIMIT = 15
 
 
 def compute_max_rounds(diff_lines):
