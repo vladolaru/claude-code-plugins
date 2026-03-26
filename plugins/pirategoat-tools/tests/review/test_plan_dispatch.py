@@ -586,7 +586,9 @@ class TestIsTestFile:
     def test_rust_bench_file(self):
         assert is_test_file("benches/my_bench.rs") is True
 
-    def test_rust_production_source_file(self):
+    def test_rust_production_source_file_is_not_test_file(self):
+        # src/lib.rs may contain inline #[cfg(test)] blocks but is not classified
+        # as a "test file" for triage — production reviewers should still run on it.
         assert is_test_file("src/lib.rs") is False
 
     def test_python_test_file(self):

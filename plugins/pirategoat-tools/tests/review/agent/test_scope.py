@@ -288,20 +288,22 @@ class TestFilterDomain:
         assert "src/utils.spec.js" in matched
         assert "e2e/login.spec.ts" in excluded
 
-    def test_rust_tests_domain_matches_tests_and_benches(self):
+    def test_rust_tests_domain_matches_all_rs_files(self):
+        """rust-tests domain includes all .rs files so inline #[cfg(test)] blocks are visible."""
         files = ["src/lib.rs", "tests/integration.rs", "benches/my_bench.rs"]
         matched, excluded = review_scope.filter_domain(files, "rust-tests")
+        assert "src/lib.rs" in matched
+        assert "tests/integration.rs" in matched
+        assert "benches/my_bench.rs" in matched
+        assert excluded == []
+
+    def test_rust_test_dirs_excludes_production_source(self):
+        """rust-test-dirs is the narrow triage domain: tests/ and benches/ only."""
+        files = ["src/lib.rs", "tests/integration.rs", "benches/my_bench.rs"]
+        matched, excluded = review_scope.filter_domain(files, "rust-test-dirs")
         assert "tests/integration.rs" in matched
         assert "benches/my_bench.rs" in matched
         assert "src/lib.rs" in excluded
-
-    def test_rust_tests_domain_excludes_production_source(self):
-        """Production .rs files must not match rust-tests domain."""
-        files = ["src/lib.rs", "src/main.rs"]
-        matched, excluded = review_scope.filter_domain(files, "rust-tests")
-        assert matched == []
-        assert "src/lib.rs" in excluded
-        assert "src/main.rs" in excluded
 
     def test_python_tests_domain(self):
         files = ["src/models.py", "tests/test_api.py", "conftest.py", "test_utils.py"]

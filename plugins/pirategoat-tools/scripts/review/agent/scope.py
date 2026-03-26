@@ -118,7 +118,12 @@ DOMAIN_CATALOG = {
         "exclude": None,
     },
     "rust-tests": {
-        "description": "Rust test files (integration tests in tests/ and benchmarks in benches/)",
+        "description": "Rust files for rust-tests-reviewer: all .rs files (integration tests, benchmarks, and source files with inline #[cfg(test)] unit tests)",
+        "include": r"(tests/.*\.rs$|benches/.*\.rs$|\.rs$)",
+        "exclude": None,
+    },
+    "rust-test-dirs": {
+        "description": "Rust dedicated test locations for triage only: tests/ and benches/ dirs are always test code; source .rs files are not (they mix production and inline unit tests)",
         "include": r"(tests/.*\.rs$|benches/.*\.rs$)",
         "exclude": None,
     },
