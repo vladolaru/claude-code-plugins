@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python testing patterns reference.** New `python-testing-patterns.md` reference file (~430 lines) in the testing patterns reference library.
 - **`python-tests` scope domain.** Matches Python test files (`test_*.py`, `*_test.py`, `tests/**/*.py`, `conftest.py`).
 
+### Fixed
+- **Rust/Python test domains added to test-only triage.** `python-tests` and `rust-test-dirs` added to `_TEST_DOMAINS` so test-only PRs in Python or Rust correctly skip conditional production reviewers (security, performance, architecture).
+- **Rust inline unit tests now visible to reviewer.** `rust-tests` scope expanded back to all `.rs` files so `#[cfg(test)] mod tests` blocks inside source files are included in the review. A dedicated `rust-test-dirs` catalog entry (`tests/` + `benches/`) handles the "is this a pure test file?" triage check without widening it to production source files.
+
 ## [1.92.0] - 2026-03-26
 
 ### Added
