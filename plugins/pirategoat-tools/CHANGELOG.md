@@ -5,6 +5,14 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.92.0] - 2026-03-26
+
+### Added
+- **Rust tests reviewer agent.** New `rust-tests-reviewer` agent covering the built-in `#[test]` framework, `assert!`/`assert_eq!`/`debug_assert!` patterns, `#[should_panic]` correctness, Result-based tests, async test patterns (`#[tokio::test]`), `mockall` trait-based mocking, `proptest` property-based testing, `rstest`/`test-case` parameterized tests, `insta` snapshot testing, `criterion` benchmarks, and `serial_test` isolation. Runs on haiku model tier, dispatched as `always` class with tests-reviewer protocol.
+- **Rust testing patterns skill.** New `rust-testing-patterns` skill with reference routing and quick-reference tables for Rust-specific assertion patterns, red flags, and test organization.
+- **Rust testing patterns reference.** New `rust-testing-patterns.md` reference file (~350 lines) in the testing patterns reference library.
+- **`rust-tests` scope domain.** Matches `.rs` files for inline unit tests and integration tests in `tests/` and `benches/` directories.
+
 ## [1.91.1] - 2026-03-25
 
 ### Changed

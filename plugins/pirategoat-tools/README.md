@@ -6,7 +6,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ## What's Inside
 
-### 25 Agents
+### 26 Agents
 
 #### 20 Domain Review Agents
 
@@ -23,6 +23,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **js-tests-reviewer** | Jest/Vitest quality, React Testing Library queries, async patterns | sonnet |
 | **e2e-tests-reviewer** | Playwright quality — locators, Page Object Model, auto-waiting | sonnet |
 | **go-tests-reviewer** | Go testing idioms, table-driven tests, httptest, benchmarks | haiku |
+| **rust-tests-reviewer** | Rust test framework, assert macros, async tests, mockall, proptest, insta | haiku |
 | **patterns-reviewer** | Codebase archaeology — finds existing patterns, prevents reinventing the wheel | sonnet |
 | **dead-code-reviewer** | Unused functions, unreachable paths, orphaned imports | sonnet |
 | **history-insights-reviewer** | Mines git history for relevant prior fixes and lessons learned | sonnet |
@@ -65,9 +66,9 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 
 - **inherit** (4 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. The a11y-reviewer needs contextual reasoning about accessibility impact. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs. The decision-reviewer needs full reasoning depth for adversarial analysis of review conclusions.
 - **sonnet** (16 agents) — Structured analysis against well-defined checklists. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. The API contract reviewer detects backwards-incompatible changes against public interfaces. The data flow/privacy reviewer traces PII through code paths. The concurrency reviewer identifies race conditions and missing transactions. The code-clarity reviewer catches naming-behavior mismatches and stale inline documentation with behavioral proof. The docs-drift reviewer detects when code changes cause external documentation (README, CLAUDE.md, guides) to become stale. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
-- **haiku** (5 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer matches against Go's highly standardized testing idioms — nearly every finding maps to a known pattern.
+- **haiku** (6 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer and rust-tests-reviewer match against highly standardized testing idioms — nearly every finding maps to a known pattern.
 
-### 18 Skills
+### 20 Skills
 
 | Skill | What it brings |
 |-------|---------------|
@@ -76,6 +77,7 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 | **js-testing-patterns** | Jest/Vitest assertions, React Testing Library queries, async patterns, snapshots |
 | **e2e-testing-patterns** | Playwright locators, Page Object Model, auto-waiting, network interception |
 | **go-testing-patterns** | Standard testing package, table-driven tests, httptest, benchmarks, fuzz testing |
+| **rust-testing-patterns** | Built-in test framework, assert macros, async tests, mockall, proptest, rstest, insta, criterion |
 | **software-architecture** | GoF patterns, SOLID, hexagonal architecture with an 87KB pattern library |
 | **wordpress-backend-dev** | WPCS coding standards, security patterns, i18n, hooks API, REST API |
 | **browser-interaction** | Browser automation via MCP servers (chrome-devtools, playwright) |
@@ -147,9 +149,9 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 
 ```
 pirategoat-tools/
-├── agents/           # 25 agent definitions (20 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
+├── agents/           # 26 agent definitions (21 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
 ├── commands/         # 7 slash commands
-├── skills/           # 19 skills with SKILL.md files
+├── skills/           # 20 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library
 ├── scripts/          # Helper scripts organized by domain

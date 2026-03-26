@@ -93,12 +93,12 @@ Claude Code docs live at `https://code.claude.com/docs/en/`. Every page has a `.
 
 ### pirategoat-tools
 
-Code review orchestration with 25 agents (20 domain reviewers, 2 pipeline, 2 cross-validators, 1 utility), 19 skills, and 7 commands covering security, architecture, testing, WordPress, accessibility, API contracts, data privacy, concurrency, code clarity, documentation drift, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
+Code review orchestration with 26 agents (21 domain reviewers, 2 pipeline, 2 cross-validators, 1 utility), 20 skills, and 7 commands covering security, architecture, testing, WordPress, accessibility, API contracts, data privacy, concurrency, code clarity, documentation drift, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
 
 | Directory | Contents |
 |---|---|
-| `agents/` | 25 agent definitions (20 reviewers, 2 pipeline, 2 cross-validators, 1 utility) + 2 shared protocols in `agents/shared/` |
-| `skills/` | 19 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, PR creation, etc.) |
+| `agents/` | 26 agent definitions (21 reviewers, 2 pipeline, 2 cross-validators, 1 utility) + 2 shared protocols in `agents/shared/` |
+| `skills/` | 20 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, PR creation, etc.) |
 | `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
 | `scripts/` | Domain packages: `review/` (pipeline, dispatch, context, telemetry + `agent/` bootstrap, scope, output), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
 | `schemas/` | TypeScript type definitions for structured review output |
