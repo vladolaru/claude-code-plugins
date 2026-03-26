@@ -8,7 +8,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ### 26 Agents
 
-#### 20 Domain Review Agents
+#### 21 Domain Review Agents
 
 These run in parallel by default — total review time equals the slowest agent, not the sum of all agents.
 
