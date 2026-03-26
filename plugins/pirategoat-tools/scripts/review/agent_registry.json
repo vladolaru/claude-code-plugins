@@ -201,6 +201,17 @@
       "focus": "Assert macros, should_panic, async tests, mockall, proptest, rstest, insta, criterion, serial_test",
       "model_tier": "haiku"
     },
+    "python-tests-reviewer": {
+      "domain": "python-tests",
+      "protocols": [
+        "reviewer",
+        "tests-reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "pytest fixtures, parametrize, mock/patch targets, autospec, AsyncMock, pytest-asyncio, hypothesis, factory_boy",
+      "model_tier": "haiku"
+    },
     "patterns-reviewer": {
       "domain": "patterns",
       "protocols": [

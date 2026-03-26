@@ -122,6 +122,11 @@ DOMAIN_CATALOG = {
         "include": r"(tests/.*\.rs$|benches/.*\.rs$|\.rs$)",
         "exclude": None,
     },
+    "python-tests": {
+        "description": "Python test files only",
+        "include": r"(test_.*\.py$|.*_test\.py$|tests/.*\.py$|conftest\.py$|pytest\.ini$|pyproject\.toml$)",
+        "exclude": None,
+    },
     "patterns": {
         "description": "All code files for pattern analysis",
         "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go)$",

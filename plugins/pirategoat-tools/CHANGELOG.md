@@ -5,6 +5,14 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.93.0] - 2026-03-26
+
+### Added
+- **Python tests reviewer agent.** New `python-tests-reviewer` agent covering pytest fixtures and scoping, parametrize patterns, mock/patch target resolution, autospec, AsyncMock, pytest-asyncio modes, hypothesis property-based testing, freezegun/time-machine lifecycle, and factory_boy state isolation. Runs on haiku model tier, dispatched as `always` class with tests-reviewer protocol.
+- **Python testing patterns skill.** New `python-testing-patterns` skill with reference routing and quick-reference tables for Python-specific assertion patterns, red flags, and mock/fixture anti-patterns.
+- **Python testing patterns reference.** New `python-testing-patterns.md` reference file (~430 lines) in the testing patterns reference library.
+- **`python-tests` scope domain.** Matches Python test files (`test_*.py`, `*_test.py`, `tests/**/*.py`, `conftest.py`).
+
 ## [1.92.0] - 2026-03-26
 
 ### Added
