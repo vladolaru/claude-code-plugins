@@ -118,8 +118,8 @@ DOMAIN_CATALOG = {
         "exclude": None,
     },
     "rust-tests": {
-        "description": "Rust test files (integration tests, benches, and all .rs for inline unit tests)",
-        "include": r"(tests/.*\.rs$|benches/.*\.rs$|\.rs$)",
+        "description": "Rust test files (integration tests in tests/ and benchmarks in benches/)",
+        "include": r"(tests/.*\.rs$|benches/.*\.rs$)",
         "exclude": None,
     },
     "python-tests": {

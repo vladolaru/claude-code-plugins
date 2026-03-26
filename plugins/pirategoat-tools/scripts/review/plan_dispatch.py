@@ -165,7 +165,7 @@ def build_domain_counts(files: List[str]) -> Dict[str, int]:
 
 
 # Test domain names — used to detect test-only file sets
-_TEST_DOMAINS = ("php-tests", "js-tests", "e2e-tests", "go-tests")
+_TEST_DOMAINS = ("php-tests", "js-tests", "e2e-tests", "go-tests", "rust-tests", "python-tests")
 
 # Agents excluded in quick review mode — lower-signal for small/low-risk PRs
 _QUICK_MODE_EXCLUDED_AGENTS = frozenset([

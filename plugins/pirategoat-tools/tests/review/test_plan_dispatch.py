@@ -580,6 +580,27 @@ class TestIsTestFile:
     def test_go_test_file(self):
         assert is_test_file("src/utils/auth_test.go") is True
 
+    def test_rust_integration_test_file(self):
+        assert is_test_file("tests/integration_test.rs") is True
+
+    def test_rust_bench_file(self):
+        assert is_test_file("benches/my_bench.rs") is True
+
+    def test_rust_production_source_file(self):
+        assert is_test_file("src/lib.rs") is False
+
+    def test_python_test_file(self):
+        assert is_test_file("tests/test_api.py") is True
+
+    def test_python_test_prefix_file(self):
+        assert is_test_file("test_utils.py") is True
+
+    def test_python_conftest_file(self):
+        assert is_test_file("tests/conftest.py") is True
+
+    def test_python_production_file(self):
+        assert is_test_file("src/models.py") is False
+
     def test_production_php_file(self):
         assert is_test_file("src/Controller.php") is False
 

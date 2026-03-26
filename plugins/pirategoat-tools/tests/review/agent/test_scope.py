@@ -288,6 +288,29 @@ class TestFilterDomain:
         assert "src/utils.spec.js" in matched
         assert "e2e/login.spec.ts" in excluded
 
+    def test_rust_tests_domain_matches_tests_and_benches(self):
+        files = ["src/lib.rs", "tests/integration.rs", "benches/my_bench.rs"]
+        matched, excluded = review_scope.filter_domain(files, "rust-tests")
+        assert "tests/integration.rs" in matched
+        assert "benches/my_bench.rs" in matched
+        assert "src/lib.rs" in excluded
+
+    def test_rust_tests_domain_excludes_production_source(self):
+        """Production .rs files must not match rust-tests domain."""
+        files = ["src/lib.rs", "src/main.rs"]
+        matched, excluded = review_scope.filter_domain(files, "rust-tests")
+        assert matched == []
+        assert "src/lib.rs" in excluded
+        assert "src/main.rs" in excluded
+
+    def test_python_tests_domain(self):
+        files = ["src/models.py", "tests/test_api.py", "conftest.py", "test_utils.py"]
+        matched, excluded = review_scope.filter_domain(files, "python-tests")
+        assert "tests/test_api.py" in matched
+        assert "conftest.py" in matched
+        assert "test_utils.py" in matched
+        assert "src/models.py" in excluded
+
     def test_dead_code_excludes_tests(self):
         files = ["src/app.php", "tests/AppTest.php", "src/app.test.ts"]
         matched, excluded = review_scope.filter_domain(files, "dead-code")
