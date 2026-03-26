@@ -190,6 +190,17 @@
       "focus": "Table-driven tests, test helpers, httptest, benchmarks, interface mocking",
       "model_tier": "haiku"
     },
+    "rust-tests-reviewer": {
+      "domain": "rust-tests",
+      "protocols": [
+        "reviewer",
+        "tests-reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "Assert macros, should_panic, async tests, mockall, proptest, rstest, insta, criterion, serial_test",
+      "model_tier": "haiku"
+    },
     "patterns-reviewer": {
       "domain": "patterns",
       "protocols": [

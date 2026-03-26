@@ -35,7 +35,7 @@ DOMAIN_CATALOG = _scope_mod.DOMAIN_CATALOG
 VALID_DISPATCH_CLASSES = {"always", "conditional", "manual", "special"}
 VALID_PROTOCOLS = {"reviewer", "tests-reviewer"}
 VALID_MODEL_TIERS = {"inherit", "sonnet", "haiku", "opus"}
-EXPECTED_AGENT_COUNT = 21  # agents from AGENT_CONFIG in review/agent/bootstrap.py
+EXPECTED_AGENT_COUNT = 22  # agents from AGENT_CONFIG in review/agent/bootstrap.py
 
 
 # ---------------------------------------------------------------------------

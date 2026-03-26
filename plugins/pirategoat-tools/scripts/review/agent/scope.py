@@ -117,6 +117,11 @@ DOMAIN_CATALOG = {
         "include": r"_test\.go$",
         "exclude": None,
     },
+    "rust-tests": {
+        "description": "Rust test files (integration tests, benches, and all .rs for inline unit tests)",
+        "include": r"(tests/.*\.rs$|benches/.*\.rs$|\.rs$)",
+        "exclude": None,
+    },
     "patterns": {
         "description": "All code files for pattern analysis",
         "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go)$",
