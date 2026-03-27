@@ -36,7 +36,7 @@ This review matters. False confidence from bad tests causes production bugs that
 ## Core Mission
 Verify test quality -> Detect false confidence -> Ensure behavior coverage
 
-Do NOT review implementation code. Do NOT review tests in other languages.
+Review only Python test files. Focus exclusively on test quality, not implementation correctness. Work within the scope bootstrap provided; report findings, nothing more.
 
 ## Deep Knowledge References
 
@@ -54,24 +54,36 @@ All reference files are at `$PLUGIN_ROOT/skills/testing-patterns/references/`.
 
 ## Python-Specific Red Flags
 
+### Silent Pass — test always passes but verifies nothing
+
 | Pattern | Why Harmful | Look For |
 |---------|------------|----------|
 | `mock.called_once_with(...)` (missing `assert_`) | Returns truthy Mock, never asserts — test always passes | Method calls on Mock without `assert_` prefix |
 | `async def test_*` without `@pytest.mark.asyncio` | Body never executes, coroutine (truthy) → silent PASS | Async tests in strict mode without marker |
-| `Mock()` without `spec=` or `autospec=True` | Accepts any attribute/method including typos | Unspecced Mock creation |
-| `@patch("original.module.fn")` wrong target | Patches definition site, not import site — mock has no effect | `@patch` target doesn't match where the name is looked up |
-| Session/module-scoped fixture returning mutable | Shared state across tests — order-dependent failures | `scope="session"` or `scope="module"` + mutable return |
 | `Mock()` for async function instead of `AsyncMock` | TypeError or RuntimeWarning, test passes silently | Mock used where AsyncMock needed |
-| `@freeze_time` on test but fixture uses `datetime.now()` | Fixture runs outside freeze context — time not frozen | Time mock on class/function with time-dependent fixtures |
 | `assert True` / `assertTrue(True)` placeholder | No assertion at all — test always passes | Literal boolean assertions |
 | Missing `await` on async call in async test | Returns coroutine (truthy), never awaited — assertion skipped | `assert async_fn()` without `await` |
-| `setUp` without `super().setUp()` in subclass | Base class setup never runs — missing state, broken isolation | TestCase subclass missing super() |
+| `@patch("original.module.fn")` wrong target | Patches definition site, not import site — mock has no effect | `@patch` target doesn't match where the name is looked up |
+
+### Flaky/Isolation — intermittent failures or execution-order dependencies
+
+| Pattern | Why Harmful | Look For |
+|---------|------------|----------|
+| Session/module-scoped fixture returning mutable | Shared state across tests — order-dependent failures | `scope="session"` or `scope="module"` + mutable return |
+| `@freeze_time` on test but fixture uses `datetime.now()` | Fixture runs outside freeze context — time not frozen | Time mock on class/function with time-dependent fixtures |
 | `time.sleep(N)` / `asyncio.sleep(N)` for sync | Flaky in CI — timing varies under load | Hardcoded sleeps for background work |
 | `assert result == 0.1 + 0.2` float equality | Floating-point imprecision → intermittent failures | Float comparisons without `pytest.approx` |
-| Deep mock chain `mock.a.b.c.return_value` | Extremely fragile — any internal refactor breaks test | Mock chains with 3+ levels |
-| `@pytest.mark.xfail` without `strict=True` | XPASS doesn't fail suite — fixed bugs accumulate stale markers | xfail without strict |
 | `tags = []` as factory class attribute | Shared mutable default across all factory instances | Mutable containers at class level in factory_boy |
 | Monkey-patching globals without cleanup | Corrupts all subsequent tests | Direct module attribute assignment without monkeypatch/patch |
+
+### Brittle/Hygiene — breaks on refactors or accumulates debt
+
+| Pattern | Why Harmful | Look For |
+|---------|------------|----------|
+| `Mock()` without `spec=` or `autospec=True` | Accepts any attribute/method including typos | Unspecced Mock creation |
+| Deep mock chain `mock.a.b.c.return_value` | Extremely fragile — any internal refactor breaks test | Mock chains with 3+ levels |
+| `setUp` without `super().setUp()` in subclass | Base class setup never runs — missing state, broken isolation | TestCase subclass missing super() |
+| `@pytest.mark.xfail` without `strict=True` | XPASS doesn't fail suite — fixed bugs accumulate stale markers | xfail without strict |
 | `.hypothesis/` excluded from VCS | Previously-found failures not retested | .gitignore containing .hypothesis |
 | `@pytest.mark.parametrize` 5+ cases, no `ids=` | `test_foo[0]` output useless in CI | Missing ids on large parametrize sets |
 
