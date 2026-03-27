@@ -100,7 +100,7 @@ Code review orchestration with 27 agents (22 domain reviewers, 2 pipeline, 2 cro
 | `agents/` | 27 agent definitions (22 reviewers, 2 pipeline, 2 cross-validators, 1 utility) + 2 shared protocols in `agents/shared/` |
 | `skills/` | 21 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, PR creation, etc.) |
 | `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Domain packages: `review/` (pipeline, dispatch, context, telemetry + `agent/` bootstrap, scope, output), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
+| `scripts/` | Domain packages: `review/` (pipeline, plan_dispatch, context, telemetry, agents_status, critic, workspace_setup, agent_registry.json + `agent/` bootstrap, scope, output, diff_noise_filter), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
 | `AGENTS.md` | Full development instructions, architecture, agent registry reference |
@@ -115,6 +115,8 @@ Knowledge capture system — turns lessons, patterns, decisions, and research in
 |---|---|
 | `commands/` | 7 commands: `/dex:grok`, `/dex:learn`, `/dex:pattern`, `/dex:research`, `/dex:sharpen`, `/dex:init`, `/dex:status` |
 | `skills/` | 1 skill (`knowledge-capture`) — core logic shared by all commands |
+| `scripts/` | `analyze-subagents.py` — subagent dispatch analysis tool |
+| `tests/` | Plugin structure tests, subagent analyzer tests, fixtures |
 
 **Dev notes:** Adapts to host project automatically (`CLAUDE.md` + `.claude/docs/` or `AGENTS.md` + `.ai/docs/`). Instructions file has a 550-line budget enforced; promotes rules as one-liners with links to full docs. No external dependencies.
 

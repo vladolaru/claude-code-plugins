@@ -14,7 +14,7 @@ These run in parallel by default — total review time equals the slowest agent,
 
 | Agent | Focus | Model |
 |-------|-------|-------|
-| **pr-reviewer** | Generalist — validates changes against stated goals, catches cross-cutting issues | inherit |
+| **pr-reviewer** | Generalist — validates changes against stated goals, catches cross-cutting issues | opus |
 | **security-reviewer** | WordPress security — SQL injection, XSS, CSRF, capabilities, sanitization | sonnet |
 | **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | sonnet |
 | **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | sonnet |
@@ -29,7 +29,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **dead-code-reviewer** | Unused functions, unreachable paths, orphaned imports | sonnet |
 | **history-insights-reviewer** | Mines git history for relevant prior fixes and lessons learned | sonnet |
 | **tests-mutation-reviewer** | Fault injection to verify tests catch real bugs (runs solo) | sonnet |
-| **a11y-reviewer** | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA | inherit |
+| **a11y-reviewer** | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA | opus |
 | **reliability-reviewer** | Logging, error handling, rollback safety, feature flags, failure-mode resilience | sonnet |
 | **api-contract-reviewer** | API contract stability — backwards-incompatible changes, response shape drift, missing deprecation | sonnet |
 | **data-flow-privacy-reviewer** | PII in logs, data leakage in API responses, GDPR erasure gaps, payment data handling | sonnet |
@@ -43,8 +43,8 @@ These are not domain reviewers — they synthesize and validate review output fr
 
 | Agent | Role | Model |
 |-------|------|-------|
-| **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | inherit |
-| **decision-reviewer** | Stress-tests review conclusions via structured criticism | inherit |
+| **review-reconciliator** | Aggregates findings from all agents into a single prioritized summary | sonnet |
+| **decision-reviewer** | Stress-tests review conclusions via structured criticism | opus |
 
 #### 2 Cross-Validators
 
@@ -65,9 +65,9 @@ External LLM cross-validation — shell out to other CLI tools for independent p
 
 Not all work requires the same level of reasoning. Agents are assigned to model tiers based on what their task demands:
 
-- **inherit** (4 agents) — Deep judgment work that uses whatever model Claude Code is running (typically Opus). The pr-reviewer must understand PR intent and exercise nuanced blocker-vs-preference decisions. The a11y-reviewer needs contextual reasoning about accessibility impact. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs. The decision-reviewer needs full reasoning depth for adversarial analysis of review conclusions.
-- **sonnet** (16 agents) — Structured analysis against well-defined checklists. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. The API contract reviewer detects backwards-incompatible changes against public interfaces. The data flow/privacy reviewer traces PII through code paths. The concurrency reviewer identifies race conditions and missing transactions. The code-clarity reviewer catches naming-behavior mismatches and stale inline documentation with behavioral proof. The docs-drift reviewer detects when code changes cause external documentation (README, CLAUDE.md, guides) to become stale. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
-- **haiku** (7 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer, rust-tests-reviewer, and python-tests-reviewer match against highly standardized testing idioms — nearly every finding maps to a known pattern.
+- **opus** (3 agents) — Deep judgment work requiring nuanced reasoning. The pr-reviewer must understand PR intent and exercise blocker-vs-preference decisions. The a11y-reviewer needs contextual reasoning about accessibility impact. The decision-reviewer needs full reasoning depth for adversarial analysis of review conclusions.
+- **sonnet** (18 agents) — Structured analysis against well-defined checklists. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. The API contract reviewer detects backwards-incompatible changes against public interfaces. The data flow/privacy reviewer traces PII through code paths. The concurrency reviewer identifies race conditions and missing transactions. The code-clarity reviewer catches naming-behavior mismatches and stale inline documentation with behavioral proof. The docs-drift reviewer detects when code changes cause external documentation (README, CLAUDE.md, guides) to become stale. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
+- **haiku** (6 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer, rust-tests-reviewer, and python-tests-reviewer match against highly standardized testing idioms — nearly every finding maps to a known pattern.
 
 ### 21 Skills
 
@@ -93,14 +93,16 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 | **using-figma** | Figma-to-code workflow — survey, specification, component tree, implementation, validation |
 | **figma-copy-sync** | Synchronize text copy between Figma designs and implemented code |
 | **analyzing-cc-sessions** | Parse CC session JSONL transcripts, analyze subagent behavior, extract metrics |
+| **create-github-pr** | Structured PR creation workflow with pre-flight checks, context gathering, and approval gate |
 
-### 6 Commands
+### 7 Commands
 
 | Command | Purpose |
 |---------|---------|
 | `/full-code-review` | Run all review agents in parallel on current branch changes |
 | `/code-review` | Incremental review of new commits since the last review |
 | `/pr-review` | End-to-end PR review pipeline (context + agents + validation) |
+| `/iterative-review` | Multi-round independent Codex review with pushback tracking and convergence detection |
 | `/pr-update` | Update PR description with accurate summary of current changes |
 | `/copy-as [content] [slack\|p2]` | Copy content to clipboard — markdown, Slack mrkdwn, or P2 HTML |
 | `/switch-to <branch\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |

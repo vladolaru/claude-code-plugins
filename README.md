@@ -16,6 +16,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 /plugin install prompt-engineer@vladolaru-claude-code-plugins
 /plugin install image-optimizer@vladolaru-claude-code-plugins
 /plugin install yoloing-safe@vladolaru-claude-code-plugins
+/plugin install caffeinate-claude@vladolaru-claude-code-plugins
 
 # Restart Claude Code to activate
 ```
@@ -29,6 +30,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
 | [**yoloing-safe**](plugins/yoloing-safe/README.md) | YOLO mode safety net — PreToolUse guardrails that block destructive commands, ask about risky ones, and nudge toward safer alternatives |
+| [**caffeinate-claude**](plugins/caffeinate-claude/README.md) | Mac sleep prevention — keeps your Mac awake during Claude Code sessions, multi-tab aware |
 
 ### pirategoat-tools
 
@@ -60,6 +62,12 @@ YOLO mode safety net. A `PreToolUse` hook that evaluates every tool call against
 
 **[Full documentation →](plugins/yoloing-safe/README.md)** | [Changelog](plugins/yoloing-safe/CHANGELOG.md)
 
+### caffeinate-claude
+
+Keeps your Mac awake during Claude Code sessions using macOS `caffeinate`. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end. Zero config needed.
+
+**[Full documentation →](plugins/caffeinate-claude/README.md)** | [Changelog](plugins/caffeinate-claude/CHANGELOG.md)
+
 ## Repository Structure
 
 ```text
@@ -71,7 +79,8 @@ vladolaru-claude-code-plugins/
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   ├── image-optimizer/          # 1 command, optimization scripts
-│   └── yoloing-safe/            # PreToolUse safety hook, tests
+│   ├── yoloing-safe/            # PreToolUse safety hook, tests
+│   └── caffeinate-claude/       # macOS sleep prevention hooks
 ├── CLAUDE.md
 ├── LICENSE
 └── README.md
@@ -82,6 +91,7 @@ vladolaru-claude-code-plugins/
 Reusable patterns for building new skills and commands are documented in [`docs/patterns/`](docs/patterns/).
 
 - **[Step-by-step prompt injection](docs/patterns/step-by-step-prompt-injection.md)** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic`.
+- **[Curated-context pipeline](docs/patterns/curated-context-pipeline.md)** — Multi-mode LLM pipelines where a script acts as context curator — reads all state, presents pre-digested briefings, controls flow via condition-driven step routing, and manages split file-based state. Covers pipeline identity anchoring, artifact discipline, and conversational output.
 
 ## External Tool References
 
@@ -112,9 +122,9 @@ cd claude-code-plugins
 
 ## Resources
 
-- [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code)
-- [Plugins guide](https://docs.anthropic.com/en/docs/claude-code/plugins)
-- [Skills guide](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills)
+- [Claude Code documentation](https://code.claude.com/docs/en/overview)
+- [Plugins guide](https://code.claude.com/docs/en/plugins)
+- [Skills guide](https://code.claude.com/docs/en/skills)
 
 ## License
 
