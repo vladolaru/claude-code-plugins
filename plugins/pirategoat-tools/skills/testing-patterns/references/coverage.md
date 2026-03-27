@@ -16,13 +16,6 @@ What to test, what to skip, and how to prioritize test coverage effectively.
 
 ## Coverage Philosophy
 
-### Coverage as a Guide, Not a Goal
-
-```
-✅ Good: "We have confidence our critical paths work"
-❌ Bad: "We achieved 95% line coverage"
-```
-
 **High coverage with bad tests is worse than lower coverage with good tests.**
 
 ```php
@@ -39,17 +32,10 @@ public function test_order_calculates_total_with_tax() {
 }
 ```
 
-### The Coverage Trap
-
-Optimizing for coverage percentage leads to:
-- Testing trivial code
-- Tests that don't verify behavior
-- False confidence
-
-Instead, optimize for:
-- Risk coverage (high-risk code is tested)
-- Behavior coverage (important behaviors are verified)
-- Confidence (team trusts the test suite)
+Instead of chasing coverage percentage, optimize for:
+- **Risk coverage** — high-risk code is tested
+- **Behavior coverage** — important behaviors are verified
+- **Confidence** — team trusts the test suite
 
 ---
 
@@ -60,25 +46,12 @@ Instead, optimize for:
 Core calculations, rules, and algorithms that define your application's value.
 
 ```php
-// MUST TEST: Payment calculation
 public function test_calculate_installment_payment() {
     $calculator = new PaymentCalculator();
-
     $installment = $calculator->calculate_installment(
-        total: 1200.00,
-        months: 12,
-        interest_rate: 0.05
+        total: 1200.00, months: 12, interest_rate: 0.05
     );
-
     $this->assertSame( 105.00, $installment );
-}
-
-// MUST TEST: Business rule
-public function test_order_requires_minimum_quantity_for_wholesale() {
-    $order = new WholesaleOrder();
-
-    $this->expectException( MinimumQuantityException::class );
-    $order->add_item( $product, quantity: 5 );  // Minimum is 10
 }
 ```
 
@@ -87,36 +60,20 @@ public function test_order_requires_minimum_quantity_for_wholesale() {
 Boundary conditions where bugs hide.
 
 ```php
-// Edge cases for pagination
 public function test_pagination_edge_cases(): void {
     $paginator = new Paginator( total_items: 100, per_page: 10 );
 
-    // First page
-    $this->assertSame( 1, $paginator->get_previous_page() ); // Can't go before 1
+    // First page — can't go before 1
+    $this->assertSame( 1, $paginator->get_previous_page() );
     $this->assertSame( 2, $paginator->get_next_page() );
 
-    // Last page
+    // Last page — can't go past last
     $paginator->set_current_page( 10 );
-    $this->assertSame( 9, $paginator->get_previous_page() );
-    $this->assertSame( 10, $paginator->get_next_page() ); // Can't go past last
+    $this->assertSame( 10, $paginator->get_next_page() );
 
-    // Beyond last page
+    // Beyond last page — clamped
     $paginator->set_current_page( 15 );
-    $this->assertSame( 10, $paginator->get_current_page() ); // Clamped to last
-}
-
-// Edge case: empty input
-public function test_calculate_average_with_empty_list() {
-    $calculator = new StatsCalculator();
-
-    $this->assertSame( 0.0, $calculator->average( [] ) );
-}
-
-// Edge case: single item
-public function test_calculate_average_with_single_item() {
-    $calculator = new StatsCalculator();
-
-    $this->assertSame( 42.0, $calculator->average( [ 42 ] ) );
+    $this->assertSame( 10, $paginator->get_current_page() );
 }
 ```
 
@@ -125,34 +82,14 @@ public function test_calculate_average_with_single_item() {
 How the system behaves when things go wrong.
 
 ```php
-// Test error response
 public function test_api_returns_error_for_invalid_input() {
-    $response = $this->post_json( '/api/orders', [
-        'items' => [],  // Invalid: empty order
-    ] );
+    $response = $this->post_json( '/api/orders', [ 'items' => [] ] );
 
     $response->assertStatus( 400 );
     $response->assertJson( [
-        'error' => 'validation_error',
+        'error'   => 'validation_error',
         'message' => 'Order must have at least one item',
     ] );
-}
-
-// Test exception handling
-public function test_payment_failure_logs_error_and_notifies() {
-    $logger = $this->createMock( Logger::class );
-    $logger->expects( $this->once() )
-           ->method( 'error' )
-           ->with( $this->stringContains( 'Payment failed' ) );
-
-    $gateway = $this->createStub( PaymentGateway::class );
-    $gateway->method( 'charge' )
-            ->willThrowException( new PaymentDeclinedException() );
-
-    $service = new OrderService( $gateway, $logger );
-
-    $this->expectException( PaymentDeclinedException::class );
-    $service->process_payment( $this->order );
 }
 ```
 
@@ -161,23 +98,10 @@ public function test_payment_failure_logs_error_and_notifies() {
 Authentication, authorization, input validation.
 
 ```php
-// Test authorization
 public function test_non_admin_cannot_delete_users() {
     $this->actingAs( $this->regular_user );
-
     $response = $this->delete( '/api/users/123' );
-
     $response->assertStatus( 403 );
-}
-
-// Test input validation
-public function test_sql_injection_is_prevented() {
-    $input = "'; DROP TABLE users; --";
-
-    $result = $this->search_service->search( $input );
-
-    // Should not throw, should handle safely
-    $this->assertIsArray( $result );
 }
 ```
 
@@ -186,15 +110,12 @@ public function test_sql_injection_is_prevented() {
 Where your code meets external systems.
 
 ```php
-// Test API contract
 public function test_payment_gateway_integration() {
-    // Use test/sandbox API or mock
     $gateway = new StripeGateway( $this->test_api_key );
-
     $result = $gateway->charge( [
-        'amount' => 1000,  // $10.00
+        'amount'   => 1000,
         'currency' => 'usd',
-        'source' => 'tok_visa',  // Test token
+        'source'   => 'tok_visa',
     ] );
 
     $this->assertTrue( $result->success );
@@ -211,20 +132,15 @@ public function test_payment_gateway_integration() {
 The framework is already tested. Trust it.
 
 ```php
-// SKIP: Testing Laravel's validation works
+// WRONG: Tests Laravel, not your code
 public function test_required_validation() {
-    $validator = Validator::make(
-        [ 'name' => '' ],
-        [ 'name' => 'required' ]
-    );
-
-    $this->assertTrue( $validator->fails() );  // Tests Laravel, not your code
+    $validator = Validator::make( [ 'name' => '' ], [ 'name' => 'required' ] );
+    $this->assertTrue( $validator->fails() );
 }
 
-// INSTEAD: Test your validation rules are correctly defined
+// CORRECT: Test your validation rules are correctly defined
 public function test_order_request_validates_required_fields() {
     $response = $this->post( '/api/orders', [] );
-
     $response->assertJsonValidationErrors( [ 'items', 'customer_id' ] );
 }
 ```
@@ -234,14 +150,14 @@ public function test_order_request_validates_required_fields() {
 No logic = nothing to test.
 
 ```php
-// SKIP: No logic to test
+// WRONG: No logic to test
 public function test_get_name() {
     $product = new Product();
     $product->setName( 'Test' );
     $this->assertSame( 'Test', $product->getName() );
 }
 
-// INSTEAD: Test getters/setters with logic
+// CORRECT: Test getters/setters WITH logic
 public function test_set_price_applies_minimum() {
     $product = new Product();
     $product->setPrice( -10 );  // Negative should become 0
@@ -251,18 +167,15 @@ public function test_set_price_applies_minimum() {
 
 ### Generated Code
 
-If code is generated, test the generator, not the output.
+Test the generator, not the output.
 
 ```php
-// SKIP: Testing generated migrations
-public function test_migration_creates_column() {
-    // The migration tool already tests this
-}
+// WRONG: Testing generated migrations
+public function test_migration_creates_column() { /* The migration tool already tests this */ }
 
-// INSTEAD: Test that your schema is correct after migration
+// CORRECT: Test that your schema is correct after migration
 public function test_products_table_has_required_columns() {
     $columns = Schema::getColumnListing( 'products' );
-
     $this->assertContains( 'sku', $columns );
     $this->assertContains( 'price', $columns );
 }
@@ -273,23 +186,19 @@ public function test_products_table_has_required_columns() {
 Don't test code you don't own.
 
 ```php
-// SKIP: Testing Stripe's SDK
+// WRONG: Testing Stripe's SDK
 public function test_stripe_creates_customer() {
     $stripe = new StripeClient( $api_key );
     $customer = $stripe->customers->create( [ 'email' => 'test@example.com' ] );
     $this->assertNotNull( $customer->id );
 }
 
-// INSTEAD: Test your integration wrapper
+// CORRECT: Test your integration wrapper
 public function test_customer_service_creates_stripe_customer() {
     $stripe = $this->createMock( StripeClient::class );
-    $stripe->expects( $this->once() )
-           ->method( 'customers' )
-           ->willReturn( $this->mock_customers );
-
+    $stripe->expects( $this->once() )->method( 'customers' )->willReturn( $this->mock_customers );
     $service = new CustomerService( $stripe );
     $result = $service->create( $this->user );
-
     $this->assertTrue( $result->success );
 }
 ```
@@ -298,10 +207,7 @@ public function test_customer_service_creates_stripe_customer() {
 
 ## Coverage Metrics
 
-### Line Coverage vs Branch Coverage
-
-**Line coverage:** Percentage of lines executed by tests.
-**Branch coverage:** Percentage of decision branches (if/else) taken.
+**Line coverage** measures percentage of lines executed. **Branch coverage** measures percentage of decision branches (if/else) taken. Branch coverage is more valuable — it catches untested paths that line coverage misses.
 
 ```php
 function categorize( int $value ): string {
@@ -314,27 +220,13 @@ function categorize( int $value ): string {
     }
 }
 
-// 100% line coverage requires testing all three branches
+// 100% branch coverage requires testing all three paths
 public function test_categorize() {
     $this->assertSame( 'negative', categorize( -5 ) );
     $this->assertSame( 'zero', categorize( 0 ) );
     $this->assertSame( 'positive', categorize( 5 ) );
 }
 ```
-
-**Branch coverage is more valuable than line coverage.**
-
-### Interpreting Coverage Reports
-
-| Coverage | Meaning |
-|----------|---------|
-| 0-30% | Critical gaps, need immediate attention |
-| 30-60% | Basic coverage, focus on critical paths |
-| 60-80% | Good coverage, continue adding tests |
-| 80-90% | Strong coverage, focus on edge cases |
-| 90%+ | Excellent, watch for diminishing returns |
-
-**Warning:** High coverage doesn't mean high quality. A test that runs code without asserting anything counts for coverage but provides no value.
 
 ---
 
@@ -353,46 +245,23 @@ public function test_categorize() {
 
 ```
                     High Impact
-                         │
-    ┌────────────────────┼────────────────────┐
-    │                    │                    │
-    │  Nice to Have      │   Must Test        │
-    │  (Admin pages,     │   (Payments, auth, │
-    │   settings)        │   core business)   │
-    │                    │                    │
-Low ├────────────────────┼────────────────────┤ High
-Complexity              │                    Complexity
-    │                    │                    │
-    │  Skip or Manual    │   Should Test      │
-    │  (Trivial getters, │   (Complex         │
-    │   generated code)  │   algorithms)      │
-    │                    │                    │
-    └────────────────────┼────────────────────┘
-                         │
+                         |
+    +--------------------+--------------------+
+    |                    |                    |
+    |  Nice to Have      |   Must Test        |
+    |  (Admin pages,     |   (Payments, auth, |
+    |   settings)        |   core business)   |
+    |                    |                    |
+Low +--------------------+--------------------+ High
+Complexity              |                    Complexity
+    |                    |                    |
+    |  Skip or Manual    |   Should Test      |
+    |  (Trivial getters, |   (Complex         |
+    |   generated code)  |   algorithms)      |
+    |                    |                    |
+    +--------------------+--------------------+
+                         |
                     Low Impact
-```
-
-### Regression Tests
-
-When a bug is found and fixed:
-
-1. Write a test that would have caught the bug
-2. Verify the test fails without the fix
-3. Apply the fix
-4. Verify the test passes
-
-```php
-/**
- * Regression test for issue #1234
- * Bug: Division by zero when cart has zero items
- */
-public function test_calculate_average_item_price_with_empty_cart() {
-    $cart = new Cart();
-
-    // Before fix: threw DivisionByZeroError
-    // After fix: returns 0.00
-    $this->assertSame( 0.00, $cart->get_average_item_price() );
-}
 ```
 
 ---
