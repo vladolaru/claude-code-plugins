@@ -10,12 +10,13 @@ This reference library provides deep dives into testing concepts, patterns, and 
 
 Start here to understand the mental models and philosophy:
 
-- **[test-philosophy.md](./test-philosophy.md)** - The fundamental shift in thinking
+- **[test-philosophy.md](./test-philosophy.md)** - Philosophy and quality principles
   - Tests as specifications vs verification
   - Tests as experiments (hard in training, easy in battle)
   - Future-focused testing
   - Behavior vs implementation distinction
   - Common mental traps and how to avoid them
+  - Quality pillars: Independence, Determinism, Speed, Readability, Single Concern
 
 ### 🔍 Diagnostic Guides
 
@@ -33,12 +34,6 @@ Use these when something's wrong:
 ### 📚 Core Principles
 
 Deep dives into what makes tests good:
-
-- **[test-quality.md](./test-quality.md)** - The 12 attributes of effective tests
-  - Behavior-based, Independent, Deterministic
-  - Fast, Readable, Single Concern
-  - Declarative, Complete, Maintainable
-  - With detailed examples and anti-patterns
 
 - **[test-structure.md](./test-structure.md)** - AAA/Given-When-Then patterns
   - Test organization and naming conventions
@@ -115,15 +110,14 @@ Framework and language details:
 ## Reading Paths
 
 ### Path 1: "I'm new to testing"
-1. Start with **test-philosophy.md** (understand the mindset)
-2. Read **test-quality.md** (what makes tests good)
-3. Study **tdd-workflow.md** (how to write tests)
+1. Start with **test-philosophy.md** (understand the mindset and quality pillars)
+2. Study **tdd-workflow.md** (how to write tests)
 4. Practice with coding katas
 5. Consult **test-smells.md** when stuck
 
 ### Path 2: "My tests are problematic"
 1. Read **test-smells.md** (diagnose the problem)
-2. Review **test-quality.md** (understand what's missing)
+2. Review **test-philosophy.md** quality pillars (understand what's missing)
 3. Check **mocking-strategies.md** (fix over-mocking)
 4. Revisit **test-philosophy.md** (correct mental model)
 
@@ -135,7 +129,7 @@ Framework and language details:
 
 ### Path 4: "I'm debugging flaky/brittle tests"
 1. Start with **test-smells.md** (diagnostic protocol)
-2. Check **test-quality.md** (determinism, independence)
+2. Check **test-philosophy.md** quality pillars (determinism, independence)
 3. Review **mocking-strategies.md** (proper isolation)
 4. Study **test-philosophy.md** (behavior vs implementation)
 
@@ -148,7 +142,7 @@ Framework and language details:
 Unit tests alone aren't enough. Integration tests validate contracts between components. Appears in **test-layers.md** and referenced throughout.
 
 ### The Flaky Test Revelation
-Flaky tests usually reveal implementation bugs (race conditions, concurrency issues), not test bugs. From **test-smells.md** and **test-quality.md**.
+Flaky tests usually reveal implementation bugs (race conditions, concurrency issues), not test bugs. From **test-smells.md** and **test-philosophy.md**.
 
 ### The Design Feedback Loop
 If tests are hard to write, the code is hard to use. Tests are the first client of your API. From **test-philosophy.md**, **test-benefits.md**, and **test-smells.md**.

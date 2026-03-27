@@ -1,18 +1,30 @@
-# Test Philosophy: The Mental Model
+# Test Philosophy & Quality Principles
 
 **Source:** Synthesized from jhumelsine.github.io testing series
 
+## Quick Reference
+
+| Principle | What It Means | Violation Symptom |
+|---|---|---|
+| Tests are specifications | Define what code should do, not verify what it does | Tests break during refactoring |
+| Tests are experiments | Subject code to adversarial conditions | Only happy path tested |
+| Tests are future-focused | Prevent bugs later, not find bugs now | No regression tests after fixes |
+| Tests document assumptions | Capture invariants and business rules | "Why does this check exist?" |
+| Independent | Each test runs in complete isolation | Tests pass/fail based on run order |
+| Deterministic | Same inputs always produce same result | Random failures, CI inconsistency |
+| Fast | Quick enough to run frequently | Developers skip running tests |
+| Readable | Clear what is being tested and why | "What does this test verify?" |
+| Single Concern | One behavior per test | Multiple behaviors fail together |
+
 ## The Fundamental Shift
 
-### Tests Are Specifications, Not Verification
-
 **The old mindset (WRONG):**
-- Write code → test it to confirm it works
+- Write code -> test it to confirm it works
 - Tests exercise implementation
 - Tests verify what the code does
 
 **The new mindset (CORRECT):**
-- Specify behavior via tests → implement to make tests pass
+- Specify behavior via tests -> implement to make tests pass
 - Tests define requirements
 - Tests specify what the code should do
 
@@ -28,24 +40,20 @@
 
 ### 1. Tests as Codified Specifications
 
-**What it means:**
 Tests are living, executable documentation of system behavior. Unlike Word docs or comments:
 - They cannot be vague or ambiguous
 - They execute and confirm consistency
 - They fail when spec and implementation diverge
 - They're always up-to-date (or they fail)
 
-**Traditional specs vs Test specs:**
-
 | Traditional (Word/Jira) | Test Specifications |
-|--------------------------|---------------------|
+|---|---|
 | Interpreted by reader | Executed by machine |
 | Can be ambiguous | Must be precise |
 | No consistency checking | Fails if inconsistent |
 | Easily outdated | Always current or red |
 | Separate from code | Lives with code |
 
-**Example:**
 ```javascript
 // Traditional spec: "The system shall validate email format"
 // Test spec (unambiguous):
@@ -53,47 +61,25 @@ describe('Email validation', () => {
     it('should accept valid email format', () => {
         expect(isValidEmail('user@example.com')).toBe(true);
     });
-
     it('should reject email without @ symbol', () => {
         expect(isValidEmail('userexample.com')).toBe(false);
     });
-
-    it('should reject email without domain', () => {
-        expect(isValidEmail('user@')).toBe(false);
-    });
 });
 ```
-
-**Key insight:** Each test is a specific, executable requirement that cannot be misinterpreted.
 
 ### 2. Tests as Experiments
 
 **The mindset:** "I'm not testing to show my code works. I'm testing to try to break it."
 
-**Hard in training, easy in battle:**
-- Subject code to extreme conditions in tests
+- Subject code to extreme conditions
 - Make test doubles throw exceptions
 - Test edge cases that "should never happen"
 - Use adversarial testing approaches
 
-**Why experiment rather than confirm:**
-- Confirmation bias makes us blind to flaws
-- We write tests that we expect to pass
-- Adversarial testing reveals hidden assumptions
-- Stress testing builds genuine confidence
+> _Tests don't break your code; they break your illusions about the quality of that code._ -- Maaret Pyhajarvi
 
-> _Tests don't break your code; they break your illusions about the quality of that code._ — Maaret Pyhäjärvi
-
-**Example adversarial tests:**
 ```php
-// Don't just test happy path
-public function test_processes_valid_order() {
-    $order = $this->create_valid_order();
-    $result = $this->processor->process($order);
-    $this->assertTrue($result->is_success());
-}
-
-// Test the "should never happens"
+// Don't just test happy path -- test the "should never happens"
 public function test_handles_null_order_gracefully() {
     $result = $this->processor->process(null);
     $this->assertTrue($result->is_error());
@@ -103,140 +89,55 @@ public function test_handles_database_timeout() {
     $this->db_mock->shouldThrow(TimeoutException::class);
     $result = $this->processor->process($this->create_valid_order());
     $this->assertTrue($result->is_error());
-    $this->assertContains('timeout', $result->get_message());
-}
-
-public function test_handles_concurrent_modification() {
-    // Another process modified the order
-    $this->db_mock->shouldReturn(['version' => 2]);
-    $result = $this->processor->process($this->order_v1);
-    $this->assertTrue($result->is_conflict());
 }
 ```
 
 ### 3. Tests Are Future-Focused
 
-**The paradox:** Tests don't find bugs now. They prevent bugs later.
-
-**When code works vs when it breaks:**
-- Code usually works when first written (fresh in mind)
-- Code breaks when modified months later (context lost)
-- Tests capture the original intent
-- Tests fail when modifications violate intent
-
-**The future bug prevention mechanism:**
+Tests don't find bugs now. They prevent bugs later. Code usually works when first written (fresh in mind) but breaks when modified months later (context lost). Tests capture the original intent and fail when modifications violate it.
 
 ```
-Today:
-  ✓ Write test specifying behavior X
-  ✓ Implement X to make test pass
-  ✓ Code works, test passes
-
-3 Months Later (Different Developer):
-  → Modifies code to add feature Y
-  → Unknowingly violates behavior X
-  ✗ Test for X fails immediately
-  → Developer sees: "Oh, X must still work"
-  → Adjusts approach to preserve X
-  ✓ Both X and Y work
+Today:                              3 Months Later (Different Developer):
+  Write test specifying behavior X    Modifies code to add feature Y
+  Implement X to make test pass       Unknowingly violates behavior X
+  Code works, test passes             Test for X fails immediately
+                                      Developer adjusts to preserve X
+                                      Both X and Y work
 ```
-
-**Without tests:**
-```
-3 Months Later:
-  → Modifies code to add feature Y
-  → Unknowingly violates behavior X
-  → Commits code
-  → Bug reaches production
-  → User reports issue
-  → Hours debugging to understand X
-  → Hours fixing both X and Y
-```
-
-**Story from the field:**
-> A developer was maintaining code I wrote. He noticed an asymmetry: one field persisted on create but not on update. He "fixed" it by adding the field to updates. A test failed: "creation timestamp cannot be changed after entity is created." He undid his change and thanked me for the test.
-
-**Key insight:** The test prevented a future bug that would have been subtle and hard to debug.
 
 ### 4. Tests Document Assumptions and Invariants
 
-**The problem:** Developer knowledge lives in three places:
-1. **In code** - but code shows HOW, not WHY
-2. **In comments** - but comments drift out of sync
-3. **In heads** - but developers leave or forget
+Developer knowledge lives in code (shows HOW, not WHY), comments (drift out of sync), and heads (developers leave or forget). Tests document the WHY and enforce it forever.
 
-**The solution:** Tests document the WHY and enforce it forever.
-
-**Example: Documenting invariants**
 ```java
 // Code shows HOW but not WHY:
 public boolean processPayment(Order order) {
-    if (order.getTotal() <= 0) {
-        return false;
-    }
-    // ... processing logic
+    if (order.getTotal() <= 0) return false;
 }
 
 // Test documents the WHY (business rule):
 @Test
 public void test_rejects_zero_dollar_orders() {
-    // Business rule: We don't process $0 orders to avoid
+    // Business rule: don't process $0 orders to avoid
     // payment processor fees and accounting complications
-    Order zeroOrder = createOrder(0.00);
-
-    assertFalse(processor.processPayment(zeroOrder));
-}
-
-@Test
-public void test_rejects_negative_orders() {
-    // Safety invariant: Negative totals indicate a bug
-    // earlier in the order calculation pipeline
-    Order negativeOrder = createOrder(-10.00);
-
-    assertFalse(processor.processPayment(negativeOrder));
+    assertFalse(processor.processPayment(createOrder(0.00)));
 }
 ```
 
-**When another developer tries to "fix" this:**
-```java
-// 6 months later: "Why are we rejecting $0 orders? Let me fix that..."
-public boolean processPayment(Order order) {
-    // Removed check - now processes $0 orders
-    // ... processing logic
-}
-```
-
-**Result:** Tests fail with clear message explaining the business rule. Developer understands why the check exists.
+When another developer tries to remove the check 6 months later, tests fail with a clear message explaining the business rule.
 
 ## The Behavior vs Implementation Distinction
 
-### What is Behavior?
-
 **Behavior = Observable outcomes from a black box perspective**
 
-**Not behavior:**
-- How many helper methods are called
-- Whether a cache is checked
-- Internal state transitions
-- Which algorithm is used
+**Not behavior:** How many helper methods are called, whether a cache is checked, internal state transitions, which algorithm is used.
 
-**Is behavior:**
-- What value is returned
-- What exception is thrown
-- What side effects occur (DB writes, API calls)
-- What messages are logged
-
-### Example: Behavior vs Implementation
+**Is behavior:** What value is returned, what exception is thrown, what side effects occur (DB writes, API calls), what messages are logged.
 
 **Testing implementation (WRONG):**
 ```javascript
 it('should call cache.get() before database.query()', () => {
-    const cache = createMock();
-    const db = createMock();
-    const service = new UserService(cache, db);
-
     service.getUser(123);
-
     expect(cache.get).toHaveBeenCalledBefore(db.query); // Implementation detail!
 });
 ```
@@ -244,151 +145,153 @@ it('should call cache.get() before database.query()', () => {
 **Testing behavior (CORRECT):**
 ```javascript
 it('should return user when user exists', () => {
-    const service = new UserService(cache, db);
-
     const user = service.getUser(123);
-
     expect(user.id).toBe(123);
     expect(user.name).toBe('John Doe');
 });
-
-it('should be fast for repeated requests', () => {
-    const service = new UserService(cache, db);
-
-    const start1 = Date.now();
-    service.getUser(123); // First call
-    const duration1 = Date.now() - start1;
-
-    const start2 = Date.now();
-    service.getUser(123); // Second call
-    const duration2 = Date.now() - start2;
-
-    expect(duration2).toBeLessThan(duration1 / 10); // Second call should be >10x faster
-});
 ```
 
-**Why the second version is better:**
-- Can switch from cache to in-memory map → tests still pass
-- Can optimize cache strategy → tests still pass
-- Can remove cache entirely → tests fail (performance requirement violated)
-- Tests document WHAT the system does, not HOW
+Can switch from cache to in-memory map, optimize cache strategy, or remove cache entirely -- behavioral tests still pass (unless performance requirement is violated).
 
 ## Common Mental Traps
 
-### Trap 1: "I need code before I can test"
+| Trap | Reality | Recommendation |
+|---|---|---|
+| "I need code before I can test" | You need requirements, not implementation. Requirement: "System should X when Y" -> test: given Y, expect X -> implement. | Write tests from requirements, not from code. |
+| "Tests after achieve the same result" | Test-first asks "What SHOULD this do?" (specification). Test-after asks "What DOES this do?" (verification). Test-first finds design issues early; test-after works around locked-in designs. | Test-first produces simpler tests and better interfaces. |
+| "Testing slows me down" | Testing speeds you up: reduces debugging time (fail fast vs. hunt for bug), prevents rework (catch bugs before merging), enables confident refactoring (safety net), documents API usage (living examples). | Investment pays back in same-day bug detection vs. multi-day debug cycles. |
 
-**The trap:** Thinking you need implementation to know what to test.
+## Quality Pillars
 
-**The reality:** You need requirements to write tests. Implementation comes after.
+### Independence
 
-**Example:**
-```
-❌ Wrong order:
-  1. Write code that does X
-  2. Figure out how to test it
-  3. Write test that exercises the code
+Each test must run in complete isolation. No test should depend on another test running first, and no test should affect subsequent tests.
 
-✅ Correct order:
-  1. Understand requirement: "System should X when Y"
-  2. Write test: given Y, expect X
-  3. Write minimal code to make test pass
-```
+```php
+// WRONG: Test depends on previous test's state
+class OrderTest extends WP_UnitTestCase {
+    private static $order_id;
+    public function test_create_order() {
+        self::$order_id = $this->factory->order->create();
+    }
+    public function test_update_order() {
+        // FAILS if test_create_order didn't run first!
+        $order = wc_get_order( self::$order_id );
+    }
+}
 
-### Trap 2: "Tests after achieve the same result"
-
-**The trap:** Thinking test-after is equivalent to test-first.
-
-**The difference:**
-
-| Test-First | Test-After |
-|------------|------------|
-| "What SHOULD this do?" | "What DOES this do?" |
-| Specification mindset | Verification mindset |
-| Often finds design issues early | Design is already locked in |
-| Tests guide implementation | Tests describe implementation |
-| Usually simple tests | Often complex tests (matching complex code) |
-
-**Why test-first is different:**
-- Test-first: You write the test you WISH you could write (ideal interface)
-- Test-after: You write the test you CAN write (working around existing interface)
-
-### Trap 3: "Testing slows me down"
-
-**The trap:** Thinking test-writing time is wasted.
-
-**The reality:** Testing speeds you up by:
-- Reducing debugging time (fail fast vs. hunt for bug)
-- Preventing rework (catch bugs before merging)
-- Enabling confident refactoring (safety net)
-- Documenting API usage (living examples)
-
-**Time breakdown comparison:**
-
-Without tests:
-```
-Write code: 2 hours
-Manual testing: 30 minutes
-Bug escapes to QA:
-  - QA finds bug: 2 days later
-  - Debug investigation: 1 hour
-  - Fix bug: 30 minutes
-  - Re-test: 30 minutes
-Total: ~5 hours spread over 3 days
+// CORRECT: Each test creates its own state
+public function test_update_order() {
+    $order = $this->factory->order->create_and_get();
+    $order->set_status( 'completed' );
+    $this->assertTrue( $order->save() );
+}
 ```
 
-With tests:
+### Determinism
+
+Given the same inputs, a test must always produce the same result. No randomness, no timing issues, no external dependencies.
+
+```php
+// WRONG: Test will fail after expiry date
+public function test_coupon_is_valid() {
+    $coupon = new Coupon( [ 'expires' => '2024-12-31' ] );
+    $this->assertTrue( $coupon->is_valid() );
+}
+
+// CORRECT: Mock the current time
+public function test_coupon_is_valid_before_expiry() {
+    \Brain\Monkey\Functions\when( 'current_time' )->justReturn( '2024-06-15' );
+    $coupon = new Coupon( [ 'expires' => '2024-12-31' ] );
+    $this->assertTrue( $coupon->is_valid() );
+}
 ```
-Write test: 15 minutes
-Write code: 2 hours
-Test fails (bug caught immediately):
-  - Debug investigation: 10 minutes (small scope)
-  - Fix bug: 15 minutes
-  - Re-run tests: 5 seconds
-Total: ~3 hours in same day
+
+**Flaky Test Diagnosis:**
+
+| Symptom | Likely Cause | Fix |
+|---|---|---|
+| Fails intermittently | Time dependency | Mock time |
+| Fails only in CI | Environment difference | Check paths, timezone |
+| Fails when run with others | Shared state | Isolate with setup/teardown |
+| Fails after timeout | Async race condition | Use proper waiting |
+
+### Speed
+
+Tests should run fast enough that developers run them frequently. Slow tests get skipped.
+
+| Test Type | Target Time | Acceptable |
+|---|---|---|
+| Unit test | < 10ms | < 100ms |
+| Integration test | < 500ms | < 2s |
+| E2E test | < 5s | < 30s |
+
+```php
+// SLOW: Creates 100 real database records
+public function test_product_search() {
+    for ( $i = 0; $i < 100; $i++ ) {
+        $this->factory->product->create();
+    }
+    $results = search_products( 'test' );
+}
+
+// FAST: Use minimum data needed
+public function test_product_search() {
+    $this->factory->product->create( [ 'name' => 'test-product' ] );
+    $results = search_products( 'test' );
+    $this->assertCount( 1, $results );
+}
 ```
 
-## Quotes to Remember
+### Readability
 
-> _When programmers do their jobs, testers find nothing._ — Robert C. Martin
+Tests are documentation. A developer should understand what's being tested without reading the implementation.
 
-> _Tests don't break your code; they break your illusions about the quality of that code._ — Maaret Pyhäjärvi
+```php
+// BAD: Unclear what's being tested
+public function test_order() { }
+public function test_order_2() { }
 
-> _Hard in training; easy in battle._ — Alexander Suvorov
+// GOOD: Describes scenario and expectation
+public function test_calculate_total_returns_zero_for_empty_cart() { }
+public function test_calculate_total_includes_tax_when_enabled() { }
+```
 
-> _As the tests get more specific, the code gets more generic._ — Robert C. Martin
+```php
+// BAD: What do these numbers mean?
+$this->assertSame( 550, $product->calculate_total() );
 
-> _Testing can show the presence of bugs, but not their absence._ — Edsger W. Dijkstra
+// GOOD: Named values with explanation
+$base_price = 100;
+$quantity = 5;  // Minimum for bulk discount
+$expected_total = ( $base_price * $quantity ) * 1.1; // With 10% tax
+$this->assertSame( $expected_total, $product->calculate_total() );
+```
 
-> _Beware of bugs in the above code; I have only proved it correct, not tried it._ — Donald Knuth
+### Single Concern
 
-## Adoption Journey
+Each test should verify one specific behavior. When a test fails, you should immediately know what broke.
 
-Most developers follow this progression:
+```php
+// BAD: Which assertion failed?
+public function test_order_processing() {
+    $order = $this->process_order( $this->cart );
+    $this->assertNotNull( $order );
+    $this->assertSame( 'pending', $order->status );
+    $this->assertSame( 100.00, $order->total );
+    $this->assertCount( 2, $order->items );
+}
 
-**Stage 1: No tests** → "I don't have time"
-**Stage 2: Tests after** → "I'll test it after I code it"
-**Stage 3: Tests first (forced)** → "This feels backward but I'll try"
-**Stage 4: Tests first (comfortable)** → "This actually helps design"
-**Stage 5: Tests first (advocate)** → "I can't imagine coding without tests"
+// GOOD: Focused tests
+public function test_process_order_creates_order_with_pending_status() {
+    $order = $this->process_order( $this->cart );
+    $this->assertSame( 'pending', $order->status );
+}
 
-Each stage requires:
-- Overcoming mental resistance
-- Building new habits
-- Experiencing the benefits personally
-- Practicing with katas (not production code)
+public function test_process_order_calculates_correct_total() {
+    $order = $this->process_order( $this->cart );
+    $this->assertSame( 100.00, $order->total );
+}
+```
 
-**Recommendation:** Practice TDD with code katas for 2 weeks before trying on production code. Common katas:
-- Bowling Score
-- Roman Numerals
-- FizzBuzz (extended)
-- String Calculator
-- Prime Factors
-
-## Further Reading
-
-From the blog series:
-- "Writing Tests Before the Implementation" - TDD methodology
-- "Testing Benefits" - Why tests are specifications
-- "Testing Concerns" - Addressing objections
-- "Attributes of Effective Unit Tests" - What makes tests good
-- "Test Doubles" - Isolating code for testing
+**Exception:** Multiple assertions on the same logical concept are fine (e.g., verifying all fields of a copied address).
