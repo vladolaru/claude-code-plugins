@@ -35,9 +35,9 @@ When you find a test concern, read ONLY the specified sections. Do NOT read full
 
 | Test Concern | Reference File | Sections to Read |
 |---|---|---|
-| Tests pass but don't verify behavior | `references/test-philosophy.md` | `## Quick Reference` + `## Behavior vs Implementation` |
-| Flaky tests (random pass/fail) — usually an implementation bug, not a test bug | `references/test-smells.md` | `## Quick Reference` + `## Flaky Tests` |
-| Brittle tests (break on refactor) | `references/test-smells.md` | `## Quick Reference` + `## Brittle Tests` |
+| Tests pass but don't verify behavior | `references/test-philosophy.md` | `## Quick Reference` + `## The Behavior vs Implementation Distinction` |
+| Flaky tests (random pass/fail) — usually an implementation bug, not a test bug | `references/test-smells.md` | `## Quick Reference` + `### 1. Flaky Tests` |
+| Brittle tests (break on refactor) | `references/test-smells.md` | `## Quick Reference` + `### 2. Brittle Tests` |
 | Over-mocking / mock confusion | `references/mocking-strategies.md` | `## Quick Reference` + `## The Mocking Decision Framework` |
 | Poor structure (no AAA, bad names) | `references/test-structure.md` | `## Quick Reference` + `## The AAA Pattern` |
 | Missing edge/error case coverage | `references/coverage.md` | `## Quick Reference` + `## What to Test` |
