@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Python testing patterns skill optimized.** Applied prompt engineering patterns: directive framing (Identity Establishment + Affirmative Directives), severity-categorized red flags (Emphasis Hierarchy + Category-Based Generalization), promoted orphan mocking instruction to proper section with concrete boundary examples, extracted async auto-mode recommendation from code comment to directive prose.
+- **Rust testing patterns skill optimized.** Applied same prompt engineering patterns: directive opening (Affirmative Directives), red flags subcategorized into three severity tiers — safety/correctness, async/concurrency, tooling/hygiene (Category-Based Generalization + Emphasis Hierarchy), promoted orphan mocking line to headed section with routing (Hint-Based Guidance).
 
 ## [1.93.0] - 2026-03-26
 

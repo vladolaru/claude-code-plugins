@@ -5,7 +5,7 @@ description: Use when writing or reviewing Rust tests - built-in test framework,
 
 # Rust Testing Patterns
 
-Built-in Rust `testing` framework patterns and common crates. For shared test quality principles (philosophy, smells, mocking decisions), see `testing-patterns`.
+Apply these Rust testing patterns when writing or reviewing tests. Flag red flags during review. Use the assertion quick reference when writing assertions. For shared test quality principles (philosophy, smells, mocking decisions), see `testing-patterns`.
 
 ## Reference Routing
 
@@ -34,23 +34,35 @@ Built-in Rust `testing` framework patterns and common crates. For shared test qu
 
 ## Rust Red Flags
 
+**Safety and correctness — assertions that lie or miss bugs:**
+
 | Pattern | Why Harmful | Fix |
 |---------|------------|-----|
 | `#[should_panic]` without `expected` | Any panic passes — setup unwrap, bounds check, anything | Add `expected = "specific message"` |
 | `debug_assert!` in unsafe code | Stripped in release → undefined behavior | Use `assert!` |
 | Side effects in `debug_assert!` | Different behavior debug vs release | Extract side effect, then assert |
 | `assert!(a == b)` | No diff on failure | Use `assert_eq!(a, b)` |
+| `assert_eq!` on floats | Imprecision failures | `(a - b).abs() < epsilon` or `approx` |
+| Result test without assertions | `parse(x)?; Ok(())` only checks "no error" | Assert on the returned value |
+
+**Async and concurrency — race conditions and silent failures:**
+
+| Pattern | Why Harmful | Fix |
+|---------|------------|-----|
 | Spawned tasks not awaited | Panics inside `tokio::spawn` silently lost | `.await` the `JoinHandle` |
 | Single-threaded async test for multi-threaded prod | Misses race conditions | `flavor = "multi_thread"` |
 | `block_on()` inside `#[tokio::test]` | Deadlocks single-threaded runtime | Use `.await` directly |
 | Shared mutable state without `#[serial]` | Flaky under parallel execution | Use `serial_test` crate |
+
+**Tooling and hygiene — maintenance debt:**
+
+| Pattern | Why Harmful | Fix |
+|---------|------------|-----|
 | Manual temp dirs | No cleanup on panic, parallel collisions | Use `tempfile::TempDir` |
 | `tests/common.rs` (not `tests/common/mod.rs`) | Phantom test crate in output | Use subdirectory convention |
 | `.proptest-regressions/` not committed | Previously-found bugs not retested | Add to VCS |
 | `.snap.new` committed or `INSTA_UPDATE=always` in CI | Unreviewed snapshot changes | Fail CI on `.snap.new` |
 | `#[ignore]` without reason | Hidden tech debt | `#[ignore = "reason"]` |
-| `assert_eq!` on floats | Imprecision failures | `(a - b).abs() < epsilon` or `approx` |
-| Result test without assertions | `parse(x)?; Ok(())` only checks "no error" | Assert on the returned value |
 
 ## Inline Unit Test Template
 
@@ -93,4 +105,6 @@ fn service_finds_item() {
 }
 ```
 
-Mock only at boundaries (network, disk, time). Over-mocking tests mock behavior, not real code.
+## Mocking Principle
+
+Mock at boundaries (network, disk, time), not internal functions. Tests that over-mock verify mock wiring, not real behavior. When unsure, see `testing-patterns` → `mocking-strategies.md`.
