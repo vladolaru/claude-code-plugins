@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.93.1] - 2026-03-27
 
+### Fixed
+- **decision-reviewer model corrected to opus.** Agent `.md` frontmatter said `model: sonnet` but `agent_registry.json` (source of truth) said `model_tier: "opus"`. Fixed `.md` to match registry. Also corrected model tier documentation in README for 4 agents (pr-reviewer, a11y-reviewer, review-reconciliator, decision-reviewer) and rewrote Model Tiers section with accurate counts: opus(3)/sonnet(18)/haiku(6).
+- **pirategoat-tools README missing `/iterative-review` command and `create-github-pr` skill.** Added both to their respective tables; updated command count from 6 to 7.
+
 ### Changed
 - **Testing patterns skill rewritten.** Applied 9 prompt engineering techniques to SKILL.md: Identity Establishment (directive opening), Emphasis Hierarchy (RULE 0: test behavior not implementation), Pre-Work Context Analysis (read existing tests first), Affirmative Directives (verb headers), Category-Based Generalization (routing table expanded from 8 to 12 entries), Scope Limitation (removed duplicate reference library listing), Error Normalization (flaky tests = implementation bug hint), Hint-Based Guidance (routing entry hints), Contrastive Examples (WHY column in FORBIDDEN table). Added missing language-specific skill references (rust, python).
 - **Testing reference corpus compressed ~32%.** All 8 core reference files compressed for agent consumption: Quick Reference tables added to every file for section-targeted routing, narrative/blog content extracted to principles, code examples trimmed to one per concept, duplicate content across files removed. test-quality.md merged into test-philosophy.md (60% overlap eliminated). README.md emoji headers removed per project standard. Individual reductions: test-layers 69%, test-smells 55%, test-structure 53%, test-benefits 53%, tdd-workflow 43%, README 43%, test-data 41%, coverage 32%, mocking-strategies 27%.
