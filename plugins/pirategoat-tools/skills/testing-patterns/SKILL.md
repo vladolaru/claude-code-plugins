@@ -48,7 +48,7 @@ When you find a test concern, read ONLY the specified sections. Do NOT read full
 | "Why should we test this?" — stakeholder justification | `references/test-benefits.md` | `## Quick Reference` |
 | TDD red-green-refactor questions | `references/tdd-workflow.md` | `## Quick Reference` + `## The Red-Green-Refactor Cycle` |
 
-**How to read sections:** Grep for the start heading to find its line number, then Read with offset+limit to the next `## ` heading.
+**How to read sections:** Grep for the start heading to find its line number, then Read with offset+limit to the next heading at the same or higher level (e.g., `### ` stops at the next `### ` or `## `; `## ` stops at the next `## `).
 
 **Fallback:** For concerns not listed, read the reference file's `## Quick Reference` section only.
 
