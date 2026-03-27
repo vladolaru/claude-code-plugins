@@ -2,7 +2,7 @@
 
 When and how to use mocks, stubs, fakes, and other test doubles effectively.
 
-## Quick Reference: When to Mock
+## Quick Reference
 
 | Dependency Type | Unit Test | Integration Test |
 |-----------------|-----------|------------------|
@@ -50,6 +50,16 @@ Is the dependency...
 
 ## Types of Test Doubles
 
+### When to Use Each
+
+| Double | Use When | Example |
+|--------|----------|---------|
+| Dummy | Need to fill a parameter | Unused logger |
+| Stub | Need controlled input | Tax rate lookup |
+| Spy | Need to verify a call happened | Audit logging |
+| Mock | Need to verify call with specific args | Payment gateway |
+| Fake | Complex behavior, multiple interactions | In-memory database |
+
 ### Dummy
 
 Objects passed around but never used. Fill parameter lists.
@@ -72,7 +82,6 @@ Pre-programmed responses. Used when you need controlled input.
 
 ```php
 public function test_calculate_tax_uses_customer_location() {
-    // Stub: Returns predetermined value
     $tax_service = $this->createStub( TaxService::class );
     $tax_service->method( 'get_rate' )
                 ->willReturn( 0.08 ); // Always returns 8%
@@ -82,13 +91,6 @@ public function test_calculate_tax_uses_customer_location() {
 
     $this->assertSame( 108.00, $total );
 }
-```
-
-```javascript
-// Jest stub
-const taxService = {
-    getRate: jest.fn().mockReturnValue(0.08),
-};
 ```
 
 ### Spy
@@ -110,16 +112,6 @@ public function test_order_creation_logs_event() {
 }
 ```
 
-```javascript
-// Jest spy
-const logger = { log: jest.fn() };
-const service = new OrderService(logger);
-
-service.create(cart, customer);
-
-expect(logger.log).toHaveBeenCalledWith('order_created', expect.any(Object));
-```
-
 ### Mock
 
 Pre-programmed expectations that verify interactions.
@@ -128,7 +120,6 @@ Pre-programmed expectations that verify interactions.
 public function test_payment_gateway_is_called_with_correct_amount() {
     $gateway = $this->createMock( PaymentGateway::class );
 
-    // Mock: Expects specific call
     $gateway->expects( $this->once() )
             ->method( 'charge' )
             ->with( 100.00, $this->anything() )
@@ -144,14 +135,13 @@ public function test_payment_gateway_is_called_with_correct_amount() {
 Working implementation with shortcuts. Best for complex collaborators.
 
 ```php
-// Fake: Real implementation, simplified for testing
 class FakePaymentGateway implements PaymentGatewayInterface {
     public array $charges = [];
 
     public function charge( float $amount, array $card ): PaymentResult {
         $this->charges[] = [
             'amount' => $amount,
-            'card' => $card,
+            'card'   => $card,
         ];
         return new PaymentResult( 'success', 'fake-transaction-' . count( $this->charges ) );
     }
@@ -168,19 +158,36 @@ public function test_order_processes_payment() {
 }
 ```
 
-### When to Use Each
-
-| Double | Use When | Example |
-|--------|----------|---------|
-| Dummy | Need to fill a parameter | Unused logger |
-| Stub | Need controlled input | Tax rate lookup |
-| Spy | Need to verify a call happened | Audit logging |
-| Mock | Need to verify call with specific args | Payment gateway |
-| Fake | Complex behavior, multiple interactions | In-memory database |
-
 ---
 
 ## Mock Verification Guidelines
+
+### State vs Behavior Verification
+
+**State verification** (preferred) — assert on the result:
+
+```php
+public function test_order_total_is_calculated() {
+    $order = $this->service->create( $this->cart );
+    $this->assertSame( 110.00, $order->total );
+}
+```
+
+**Behavior verification** (use sparingly) — assert that something was called. Appropriate when:
+
+1. **Side effects are the behavior** - Sending emails, webhooks
+2. **No observable state change** - Fire-and-forget operations
+3. **Verifying integration points** - API was called correctly
+
+```php
+public function test_order_creation_sends_notification() {
+    $notifier = $this->createMock( Notifier::class );
+    $notifier->expects( $this->once() )->method( 'send' );
+
+    $service = new OrderService( $notifier );
+    $service->create( $this->cart );
+}
+```
 
 ### Verify Only What Matters
 
@@ -201,37 +208,6 @@ $service->expects( $this->once() )
         ->method( 'process' )
         ->with( 100, $this->anything(), $this->anything() );
 ```
-
-### State vs Behavior Verification
-
-**State verification:** Assert on the result (preferred).
-
-```php
-// State verification - simpler, less brittle
-public function test_order_total_is_calculated() {
-    $order = $this->service->create( $this->cart );
-    $this->assertSame( 110.00, $order->total );
-}
-```
-
-**Behavior verification:** Assert that something was called (use sparingly).
-
-```php
-// Behavior verification - use when the call itself is the behavior
-public function test_order_creation_sends_notification() {
-    $notifier = $this->createMock( Notifier::class );
-    $notifier->expects( $this->once() )->method( 'send' );
-
-    $service = new OrderService( $notifier );
-    $service->create( $this->cart );
-}
-```
-
-### When Behavior Verification is Appropriate
-
-1. **Side effects are the behavior** - Sending emails, webhooks
-2. **No observable state change** - Fire-and-forget operations
-3. **Verifying integration points** - API was called correctly
 
 ---
 
@@ -262,7 +238,6 @@ public function test_create_order_rejects_invalid_cart() {
 // BAD: Only testing the mock returns what we told it to
 $calculator = $this->createStub( Calculator::class );
 $calculator->method( 'add' )->willReturn( 5 );
-
 $result = $calculator->add( 2, 3 );
 $this->assertSame( 5, $result );  // Of course it's 5 - we said so!
 
@@ -272,32 +247,10 @@ $tax_service->method( 'get_rate' )->willReturn( 0.10 );
 
 $calculator = new PriceCalculator( $tax_service );  // Real code!
 $result = $calculator->calculate_total( 100 );
-
 $this->assertSame( 110, $result );  // Tests real logic
 ```
 
-### 3. Mock Leaking Between Tests
-
-```javascript
-// BAD: Mocks persist across tests
-jest.mock('./api');
-
-it('test one', () => {
-    api.fetch.mockReturnValue('result1');
-    // ...
-});
-
-it('test two', () => {
-    // Still has mockReturnValue from test one!
-});
-
-// GOOD: Clear mocks in beforeEach
-beforeEach(() => {
-    jest.clearAllMocks();
-});
-```
-
-### 4. Over-Mocking (The "Mock Everything" Trap)
+### 3. Over-Mocking (The "Mock Everything" Trap)
 
 ```php
 // BAD: So many mocks, what are we even testing?
@@ -310,7 +263,6 @@ public function test_process_order() {
     $payment_mock = $this->createMock( PaymentGateway::class );
     $notification_mock = $this->createMock( Notifier::class );
     $logger_mock = $this->createMock( Logger::class );
-
     // At this point, we're testing nothing useful
 }
 
@@ -327,84 +279,16 @@ public function test_process_order_charges_payment() {
 }
 ```
 
----
-
-## Language-Specific Patterns
-
-### PHP: PHPUnit Mocks
+### 4. Mock Leaking Between Tests
 
 ```php
-// Create mock
-$mock = $this->createMock( ServiceInterface::class );
-
-// Stub a method
-$mock->method( 'getValue' )->willReturn( 42 );
-
-// Set expectation
-$mock->expects( $this->once() )
-     ->method( 'doSomething' )
-     ->with( $this->equalTo( 'arg' ) );
-
-// Consecutive returns
-$mock->method( 'getNext' )
-     ->willReturnOnConsecutiveCalls( 1, 2, 3 );
-
-// Throw exception
-$mock->method( 'fail' )
-     ->willThrowException( new RuntimeException() );
-```
-
-### PHP: Brain Monkey for WordPress
-
-```php
-// Mock WordPress functions
-use Brain\Monkey\Functions;
-
-Functions\when( 'get_option' )->justReturn( 'value' );
-Functions\expect( 'update_option' )->once()->with( 'key', 'value' );
-Functions\when( 'current_time' )->justReturn( '2024-01-15' );
-```
-
-### JavaScript: Jest
-
-```javascript
-// Module mock
-jest.mock('./api');
-api.fetch.mockResolvedValue({ data: 'value' });
-
-// Function mock
-const callback = jest.fn();
-callback.mockReturnValue(42);
-
-// Spy on method
-const spy = jest.spyOn(object, 'method');
-
-// Clear between tests
-beforeEach(() => {
-    jest.clearAllMocks();
-});
-
-// Verify calls
-expect(callback).toHaveBeenCalledWith('arg');
-expect(callback).toHaveBeenCalledTimes(1);
-```
-
-### JavaScript: Vitest
-
-```javascript
-import { vi } from 'vitest';
-
-// Function mock
-const mock = vi.fn();
-mock.mockReturnValue(42);
-
-// Module mock
-vi.mock('./api', () => ({
-    fetch: vi.fn().mockResolvedValue({ data: 'value' }),
-}));
-
-// Spy
-const spy = vi.spyOn(object, 'method');
+// BAD: Shared mock state persists across tests
+// GOOD: Reset mocks in setUp()
+protected function setUp(): void {
+    parent::setUp();
+    $this->gateway = $this->createMock( PaymentGateway::class );
+    $this->service = new OrderService( $this->gateway );
+}
 ```
 
 ---
