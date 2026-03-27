@@ -145,7 +145,6 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 |-----|-------------|
 | [Changelog](./CHANGELOG.md) | Detailed version history |
 | [Guides](./docs/guides/) | User guides and tutorials |
-| [False Positive Guide](./docs/guides/FALSE-POSITIVE-HANDLING-GUIDE.md) | Distinguishing real issues from noise |
 
 ## Structure
 
