@@ -60,11 +60,9 @@ Read ONLY the specified sections from the reference file. Do NOT read full files
 
 ## Guardrails
 
-**RULE:** Wait for the third duplication before introducing an abstraction. Two similar blocks are not a pattern — they are two similar blocks.
+**RULE:** Apply a pattern only when you can name the specific design pressure it relieves. If the only justification is "this is the proper way," skip the pattern.
 
-Apply a pattern only when you can name the specific design pressure it relieves. If the only justification is "this is the proper way," skip the pattern.
-
-Solve today's problem. Add flexibility when a second concrete use case arrives, not before.
+Wait for the third duplication before extracting a shared abstraction. Two similar blocks are not a pattern — they are two similar blocks. Solve today's problem; design for tomorrow only when the pressure is concrete.
 
 ## Architecture Review Checklist
 
@@ -99,8 +97,6 @@ Use after recommending a pattern to verify the proposed design. Check only the s
 - [ ] Composable components over inheritance hierarchies
 
 ## Pattern Quick Reference
-
-For the full pattern index with relationships and common stacks, read `patterns/README.md`.
 
 | Problem | Patterns |
 |---------|----------|
