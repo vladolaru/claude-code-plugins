@@ -5,7 +5,7 @@ description: Use when writing or reviewing Python tests - pytest fixtures, param
 
 # Python Testing Patterns
 
-pytest and unittest patterns and common libraries. For shared test quality principles (philosophy, smells, mocking decisions), see `testing-patterns`.
+Apply these pytest patterns when writing or reviewing Python tests. Flag red flags during review. Use the assertion quick reference when writing assertions. For shared test quality principles (philosophy, smells, mocking decisions), see `testing-patterns`.
 
 ## Reference Routing
 
@@ -36,16 +36,28 @@ pytest and unittest patterns and common libraries. For shared test quality princ
 
 ## Python Red Flags
 
+**Silent failures — tests pass but verify nothing:**
+
 | Pattern | Why Harmful | Fix |
 |---------|------------|-----|
 | `mock.called_once_with(...)` | Truthy Mock, not an assertion | `mock.assert_called_once_with(...)` |
 | `async def test_*` without marker (strict) | Body never runs, silent PASS | Add `@pytest.mark.asyncio` or use `auto` mode |
 | `Mock()` without `spec=` | Accepts any attribute/typo | Use `spec=` or `create_autospec()` |
 | `@patch` at definition site | Mock has no effect | Patch where the name is imported |
+
+**State and timing — flaky or leaking tests:**
+
+| Pattern | Why Harmful | Fix |
+|---------|------------|-----|
 | Session-scoped fixture + mutable return | State leaks across tests | Scope `function` or return immutable |
 | `@freeze_time` but fixture uses `now()` | Fixture outside freeze context | Use `@pytest.mark.freeze_time` |
 | `setUp` without `super().setUp()` | Base class setup skipped | Call `super().setUp()` first |
 | `time.sleep(N)` for sync | Flaky under CI load | Event/queue-based sync |
+
+**Correctness and hygiene:**
+
+| Pattern | Why Harmful | Fix |
+|---------|------------|-----|
 | `assert x == float_expr` | Imprecision failures | `pytest.approx()` |
 | `tags = []` in factory class | Shared mutable default | `factory.LazyAttribute(lambda o: [])` |
 | `.hypothesis/` in `.gitignore` | Prior failures not retested | Commit `.hypothesis/examples/` |
@@ -79,10 +91,9 @@ def make_user():
 
 ## Async Test Patterns
 
-```python
-# Auto mode (recommended): all async tests auto-collected
-# pyproject.toml: asyncio_mode = "auto"
+Use `asyncio_mode = "auto"` in `pyproject.toml` so async tests run without per-test `@pytest.mark.asyncio` markers.
 
+```python
 async def test_create_user():
     user = await create_user("alice")
     assert user.id is not None
@@ -95,4 +106,6 @@ async def db_pool():
     await pool.close()
 ```
 
-Mock at boundaries, not internals. Over-mocking tests mock behavior, not real code.
+## Mocking Principle
+
+Mock at boundaries (HTTP, database, filesystem), not internal functions. Tests that over-mock verify mock wiring, not real behavior. When unsure, see `testing-patterns` → `mocking-strategies.md`.

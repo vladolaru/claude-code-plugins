@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.93.1] - 2026-03-27
+
+### Changed
+- **Python testing patterns skill optimized.** Applied prompt engineering patterns: directive framing (Identity Establishment + Affirmative Directives), severity-categorized red flags (Emphasis Hierarchy + Category-Based Generalization), promoted orphan mocking instruction to proper section with concrete boundary examples, extracted async auto-mode recommendation from code comment to directive prose.
+
 ## [1.93.0] - 2026-03-26
 
 ### Added
