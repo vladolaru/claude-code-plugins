@@ -83,6 +83,13 @@ Reusable patterns for building new skills and commands are documented in [`docs/
 
 - **[Step-by-step prompt injection](docs/patterns/step-by-step-prompt-injection.md)** — Enforce analytical discipline across multi-phase workflows by driving each step from a Python CLI script. Claude calls the script once per step; the script injects that step's instructions and nothing else. Includes script template, skill file structure, testing checklist, and reference implementations from `decision-critic`.
 
+## External Tool References
+
+Integration guides for spawning external CLIs as subprocesses, documented in [`docs/`](docs/).
+
+- **[Codex CLI reference](docs/codex-cli-reference.md)** — Integrating with the OpenAI Codex CLI: prompting contracts, structured output, headless review invocation, sandbox behavior, and Structured Outputs schema constraints.
+- **[Claude Code CLI reference](docs/claude-code-cli-reference.md)** — Spawning Claude Code CLI as a subprocess: nesting guard status, isolation flags, structured output via `--json-schema`, settings hierarchy, and Python integration pattern.
+
 ## Development
 
 ```bash
