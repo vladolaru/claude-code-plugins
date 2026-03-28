@@ -192,6 +192,22 @@ class TestPushbackLog:
         assert entry is not None
         assert "DEFERRED" in entry
 
+    def test_includes_p2_deferred(self):
+        """Deferred items bypass severity gate so the reviewer sees scope decisions."""
+        outcome = {"id": "r1_f3", "action": "deferred", "reasoning": "Out of scope."}
+        finding = {"id": "r1_f3", "severity": "P2", "title": "Edge case", "location": "b.py:5"}
+        entry = build_pushback_entry(outcome, finding, round_num=1)
+        assert entry is not None
+        assert "DEFERRED" in entry
+
+    def test_includes_p3_deferred(self):
+        """Even P3 deferred items are logged to prevent re-surfacing."""
+        outcome = {"id": "r1_f4", "action": "deferred", "reasoning": "Nice to have."}
+        finding = {"id": "r1_f4", "severity": "P3", "title": "Suggestion", "location": "c.py:10"}
+        entry = build_pushback_entry(outcome, finding, round_num=1)
+        assert entry is not None
+        assert "DEFERRED" in entry
+
     def test_append_and_read_log(self, tmp_path):
         d = str(tmp_path)
         append_pushback_log(d, "### Round 1\nREJECTED: [r1_f2] ...\n")

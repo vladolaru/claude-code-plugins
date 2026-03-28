@@ -138,7 +138,7 @@ def check_auth():
 
 def write_prompt_file(output_dir, round_num, rubric, merge_base,
                       context, pushback_log, analysis_doc_path,
-                      prior_analysis_path=None):
+                      prior_analysis_path=None, deferred_items=None):
     """Compose and write the review prompt file for codex exec.
 
     The prompt is ordered for optimal server-side prompt caching:
@@ -175,7 +175,27 @@ def write_prompt_file(output_dir, round_num, rubric, merge_base,
             "\nReview the CURRENT state of the code. Previously fixed issues "
             "should no longer exist. Re-raise a rejected item ONLY if you have "
             "a new technical counter-argument the reviewer has not addressed. "
-            "Otherwise, treat rejected items as resolved.\n"
+            "Treat rejected items as resolved. Treat deferred items as "
+            "out-of-scope — they were acknowledged and will be tracked as "
+            "follow-ups. Do not re-raise deferred items.\n"
+        )
+
+    # Previously deferred items (round 2+)
+    if deferred_items:
+        parts.append("\n## Previously Deferred Items\n")
+        parts.append(
+            "The following issues were identified in prior rounds, acknowledged "
+            "as valid, and deferred as out-of-scope for this branch. They will "
+            "be tracked as follow-ups.\n"
+        )
+        for item in deferred_items:
+            sev = item.get("severity", "?")
+            title = item.get("title", "Untitled")
+            loc = item.get("location", "unknown")
+            parts.append(f'- [{sev}] "{title}" ({loc})')
+        parts.append(
+            "\nFocus your review on NEW issues not covered above. "
+            "Do not re-raise deferred items — their scope decision has been made.\n"
         )
 
     # Prior analysis doc (round 2+)

@@ -126,6 +126,46 @@ class TestWritePromptFile:
         assert "r1-analysis.md" in content
         assert "r2-analysis.md" in content
 
+    def test_round_2_includes_deferred_items_section(self, tmp_path):
+        deferred = [
+            {"severity": "P2", "title": "Missing null check", "location": "api.ts:42"},
+            {"severity": "P3", "title": "Vague error message", "location": "handler.ts:15"},
+        ]
+        path = write_prompt_file(
+            str(tmp_path), 2, rubric="# Rubric",
+            merge_base="abc123", context="Context.",
+            pushback_log="### Round 1\nREJECTED: ...",
+            analysis_doc_path="r2-analysis.md",
+            deferred_items=deferred,
+        )
+        content = Path(path).read_text()
+        assert "Previously Deferred Items" in content
+        assert "Missing null check" in content
+        assert "api.ts:42" in content
+        assert "Do not re-raise deferred items" in content
+
+    def test_no_deferred_section_when_empty(self, tmp_path):
+        path = write_prompt_file(
+            str(tmp_path), 2, rubric="# Rubric",
+            merge_base="abc123", context="Context.",
+            pushback_log="### Round 1\nREJECTED: ...",
+            analysis_doc_path="r2-analysis.md",
+            deferred_items=None,
+        )
+        content = Path(path).read_text()
+        assert "Previously Deferred Items" not in content
+
+    def test_review_history_mentions_deferred(self, tmp_path):
+        path = write_prompt_file(
+            str(tmp_path), 2, rubric="# Rubric",
+            merge_base="abc123", context="Context.",
+            pushback_log="### Round 1\nDEFERRED: ...",
+            analysis_doc_path="r2-analysis.md",
+        )
+        content = Path(path).read_text()
+        assert "Treat deferred items as" in content
+        assert "out-of-scope" in content
+
     def test_round_specific_filename(self, tmp_path):
         path = write_prompt_file(
             str(tmp_path), 3, rubric="# R", merge_base="x",

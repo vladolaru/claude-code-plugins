@@ -113,8 +113,10 @@ def build_pushback_entry(outcome, finding, round_num, severity_gate=None):
 
     if action == "fixed":
         return None
-    if severity not in gate and severity != "unknown":
-        return None
+    # Deferred items always logged — reviewer must see scope decisions
+    if action != "deferred":
+        if severity not in gate and severity != "unknown":
+            return None
 
     label = action.upper()
     fid = finding.get("id", "?")

@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.93.3] - 2026-03-28
+
+### Fixed
+- **Iterative review: deferred findings re-surfacing across rounds.** Three reinforcing changes prevent the reviewer from re-flagging items the engineer already deferred: (1) new "Previously Deferred Items" section in the reviewer prompt lists all deferred items with explicit "do not re-raise" instruction, (2) Review History instruction now addresses both rejected AND deferred items (previously only mentioned rejected), (3) pushback log severity gate bypassed for deferred items so they appear in the chronological history regardless of severity.
+
 ## [1.93.2] - 2026-03-28
 
 ### Fixed

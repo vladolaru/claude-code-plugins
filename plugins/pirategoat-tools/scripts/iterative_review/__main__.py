@@ -18,7 +18,7 @@ from .loop import (
     read_loop_state, write_loop_state, DEFAULT_STATE, MAX_ROUNDS_HARD_LIMIT,
     compute_max_rounds, compute_relevant_diff_size, check_convergence,
     build_pushback_entry, append_pushback_log, read_pushback_log,
-    append_deferred_item, validate_outcomes, outcome_severity,
+    append_deferred_item, read_deferred_items, validate_outcomes, outcome_severity,
 )
 from .briefing import (
     format_evaluation_briefing, format_completion_briefing,
@@ -391,6 +391,7 @@ def action_review(args):
 
     # Compose prompt file
     pushback_log = read_pushback_log(output_dir)
+    deferred_items = read_deferred_items(output_dir) if round_num > 1 else []
     prefix = state.get("analysis_doc_prefix", "independent-review")
     analysis_path = os.path.join(output_dir, f"{prefix}-r{round_num}-analysis.md")
 
@@ -413,6 +414,7 @@ def action_review(args):
         pushback_log=pushback_log if pushback_log else None,
         analysis_doc_path=analysis_path,
         prior_analysis_path=prior_path,
+        deferred_items=deferred_items if deferred_items else None,
     )
 
     context_chars = os.path.getsize(prompt_file) if os.path.isfile(prompt_file) else 0
