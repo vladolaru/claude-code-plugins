@@ -126,7 +126,7 @@
       "name": "prompt-engineer",
       "source": "./plugins/prompt-engineer",
       "description": "Human-in-the-loop prompt optimization with evidence-grounded pattern attribution using proven prompt engineering patterns.",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "author": {
         "name": "Vlad Olaru"
       },

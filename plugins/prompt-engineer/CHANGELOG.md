@@ -5,6 +5,13 @@ All notable changes to the prompt-engineer plugin will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-03-28
+
+### Fixed
+
+- **Reference file paths**: Use `${CLAUDE_SKILL_DIR}` substitution for all reference paths so CC resolves them directly instead of searching the filesystem
+- **Stale command reference**: Remove non-existent `references/prompt-engineering.md` path from `/optimize-prompt` command (files were split in v2.0.0)
+
 ## [2.1.0] - 2025-01-23
 
 ### Added

@@ -12,7 +12,7 @@ If a file path is provided, read the file first and optimize its contents. Commo
 - CLAUDE.md or memory files
 - Any system prompt or instruction file
 
-Apply ALL prompt engineering patterns from the skill's `references/prompt-engineering.md` file. For EACH change, specify EXACTLY which technique(s) you used:
+Apply ALL prompt engineering patterns from the skill's reference files. For EACH change, specify EXACTLY which technique(s) you used:
 - Pattern name (e.g., "Progressive Disclosure", "Emphasis Hierarchy")
 - Why this pattern applies here
 - Expected behavioral impact

@@ -39,7 +39,7 @@ Before ANY analysis, read the appropriate pattern reference(s). Each reference c
 ### Single-Turn Reference (Always Read)
 
 ```
-references/prompt-engineering-single-turn.md
+${CLAUDE_SKILL_DIR}/references/prompt-engineering-single-turn.md
 ```
 
 This contains the complete catalog of single-turn patterns, including:
@@ -52,7 +52,7 @@ This contains the complete catalog of single-turn patterns, including:
 ### Multi-Turn Reference (Conditional)
 
 ```
-references/prompt-engineering-multi-turn.md
+${CLAUDE_SKILL_DIR}/references/prompt-engineering-multi-turn.md
 ```
 
 **Read when the prompt involves:**
@@ -65,7 +65,7 @@ references/prompt-engineering-multi-turn.md
 ### Subagent Orchestration Reference (Conditional)
 
 ```
-references/prompt-engineering-subagents.md
+${CLAUDE_SKILL_DIR}/references/prompt-engineering-subagents.md
 ```
 
 **Read when the prompt involves:**
@@ -82,7 +82,7 @@ references/prompt-engineering-subagents.md
 ### Human-in-the-Loop Reference (Conditional)
 
 ```
-references/prompt-engineering-hitl.md
+${CLAUDE_SKILL_DIR}/references/prompt-engineering-hitl.md
 ```
 
 **Read when the prompt involves:**
@@ -97,7 +97,7 @@ references/prompt-engineering-hitl.md
 ### Compression Reference (Conditional)
 
 ```
-references/prompt-engineering-compression.md
+${CLAUDE_SKILL_DIR}/references/prompt-engineering-compression.md
 ```
 
 **Read when:**
