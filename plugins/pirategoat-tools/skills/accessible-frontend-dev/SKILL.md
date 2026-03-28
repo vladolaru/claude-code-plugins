@@ -20,7 +20,7 @@ Native HTML element exists for this semantic?
 ├── YES → Use it. No ARIA needed.
 │   └── Needs additional state? → Add aria-* state attributes only
 └── NO → Use ARIA roles + required states
-    └── Follow component pattern in references/component-patterns.md
+    └── Follow component pattern in ${CLAUDE_SKILL_DIR}/references/component-patterns.md
 ```
 
 ### What focus management strategy?
@@ -249,7 +249,7 @@ Prefer CSS mechanisms over JavaScript runtime checks for presentational adaptati
 
 ## Component Pattern Quick Reference
 
-For each widget type, `references/component-patterns.md` has the full ARIA pattern, keyboard model, and focus behavior. Quick lookup:
+For each widget type, `${CLAUDE_SKILL_DIR}/references/component-patterns.md` has the full ARIA pattern, keyboard model, and focus behavior. Quick lookup:
 
 | Widget | Key ARIA | Key Keyboard | Key Focus |
 |--------|----------|-------------|-----------|
@@ -302,6 +302,6 @@ Skip this section for non-WordPress projects. These utilities are Gutenberg-spec
 ## Detailed Research
 
 For deep dives into specific areas, see:
-- `docs/research/a11y/07-synthesized-rules.md` — Full rule set with all cross-references
-- `docs/research/a11y/03-component-a11y-patterns.md` — 26 Gutenberg component analyses
-- `docs/research/a11y/04-anti-patterns-from-bugs.md` — 15 anti-patterns with real commit diffs
+- `${CLAUDE_SKILL_DIR}/../../../../.claude/docs/research/a11y/07-synthesized-rules.md` — Full rule set with all cross-references
+- `${CLAUDE_SKILL_DIR}/../../../../.claude/docs/research/a11y/03-component-a11y-patterns.md` — 26 Gutenberg component analyses
+- `${CLAUDE_SKILL_DIR}/../../../../.claude/docs/research/a11y/04-anti-patterns-from-bugs.md` — 15 anti-patterns with real commit diffs

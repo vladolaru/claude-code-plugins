@@ -96,7 +96,7 @@ Backtrack: Phase 4 → Phase 3 (fidelity gap found). Planning sessions: Phase 3 
 Some phases use helper scripts bundled with this plugin. Derive the plugin root from the skill base directory (provided by Claude Code on skill load — go two levels up):
 
 ```bash
-PLUGIN_ROOT="<skill base directory>/../.."
+PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
 ```
 
 ### Phase 0: Survey
@@ -107,7 +107,7 @@ PLUGIN_ROOT="<skill base directory>/../.."
 
 2. **Fetch metadata** — Call `get_metadata` on the root node. If the response is >50K chars, save to file and parse with:
    ```bash
-   python3 $PLUGIN_ROOT/scripts/figma/parse_nodes.py <saved-file> [--format tree|flat|json]
+   python3 ${CLAUDE_SKILL_DIR}/../../scripts/figma/parse_nodes.py <saved-file> [--format tree|flat|json]
    ```
 
 3. **Classify nodes** — From the parsed hierarchy, identify:
@@ -129,12 +129,12 @@ PLUGIN_ROOT="<skill base directory>/../.."
 
 2. **Parse each response** — If a response is >20K chars, save to file and parse with:
    ```bash
-   python3 $PLUGIN_ROOT/scripts/figma/extract_specs.py <saved-file> [--tokens-file <tokens-cache>]
+   python3 ${CLAUDE_SKILL_DIR}/../../scripts/figma/extract_specs.py <saved-file> [--tokens-file <tokens-cache>]
    ```
 
 3. **Build token mapping** — If no `.claude/figma-config.json` exists, cross-reference Figma token names with the project's CSS variables/design tokens. Write the mapping to `.claude/tmp/figma-cache/token-mapping-<fileKey>.json`.
 
-4. **Write Design Specification Document** — Create `.claude/tmp/figma-specs/<feature-name>.md` using the template in `references/design-spec-template.md`. This document is the source of truth for implementation — NOT the raw Figma responses.
+4. **Write Design Specification Document** — Create `.claude/tmp/figma-specs/<feature-name>.md` using the template in `${CLAUDE_SKILL_DIR}/references/design-spec-template.md`. This document is the source of truth for implementation — NOT the raw Figma responses.
 
 **Output:** Design Specification Document with normalized spacing, typography, colors, and component structure using project tokens.
 

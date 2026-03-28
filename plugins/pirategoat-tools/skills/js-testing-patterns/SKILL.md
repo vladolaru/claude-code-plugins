@@ -11,12 +11,12 @@ Jest, Vitest, and React Testing Library testing patterns. For shared test qualit
 
 | Need | Reference File | Sections to Read |
 |------|---------------|-----------------|
-| Jest/Vitest + RTL patterns | `../testing-patterns/references/jest-vitest-patterns.md` | Full file (~422L, manageable) |
-| Behavior vs implementation | `../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
-| Flaky/brittle tests | `../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
-| Mock usage decisions | `../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
-| AAA pattern/naming | `../testing-patterns/references/test-structure.md` | `## The AAA Pattern` + `## Test Naming Conventions` |
-| Test data strategy | `../testing-patterns/references/test-data.md` | `## Factories` + `## Builders` |
+| Jest/Vitest + RTL patterns | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/jest-vitest-patterns.md` | Full file (~422L, manageable) |
+| Behavior vs implementation | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
+| Flaky/brittle tests | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
+| Mock usage decisions | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
+| AAA pattern/naming | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-structure.md` | `## The AAA Pattern` + `## Test Naming Conventions` |
+| Test data strategy | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-data.md` | `## Factories` + `## Builders` |
 
 **How to read sections:** Grep for heading to find line number, Read with offset+limit.
 

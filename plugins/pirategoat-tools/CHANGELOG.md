@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.93.2] - 2026-03-28
+
+### Fixed
+- **Skill reference file paths across 12 skills.** Replaced ~80 bare relative paths (`references/foo.md`, `../testing-patterns/references/bar.md`, `$PLUGIN_ROOT/scripts/...`) with `${CLAUDE_SKILL_DIR}`-based paths so CC resolves them directly via string substitution instead of searching the filesystem. Affected skills: testing-patterns, php/js/go/python/rust/e2e-testing-patterns, wordpress-backend-dev, software-architecture, accessible-frontend-dev, using-figma, decision-critic, analyzing-cc-sessions.
+
 ## [1.93.1] - 2026-03-27
 
 ### Fixed

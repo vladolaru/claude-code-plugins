@@ -11,11 +11,11 @@ Playwright end-to-end testing patterns. For shared test quality principles (phil
 
 | Need | Reference File | Sections to Read |
 |------|---------------|-----------------|
-| Playwright + E2E patterns | `../testing-patterns/references/playwright-patterns.md` | Full file (~461L, manageable) |
-| Behavior vs implementation | `../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
-| Flaky/brittle tests | `../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
-| Mock usage decisions | `../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
-| Test layer strategy | `../testing-patterns/references/test-layers.md` | `## The Three Layers` + `## Choosing the Right Layer` |
+| Playwright + E2E patterns | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/playwright-patterns.md` | Full file (~461L, manageable) |
+| Behavior vs implementation | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
+| Flaky/brittle tests | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
+| Mock usage decisions | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
+| Test layer strategy | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-layers.md` | `## The Three Layers` + `## Choosing the Right Layer` |
 
 **How to read sections:** Grep for heading to find line number, Read with offset+limit.
 

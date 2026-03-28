@@ -346,20 +346,20 @@ When this skill loads, Claude Code provides a "Base directory for this skill" pa
 # PLUGIN_ROOT = base directory minus "skills/analyzing-cc-sessions"
 # Example: if base dir is ~/.claude/plugins/cache/.../pirategoat-tools/1.43.3/skills/analyzing-cc-sessions
 # then PLUGIN_ROOT is ~/.claude/plugins/cache/.../pirategoat-tools/1.43.3
-PLUGIN_ROOT="<skill base directory>/../.."
+PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
 ```
 
 | When you need to... | Use |
 |---------------------|-----|
-| Trace tool call sequences for a specific agent type | `$PLUGIN_ROOT/scripts/analysis/session_analyzer.py` |
-| Compare metrics (tokens, duration, findings) across sessions | `$PLUGIN_ROOT/scripts/analysis/session_metrics.py` |
+| Trace tool call sequences for a specific agent type | `${CLAUDE_SKILL_DIR}/../../scripts/analysis/session_analyzer.py` |
+| Compare metrics (tokens, duration, findings) across sessions | `${CLAUDE_SKILL_DIR}/../../scripts/analysis/session_metrics.py` |
 | Do something not covered above | Write a targeted script using the parsing recipes in this skill |
 
 ### Quick Start
 
 ```bash
 # Derive plugin root from skill base directory (provided by Claude Code on skill load)
-PLUGIN_ROOT="<skill base directory>/../.."
+PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
 
 # Analyze specific agent type across recent sessions
 python3 "$PLUGIN_ROOT/scripts/analysis/session_analyzer.py" \

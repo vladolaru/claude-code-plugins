@@ -36,14 +36,14 @@ Read ONLY the specified sections from the reference file. Do NOT read full files
 
 | Code Smell / Symptom | Reference File | Sections to Read |
 |---------------------|---------------|-----------------|
-| Switch/if-else chains on types | `patterns/behavioral/strategy.md` | `## Quick Reference` + `## When to Use` + `## When NOT to Use` + `## Common Mistakes` |
-| Direct instantiation of dependencies | `patterns/creational/dependency-injection.md` | `## The Core Problem` + `## Dependency Injection - The Solution` |
-| Complex object creation, long constructor | `patterns/creational/factory.md` | `## Overview` + `## The Problem` + `## Factory Method` (first 100L) |
-| Business logic mixed with infrastructure | `patterns/architectural/hexagonal-architecture.md` | `## Overview` + `## When to Use Hexagonal Architecture` + `## Structure` (first 100L) |
-| Deep inheritance hierarchy, rigid hierarchy | `patterns/structural/decorator.md` | `## Intent` + `## Problem` + `## Solution` + `## When to Use` |
-| Complex subsystem exposed to clients | `patterns/structural/facade.md` | `## The Core Problem` + `## What is Facade?` + `## When to Use Facade` |
-| Algorithm steps fixed, details vary | `patterns/behavioral/template-method.md` | `## Intent` + `## Motivation` + `## When to Use Template Method` |
-| Need to encapsulate requests for undo/queue | `patterns/behavioral/command.md` | `## Overview` + `## When to Use` + `## When NOT to Use` |
+| Switch/if-else chains on types | `${CLAUDE_SKILL_DIR}/patterns/behavioral/strategy.md` | `## Quick Reference` + `## When to Use` + `## When NOT to Use` + `## Common Mistakes` |
+| Direct instantiation of dependencies | `${CLAUDE_SKILL_DIR}/patterns/creational/dependency-injection.md` | `## The Core Problem` + `## Dependency Injection - The Solution` |
+| Complex object creation, long constructor | `${CLAUDE_SKILL_DIR}/patterns/creational/factory.md` | `## Overview` + `## The Problem` + `## Factory Method` (first 100L) |
+| Business logic mixed with infrastructure | `${CLAUDE_SKILL_DIR}/patterns/architectural/hexagonal-architecture.md` | `## Overview` + `## When to Use Hexagonal Architecture` + `## Structure` (first 100L) |
+| Deep inheritance hierarchy, rigid hierarchy | `${CLAUDE_SKILL_DIR}/patterns/structural/decorator.md` | `## Intent` + `## Problem` + `## Solution` + `## When to Use` |
+| Complex subsystem exposed to clients | `${CLAUDE_SKILL_DIR}/patterns/structural/facade.md` | `## The Core Problem` + `## What is Facade?` + `## When to Use Facade` |
+| Algorithm steps fixed, details vary | `${CLAUDE_SKILL_DIR}/patterns/behavioral/template-method.md` | `## Intent` + `## Motivation` + `## When to Use Template Method` |
+| Need to encapsulate requests for undo/queue | `${CLAUDE_SKILL_DIR}/patterns/behavioral/command.md` | `## Overview` + `## When to Use` + `## When NOT to Use` |
 
 ### Quick Fixes (No Reference Needed)
 

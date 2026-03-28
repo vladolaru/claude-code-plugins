@@ -77,24 +77,24 @@ echo esc_html( $value );
 Before beginning development work, read the relevant reference files:
 
 ```
-references/coding-standards.md        # PHP coding standards (WPCS)
-references/i18n.md                    # Internationalization best practices
-references/security.md                # Security patterns and sanitization
-references/hooks-api.md               # Actions, filters, and hook patterns
-references/database.md                # WPDB and database operations
-references/transients.md              # Transients API for caching
-references/users.md                   # Users, roles, capabilities, user meta
-references/ajax.md                    # AJAX handlers and JavaScript enqueuing
-references/http-api.md                # HTTP requests to external APIs
+${CLAUDE_SKILL_DIR}/references/coding-standards.md        # PHP coding standards (WPCS)
+${CLAUDE_SKILL_DIR}/references/i18n.md                    # Internationalization best practices
+${CLAUDE_SKILL_DIR}/references/security.md                # Security patterns and sanitization
+${CLAUDE_SKILL_DIR}/references/hooks-api.md               # Actions, filters, and hook patterns
+${CLAUDE_SKILL_DIR}/references/database.md                # WPDB and database operations
+${CLAUDE_SKILL_DIR}/references/transients.md              # Transients API for caching
+${CLAUDE_SKILL_DIR}/references/users.md                   # Users, roles, capabilities, user meta
+${CLAUDE_SKILL_DIR}/references/ajax.md                    # AJAX handlers and JavaScript enqueuing
+${CLAUDE_SKILL_DIR}/references/http-api.md                # HTTP requests to external APIs
 
 # REST API (comprehensive coverage)
-references/rest-api.md                # Overview, key concepts, global params
-references/rest-api-endpoints.md      # Routes, parameters, validation
-references/rest-api-authentication.md # Auth methods, nonces, app passwords
-references/rest-api-controllers.md    # Controller classes and patterns
+${CLAUDE_SKILL_DIR}/references/rest-api.md                # Overview, key concepts, global params
+${CLAUDE_SKILL_DIR}/references/rest-api-endpoints.md      # Routes, parameters, validation
+${CLAUDE_SKILL_DIR}/references/rest-api-authentication.md # Auth methods, nonces, app passwords
+${CLAUDE_SKILL_DIR}/references/rest-api-controllers.md    # Controller classes and patterns
 
 # Admin interface
-references/admin-menus.md             # Admin menu pages and settings screens
+${CLAUDE_SKILL_DIR}/references/admin-menus.md             # Admin menu pages and settings screens
 ```
 
 ## Core Principles (Quick Summary)

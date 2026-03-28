@@ -38,8 +38,7 @@ SYNTHESIS (7)          Verdict: STAND | REVISE | ESCALATE
 Use the skill base directory (provided by Claude Code on skill load) to locate the script:
 
 ```bash
-SKILL_DIR="<skill base directory>"
-python3 "$SKILL_DIR/scripts/decision-critic.py" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/decision-critic.py" \
   --step-number <1-7> \
   --total-steps 7 \
   --decision "<decision text>" \
