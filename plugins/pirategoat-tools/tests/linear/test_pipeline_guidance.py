@@ -226,6 +226,19 @@ class TestStep4GatherContext:
         assert g["handoff"] is not None
         assert len(g["handoff"]) > 0
 
+    def test_surfaces_caller_requested_focus(self, mod):
+        g = mod.get_step_guidance(
+            4,
+            "investigate",
+            {},
+            INVESTIGATE_CTX,
+            config={"additional_instructions": "Focus on webhook retry behavior and related failure handling"},
+            output_dir="/tmp/test",
+        )
+        text = _guidance_text(g)
+        assert "Caller-Requested Focus" in text
+        assert "webhook retry behavior" in text
+
 
 # ---------------------------------------------------------------------------
 # Step 5: Investigate
@@ -435,6 +448,19 @@ class TestStep9WritePlan:
         assert "small" in text
         assert "medium" in text
         assert "large" in text
+
+    def test_surfaces_caller_requested_focus(self, mod):
+        g = mod.get_step_guidance(
+            9,
+            "fix",
+            {},
+            FIX_CTX,
+            config={"additional_instructions": "Focus on preserving existing merchant onboarding behavior"},
+            output_dir="/tmp/test",
+        )
+        text = _guidance_text(g)
+        assert "Caller-Requested Focus" in text
+        assert "preserving existing merchant onboarding behavior" in text
 
 
 class TestStep10Implement:

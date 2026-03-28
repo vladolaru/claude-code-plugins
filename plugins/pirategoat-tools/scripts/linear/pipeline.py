@@ -392,6 +392,35 @@ def format_output(step, guidance):
     return "\n".join(lines)
 
 
+def _caller_requested_focus(config):
+    """Return trimmed caller-provided guidance from run-config.json, if any."""
+    additional = config.get("additional_instructions") if config else None
+    if not isinstance(additional, str):
+        return None
+
+    additional = additional.strip()
+    return additional or None
+
+
+def _append_caller_requested_focus(lines, config, follow_up=None):
+    """Append caller-provided guidance to a briefing section."""
+    additional = _caller_requested_focus(config)
+    if not additional:
+        return
+
+    lines.append("")
+    lines.append("## Caller-Requested Focus")
+    lines.append(f"> {additional}")
+
+    if not follow_up:
+        return
+
+    if isinstance(follow_up, (list, tuple)):
+        lines.extend(follow_up)
+    else:
+        lines.append(follow_up)
+
+
 # ---------------------------------------------------------------------------
 # Step Guidance (pure formatting — no I/O, no subprocesses)
 # ---------------------------------------------------------------------------
@@ -650,6 +679,11 @@ def _step_4_gather_context(mode, state, context, config, output_dir):
         "",
         "4. Note your findings — they feed into the investigation step.",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Bias the context-gathering pass toward this guidance, but verify every claim in code before treating it as evidence.",
+    )
 
     return {
         "phase": "INVESTIGATION",
@@ -710,6 +744,11 @@ def _step_5_investigate(mode, state, context, config, output_dir):
         "",
         "**Verify findings against actual code**, not your own analysis.",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Give extra depth to this focus while still completing the full issue-type investigation path.",
+    )
 
     return {
         "phase": "INVESTIGATION",
@@ -781,6 +820,11 @@ def _step_6_write_report(mode, state, context, config, output_dir):
         "",
         "**Be specific and evidence-based.** Link to code, commits, and issues.",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Make the report explicit about whether the investigation confirmed, narrowed, or ruled out this requested focus.",
+    )
 
     return {
         "phase": "INVESTIGATION",
@@ -898,6 +942,11 @@ def _step_8_assess_clarity(mode, state, context, config, output_dir):
         "If `clear_enough` is false, generate 2-5 specific, answerable questions",
         "for the issue author in `questions_for_author`.",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Factor this guidance into the clarity call, but do not let it replace missing issue evidence or author intent.",
+    )
 
     return {
         "phase": "INVESTIGATION",
@@ -959,6 +1008,11 @@ def _step_9_write_plan(mode, state, context, config, output_dir):
         '   `{"complexity": "small|medium|large", "reason": "brief justification"}`',
         "   This determines whether the iterative review loop runs at step 12.",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Ensure the plan addresses this guidance directly, or explain why the investigation showed it is out of scope or not applicable.",
+    )
 
     return {
         "phase": "IMPLEMENTATION",
@@ -1000,6 +1054,11 @@ def _step_10_implement(mode, state, context, config, output_dir):
         "**Scope discipline:** Only implement what's in the plan. If you discover",
         "additional work needed, note it but don't expand scope.",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Treat this as an implementation priority, but do not add unrelated refactors just because they touch the same area.",
+    )
 
     return {
         "phase": "IMPLEMENTATION",
@@ -1044,6 +1103,11 @@ def _step_11_verify(mode, state, context, config, output_dir):
         "   - **medium or large** → Continue to step 12 (iterative review)",
         "   - **missing** → Treat as medium",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Verification must explicitly cover this guidance instead of assuming the implementation handled it implicitly.",
+    )
 
     return {
         "phase": "IMPLEMENTATION",
@@ -1287,6 +1351,11 @@ def _step_15_present_results(mode, state, context, config, output_dir):
         "",
         f"4. Read `{result_path}` and output its contents as raw JSON.",
     ]
+    _append_caller_requested_focus(
+        actions,
+        config,
+        "Summarize how the final report or fix addressed this requested focus so the caller can verify their steering was honored.",
+    )
 
     return {
         "phase": "OUTPUT",
