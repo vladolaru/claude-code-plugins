@@ -313,6 +313,7 @@ All AI-generated artifacts (plans, analysis, research, decisions, learnings) go 
 |---|---|
 | [codex-cli-reference](docs/codex-cli-reference.md) | Integrating with the OpenAI Codex CLI — prompting contracts, structured output, headless review invocation, cross-CLI comparison with Claude Code, sandbox behavior, and Structured Outputs schema constraints. Based on source analysis + runtime testing. |
 | [claude-code-cli-reference](docs/claude-code-cli-reference.md) | Spawning Claude Code CLI as a subprocess — nesting guard status, isolation flags, structured output via `--json-schema`, settings hierarchy, Python integration pattern, and cross-CLI comparison with Codex. Based on v2.1.81 source analysis + runtime testing. |
+| [plugin-env-vars-reference](docs/plugin-env-vars-reference.md) | Plugin environment variables — `CLAUDE_PLUGIN_ROOT`, `CLAUDE_SKILL_DIR`, `CLAUDE_PLUGIN_DATA`: substitution matrix (what works where), substitution order, decision guide, known bugs, and source code function references. Based on v2.1.87 source analysis. |
 
 **Knowledge capture:** After significant debugging sessions, architectural decisions, or discovering non-obvious behavior, suggest using `/dex:grok` to capture the knowledge.
 
