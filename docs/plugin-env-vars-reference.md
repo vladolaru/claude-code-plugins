@@ -175,6 +175,9 @@ These control plugin system behavior, not content substitution:
 | `CLAUDE_CODE_PLUGIN_CACHE_DIR` | Override the plugin cache directory location | Pre-v2.1.72 |
 | `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` | Timeout for git operations during plugin install/update (default: 120000ms) | v2.1.51 (Feb 24, 2026) |
 | `FORCE_AUTOUPDATE_PLUGINS` | Force plugin auto-updates even when main auto-updater is disabled | Documented |
+| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | Strip credentials from subprocess environments (affects plugin hook subprocesses) | v2.1.83 (Mar 25, 2026) |
+| `CLAUDE_CODE_MCP_SERVER_NAME` | Set on MCP `headersHelper` script subprocesses — the server name | v2.1.85 (Mar 26, 2026) |
+| `CLAUDE_CODE_MCP_SERVER_URL` | Set on MCP `headersHelper` script subprocesses — the server URL | v2.1.85 (Mar 26, 2026) |
 
 ---
 
@@ -201,6 +204,11 @@ These control plugin system behavior, not content substitution:
 | v2.1.77 | Mar 17 | Updated `--plugin-dir` to accept one path per flag |
 | v2.1.78 | Mar 17 | Added `${CLAUDE_PLUGIN_DATA}` for persistent plugin state |
 | v2.1.79 | Mar 18 | Added `CLAUDE_CODE_PLUGIN_SEED_DIR` with multiple-directory support |
+| v2.1.80 | Mar 19 | Added `source: 'settings'` plugin marketplace source for inline declarations; `effort` frontmatter for skills/commands |
+| v2.1.83 | Mar 25 | Added `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`; agent `initialPrompt` frontmatter; `CwdChanged`/`FileChanged` hook events; plugin script permissions **broken** on macOS/Linux (see v2.1.86) |
+| v2.1.84 | Mar 26 | Added `allowedChannelPlugins` managed setting; skill/rule `paths:` frontmatter (YAML glob list); MCP tool descriptions capped at 2KB |
+| v2.1.85 | Mar 26 | Added `CLAUDE_CODE_MCP_SERVER_NAME`/`_URL` for MCP `headersHelper` scripts; conditional `if` field for hooks |
+| v2.1.86 | Mar 27 | **Fixed** plugin script "Permission denied" on macOS/Linux (broken since v2.1.83); skill descriptions capped at 250 chars; `@` file mentions no longer JSON-escaped (reduced token overhead) |
 
 ---
 

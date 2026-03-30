@@ -106,7 +106,8 @@ From the [official tools reference](https://code.claude.com/docs/en/tools-refere
 | `Grep` | Search for patterns in file contents |
 | `Glob` | Find files by pattern matching |
 | `AskUserQuestion` | Ask clarifying questions |
-| `TaskCreate/Get/List/Output/Stop/Update` | Task management |
+| `TaskCreate/Get/List/Stop/Update` | Task management (note: `TaskOutput` deprecated in v2.1.83 — use `Read` on output path) |
+| `SendMessage` | Resume or message a stopped/running agent (replaced `Agent(resume:)` in v2.1.77) |
 | `TodoWrite` | Session task checklist (non-interactive / Agent SDK) |
 | `CronCreate/Delete/List` | Scheduled tasks within session |
 | `EnterPlanMode` / `ExitWorktree` / `EnterWorktree` | Mode and worktree control |
@@ -389,9 +390,8 @@ claude -p --effort high "Complex review"
 | Level | Description |
 |---|---|
 | `low` | Minimal reasoning |
-| `medium` | Standard (default) |
+| `medium` | Standard (default for Opus 4.6) |
 | `high` | Deep reasoning |
-| `max` | Maximum reasoning depth |
 
 ### Fallback Model
 
@@ -433,6 +433,10 @@ The mitigation stack (`--system-prompt` replaces prompt, `--strict-mcp-config` b
 | Budget cap | `--max-budget-usd 0.50` | Not available |
 | Session persistence | `--no-session-persistence` | `--ephemeral` |
 | Nesting from parent session | Works (no guard in v2.1.81) | Works (no guard) |
+| Named sessions | `-n`/`--name <name>` (v2.1.76) | Not available |
+| Recurring prompts | `/loop 5m <prompt>` (v2.1.71) | Not available |
+| Cron scheduling | `CronCreate` tool (v2.1.71) | Not available |
+| Code review | `/simplify` (v2.1.63) — no `codex review` equivalent | `codex review` / `codex exec review` |
 
 ### Isolation
 
@@ -548,28 +552,175 @@ Env vars that affect subprocess behavior (beyond standard Anthropic auth):
 | `CLAUDECODE` | Set to `"1"` on all CC child processes. No longer checked as a nesting guard (v2.1.81+). |
 | `CLAUDE_CODE_SIMPLE` | Set by `--bare`. Disables hooks, LSP, plugins, CLAUDE.md, auto-memory. Also skips keychain auth. |
 | `CLAUDE_CODE_DONT_INHERIT_ENV` | When set, CC doesn't inherit the parent shell's environment snapshot. |
+| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | Strip credentials from subprocess environments (v2.1.83). |
 | `ANTHROPIC_API_KEY` | API key for direct Anthropic API auth (used by `--bare` mode). |
 | `ANTHROPIC_BASE_URL` | Custom API endpoint. |
+| `ANTHROPIC_CUSTOM_MODEL_OPTION` | Add a custom entry to the `/model` picker (v2.1.78). |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL_SUPPORTS` | Pinned model capability detection for Bedrock/Vertex/Foundry (v2.1.84). |
+| `ANTHROPIC_DEFAULT_*_MODEL_NAME` / `_DESCRIPTION` | Customize `/model` picker labels (v2.1.84). |
 | `CLAUDE_CODE_USE_BEDROCK` | Use AWS Bedrock as the API provider. |
 | `CLAUDE_CODE_USE_VERTEX` | Use Google Vertex AI as the API provider. |
+| `CLAUDE_CODE_DISABLE_CRON` | Stop scheduled cron jobs from running (v2.1.72). |
+| `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` | Remove git workflows from system prompt (v2.1.69). |
+| `CLAUDE_CODE_MCP_SERVER_NAME` / `_URL` | Set on MCP `headersHelper` script subprocesses (v2.1.85). |
+| `CLAUDE_STREAM_IDLE_TIMEOUT_MS` | Streaming idle watchdog threshold, default 90s (v2.1.84). |
+| `ENABLE_CLAUDEAI_MCP_SERVERS` | Set to `false` to opt out of claude.ai MCP servers (v2.1.63). |
+| `OTEL_LOG_TOOL_DETAILS` | Set to `1` to include `tool_parameters` in OpenTelemetry events (v2.1.85). |
 
 ---
 
-## 9. Version History of Key Behaviors
+## 9. Agent & Skill Frontmatter (v2.1.69+)
+
+Agents and skills support YAML frontmatter fields that control runtime behavior. These are relevant for plugin development and subagent orchestration.
+
+### Agent Frontmatter
+
+| Field | Version | Effect |
+|---|---|---|
+| `model` | v2.1.72 | Override model for this agent (`opus`, `sonnet`, `haiku`, or full model ID). Also available as `model` parameter on `Agent` tool call. |
+| `effort` | v2.1.78 | Override effort level (`low`, `medium`, `high`) |
+| `maxTurns` | v2.1.78 | Cap number of model turns the agent can take |
+| `disallowedTools` | v2.1.78 | List of tools the agent cannot use |
+| `initialPrompt` | v2.1.83 | Auto-submit prompt on agent spawn (agent starts working immediately) |
+
+### Skill & Slash Command Frontmatter
+
+| Field | Version | Effect |
+|---|---|---|
+| `effort` | v2.1.80 | Override model effort level when this skill/command runs |
+| `paths` | v2.1.84 | YAML list of globs — skill/rule only activates for matching file paths |
+
+### Agent Tool API Changes
+
+| Version | Change |
+|---|---|
+| v2.1.72 | `model` parameter restored on `Agent` tool for per-invocation model override |
+| v2.1.77 | `resume` parameter **removed** from `Agent` tool. Use `SendMessage({to: agentId})` instead. `SendMessage` auto-resumes stopped agents. |
+
+---
+
+## 10. Hook Events (v2.1.63+)
+
+The hook system has expanded significantly since v2.1.63. This section covers new hook events and capabilities relevant to plugin/pipeline development.
+
+### New Hook Events
+
+| Event | Version | Fires when |
+|---|---|---|
+| `InstructionsLoaded` | v2.1.69 | CLAUDE.md or `.claude/rules/*.md` files are loaded |
+| `PostCompact` | v2.1.76 | After context compaction completes |
+| `Elicitation` | v2.1.76 | MCP elicitation dialog presented |
+| `ElicitationResult` | v2.1.76 | User responds to MCP elicitation |
+| `StopFailure` | v2.1.78 | Model turn ends due to API error |
+| `CwdChanged` | v2.1.83 | Working directory changes |
+| `FileChanged` | v2.1.83 | A file is modified |
+| `TaskCreated` | v2.1.84 | A task is created via `TaskCreate` |
+
+### Hook Capabilities
+
+| Capability | Version | Description |
+|---|---|---|
+| HTTP hooks | v2.1.63 | POST JSON to a URL, receive JSON response — hooks can be remote services |
+| Conditional `if` field | v2.1.85 | Filter when hooks run using permission rule syntax (e.g., only fire for specific tools or file patterns) |
+| PreToolUse satisfies AskUserQuestion | v2.1.85 | A PreToolUse hook can answer `AskUserQuestion` via `updatedInput` with `permissionDecision: "allow"` |
+| `agent_id` / `agent_type` in events | v2.1.69 | Hook events include agent context (subagent ID, agent type from `--agent`) |
+| `worktree` field in statusline | v2.1.69 | Statusline scripts receive worktree info (name, path, branch, original repo) |
+| `rate_limits` in statusline | v2.1.80 | Statusline scripts receive 5-hour/7-day rate limits with `used_percentage` and `resets_at` |
+
+---
+
+## 11. Version History of Key Behaviors
 
 | Version | Change | Impact |
 |---|---|---|
 | 2.1.59 | `--setting-sources ""` broken (empty stdout, process exits) | Cannot use empty string to skip settings files; use `--settings` overrides instead |
 | 2.1.62 | Last version with active nesting guard | `CLAUDECODE=1` check + `process.exit(1)` for nested non-teammate invocations |
+| 2.1.63 | HTTP hooks added | Hooks can POST JSON to a URL and receive JSON — enables remote hook services |
+| 2.1.63 | Project configs & auto memory shared across git worktrees | Worktrees share session context with main repo |
+| 2.1.68 | Opus 4.6 defaults to medium effort | Model-specific default; affects cost/quality baseline |
+| 2.1.69 | `${CLAUDE_SKILL_DIR}` added | Skills can reference files alongside their SKILL.md |
+| 2.1.69 | `InstructionsLoaded` hook, `agent_id`/`agent_type` in hook events | Hooks gain instruction-load awareness and agent context |
+| 2.1.71 | `/loop` and cron scheduling tools added | Recurring prompts and scheduled tasks within sessions |
+| 2.1.72 | Effort levels simplified to low/medium/high | `max` removed; three levels with visual indicators (○ ◐ ●) |
+| 2.1.72 | `model` parameter restored on `Agent` tool | Per-invocation model override for subagents |
+| 2.1.72 | `ExitWorktree` tool added | Leave `EnterWorktree` sessions programmatically |
+| 2.1.73 | `modelOverrides` setting added | Custom provider model mapping (Bedrock/Vertex/Foundry) |
+| 2.1.74 | `autoMemoryDirectory` setting added | Custom location for auto-memory files |
+| 2.1.75 | 1M context for Opus 4.6 (Max/Team/Enterprise) | Extended context window as default |
+| 2.1.76 | MCP elicitation support | Structured input dialogs for MCP servers |
+| 2.1.76 | `-n`/`--name` flag, `PostCompact` hook, `/effort` command | Named sessions, post-compaction hooks, effort control |
+| 2.1.77 | Opus 4.6 default output 64k, upper bound 128k | Significantly increased output capacity |
+| 2.1.77 | `Agent(resume:)` removed — use `SendMessage` | Breaking API change for agent resumption |
+| 2.1.78 | Agent frontmatter: `effort`, `maxTurns`, `disallowedTools` | Plugin agents can cap turns and restrict tools |
+| 2.1.78 | `${CLAUDE_PLUGIN_DATA}` added | Persistent plugin state surviving updates |
+| 2.1.78 | `StopFailure` hook event | Hook on API error turn end |
+| 2.1.80 | Skill/command `effort` frontmatter | Skills can override model effort level |
+| 2.1.80 | `rate_limits` in statusline scripts | Statusline scripts receive usage percentages and reset times |
 | 2.1.81 | Nesting guard removed | `-p` mode works from within CC sessions without environment stripping |
 | 2.1.81 | `--json-schema` available | Structured output via inline JSON schema (returns `structured_output` in response) |
-| 2.1.81 | `--bare` mode available | Single-flag isolation (hooks, MCP, plugins, skills, CLAUDE.md). Keeps only Bash/Read/Edit tools (no Grep/Glob/Write). Requires `ANTHROPIC_API_KEY` — skips OAuth/keychain; `apiKeyHelper` cannot bridge OAuth (outputs to `x-api-key` header, not `Authorization: Bearer`). Will become default for `-p` in a future release. |
-| 2.1.81 | `--effort` flag available | Direct effort control (low/medium/high/max) |
-| 2.1.81 | `--max-budget-usd` available | Session cost cap for `--print` mode |
+| 2.1.81 | `--bare` mode available | Single-flag isolation (hooks, MCP, plugins, skills, CLAUDE.md). Keeps only Bash/Read/Edit tools (no Grep/Glob/Write). Requires `ANTHROPIC_API_KEY` — skips OAuth/keychain. |
+| 2.1.81 | `--effort` flag, `--max-budget-usd` available | Direct effort control; session cost cap for `--print` mode |
+| 2.1.83 | `managed-settings.d/` drop-in directory | Enterprise settings alongside managed-settings.json |
+| 2.1.83 | `CwdChanged`, `FileChanged` hook events | Reactive hooks for directory and file changes |
+| 2.1.83 | Agent `initialPrompt` frontmatter | Agents auto-submit on spawn |
+| 2.1.83 | `MEMORY.md` truncates at 25KB / 200 lines | Auto-memory index has a hard cap |
+| 2.1.83 | `TaskOutput` deprecated | Use `Read` on the task's output path instead |
+| 2.1.84 | Skill/rule `paths:` frontmatter (YAML glob list) | Skills and rules activate only for matching file paths |
+| 2.1.84 | MCP tool descriptions capped at 2KB | Prevents large MCP descriptions from consuming context |
+| 2.1.84 | `TaskCreated` hook event | Hook fires when tasks are created |
+| 2.1.85 | Conditional `if` field for hooks | Permission rule syntax to filter when hooks run |
+| 2.1.85 | `PreToolUse` can satisfy `AskUserQuestion` | Hooks can auto-answer user questions via `updatedInput` |
+| 2.1.86 | Skill descriptions capped at 250 chars | Reduces context usage from `/skills` menu |
+| 2.1.86 | Read tool compact line-number format | Deduplicates unchanged re-reads; reduces token overhead |
 
 ---
 
-## 10. Recommended Headless Review Invocation
+## 12. Key Behavioral Changes (v2.1.63+)
+
+Changes that affect model capabilities, resource limits, or default behaviors.
+
+### Opus 4.6 Defaults
+
+| Aspect | Value | Version |
+|---|---|---|
+| Context window | 1M tokens (Max/Team/Enterprise) | v2.1.75 |
+| Default max output tokens | 64k | v2.1.77 |
+| Upper bound output tokens | 128k | v2.1.77 |
+| Default effort | Medium | v2.1.68 |
+
+### Resource Limits
+
+| Limit | Value | Version |
+|---|---|---|
+| MCP tool descriptions / server instructions | Capped at 2KB | v2.1.84 |
+| Skill descriptions in `/skills` menu | Capped at 250 characters | v2.1.86 |
+| `MEMORY.md` auto-memory index | Truncates at 25KB / 200 lines | v2.1.83 |
+| Background bash output | Killed if output exceeds 5GB | v2.1.77 |
+
+### New Built-in Commands
+
+| Command | Version | Purpose |
+|---|---|---|
+| `/simplify` | v2.1.63 | Review changed code for reuse, quality, efficiency |
+| `/batch` | v2.1.63 | Bundled slash command |
+| `/loop` | v2.1.71 | Recurring prompts on an interval (e.g., `/loop 5m check deploy`) |
+| `/effort` | v2.1.76 | Set effort level (low/medium/high) |
+| `/color` | v2.1.75 | Prompt-bar color |
+| `/rename` | v2.1.75 | Session name display on prompt bar |
+| `/reload-plugins` | v2.1.69 | Apply pending plugin changes without restart |
+
+### Other Notable Changes
+
+- **Response streaming** (v2.1.78): Responses stream line-by-line as generated.
+- **Project configs shared across worktrees** (v2.1.63): Auto memory and project settings shared between git worktrees.
+- **MCP elicitation** (v2.1.76): MCP servers can present structured input dialogs to the user.
+- **Named sessions** (v2.1.76): `-n`/`--name <name>` flag for session display name.
+- **Channels** (v2.1.81+): `--channels` research preview for MCP servers pushing messages.
+- **`includeGitInstructions` setting** (v2.1.69): `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` env var to remove git workflows from system prompt.
+
+---
+
+## 13. Recommended Headless Review Invocation
 
 For agentic code review pipelines where the reviewer explores the codebase, runs git commands, and writes analysis docs:
 
@@ -605,6 +756,7 @@ This gives:
 ## Provenance
 
 - **Source analysis:** `@anthropic-ai/claude-code@2.1.81` npm package (`cli.js`, 12MB Bun bundle)
+- **Changelog analysis:** v2.1.63 through v2.1.86 (Feb 28 – Mar 27, 2026) — sections 9–12 and version history updated from changelog
 - **Runtime testing:** v2.1.81 on macOS (arm64), March 2026
 - **Production patterns:** cabrero project subprocess isolation (v0.27+), pirategoat-bot headless review orchestration
 - **Previous version analysis:** cabrero's `docs/subprocess-isolation.md` (v2.1.62 nesting guard documentation)
