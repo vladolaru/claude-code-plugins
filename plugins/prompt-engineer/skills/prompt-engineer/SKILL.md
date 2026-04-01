@@ -1,6 +1,7 @@
 ---
 name: prompt-engineer
 description: Optimize system prompts for Claude Code agents using proven prompt engineering patterns. Use when users request prompt improvement, optimization, or refinement for agent workflows, tool instructions, or system behaviors.
+disable-model-invocation: true
 ---
 
 # Prompt Optimizer
@@ -231,13 +232,13 @@ Present each proposed change as a visually distinct "card" using ASCII box drawi
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  CHANGE N: [Short title - what this change does]                             ║
+║  CHANGE N: [Short title - what this change does]                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                              ║
 ║  SCOPE                                                                       ║
 ║  ─────                                                                       ║
 ║  Prompt:      [prompt name or "multi-prompt: A → B"]                         ║
-║  Section:     [which part of the prompt]                                     ║
+║  Section:     [which part of the prompt]                                    ║
 ║  Downstream:  [what depends on this output, or "none"]                       ║
 ║                                                                              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
