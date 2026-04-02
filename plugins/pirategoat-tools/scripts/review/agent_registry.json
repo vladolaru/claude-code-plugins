@@ -540,6 +540,61 @@
       ],
       "focus": "Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs, guides after code changes",
       "model_tier": "sonnet"
+    },
+    "toolchain-reviewer": {
+      "domain": "toolchain",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "Package manager config changes (pnpm-workspace.yaml, .npmrc, package.json engines/scripts)",
+        "Build tool config changes (webpack, vite, esbuild, turbo, nx)",
+        "Linter or formatter config changes (ESLint, Prettier, PHPCS, PHPStan)",
+        "TypeScript or Babel config changes (tsconfig.json, babel.config.*)",
+        "CI/CD pipeline changes (GitHub Actions workflows, GitLab CI)",
+        "Version constraint changes (.nvmrc, engines, Docker base images)",
+        "Dependency management changes (renovate, dependabot configs)",
+        "Tool version upgrades or migrations",
+        "Dev environment config changes (wp-env, Docker Compose)",
+        "Supply chain security settings (allowBuilds, lockfile config, strictDepBuilds)"
+      ],
+      "triage_keywords": [
+        "pnpm",
+        "npm",
+        "yarn",
+        "webpack",
+        "vite",
+        "esbuild",
+        "turbo",
+        "eslint",
+        "prettier",
+        "phpstan",
+        "phpcs",
+        "tsconfig",
+        "typescript",
+        "babel",
+        "docker",
+        "wp-env",
+        "nvmrc",
+        "node-version",
+        "engines",
+        "ci",
+        "workflow",
+        "actions",
+        "upgrade",
+        "migrat",
+        "toolchain",
+        "build",
+        "lockfile",
+        "allowBuilds",
+        "composer",
+        "renovate",
+        "dependabot"
+      ],
+      "focus": "Package manager configs, build tools, linting configs, version constraints, CI pipelines, supply chain settings — proactively searches changelogs for deprecations and behavior changes",
+      "model_tier": "sonnet"
     }
   }
 }

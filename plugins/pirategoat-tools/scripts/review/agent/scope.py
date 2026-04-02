@@ -172,6 +172,24 @@ DOMAIN_CATALOG = {
         "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb|md|txt|rst|yaml|yml|json)$",
         "exclude": _TEST_EXCLUDE,
     },
+    "toolchain": {
+        "description": "Developer toolchain configs — package managers, build tools, linters, version constraints, CI pipelines",
+        "include": r"("
+                   r"pnpm-workspace\.yaml|\.npmrc|\.pnpmrc|\.yarnrc|\.pnpmfile\.cjs|"
+                   r"(^|/)package\.json$|"
+                   r"tsconfig.*\.json$|jsconfig.*\.json$|"
+                   r"webpack\.config\.|vite\.config\.|rollup\.config\.|esbuild\.config\.|turbo\.json$|nx\.json$|"
+                   r"babel\.config\.|\.babelrc|"
+                   r"eslint\.config\.|\.eslintrc|\.prettierrc|\.stylelintrc|"
+                   r"composer\.json$|phpstan.*\.neon|phpcs\.xml|phpunit\.xml|"
+                   r"Dockerfile|docker-compose|\.wp-env\.json|\.wp-env\.override\.json|"
+                   r"\.github/workflows/|\.gitlab-ci|Jenkinsfile|\.circleci/|"
+                   r"\.nvmrc$|\.node-version$|\.tool-versions$|\.editorconfig$|"
+                   r"renovate\.json|\.github/dependabot\.yml|"
+                   r"Makefile$"
+                   r")",
+        "exclude": r"node_modules/",
+    },
     "config-ops": {
         "description": "CI/CD configs, Docker, Terraform, and infrastructure files",
         "include": r"(\.github/workflows/|\.gitlab-ci|Dockerfile|docker-compose|\.tf$|\.tfvars$|\.toml$|Jenkinsfile|\.circleci/|Makefile$|\.helmfile|chart\.yaml$|values\.yaml$)",
