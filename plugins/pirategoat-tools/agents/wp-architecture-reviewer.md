@@ -161,6 +161,14 @@ Before reporting a finding, verify it doesn't fall into these known FP patterns:
 |---------|--------------|--------------|
 | Missing hook | Genuine use case, public API boundary | Internal methods, no use case, new code |
 
+## FALSE POSITIVE GATE — Before reporting ANY finding, check every item:
+
+1. Is this a **general SOLID/design pattern concern** without WordPress ecosystem impact? (→ architecture-reviewer's domain.)
+2. Is this a **REST API contract concern** (response shape stability, endpoint backwards compatibility)? (→ api-contract-reviewer's domain.)
+3. Is this a **security vulnerability** rather than a hook/API design issue? (→ security-reviewer's domain.)
+4. Is this recommending a hook where there's **no genuine external use case**? (Apply the Pragmatic Hooks Principle from RULE 0 — over-hooking is worse than missing hooks.)
+5. Did you verify this is NOT a **documented framework API pattern**? (Anti-FP Check #1 from RULE 0 — read the type definitions before flagging.)
+
 ## Linter Results
 
 When available, load `lint-results-unified.json` per shared protocol. Prioritize PHPCS violations with architectural significance: `WordPress.Security.*`, `WordPress.WP.DeprecatedFunctions`, `WordPress.WP.GlobalVariablesOverride`, `WordPress.DB.DirectDatabaseQuery`, `WordPress.WP.I18n.*`. Acknowledge but don't escalate pure formatting issues.

@@ -86,6 +86,14 @@ Identify exploitable vulnerabilities -> Assess severity -> Provide WordPress-spe
 
 **Escape output:** `esc_html()`, `esc_attr()`, `esc_url()`, `esc_js()`, `$wpdb->prepare()`, `wp_kses_post()`, `esc_html__()`
 
+## FALSE POSITIVE GATE — Before reporting ANY finding, check every item:
+
+1. Is this a **performance concern** (slow queries, missing caching, unbounded results)? (→ performance-reviewer's domain.)
+2. Is this a **PII lifecycle concern** (PII in logs, GDPR erasure, data flow across boundaries)? (→ data-flow-privacy-reviewer's domain.)
+3. Is the input **already sanitized or escaped by the framework**? (e.g., `$wpdb->prepare()` in a wrapper function, WP REST API `sanitize_callback` on the arg definition — verify the full chain before flagging.)
+4. Is this **defense-in-depth only** with no exploitable path? (Missing `absint()` on a value that's already validated as numeric by `validate_callback` → MEDIUM at most, not CRITICAL.)
+5. Did you **trace the full source→sanitize→sink chain** in the code? Incomplete traces ("this input *might* reach a query") are not findings.
+
 ## Review Checklists
 
 ### For Each Form/AJAX Handler:

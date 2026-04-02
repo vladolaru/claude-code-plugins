@@ -112,6 +112,14 @@ Check EVERY changed file for:
 - [ ] Treeview components implement full arrow key navigation (Up/Down/Left/Right/Home/End).
 - [ ] *(WordPress only)* Decorative symbols use `::after`/SVG, not text nodes (Twemoji replaces Unicode in text nodes with `<img>` tags).
 
+## FALSE POSITIVE GATE — Before reporting ANY finding, check every item:
+
+1. Is this a **code clarity/naming concern** without accessibility impact? (→ code-clarity-reviewer's domain.)
+2. Is this a **component architecture concern** without accessibility impact? (→ architecture-reviewer's domain.)
+3. Is this a **visual design preference** without a WCAG violation or assistive technology barrier? (Drop it.)
+4. Is the issue **already handled by a parent component** you haven't checked? (e.g., focus trapping in a parent `<Modal>` wrapper — verify context before reporting.)
+5. Does the element exist in a **non-interactive, decorative, or admin-only context** where the finding's severity should be reduced?
+
 ## Anti-Pattern Detection Heuristics
 
 Use these to scan changed code. Sorted by severity:
