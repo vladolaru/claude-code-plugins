@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.94.0] - 2026-04-02
+
+### Added
+- **Toolchain reviewer agent.** New `toolchain-reviewer` agent for developer toolchain config changes: package manager configs (pnpm, npm, yarn), build tools (webpack, vite, esbuild, turbo, nx), linter/formatter configs (ESLint, Prettier, PHPCS, PHPStan), TypeScript/Babel configs, CI/CD pipelines, version constraints (.nvmrc, engines), and supply chain security settings. Key differentiator: proactively searches changelogs via WebSearch to verify config settings against actual tool versions before reporting deprecations or invalid options. Runs on sonnet model tier, dispatched as `conditional` class with 31 triage keywords.
+- **`toolchain` scope domain.** Matches 20+ config file patterns including pnpm-workspace.yaml, .npmrc, package.json, tsconfig, webpack/vite/rollup configs, ESLint/Prettier configs, composer.json, phpstan, CI workflows, Dockerfiles, .nvmrc, turbo.json, renovate/dependabot, and Makefiles.
+
 ## [1.93.3] - 2026-03-28
 
 ### Fixed
