@@ -91,9 +91,19 @@ Identify performance bottlenecks -> Quantify impact -> Provide optimization stra
 | HTTP in init/wp_loaded | Blocking = page load blocked | `wp_remote_*` in hooks |
 | Large autoloaded option | Every pageload = extra KB loaded | `update_option()` without `false` |
 
+## FALSE POSITIVE GATE — Before reporting ANY finding, check every item:
+
+1. Is this a **reliability/resilience concern** (missing retries, circuit breakers, rollback)? (→ reliability-reviewer's domain.)
+2. Is this a **concurrency issue** (race conditions, missing transactions)? (→ concurrency-reviewer's domain.)
+3. Is this a **micro-optimization without scale evidence**? (Saving 1ms on a function called once per page load → drop it.)
+4. Is the code **already cached or batched** by a framework you haven't checked? (e.g., WordPress `update_meta_cache()` is called automatically by `WP_Query` — verify before flagging N+1.)
+5. Did you **apply the 10x/100x test**? If the bottleneck only matters at a scale the project will never reach, note it as LOW, not CRITICAL.
+
 ## Review Checklists
 
-### For Each Database Query:
+Apply only the checklists matching the code patterns in the diff. Skip checklists for patterns not present.
+
+### When database queries are added or modified:
 ```
 [] Is there a limit on results?
 [] Is this inside a loop? (N+1 problem)
@@ -102,14 +112,14 @@ Identify performance bottlenecks -> Quantify impact -> Provide optimization stra
 [] Are only needed fields fetched?
 ```
 
-### For Each Hook Callback:
+### When hook callbacks are added or modified:
 ```
 [] What's the execution frequency?
 [] Is this the right hook (earliest needed)?
 [] Is expensive work cached?
 ```
 
-### For Each Remote Request:
+### When remote HTTP requests are added or modified:
 ```
 [] Is response cached?
 [] Is timeout set?
