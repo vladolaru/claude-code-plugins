@@ -347,6 +347,29 @@ class TestFilterDomain:
         assert matched == [], "_test.php should be excluded from reliability"
         assert "tests/unit/handler_test.php" in excluded
 
+    def test_toolchain_domain_matches_configs(self):
+        files = ["pnpm-workspace.yaml", ".npmrc", "tsconfig.json", "src/app.ts"]
+        matched, excluded = review_scope.filter_domain(files, "toolchain")
+        assert "pnpm-workspace.yaml" in matched
+        assert ".npmrc" in matched
+        assert "tsconfig.json" in matched
+        assert "src/app.ts" in excluded
+
+    def test_toolchain_domain_matches_lock_files(self):
+        """Lock files should pass the toolchain domain include filter."""
+        files = [
+            "pnpm-lock.yaml", "package-lock.json", "composer.lock",
+            "yarn.lock", "go.sum", "npm-shrinkwrap.json",
+        ]
+        matched, excluded = review_scope.filter_domain(files, "toolchain")
+        assert matched == files, "All lock files should match toolchain domain"
+        assert excluded == []
+
+    def test_toolchain_domain_matches_ci_files(self):
+        files = [".github/workflows/ci.yml", "Dockerfile", "Makefile"]
+        matched, excluded = review_scope.filter_domain(files, "toolchain")
+        assert matched == files
+
     def test_unknown_domain_raises(self):
         with pytest.raises(RuntimeError, match="Unknown domain"):
             review_scope.filter_domain(["app.py"], "nonexistent-domain")
@@ -807,3 +830,170 @@ class TestBudgetSortOrder:
             assert "large.php" in scope["files"], (
                 "Large file should be included when budget prioritizes largest first"
             )
+
+
+# =============================================================================
+# List-only tests — lock files for toolchain domain
+# =============================================================================
+
+
+def _mock_git_for_list_only_test(cmd, check=True, capture_stderr=True):
+    """Mock git commands for list-only (lock file rescue) testing.
+
+    Simulates a diff with both config files and lock files.
+    """
+    cmd_str = " ".join(cmd)
+    if "rev-parse --git-dir" in cmd_str:
+        return ".git"
+    if "rev-parse" in cmd_str:
+        return "abc123"
+    if "--name-only" in cmd_str:
+        return ".npmrc\npackage.json\npnpm-lock.yaml\ncomposer.lock\nsrc/app.php"
+    if "--numstat" in cmd_str:
+        return "5\t2\t.npmrc\n10\t3\tpackage.json\n500\t200\tpnpm-lock.yaml\n300\t100\tcomposer.lock\n50\t20\tsrc/app.php"
+    if "merge-base" in cmd_str:
+        return "abc123"
+    if "rev-list --count" in cmd_str:
+        return "0"
+    if "diff" in cmd_str and "-- .npmrc" in cmd_str:
+        return "+registry=https://registry.npmjs.org/"
+    if "diff" in cmd_str and "-- package.json" in cmd_str:
+        return '+  "engines": {"node": ">=20"}'
+    if "diff" in cmd_str and "-- pnpm-lock.yaml" in cmd_str:
+        return "\n".join([f"+lockfile-line-{i}" for i in range(500)])
+    if "diff" in cmd_str and "-- composer.lock" in cmd_str:
+        return "\n".join([f"+composer-line-{i}" for i in range(300)])
+    if "diff" in cmd_str and "-- src/app.php" in cmd_str:
+        return "+<?php echo 'hello';"
+    return ""
+
+
+class TestListOnly:
+    """Tests for list_only domain feature — lock files rescued from noise, diffstat included, diff skipped."""
+
+    def test_lock_files_rescued_from_noise_for_toolchain(self):
+        """Lock files normally caught by NOISE_PATTERNS should survive when domain has list_only."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="toolchain", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            assert scope["status"] == "OK"
+            # Lock files should be in list_only_files, not in noise_skipped
+            assert "pnpm-lock.yaml" in scope["list_only_files"]
+            assert "composer.lock" in scope["list_only_files"]
+            assert "pnpm-lock.yaml" not in scope["skipped_files"]["noise"]
+            assert "composer.lock" not in scope["skipped_files"]["noise"]
+
+    def test_lock_files_have_diffstat_but_no_diff(self):
+        """List-only files appear in diffstat but not in diffs dict."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="toolchain", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            # Diffstat should include lock files
+            assert "pnpm-lock.yaml" in scope["diffstat"]
+            assert "composer.lock" in scope["diffstat"]
+            # But their diffs should NOT be fetched
+            assert "pnpm-lock.yaml" not in scope["diffs"]
+            assert "composer.lock" not in scope["diffs"]
+
+    def test_config_files_still_get_full_diffs(self):
+        """Non-list-only files in the same domain still get their full diffs."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="toolchain", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            assert ".npmrc" in scope["diffs"]
+            assert "package.json" in scope["diffs"]
+            assert ".npmrc" in scope["files"]
+            assert "package.json" in scope["files"]
+
+    def test_lock_files_not_in_files_key(self):
+        """In regular mode, files key only contains files with diffs."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="toolchain", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            assert "pnpm-lock.yaml" not in scope["files"]
+            assert "composer.lock" not in scope["files"]
+
+    def test_list_only_in_skipped_files(self):
+        """List-only files should also appear in skipped_files.list_only."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="toolchain", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            assert scope["skipped_files"]["list_only"] == scope["list_only_files"]
+
+    def test_non_toolchain_domain_still_filters_lock_files_as_noise(self):
+        """Lock files should remain noise for domains without list_only."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            # Lock files should be in noise_skipped for non-toolchain domains
+            assert "pnpm-lock.yaml" in scope["skipped_files"]["noise"]
+            assert "composer.lock" in scope["skipped_files"]["noise"]
+
+    def test_list_only_text_output_section(self):
+        """Text output should include a CHANGED section for list-only files."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="toolchain", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            text = review_scope.format_text_output(scope)
+            assert "CHANGED (no diff" in text
+            assert "pnpm-lock.yaml" in text
+            assert "composer.lock" in text
+            assert "LIST_ONLY_FILES: 2" in text
+
+    def test_lock_files_dont_eat_diff_budget(self):
+        """List-only files should not consume any of the diff line budget."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_list_only_test
+            args = argparse.Namespace(
+                domain="toolchain", range="abc123..HEAD", max_lines=50,
+                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+            # Even with a tiny budget, lock files don't consume it
+            assert "pnpm-lock.yaml" in scope["list_only_files"]
+            # Config files should still get budget allocation
+            assert scope["files_with_diffs"] > 0

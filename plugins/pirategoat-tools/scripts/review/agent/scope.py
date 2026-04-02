@@ -177,6 +177,7 @@ DOMAIN_CATALOG = {
         "include": r"("
                    r"pnpm-workspace\.yaml|\.npmrc|\.pnpmrc|\.yarnrc|\.pnpmfile\.cjs|"
                    r"(^|/)package\.json$|"
+                   r"\.lock$|pnpm-lock\.yaml$|package-lock\.json$|npm-shrinkwrap\.json$|go\.sum$|"
                    r"tsconfig.*\.json$|jsconfig.*\.json$|"
                    r"webpack\.config\.|vite\.config\.|rollup\.config\.|esbuild\.config\.|turbo\.json$|nx\.json$|"
                    r"babel\.config\.|\.babelrc|"
@@ -189,6 +190,7 @@ DOMAIN_CATALOG = {
                    r"Makefile$"
                    r")",
         "exclude": r"node_modules/",
+        "list_only": r"(\.lock$|pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|go\.sum)",
     },
     "config-ops": {
         "description": "CI/CD configs, Docker, Terraform, and infrastructure files",
@@ -635,6 +637,20 @@ def build_scope(args: argparse.Namespace) -> dict:
 
     # Step 3: Filter noise
     after_noise, noise_skipped = filter_noise(all_files)
+
+    # Step 3.5: Rescue list-only files from noise (domain-specific override).
+    # Some domains (e.g., toolchain) need to know that lock files changed
+    # even though they're normally noise. Rescued files appear in the file
+    # list and diffstat but their full diff is not fetched.
+    domain_spec = DOMAIN_CATALOG[args.domain]
+    list_only_re = re.compile(domain_spec["list_only"]) if domain_spec.get("list_only") else None
+    if list_only_re and noise_skipped:
+        rescued = [f for f in noise_skipped if list_only_re.search(f)]
+        if rescued:
+            rescued_set = set(rescued)
+            after_noise.extend(rescued)
+            noise_skipped = [f for f in noise_skipped if f not in rescued_set]
+
     if not after_noise:
         raise RuntimeError(
             f"NO_RELEVANT_FILES: All {len(all_files)} changed files were "
@@ -653,6 +669,7 @@ def build_scope(args: argparse.Namespace) -> dict:
             "domain_excluded": len(domain_excluded),
             "domain": args.domain,
             "files": [],
+            "list_only_files": [],
             "diffs": {},
             "skipped_files": {
                 "noise": noise_skipped,
@@ -682,12 +699,20 @@ def build_scope(args: argparse.Namespace) -> dict:
     diffs = {}
     total_lines = 0
     budget_exceeded_files = []
+    list_only_files = []
 
     # Determine if semantic filtering is enabled
     use_semantic_filter = not getattr(args, "no_semantic_filter", False)
 
     if not args.base_ref_only and not args.summary:
         for filepath in domain_matched_sorted:
+            # List-only files: appear in file list + diffstat, but no diff content.
+            # These are files rescued from noise (e.g., lock files for toolchain domain)
+            # that are too large/noisy for inline diffs but signal relevant changes.
+            if list_only_re and list_only_re.search(filepath):
+                list_only_files.append(filepath)
+                continue
+
             if total_lines >= max_lines:
                 budget_exceeded_files.append(filepath)
                 continue
@@ -728,6 +753,7 @@ def build_scope(args: argparse.Namespace) -> dict:
         "domain_excluded": len(domain_excluded),
         "domain_matched": len(domain_matched),
         "files_with_diffs": len(diffs),
+        "list_only_files": list_only_files,
         "total_diff_lines": total_lines,
         "budget_max": max_lines,
         "budget_exceeded_files": budget_exceeded_files,
@@ -738,6 +764,7 @@ def build_scope(args: argparse.Namespace) -> dict:
             "noise": noise_skipped,
             "domain": domain_excluded,
             "budget": budget_exceeded_files,
+            "list_only": list_only_files,
         },
         "branch_freshness": {
             "ahead": freshness["ahead"],
@@ -779,6 +806,9 @@ def format_text_output(scope: dict) -> str:
     lines.append(f"DOMAIN_EXCLUDED: {scope.get('domain_excluded', 0)}")
     lines.append(f"DOMAIN_MATCHED: {scope.get('domain_matched', 0)}")
     lines.append(f"FILES_WITH_DIFFS: {scope.get('files_with_diffs', 0)}")
+    list_only = scope.get("list_only_files", [])
+    if list_only:
+        lines.append(f"LIST_ONLY_FILES: {len(list_only)}")
     lines.append(f"TOTAL_DIFF_LINES: {scope.get('total_diff_lines', 0)}")
 
     if scope.get("budget_exceeded_files"):
@@ -839,6 +869,17 @@ def format_text_output(scope: dict) -> str:
         for filepath in scope.get("files", []):
             added, removed = diffstat.get(filepath, (0, 0))
             lines.append(f"{filepath}  (+{added} -{removed})")
+
+        # List-only files: changed but diff intentionally skipped (e.g., lock files)
+        list_only_files = scope.get("list_only_files", [])
+        if list_only_files:
+            lines.append("")
+            lines.append(f"=== CHANGED (no diff — {len(list_only_files)} lock/generated files) ===")
+            lines.append("These files changed but diffs are skipped (too large/noisy for inline review).")
+            lines.append(f"Use 'git diff {scope.get('range', '')} -- <file>' to inspect if relevant.")
+            for filepath in list_only_files:
+                added, removed = diffstat.get(filepath, (0, 0))
+                lines.append(f"  {filepath}  (+{added} -{removed})")
 
         # Budget-exceeded files with their diffstat so agent knows what it's missing
         budget_files = scope.get("skipped_files", {}).get("budget", [])
