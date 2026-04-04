@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.95.0] - 2026-04-04
+
+### Changed
+- **Reconciliator performance: pre-gathered context.** New `reconciliation_context.py` script pre-gathers all agent findings, source snippets (±10 lines around each referenced location), scope annotations, and the ReviewOutputBuilder path into a single `reconciliation-context.json` before dispatching the reconciliator agent. The reconciliator now reads one file instead of 11+ agent JSONs and 15-25 source files individually, reducing LLM turns from ~50 to ~5-8 (est. 5-10x speedup). Pipeline step 8 calls the new script during orchestration and passes the context file path in the briefing.
+
 ## [1.94.0] - 2026-04-02
 
 ### Added
