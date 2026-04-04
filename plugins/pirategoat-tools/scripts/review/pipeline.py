@@ -983,26 +983,12 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
          "**1. TaskStop** all remaining background review agents."),
         "",
         "**2. Dispatch `review-reconciliator`** with:",
-        f"- Git range: `{git_range}`",
-        f"- Changed files: `{changed_files_csv}`",
+        f"- **Reconciliation context:** `{od}/reconciliation-context.json` (pre-gathered: all agent findings, source snippets, scope annotations, output builder path)",
         f"- Output directory: `{od}`",
-        f"- Dispatch plan: `{od}/dispatch-plan.json`",
     ]
 
     if change_purpose:
         actions.append(f"- **Change purpose:** {change_purpose}")
-    else:
-        actions.append("- **Change purpose:** Derive from commit messages if change-purpose.md is missing")
-
-    review_files = agents_state.get("review_files", [])
-    if review_files:
-        actions.append("")
-        actions.append("**Completed review files:**")
-        for rf in review_files:
-            actions.append(f"- `{rf}`")
-    else:
-        actions.append("")
-        actions.append("**Completed review files:** Check output directory for `*-review.json` files.")
 
     actions.append("")
     actions.append(f"**Expected output:** `{od}/review-findings.json` + `{od}/review-findings.md`")
@@ -1697,6 +1683,21 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 }
             except (json.JSONDecodeError, OSError):
                 pass
+
+        # Build reconciliation context (pre-gather all data for the reconciliator)
+        recon_ctx_cmd = [
+            sys.executable, str(SCRIPTS_DIR / "reconciliation_context.py"),
+            "--output-dir", output_dir,
+            "--git-range", git_range,
+            "--changed-files", context.get("git", {}).get("changed_files_csv", ""),
+        ]
+        cp = state.get("change_purpose", "")
+        if cp:
+            recon_ctx_cmd.extend(["--change-purpose", cp])
+        pr_id = config.get("pr_number", "")
+        if pr_id:
+            recon_ctx_cmd.extend(["--pr-id", str(pr_id)])
+        _run_subprocess(recon_ctx_cmd, timeout=30)
 
     if step == 10:
         # Read reconciliation verdict for quick-mode critic skip decision
