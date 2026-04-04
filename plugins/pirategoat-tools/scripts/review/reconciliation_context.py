@@ -43,5 +43,40 @@ _NON_REVIEW_FILES = frozenset([
 ])
 
 
+def load_agent_findings(output_dir: str) -> Dict[str, Any]:
+    """Load all agent review JSON files from the output directory.
+
+    Reads all *-review.json files, skipping pipeline infrastructure files
+    listed in _NON_REVIEW_FILES. Malformed JSON files are skipped with a
+    warning on stderr.
+
+    Returns:
+        Dict keyed by agent name (e.g., "security-review") with the parsed
+        JSON content as the value.
+    """
+    findings = {}
+    output_path = Path(output_dir)
+
+    if not output_path.is_dir():
+        print(f"WARNING: output directory does not exist: {output_dir}", file=sys.stderr)
+        return findings
+
+    for entry in sorted(output_path.iterdir()):
+        if not entry.name.endswith("-review.json"):
+            continue
+        if entry.name in _NON_REVIEW_FILES:
+            continue
+
+        try:
+            data = json.loads(entry.read_text(encoding="utf-8"))
+            # Key by filename without .json extension (e.g., "security-review")
+            agent_name = entry.stem
+            findings[agent_name] = data
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"WARNING: skipping malformed file {entry.name}: {exc}", file=sys.stderr)
+
+    return findings
+
+
 if __name__ == "__main__":
     sys.exit(1)  # Not yet implemented
