@@ -465,3 +465,127 @@ class TestResolveOutputBuilderPath:
         """Should point to scripts/review/agent/output.py."""
         path = mod.resolve_output_builder_path()
         assert "scripts/review/agent/output.py" in path.replace("\\", "/")
+
+
+# ===========================================================================
+# TestFullScript — subprocess integration tests
+# ===========================================================================
+
+class TestFullScript:
+    """Integration tests running the complete script via subprocess."""
+
+    def _run(self, *args, cwd=None):
+        """Run the script and return the CompletedProcess."""
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+
+    def test_produces_valid_output_json(self, tmp_path):
+        """Full run produces reconciliation-context.json with all fields."""
+        # Create a review file
+        review = _make_review_json(
+            reviewer="security",
+            issues=[_make_issue(file="src/auth.py", line=10)],
+        )
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "src/auth.py,src/db.py",
+            "--change-purpose", "Fix auth bug",
+            "--pr-id", "42",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        # Verify stdout has status JSON
+        stdout_json = json.loads(result.stdout.strip())
+        assert stdout_json["status"] == "ok"
+
+        # Verify output file exists and has all expected fields
+        ctx_path = tmp_path / "reconciliation-context.json"
+        assert ctx_path.is_file()
+
+        ctx = json.loads(ctx_path.read_text())
+        expected_keys = {
+            "agent_findings",
+            "source_snippets",
+            "scope_annotations",
+            "changed_files",
+            "git_range",
+            "change_purpose",
+            "pr_id",
+            "output_dir",
+            "output_builder_path",
+        }
+        assert set(ctx.keys()) == expected_keys
+
+        # Verify specific values
+        assert "security-review" in ctx["agent_findings"]
+        assert ctx["changed_files"] == ["src/auth.py", "src/db.py"]
+        assert ctx["git_range"] == "abc123..HEAD"
+        assert ctx["change_purpose"] == "Fix auth bug"
+        assert ctx["pr_id"] == "42"
+        assert ctx["output_builder_path"].endswith("output.py")
+
+    def test_empty_output_dir(self, tmp_path):
+        """Runs successfully with no review files."""
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc..HEAD",
+            cwd=tmp_path,
+        )
+        assert result.returncode == 0
+
+        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        assert ctx["agent_findings"] == {}
+
+    def test_missing_required_args(self, tmp_path):
+        """Missing --output-dir or --git-range exits with code 2 (argparse)."""
+        result = self._run("--output-dir", str(tmp_path), cwd=tmp_path)
+        assert result.returncode == 2  # argparse exits with 2
+
+    def test_scope_annotations_present(self, tmp_path):
+        """Scope annotations are correctly populated."""
+        review = _make_review_json(
+            issues=[
+                _make_issue(file="src/auth.py", line=10),
+                _make_issue(file="src/other.py", line=20),
+            ],
+        )
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc..HEAD",
+            "--changed-files", "src/auth.py",
+            cwd=tmp_path,
+        )
+        assert result.returncode == 0
+
+        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        assert ctx["scope_annotations"]["src/auth.py"] == "IN_SCOPE"
+        assert ctx["scope_annotations"]["src/other.py"] == "OUT_OF_SCOPE:file_not_in_diff"
+
+    def test_multiple_agents(self, tmp_path):
+        """Multiple agent review files are all loaded."""
+        for agent in ["security", "performance", "patterns"]:
+            review = _make_review_json(
+                reviewer=agent,
+                issues=[_make_issue(file=f"src/{agent}.py", line=10)],
+            )
+            (tmp_path / f"{agent}-review.json").write_text(json.dumps(review))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc..HEAD",
+            cwd=tmp_path,
+        )
+        assert result.returncode == 0
+
+        ctx = json.loads((tmp_path / "reconciliation-context.json").read_text())
+        assert len(ctx["agent_findings"]) == 3
+        assert "security-review" in ctx["agent_findings"]
+        assert "performance-review" in ctx["agent_findings"]
+        assert "patterns-review" in ctx["agent_findings"]

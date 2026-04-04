@@ -252,5 +252,86 @@ def resolve_output_builder_path() -> str:
     return str(SCRIPTS_DIR / "agent" / "output.py")
 
 
+def main() -> int:
+    """CLI entry point. Gathers all reconciliation context and writes JSON."""
+    parser = argparse.ArgumentParser(
+        description="Build reconciliation context for the reconciliator agent."
+    )
+    parser.add_argument(
+        "--output-dir", required=True,
+        help="Directory containing agent review outputs.",
+    )
+    parser.add_argument(
+        "--git-range", required=True,
+        help="Git range for the review (e.g., abc123..HEAD).",
+    )
+    parser.add_argument(
+        "--changed-files", default="",
+        help="Comma-separated list of changed file paths.",
+    )
+    parser.add_argument(
+        "--change-purpose", default="",
+        help="Description of the change purpose.",
+    )
+    parser.add_argument(
+        "--pr-id", default="",
+        help="Pull request ID.",
+    )
+
+    args = parser.parse_args()
+
+    output_dir = args.output_dir
+    git_range = args.git_range
+    changed_files = [f.strip() for f in args.changed_files.split(",") if f.strip()]
+    change_purpose = args.change_purpose
+    pr_id = args.pr_id
+
+    try:
+        # 1. Load all agent findings
+        agent_findings = load_agent_findings(output_dir)
+
+        # 2. Extract file:line references
+        references = extract_references(agent_findings)
+
+        # 3. Read source snippets
+        source_snippets = read_source_snippets(references)
+
+        # 4. Annotate scope
+        scope_annotations = check_scope(references, changed_files, git_range)
+
+        # 5. Resolve output builder path
+        output_builder_path = resolve_output_builder_path()
+
+        # Build the context object
+        context = {
+            "agent_findings": agent_findings,
+            "source_snippets": source_snippets,
+            "scope_annotations": scope_annotations,
+            "changed_files": changed_files,
+            "git_range": git_range,
+            "change_purpose": change_purpose,
+            "pr_id": pr_id,
+            "output_dir": output_dir,
+            "output_builder_path": output_builder_path,
+        }
+
+        # Write to output directory
+        output_path = os.path.join(output_dir, "reconciliation-context.json")
+        os.makedirs(output_dir, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(context, f, indent=2, ensure_ascii=False)
+
+        # Print success status
+        result = {"status": "ok", "path": output_path}
+        print(json.dumps(result))
+        return 0
+
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        result = {"status": "error", "error": str(exc)}
+        print(json.dumps(result))
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(1)  # Not yet implemented
+    sys.exit(main())
