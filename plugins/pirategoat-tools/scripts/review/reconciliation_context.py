@@ -198,5 +198,59 @@ def _merge_windows(windows: List[tuple]) -> List[tuple]:
     return merged
 
 
+def check_scope(
+    references: List[Dict[str, Any]],
+    changed_files: List[str],
+    git_range: str,
+) -> Dict[str, str]:
+    """Annotate each referenced file as IN_SCOPE or OUT_OF_SCOPE.
+
+    Uses suffix matching to handle absolute vs relative paths. A file is
+    considered in-scope if any changed_files entry is a suffix of the
+    referenced file path (or vice versa).
+
+    Args:
+        references: Output of extract_references().
+        changed_files: List of file paths from the diff.
+        git_range: Git range string (unused, reserved for future use).
+
+    Returns:
+        Dict mapping file paths to scope status strings.
+    """
+    annotations: Dict[str, str] = {}
+
+    for ref in references:
+        file_path = ref["file"]
+        if _file_in_changed(file_path, changed_files):
+            annotations[file_path] = "IN_SCOPE"
+        else:
+            annotations[file_path] = "OUT_OF_SCOPE:file_not_in_diff"
+
+    return annotations
+
+
+def _file_in_changed(file_path: str, changed_files: List[str]) -> bool:
+    """Check if file_path matches any entry in changed_files using suffix matching."""
+    # Normalize separators
+    norm_path = file_path.replace("\\", "/")
+
+    for changed in changed_files:
+        norm_changed = changed.replace("\\", "/")
+        if norm_path == norm_changed:
+            return True
+        if norm_path.endswith("/" + norm_changed) or norm_changed.endswith("/" + norm_path):
+            return True
+
+    return False
+
+
+def resolve_output_builder_path() -> str:
+    """Return the path to the ReviewOutputBuilder script.
+
+    The script knows its own location relative to the output builder.
+    """
+    return str(SCRIPTS_DIR / "agent" / "output.py")
+
+
 if __name__ == "__main__":
     sys.exit(1)  # Not yet implemented

@@ -386,3 +386,82 @@ class TestMergeWindows:
         """Window fully contained in another is absorbed."""
         result = mod._merge_windows([(1, 20), (5, 10)])
         assert result == [(1, 20)]
+
+
+# ===========================================================================
+# TestCheckScope
+# ===========================================================================
+
+class TestCheckScope:
+    """Tests for check_scope()."""
+
+    def test_file_in_changed_is_in_scope(self, mod):
+        """A referenced file that appears in changed_files is IN_SCOPE."""
+        refs = [{"file": "src/auth.py", "lines": [10]}]
+        changed = ["src/auth.py", "src/db.py"]
+        result = mod.check_scope(refs, changed, "abc..HEAD")
+        assert result["src/auth.py"] == "IN_SCOPE"
+
+    def test_file_not_in_changed_is_out_of_scope(self, mod):
+        """A referenced file NOT in changed_files is OUT_OF_SCOPE."""
+        refs = [{"file": "src/utils.py", "lines": [10]}]
+        changed = ["src/auth.py"]
+        result = mod.check_scope(refs, changed, "abc..HEAD")
+        assert result["src/utils.py"] == "OUT_OF_SCOPE:file_not_in_diff"
+
+    def test_suffix_matching_abs_vs_relative(self, mod):
+        """Absolute path in refs matches relative path in changed_files."""
+        refs = [{"file": "/home/user/project/src/auth.py", "lines": [10]}]
+        changed = ["src/auth.py"]
+        result = mod.check_scope(refs, changed, "abc..HEAD")
+        assert result["/home/user/project/src/auth.py"] == "IN_SCOPE"
+
+    def test_suffix_matching_relative_vs_abs(self, mod):
+        """Relative path in refs matches absolute path in changed_files."""
+        refs = [{"file": "src/auth.py", "lines": [10]}]
+        changed = ["/home/user/project/src/auth.py"]
+        result = mod.check_scope(refs, changed, "abc..HEAD")
+        assert result["src/auth.py"] == "IN_SCOPE"
+
+    def test_empty_changed_files(self, mod):
+        """No changed files means everything is OUT_OF_SCOPE."""
+        refs = [{"file": "src/auth.py", "lines": [10]}]
+        result = mod.check_scope(refs, [], "abc..HEAD")
+        assert result["src/auth.py"] == "OUT_OF_SCOPE:file_not_in_diff"
+
+    def test_empty_references(self, mod):
+        """No references means empty annotations."""
+        result = mod.check_scope([], ["src/auth.py"], "abc..HEAD")
+        assert result == {}
+
+    def test_mixed_scope(self, mod):
+        """Mix of in-scope and out-of-scope files."""
+        refs = [
+            {"file": "src/auth.py", "lines": [10]},
+            {"file": "src/utils.py", "lines": [20]},
+            {"file": "src/db.py", "lines": [30]},
+        ]
+        changed = ["src/auth.py", "src/db.py"]
+        result = mod.check_scope(refs, changed, "abc..HEAD")
+        assert result["src/auth.py"] == "IN_SCOPE"
+        assert result["src/utils.py"] == "OUT_OF_SCOPE:file_not_in_diff"
+        assert result["src/db.py"] == "IN_SCOPE"
+
+
+# ===========================================================================
+# TestResolveOutputBuilderPath
+# ===========================================================================
+
+class TestResolveOutputBuilderPath:
+    """Tests for resolve_output_builder_path()."""
+
+    def test_resolves_to_existing_file(self, mod):
+        """Should resolve to a path ending in output.py that exists."""
+        path = mod.resolve_output_builder_path()
+        assert path.endswith("output.py")
+        assert os.path.isfile(path)
+
+    def test_points_to_agent_output(self, mod):
+        """Should point to scripts/review/agent/output.py."""
+        path = mod.resolve_output_builder_path()
+        assert "scripts/review/agent/output.py" in path.replace("\\", "/")
