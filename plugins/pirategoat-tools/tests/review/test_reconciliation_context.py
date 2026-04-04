@@ -180,3 +180,209 @@ class TestLoadAgentFindings:
         result = mod.load_agent_findings(str(tmp_path))
         assert len(result) == 1
         assert "security-review" in result
+
+
+# ===========================================================================
+# TestExtractReferences
+# ===========================================================================
+
+class TestExtractReferences:
+    """Tests for extract_references()."""
+
+    def test_extracts_unique_refs(self, mod):
+        """Extracts file:line pairs from agent issues."""
+        findings = {
+            "security-review": _make_review_json(issues=[
+                _make_issue(file="src/auth.py", line=10),
+                _make_issue(file="src/db.py", line=20),
+            ]),
+        }
+        refs = mod.extract_references(findings)
+        assert len(refs) == 2
+        files = {r["file"] for r in refs}
+        assert files == {"src/auth.py", "src/db.py"}
+
+    def test_deduplicates_same_file(self, mod):
+        """Same file from multiple agents is deduplicated, lines merged."""
+        findings = {
+            "security-review": _make_review_json(issues=[
+                _make_issue(file="src/auth.py", line=10),
+                _make_issue(file="src/auth.py", line=30),
+            ]),
+            "performance-review": _make_review_json(issues=[
+                _make_issue(file="src/auth.py", line=20),
+                _make_issue(file="src/auth.py", line=10),  # duplicate line
+            ]),
+        }
+        refs = mod.extract_references(findings)
+        assert len(refs) == 1
+        assert refs[0]["file"] == "src/auth.py"
+        assert refs[0]["lines"] == [10, 20, 30]
+
+    def test_skips_missing_lines(self, mod):
+        """Issues without a valid line field are skipped."""
+        findings = {
+            "security-review": _make_review_json(issues=[
+                _make_issue(file="src/auth.py", line=10),
+                {
+                    "id": "x",
+                    "severity": "medium",
+                    "title": "No line",
+                    "file": "src/other.py",
+                    "description": "...",
+                    "recommendation": "...",
+                    # line field missing
+                },
+                {
+                    "id": "y",
+                    "severity": "medium",
+                    "title": "Null line",
+                    "file": "src/other.py",
+                    "line": None,
+                    "description": "...",
+                    "recommendation": "...",
+                },
+                {
+                    "id": "z",
+                    "severity": "medium",
+                    "title": "Zero line",
+                    "file": "src/other.py",
+                    "line": 0,
+                    "description": "...",
+                    "recommendation": "...",
+                },
+            ]),
+        }
+        refs = mod.extract_references(findings)
+        assert len(refs) == 1
+        assert refs[0]["file"] == "src/auth.py"
+
+    def test_handles_empty_findings(self, mod):
+        """Empty findings returns empty list."""
+        refs = mod.extract_references({})
+        assert refs == []
+
+    def test_handles_findings_with_no_issues(self, mod):
+        """Findings with no issues list returns empty refs."""
+        findings = {
+            "security-review": {"verdict": "approve"},  # no issues key
+        }
+        refs = mod.extract_references(findings)
+        assert refs == []
+
+    def test_lines_are_sorted(self, mod):
+        """Lines within a file reference are sorted ascending."""
+        findings = {
+            "a-review": _make_review_json(issues=[
+                _make_issue(file="src/app.py", line=50),
+                _make_issue(file="src/app.py", line=10),
+                _make_issue(file="src/app.py", line=30),
+            ]),
+        }
+        refs = mod.extract_references(findings)
+        assert refs[0]["lines"] == [10, 30, 50]
+
+
+# ===========================================================================
+# TestReadSourceSnippets
+# ===========================================================================
+
+class TestReadSourceSnippets:
+    """Tests for read_source_snippets()."""
+
+    def test_reads_with_context(self, mod, tmp_path):
+        """Reads source lines with +/-context around referenced lines."""
+        # Create a source file with 20 lines
+        source_file = tmp_path / "app.py"
+        source_lines = [f"line {i}" for i in range(1, 21)]
+        source_file.write_text("\n".join(source_lines) + "\n")
+
+        refs = [{"file": str(source_file), "lines": [10]}]
+        snippets = mod.read_source_snippets(refs, context_lines=3)
+
+        assert str(source_file) in snippets
+        snippet = snippets[str(source_file)]
+        # Should include lines 7-13 (10 +/- 3)
+        assert "7 | line 7" in snippet
+        assert "10 | line 10" in snippet
+        assert "13 | line 13" in snippet
+        # Should NOT include line 6 or 14
+        assert "6 | line 6" not in snippet
+        assert "14 | line 14" not in snippet
+
+    def test_merges_overlapping_windows(self, mod, tmp_path):
+        """Overlapping context windows are merged."""
+        source_file = tmp_path / "app.py"
+        source_lines = [f"line {i}" for i in range(1, 31)]
+        source_file.write_text("\n".join(source_lines) + "\n")
+
+        # Lines 10 and 12 with context_lines=3: windows [7,13] and [9,15]
+        # Should merge into [7,15]
+        refs = [{"file": str(source_file), "lines": [10, 12]}]
+        snippets = mod.read_source_snippets(refs, context_lines=3)
+
+        snippet = snippets[str(source_file)]
+        lines_in_snippet = snippet.strip().split("\n")
+        # Should be a single contiguous block from 7 to 15 = 9 lines
+        assert len(lines_in_snippet) == 9
+
+    def test_handles_missing_files(self, mod, tmp_path):
+        """Missing files are skipped gracefully."""
+        refs = [{"file": str(tmp_path / "nonexistent.py"), "lines": [10]}]
+        snippets = mod.read_source_snippets(refs, context_lines=3)
+        assert snippets == {}
+
+    def test_handles_empty_references(self, mod):
+        """Empty references returns empty dict."""
+        snippets = mod.read_source_snippets([], context_lines=3)
+        assert snippets == {}
+
+    def test_clamps_to_file_boundaries(self, mod, tmp_path):
+        """Context window is clamped to file start/end."""
+        source_file = tmp_path / "short.py"
+        source_file.write_text("line 1\nline 2\nline 3\n")
+
+        refs = [{"file": str(source_file), "lines": [1]}]
+        snippets = mod.read_source_snippets(refs, context_lines=10)
+
+        snippet = snippets[str(source_file)]
+        lines_in_snippet = snippet.strip().split("\n")
+        assert len(lines_in_snippet) == 3  # All 3 lines of file
+
+
+# ===========================================================================
+# TestMergeWindows
+# ===========================================================================
+
+class TestMergeWindows:
+    """Tests for _merge_windows() helper."""
+
+    def test_non_overlapping(self, mod):
+        """Non-overlapping windows stay separate."""
+        result = mod._merge_windows([(1, 5), (10, 15)])
+        assert result == [(1, 5), (10, 15)]
+
+    def test_overlapping(self, mod):
+        """Overlapping windows are merged."""
+        result = mod._merge_windows([(1, 10), (5, 15)])
+        assert result == [(1, 15)]
+
+    def test_adjacent(self, mod):
+        """Adjacent windows (end+1 = start) are merged."""
+        result = mod._merge_windows([(1, 5), (6, 10)])
+        assert result == [(1, 10)]
+
+    def test_empty(self, mod):
+        """Empty input returns empty list."""
+        result = mod._merge_windows([])
+        assert result == []
+
+    def test_unsorted_input(self, mod):
+        """Unsorted input is sorted before merging."""
+        result = mod._merge_windows([(10, 15), (1, 5)])
+        assert result == [(1, 5), (10, 15)]
+
+    def test_fully_contained(self, mod):
+        """Window fully contained in another is absorbed."""
+        result = mod._merge_windows([(1, 20), (5, 10)])
+        assert result == [(1, 20)]

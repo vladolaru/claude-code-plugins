@@ -78,5 +78,125 @@ def load_agent_findings(output_dir: str) -> Dict[str, Any]:
     return findings
 
 
+def extract_references(agent_findings: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract unique file:line references from all agent issues.
+
+    Scans the 'issues' list in each agent's findings and collects unique
+    file paths with their referenced line numbers.
+
+    Returns:
+        List of dicts, each with:
+        - "file": str — the file path as reported by the agent
+        - "lines": List[int] — sorted, deduplicated line numbers
+
+        Skips issues without a valid integer 'line' field.
+    """
+    file_lines: Dict[str, set] = {}
+
+    for _agent_name, data in agent_findings.items():
+        issues = data.get("issues", [])
+        if not isinstance(issues, list):
+            continue
+
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            file_path = issue.get("file")
+            line = issue.get("line")
+
+            if not file_path or not isinstance(file_path, str):
+                continue
+            if not isinstance(line, int) or line <= 0:
+                continue
+
+            if file_path not in file_lines:
+                file_lines[file_path] = set()
+            file_lines[file_path].add(line)
+
+    return [
+        {"file": fp, "lines": sorted(lines)}
+        for fp, lines in sorted(file_lines.items())
+    ]
+
+
+def read_source_snippets(
+    references: List[Dict[str, Any]], context_lines: int = 10
+) -> Dict[str, str]:
+    """Read source code snippets around referenced lines.
+
+    For each referenced file, reads ±context_lines around each line number.
+    Overlapping windows are merged. Missing files are skipped gracefully.
+
+    Returns:
+        Dict mapping absolute file paths to snippet text with line numbers.
+        Format: "  42 | code here\\n  43 | more code\\n..."
+    """
+    snippets: Dict[str, str] = {}
+
+    for ref in references:
+        file_path = ref["file"]
+        lines = ref["lines"]
+
+        # Resolve to absolute path
+        abs_path = str(Path(file_path).resolve())
+
+        if not os.path.isfile(abs_path):
+            # Try as-is (might already be absolute)
+            if not os.path.isfile(file_path):
+                continue
+            abs_path = file_path
+
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                source_lines = f.readlines()
+        except OSError:
+            continue
+
+        total_lines = len(source_lines)
+        if total_lines == 0:
+            continue
+
+        # Build merged windows
+        windows = []
+        for line_num in lines:
+            start = max(1, line_num - context_lines)
+            end = min(total_lines, line_num + context_lines)
+            windows.append((start, end))
+
+        # Merge overlapping windows
+        merged = _merge_windows(windows)
+
+        # Extract snippets
+        snippet_parts = []
+        for start, end in merged:
+            for i in range(start, end + 1):
+                line_text = source_lines[i - 1].rstrip("\n")
+                snippet_parts.append(f"{i:>6} | {line_text}")
+
+        if snippet_parts:
+            snippets[abs_path] = "\n".join(snippet_parts)
+
+    return snippets
+
+
+def _merge_windows(windows: List[tuple]) -> List[tuple]:
+    """Merge overlapping (start, end) windows into non-overlapping ranges."""
+    if not windows:
+        return []
+
+    sorted_windows = sorted(windows)
+    merged = [sorted_windows[0]]
+
+    for start, end in sorted_windows[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + 1:
+            # Overlapping or adjacent — merge
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+
+    return merged
+
+
 if __name__ == "__main__":
     sys.exit(1)  # Not yet implemented
