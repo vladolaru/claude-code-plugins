@@ -1697,7 +1697,27 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         pr_id = config.get("pr_number", "")
         if pr_id:
             recon_ctx_cmd.extend(["--pr-id", str(pr_id)])
-        _run_subprocess(recon_ctx_cmd, timeout=30)
+        # Pass dispatched agents only when real dispatch metadata exists.
+        # _DEFAULT_STATE always populates state["agents"] with empty lists,
+        # so checking `is not None` is insufficient — we must check that
+        # dispatched is non-empty (i.e., the dispatch plan was actually
+        # loaded and had agents). When dispatched is empty (default state
+        # or plan with 0 agents), omit the flag entirely so
+        # reconciliation_context.py falls back to discovering all
+        # *-review.json files on disk.
+        agents_info = state.get("agents")
+        if agents_info is not None:
+            dispatched = agents_info.get("dispatched", [])
+            if dispatched:
+                recon_ctx_cmd.extend(["--dispatched-agents", ",".join(dispatched)])
+        _, ctx_ok = _run_subprocess(recon_ctx_cmd, timeout=30)
+        recon_ctx_path = os.path.join(output_dir, "reconciliation-context.json")
+        if not ctx_ok or not os.path.isfile(recon_ctx_path):
+            raise RuntimeError(
+                "reconciliation_context.py failed — cannot proceed to "
+                "reconciliation without a valid context file. "
+                f"Check stderr above. Expected: {recon_ctx_path}"
+            )
 
     if step == 10:
         # Read reconciliation verdict for quick-mode critic skip decision

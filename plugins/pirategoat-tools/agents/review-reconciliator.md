@@ -30,14 +30,15 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
     "<agent-name>-review": { "verdict": "...", "issues": [...], ... }
   },
   "source_snippets": {
-    "/abs/path/to/file.py": "  40 | def foo():\n  41 |     bar()\n  42 |     baz()\n..."
+    "src/auth.py": "  40 | def foo():\n  41 |     bar()\n  42 |     baz()\n..."
   },
   "scope_annotations": {
-    "/abs/path/to/file.py": "IN_SCOPE",
-    "/abs/path/other.py": "OUT_OF_SCOPE:file_not_in_diff"
+    "src/auth.py": "IN_SCOPE:in_hunk",
+    "src/other.py": "OUT_OF_SCOPE:file_not_in_diff"
   },
   "changed_files": ["src/a.py", "src/b.py"],
   "git_range": "abc..HEAD",
+  "dispatched_agents": ["security-review", "performance-review", "architecture-review"],
   "change_purpose": "Adds retry logic to the payment gateway.",
   "pr_id": "42",
   "output_dir": "/tmp/pr-review-42",
@@ -47,10 +48,11 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 
 - **`agent_findings`** — All agent review JSON outputs, keyed by agent name. Each value is the full parsed JSON from that agent's output file.
 - **`source_snippets`** — Pre-read source code around every referenced file:line, with ±10 lines of context. Format: `"<line_num> | <code>"` per line.
-- **`scope_annotations`** — Per-file scope status: `"IN_SCOPE"` or `"OUT_OF_SCOPE:<reason>"`.
+- **`scope_annotations`** — Per-finding scope status keyed by `"file:line"`. Values: `"IN_SCOPE:in_hunk"` (line inside a changed hunk), `"IN_SCOPE:near_hunk"` (within ±5 lines of a hunk), `"OUT_OF_SCOPE:not_in_hunk"` (file changed but line far from any hunk — pre-existing code), `"OUT_OF_SCOPE:file_not_in_diff"` (file not in the diff).
+- **`dispatched_agents`** — List of dispatched agents, normalized to match `agent_findings` keys (e.g., `["security-review", "performance-review"]`). Compare directly against keys in `agent_findings` to detect agents that were dispatched but failed to report — these should be noted in `meta.reconciliation` so coverage is accurately represented, not silently overstated. May be absent for backward compatibility (treat as "unknown").
 - **`changed_files`** — List of files in the diff.
 - **`git_range`** — The git range for this review.
-- **`change_purpose`** — Summary of what the change accomplishes (may be empty). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility.
+- **`change_purpose`** — Summary of what the change accomplishes. When an explicit change-purpose artifact exists, this contains it. Otherwise, it is auto-derived from commit messages (prefixed with "Derived from commit messages:"). May be empty only if both sources are unavailable. Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility.
 - **`pr_id`** — Pull request number.
 - **`output_dir`** — Where to write output files.
 - **`output_builder_path`** — Resolved path to `review/agent/output.py` for importing `ReviewOutputBuilder`.
@@ -78,9 +80,12 @@ Read `reconciliation-context.json`. All agent findings are in the `agent_finding
 
 For each concern group:
 
-1. **Scope check — file in diff:**
-   - Check `scope_annotations[file]`. If the value starts with `OUT_OF_SCOPE:`, drop the concern immediately.
-   - If the file is not present in `scope_annotations` at all, check whether it appears in `changed_files`. If not → OUT OF SCOPE, drop it.
+1. **Scope check — file and line in diff:**
+   - Look up `scope_annotations["file:line"]` for each finding's file and line. If the value starts with `OUT_OF_SCOPE:`, drop the concern immediately.
+   - `OUT_OF_SCOPE:file_not_in_diff` — file not in the diff at all.
+   - `OUT_OF_SCOPE:not_in_hunk` — file is changed but this line is far from any changed hunk (pre-existing code, not introduced by this PR).
+   - `IN_SCOPE:in_hunk` or `IN_SCOPE:near_hunk` — proceed with verification.
+   - If no annotation exists for the file:line, check whether the file appears in `changed_files`. If not → OUT OF SCOPE, drop it. If yes → proceed conservatively with verification.
 
 2. **Fact verification using source snippets:**
    - For in-scope concerns: look up the referenced file in `source_snippets`. The snippet includes ±10 lines of context around each referenced line.
@@ -154,6 +159,8 @@ output['meta']['reconciliation'] = {
     'not_applicable_count': NA_COUNT,           # agents that returned not_applicable
     'not_applicable_agents': NA_AGENT_LIST,     # list: [{"name": "...", "skip_reason": "..."}]
     'reviewing_agents': REVIEWING_NAMES,        # agents that performed actual reviews
+    'dispatched_agents': DISPATCHED_LIST,       # all agents that were dispatched (from context)
+    'missing_agents': MISSING_LIST,            # dispatched but no output (crashed/timed out)
 }
 
 # Write output
