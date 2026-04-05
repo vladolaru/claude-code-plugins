@@ -461,7 +461,7 @@ class TestStep8AgentPrompt:
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py,b.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "reconciliation-context.json" in text  # pre-gathered context file
+        assert "reconciliation-context.md" in text  # pre-gathered Markdown context file
         assert str(tmp_path) in text  # concrete output directory
 
 

@@ -983,7 +983,8 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
          "**1. TaskStop** all remaining background review agents."),
         "",
         "**2. Dispatch `review-reconciliator`** with:",
-        f"- **Reconciliation context:** `{od}/reconciliation-context.json` (pre-gathered: all agent findings, source snippets, scope annotations, output builder path)",
+        f"- **Reconciliation context:** `{od}/reconciliation-context.md` (pre-gathered Markdown briefing: all agent findings, source snippets, scope annotations)",
+        f"- **Output builder path:** `{SCRIPTS_DIR / 'agent' / 'output.py'}`",
         f"- Output directory: `{od}`",
     ]
 
@@ -1713,7 +1714,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             elif os.path.isfile(plan_path):
                 recon_ctx_cmd.extend(["--dispatched-agents", ""])
         _, ctx_ok = _run_subprocess(recon_ctx_cmd, timeout=30)
-        recon_ctx_path = os.path.join(output_dir, "reconciliation-context.json")
+        recon_ctx_path = os.path.join(output_dir, "reconciliation-context.md")
         if not ctx_ok or not os.path.isfile(recon_ctx_path):
             raise RuntimeError(
                 "reconciliation_context.py failed — cannot proceed to "

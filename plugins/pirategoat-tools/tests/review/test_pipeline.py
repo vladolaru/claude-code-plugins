@@ -637,13 +637,13 @@ class TestStep8Reconcile:
         assert "security-reviewer" in text
 
     def test_includes_reconciliation_context_path(self, mod, tmp_path):
-        """All modes should pass reconciliation-context.json to reconciliator."""
+        """All modes should pass reconciliation-context.md to reconciliator."""
         for mode in ("pr", "full", "incremental"):
             state = self._make_state_with_agents(change_purpose_exists=True)
             ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
             g = mod.get_step_guidance(8, mode, state, ctx, output_dir=str(tmp_path))
             text = "\n".join(g["actions"])
-            assert "reconciliation-context.json" in text
+            assert "reconciliation-context.md" in text
 
     def test_includes_change_purpose_when_available(self, mod, tmp_path):
         """Should include change purpose in reconciliator prompt."""
@@ -670,7 +670,7 @@ class TestStep8Reconcile:
         assert "stop" in text.lower() or "TaskStop" in text
 
     def test_reconciliator_prompt_references_context_file(self, mod, tmp_path):
-        """Step 8 should reference pre-gathered reconciliation-context.json instead of individual review files."""
+        """Step 8 should reference pre-gathered reconciliation-context.md instead of individual review files."""
         state = self._make_state_with_agents(change_purpose_exists=True)
         state["agents"]["review_files"] = [
             "/tmp/out/pr-review.json",
@@ -679,7 +679,7 @@ class TestStep8Reconcile:
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "reconciliation-context.json" in text
+        assert "reconciliation-context.md" in text
         # Individual review files are no longer listed — they're inside the context file
         assert "pr-review.json" not in text
 
