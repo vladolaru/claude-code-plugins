@@ -19,47 +19,31 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 
 ## Context You Will Receive
 
-- **Reconciliation Context File**: Path to `reconciliation-context.json` — a single file containing everything you need (see schema below). Read this file first.
+- **Reconciliation Context File**: Path to `reconciliation-context.md` — a structured Markdown document containing all agent findings, source snippets, and scope annotations. Read this file first.
 - **Output Directory**: Where to write `review-findings.json` and `review-findings.md`
+- **Output Builder Path**: Resolved path to `review/agent/output.py` for importing `ReviewOutputBuilder`.
 
-### `reconciliation-context.json` Schema
+### `reconciliation-context.md` Structure
 
-```json
-{
-  "agent_findings": {
-    "<agent-name>-review": { "verdict": "...", "issues": [...], ... }
-  },
-  "source_snippets": {
-    "src/auth.py": "  40 | def foo():\n  41 |     bar()\n  42 |     baz()\n..."
-  },
-  "scope_annotations": {
-    "src/auth.py": "IN_SCOPE:in_hunk",
-    "src/other.py": "OUT_OF_SCOPE:file_not_in_diff"
-  },
-  "changed_files": ["src/a.py", "src/b.py"],
-  "git_range": "abc..HEAD",
-  "dispatched_agents": ["security-review", "performance-review", "architecture-review"],
-  "change_purpose": "Adds retry logic to the payment gateway.",
-  "pr_id": "42",
-  "output_dir": "/tmp/pr-review-42",
-  "output_builder_path": "/path/to/scripts/review/agent/output.py"
-}
-```
+The Markdown document has these sections:
 
-- **`agent_findings`** — All agent review JSON outputs, keyed by agent name. Each value is the full parsed JSON from that agent's output file.
-- **`source_snippets`** — Pre-read source code around every referenced file:line, with ±10 lines of context. Format: `"<line_num> | <code>"` per line.
-- **`scope_annotations`** — Per-finding scope status keyed by `"file:line"`. Values: `"IN_SCOPE:in_hunk"` (line inside a changed hunk), `"IN_SCOPE:near_hunk"` (within ±5 lines of a hunk), `"OUT_OF_SCOPE:not_in_hunk"` (file changed but line far from any hunk — pre-existing code), `"OUT_OF_SCOPE:file_not_in_diff"` (file not in the diff).
-- **`dispatched_agents`** — List of dispatched agents, normalized to match `agent_findings` keys (e.g., `["security-review", "performance-review"]`). Compare directly against keys in `agent_findings` to detect agents that were dispatched but failed to report — these should be noted in `meta.reconciliation` so coverage is accurately represented, not silently overstated. May be absent for backward compatibility (treat as "unknown").
-- **`changed_files`** — List of files in the diff.
-- **`git_range`** — The git range for this review.
-- **`change_purpose`** — Summary of what the change accomplishes. When an explicit change-purpose artifact exists, this contains it. Otherwise, it is auto-derived from commit messages (prefixed with "Derived from commit messages:"). May be empty only if both sources are unavailable. Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility.
-- **`pr_id`** — Pull request number.
-- **`output_dir`** — Where to write output files.
-- **`output_builder_path`** — Resolved path to `review/agent/output.py` for importing `ReviewOutputBuilder`.
+1. **Metadata** — git range, PR ID, output directory, output builder path, changed files, dispatched agents
+2. **Change Purpose** — what the change accomplishes (may be derived from commits, prefixed with "Derived from commit messages:"). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility.
+3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, file:line, description, recommendation, category, and confidence. Agents are sorted alphabetically.
+4. **Source Snippets** — pre-read source code around every referenced file:line in fenced code blocks, with ±10 lines of context. Format: `<line_num> | <code>` per line. May include `[pre-change]` entries for files with deletion hunks and `[deleted]` prefixed content for removed files.
+5. **Scope Annotations** — table mapping `file:line` to scope status:
+   - `IN_SCOPE:in_hunk` — line inside a changed hunk
+   - `IN_SCOPE:near_hunk` — within ±5 lines of a hunk
+   - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (pre-existing code)
+   - `OUT_OF_SCOPE:file_not_in_diff` — file not in the diff
+
+**Key fields:**
+- **Dispatched agents** (in Metadata) — compare against agent findings subsection headers to detect agents dispatched but failed to report. Note these in `meta.reconciliation` so coverage is accurately represented. May be absent for backward compatibility (treat as "unknown").
+- **Changed files** (in Metadata) — files in the diff. When a finding references a file not in this list, it's out of scope.
 
 ## Phase 1: Load & Group
 
-Read `reconciliation-context.json`. All agent findings are in the `agent_findings` object. For each finding across all agents:
+Read `reconciliation-context.md`. Agent findings are in the "## Agent Findings" section, with each agent as a `### agent-name` subsection. For each finding across all agents:
 
 1. **Understand the underlying concern** — not just the title, but what the finding is actually about. Two findings titled "Missing input validation" and "Unsanitized user data in query" may describe the same concern if they reference the same code path.
 
@@ -121,17 +105,15 @@ For each verified concern:
 ```python
 import sys, os, json
 
-# Load pre-gathered context
-with open("RECONCILIATION_CONTEXT_PATH") as f:
-    ctx = json.load(f)
+# Use the output directory and builder path from the dispatch prompt
+output_dir = "OUTPUT_DIR_FROM_PROMPT"
+builder_path = "OUTPUT_BUILDER_PATH_FROM_PROMPT"
 
-# Import ReviewOutputBuilder using the resolved path from context
-builder_path = ctx["output_builder_path"]
+# Import ReviewOutputBuilder
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(builder_path))))
 from review.agent.output import ReviewOutputBuilder
 
-output_dir = ctx["output_dir"]
-builder = ReviewOutputBuilder(pr_id=ctx.get("pr_id", ""), reviewer="reconciliator")
+builder = ReviewOutputBuilder(pr_id="PR_ID_FROM_CONTEXT", reviewer="reconciliator")
 
 # For each verified concern:
 builder.add_issue(
