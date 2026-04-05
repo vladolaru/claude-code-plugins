@@ -156,15 +156,56 @@ def _get_git_root() -> Optional[str]:
     return None
 
 
+def _read_git_content(
+    file_path: str,
+    base_ref: str,
+    git_root: Optional[str] = None,
+) -> Optional[List[str]]:
+    """Read file content from a git ref (for deleted/renamed files).
+
+    Falls back to git history when the working-tree file no longer exists,
+    preserving source evidence for deletion-based findings.
+
+    Args:
+        file_path: Repo-relative file path.
+        base_ref: Git ref to read from (e.g., merge base commit).
+        git_root: Git repository root (used as cwd for git commands).
+
+    Returns:
+        List of lines (with newlines), or None on failure.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{base_ref}:{file_path}"],
+            capture_output=True, text=True, timeout=5,
+            cwd=git_root,
+        )
+        if result.returncode == 0 and result.stdout:
+            return result.stdout.splitlines(keepends=True)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return None
+
+
 def read_source_snippets(
     references: List[Dict[str, Any]],
     context_lines: int = 10,
     git_root: Optional[str] = None,
+    base_ref: Optional[str] = None,
+    old_side_files: Optional[set] = None,
 ) -> Dict[str, str]:
     """Read source code snippets around referenced lines.
 
     For each referenced file, reads ±context_lines around each line number.
     Overlapping windows are merged. Missing files are skipped gracefully.
+    When a file doesn't exist in the working tree (deleted by this patch),
+    falls back to reading from ``base_ref`` via ``git show``.
+
+    For files that still exist but have deletion hunks (listed in
+    *old_side_files*), also reads the pre-change version from ``base_ref``
+    and includes it as a separate ``"[pre-change] file"`` entry.  This
+    ensures the reconciliator has evidence for findings about deleted code
+    even when the file survives the patch.
 
     Args:
         references: List of {"file": path, "lines": [int, ...]} dicts.
@@ -173,12 +214,21 @@ def read_source_snippets(
             findings are resolved against this directory. When None, falls
             back to CWD-based resolution (which breaks when the pipeline
             is launched from a subdirectory).
+        base_ref: Git ref for old-side content (e.g., merge base). Used
+            to recover snippets for files deleted by the patch.
+        old_side_files: Set of repo-relative file paths that have deletion
+            hunks (old_count > new_count). When ``base_ref`` is also
+            available, pre-change content is read and included alongside
+            the working-tree snippet.
 
     Returns:
         Dict mapping original file paths to snippet text with line numbers.
         Format: "  42 | code here\\n  43 | more code\\n..."
+        Deleted-file snippets include a ``[deleted]`` prefix.
+        Pre-change snippets use a ``[pre-change] file`` key.
     """
     snippets: Dict[str, str] = {}
+    _old_side = old_side_files or set()
 
     for ref in references:
         file_path = ref["file"]
@@ -193,13 +243,33 @@ def read_source_snippets(
         else:
             read_path = str(Path(file_path).resolve())
 
-        if not os.path.isfile(read_path):
-            continue
+        source_lines: Optional[List[str]] = None
+        deleted = False
 
-        try:
-            with open(read_path, "r", encoding="utf-8", errors="replace") as f:
-                source_lines = f.readlines()
-        except OSError:
+        if os.path.isfile(read_path):
+            # Security: resolved path must be within the git root. Prevents
+            # reading files outside the repo via hallucinated absolute paths
+            # that suffix-match changed filenames in _file_in_changed().
+            if git_root:
+                try:
+                    real_read = os.path.realpath(read_path)
+                    real_root = os.path.realpath(git_root)
+                    if not real_read.startswith(real_root + os.sep):
+                        continue
+                except (OSError, ValueError):
+                    continue
+
+            try:
+                with open(read_path, "r", encoding="utf-8", errors="replace") as f:
+                    source_lines = f.readlines()
+            except OSError:
+                pass
+        elif base_ref:
+            # File deleted by this patch — recover old-side content from git.
+            source_lines = _read_git_content(file_path, base_ref, git_root)
+            deleted = True
+
+        if not source_lines:
             continue
 
         total_lines = len(source_lines)
@@ -224,9 +294,43 @@ def read_source_snippets(
                 snippet_parts.append(f"{i:>6} | {line_text}")
 
         if snippet_parts:
-            snippets[file_path] = "\n".join(snippet_parts)
+            prefix = "[deleted] " if deleted else ""
+            snippets[file_path] = prefix + "\n".join(snippet_parts)
+
+        # For surviving files with deletion hunks, also read pre-change
+        # content so the reconciliator has evidence for deleted-code findings.
+        if not deleted and base_ref and _file_in_old_side(file_path, _old_side):
+            old_lines = _read_git_content(file_path, base_ref, git_root)
+            if old_lines:
+                old_total = len(old_lines)
+                old_windows = []
+                for line_num in lines:
+                    s = max(1, line_num - context_lines)
+                    e = min(old_total, line_num + context_lines)
+                    if s <= e:
+                        old_windows.append((s, e))
+                old_merged = _merge_windows(old_windows)
+                old_parts = []
+                for s, e in old_merged:
+                    for i in range(s, e + 1):
+                        lt = old_lines[i - 1].rstrip("\n")
+                        old_parts.append(f"{i:>6} | {lt}")
+                if old_parts:
+                    snippets[f"[pre-change] {file_path}"] = "\n".join(old_parts)
 
     return snippets
+
+
+def _file_in_old_side(file_path: str, old_side_files: set) -> bool:
+    """Check if file_path matches any entry in old_side_files (suffix matching)."""
+    norm = file_path.replace("\\", "/")
+    for entry in old_side_files:
+        norm_entry = entry.replace("\\", "/")
+        if norm == norm_entry:
+            return True
+        if norm.endswith("/" + norm_entry) or norm_entry.endswith("/" + norm):
+            return True
+    return False
 
 
 def _merge_windows(windows: List[tuple]) -> List[tuple]:
@@ -274,7 +378,7 @@ def _derive_change_purpose_from_commits(git_range: str) -> str:
 
 
 _HUNK_HEADER_RE = re.compile(
-    r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE
 )
 
 # Lines of proximity to a changed hunk that count as "near" the change.
@@ -282,16 +386,24 @@ _HUNK_HEADER_RE = re.compile(
 _HUNK_PROXIMITY = 5
 
 
-def _parse_diff_hunks(git_range: str) -> Dict[str, List[Tuple[int, int]]]:
+def _parse_diff_hunks(
+    git_range: str,
+) -> Tuple[Dict[str, List[Tuple[int, int]]], set]:
     """Parse git diff to extract changed line ranges per file.
 
-    Runs ``git diff --unified=0 <git_range>`` and extracts the new-file line
-    ranges from ``@@`` hunk headers.
+    Runs ``git diff --unified=0 <git_range>`` and extracts old-side and
+    new-side line ranges separately from ``@@`` hunk headers.  Storing
+    them as individual entries (instead of a union) prevents false
+    in-scope gaps when insertions/deletions shift later hunks.
 
     Returns:
-        Dict mapping repo-relative file paths to lists of ``(start, end)``
-        tuples representing changed line ranges in the new version.
-        Empty dict if git diff fails or times out.
+        Tuple of:
+        - Dict mapping repo-relative file paths to lists of ``(start, end)``
+          tuples.  Each hunk may contribute up to two entries (old-side
+          and new-side), so the list may contain overlapping ranges.
+        - Set of file paths that have at least one deletion hunk
+          (old_count > new_count), used to trigger old-side snippet reads.
+        Returns ``({}, set())`` if git diff fails or times out.
     """
     try:
         result = subprocess.run(
@@ -301,11 +413,12 @@ def _parse_diff_hunks(git_range: str) -> Dict[str, List[Tuple[int, int]]]:
             timeout=30,
         )
         if result.returncode != 0:
-            return {}
+            return {}, set()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return {}
+        return {}, set()
 
     hunks: Dict[str, List[Tuple[int, int]]] = {}
+    files_with_deletions: set = set()
     current_file: Optional[str] = None
 
     for line in result.stdout.splitlines():
@@ -318,19 +431,33 @@ def _parse_diff_hunks(git_range: str) -> Dict[str, List[Tuple[int, int]]]:
         elif line.startswith("@@ ") and current_file is not None:
             m = _HUNK_HEADER_RE.match(line)
             if m:
-                start = int(m.group(1))
-                count = int(m.group(2)) if m.group(2) else 1
-                if count == 0:
-                    # Pure deletion — no new lines added, but the deletion
-                    # occurred at this position in the new file.  Store as a
-                    # zero-width marker so proximity matching can still
-                    # classify findings near the deletion as IN_SCOPE.
-                    hunks[current_file].append((start, start))
-                    continue
-                end = start + count - 1
-                hunks[current_file].append((start, end))
+                old_start = int(m.group(1))
+                old_count = int(m.group(2)) if m.group(2) else 1
+                new_start = int(m.group(3))
+                new_count = int(m.group(4)) if m.group(4) else 1
 
-    return hunks
+                if old_count > new_count:
+                    files_with_deletions.add(current_file)
+
+                if old_count == 0 and new_count == 0:
+                    # Both sides empty — metadata-only marker.
+                    hunks[current_file].append(
+                        (min(old_start, new_start), min(old_start, new_start))
+                    )
+                    continue
+
+                # Store old-side and new-side ranges separately so
+                # findings citing either coordinate system are IN_SCOPE,
+                # without creating a false in-scope gap between them when
+                # insertions/deletions shift line numbers.
+                old_range = (old_start, old_start + old_count - 1) if old_count > 0 else None
+                new_range = (new_start, new_start + new_count - 1) if new_count > 0 else None
+                if old_range:
+                    hunks[current_file].append(old_range)
+                if new_range and new_range != old_range:
+                    hunks[current_file].append(new_range)
+
+    return hunks, files_with_deletions
 
 
 def _find_file_hunks(
@@ -375,6 +502,7 @@ def check_scope(
     references: List[Dict[str, Any]],
     changed_files: List[str],
     git_range: str,
+    diff_hunks: Optional[Dict[str, List[Tuple[int, int]]]] = None,
 ) -> Dict[str, str]:
     """Annotate each referenced file:line as IN_SCOPE or OUT_OF_SCOPE.
 
@@ -390,6 +518,8 @@ def check_scope(
         references: Output of extract_references().
         changed_files: List of file paths from the diff.
         git_range: Git range string for ``git diff``.
+        diff_hunks: Pre-parsed hunk ranges from ``_parse_diff_hunks()``.
+            When ``None``, hunks are parsed from git diff on demand.
 
     Returns:
         Dict mapping ``"file:line"`` strings to scope status:
@@ -402,7 +532,8 @@ def check_scope(
     annotations: Dict[str, str] = {}
 
     # Parse hunks from git diff (best-effort; falls back to file-level)
-    diff_hunks = _parse_diff_hunks(git_range)
+    if diff_hunks is None:
+        diff_hunks, _ = _parse_diff_hunks(git_range)
 
     for ref in references:
         file_path = ref["file"]
@@ -425,12 +556,11 @@ def check_scope(
             continue
 
         if not file_hunks:
-            # File appears in the diff but has no hunk entries at all.
-            # This is a defensive fallback (deletion-only hunks now produce
-            # zero-width markers, so this shouldn't trigger for them).
-            # Fall back to file-level IN_SCOPE to avoid false negatives.
+            # File appears in the diff but has no hunk entries — pure
+            # rename, chmod, or other metadata-only change. No content
+            # was modified, so all lines are pre-existing code.
             for line in ref_lines:
-                annotations[f"{file_path}:{line}"] = "IN_SCOPE:in_hunk"
+                annotations[f"{file_path}:{line}"] = "OUT_OF_SCOPE:metadata_only"
             continue
 
         for line in ref_lines:
@@ -457,6 +587,35 @@ def _file_in_changed(file_path: str, changed_files: List[str]) -> bool:
             return True
 
     return False
+
+
+def filter_in_scope_references(
+    references: List[Dict[str, Any]],
+    scope_annotations: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """Filter references to only include files with at least one IN_SCOPE line.
+
+    Security gate: prevents reading source snippets for files outside the
+    reviewed diff (e.g., hallucinated absolute paths, ``../`` escapes).
+
+    Args:
+        references: Output of extract_references().
+        scope_annotations: Output of check_scope().
+
+    Returns:
+        Filtered list of references. Each entry retains only the lines that
+        are IN_SCOPE. Entries with no in-scope lines are dropped entirely.
+    """
+    filtered = []
+    for ref in references:
+        file_path = ref["file"]
+        in_scope_lines = [
+            line for line in ref["lines"]
+            if scope_annotations.get(f"{file_path}:{line}", "").startswith("IN_SCOPE")
+        ]
+        if in_scope_lines:
+            filtered.append({"file": file_path, "lines": in_scope_lines})
+    return filtered
 
 
 def resolve_output_builder_path() -> str:
@@ -526,12 +685,26 @@ def main() -> int:
         # 2. Extract file:line references
         references = extract_references(agent_findings)
 
-        # 3. Read source snippets (resolve relative paths from git root)
-        git_root = _get_git_root()
-        source_snippets = read_source_snippets(references, git_root=git_root)
+        # 3. Parse diff hunks once — reused for scope checking and snippet
+        #    reading.  files_with_deletions identifies surviving files that
+        #    need old-side snippet reads.
+        diff_hunks, files_with_deletions = _parse_diff_hunks(git_range)
 
-        # 4. Annotate scope
-        scope_annotations = check_scope(references, changed_files, git_range)
+        # 4. Annotate scope BEFORE reading snippets — prevents reading
+        #    files outside the diff (hallucinated paths, ../ escapes).
+        scope_annotations = check_scope(
+            references, changed_files, git_range, diff_hunks=diff_hunks,
+        )
+
+        # 5. Filter to in-scope references, then read source snippets.
+        #    Extract base_ref for deleted-file fallback (git show).
+        in_scope_refs = filter_in_scope_references(references, scope_annotations)
+        git_root = _get_git_root()
+        base_ref = git_range.split("..")[0] if ".." in git_range else None
+        source_snippets = read_source_snippets(
+            in_scope_refs, git_root=git_root, base_ref=base_ref,
+            old_side_files=files_with_deletions,
+        )
 
         # 5. Resolve output builder path
         output_builder_path = resolve_output_builder_path()

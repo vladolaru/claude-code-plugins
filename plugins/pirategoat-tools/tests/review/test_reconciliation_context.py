@@ -412,8 +412,8 @@ class TestReadSourceSnippets:
         assert "src/app.py" in snippets
         assert "2 | line 2" in snippets["src/app.py"]
 
-    def test_absolute_paths_ignore_git_root(self, mod, tmp_path):
-        """Absolute file paths are used directly, git_root is irrelevant."""
+    def test_absolute_paths_outside_git_root_rejected(self, mod, tmp_path):
+        """Absolute paths outside git_root are rejected (security containment)."""
         source_file = tmp_path / "abs.py"
         source_file.write_text("line 1\nline 2\n")
 
@@ -421,7 +421,134 @@ class TestReadSourceSnippets:
         snippets = mod.read_source_snippets(
             refs, context_lines=1, git_root="/some/other/root"
         )
+        assert str(source_file) not in snippets
+
+    def test_absolute_paths_inside_git_root_allowed(self, mod, tmp_path):
+        """Absolute paths within git_root are read normally."""
+        source_file = tmp_path / "src" / "auth.py"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text("line 1\nline 2\n")
+
+        refs = [{"file": str(source_file), "lines": [1]}]
+        snippets = mod.read_source_snippets(
+            refs, context_lines=1, git_root=str(tmp_path)
+        )
         assert str(source_file) in snippets
+
+    def test_deleted_file_fallback_via_base_ref(self, mod, tmp_path):
+        """Deleted files are recovered from git history via base_ref."""
+        # Set up a git repo with a file, then delete it
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path, capture_output=True,
+        )
+        source_file = tmp_path / "guard.py"
+        source_file.write_text("def validate():\n    check_auth()\n    return True\n")
+        subprocess.run(["git", "add", "guard.py"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add guard"],
+            cwd=tmp_path, capture_output=True,
+        )
+        # Get the commit hash for base_ref
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path, capture_output=True, text=True,
+        )
+        base_ref = result.stdout.strip()
+        # Delete the file
+        source_file.unlink()
+
+        refs = [{"file": "guard.py", "lines": [2]}]
+        snippets = mod.read_source_snippets(
+            refs, context_lines=1, git_root=str(tmp_path), base_ref=base_ref,
+        )
+        assert "guard.py" in snippets
+        assert "[deleted]" in snippets["guard.py"]
+        assert "check_auth" in snippets["guard.py"]
+
+    def test_deleted_file_no_base_ref_skipped(self, mod, tmp_path):
+        """Without base_ref, deleted files are still skipped."""
+        refs = [{"file": str(tmp_path / "gone.py"), "lines": [1]}]
+        snippets = mod.read_source_snippets(refs, context_lines=1)
+        assert snippets == {}
+
+    def test_old_side_snippet_for_surviving_file(self, mod, tmp_path):
+        """Surviving files with deletion hunks get a [pre-change] snippet."""
+        # Set up a git repo with a file, then modify it
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path, capture_output=True,
+        )
+        source_file = tmp_path / "auth.py"
+        source_file.write_text(
+            "def validate():\n    check_auth()\n    check_perms()\n    return True\n"
+        )
+        subprocess.run(["git", "add", "auth.py"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=tmp_path, capture_output=True,
+        )
+        base_ref = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.strip()
+
+        # Modify the file (delete a line — simulates surviving file with deletion)
+        source_file.write_text(
+            "def validate():\n    return True\n"
+        )
+
+        refs = [{"file": "auth.py", "lines": [2]}]
+        snippets = mod.read_source_snippets(
+            refs, context_lines=1, git_root=str(tmp_path),
+            base_ref=base_ref, old_side_files={"auth.py"},
+        )
+        # Should have both current and pre-change snippets
+        assert "auth.py" in snippets
+        assert "return True" in snippets["auth.py"]
+        assert "[pre-change] auth.py" in snippets
+        assert "check_auth" in snippets["[pre-change] auth.py"]
+
+    def test_old_side_snippet_not_produced_without_flag(self, mod, tmp_path):
+        """Without old_side_files, no [pre-change] snippet is produced."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path, capture_output=True,
+        )
+        source_file = tmp_path / "auth.py"
+        source_file.write_text("line 1\nline 2\n")
+        subprocess.run(["git", "add", "auth.py"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=tmp_path, capture_output=True,
+        )
+        base_ref = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path, capture_output=True, text=True,
+        ).stdout.strip()
+
+        refs = [{"file": "auth.py", "lines": [1]}]
+        snippets = mod.read_source_snippets(
+            refs, context_lines=1, git_root=str(tmp_path),
+            base_ref=base_ref,  # no old_side_files
+        )
+        assert "auth.py" in snippets
+        assert "[pre-change] auth.py" not in snippets
 
 
 # ===========================================================================
@@ -537,6 +664,71 @@ class TestCheckScope:
 
 
 # ===========================================================================
+# TestFilterInScopeReferences
+# ===========================================================================
+
+
+class TestFilterInScopeReferences:
+    """Tests for filter_in_scope_references() — security gate."""
+
+    def test_keeps_in_scope_references(self, mod):
+        refs = [{"file": "src/auth.py", "lines": [10, 20]}]
+        annotations = {
+            "src/auth.py:10": "IN_SCOPE:in_hunk",
+            "src/auth.py:20": "IN_SCOPE:near_hunk",
+        }
+        result = mod.filter_in_scope_references(refs, annotations)
+        assert len(result) == 1
+        assert result[0]["file"] == "src/auth.py"
+        assert result[0]["lines"] == [10, 20]
+
+    def test_drops_out_of_scope_file(self, mod):
+        """Files not in the diff are dropped entirely."""
+        refs = [{"file": "/etc/hosts", "lines": [1]}]
+        annotations = {"/etc/hosts:1": "OUT_OF_SCOPE:file_not_in_diff"}
+        result = mod.filter_in_scope_references(refs, annotations)
+        assert result == []
+
+    def test_drops_path_traversal(self, mod):
+        """Path traversal attempts are dropped when not in diff."""
+        refs = [{"file": "../../.env", "lines": [5]}]
+        annotations = {"../../.env:5": "OUT_OF_SCOPE:file_not_in_diff"}
+        result = mod.filter_in_scope_references(refs, annotations)
+        assert result == []
+
+    def test_mixed_lines_keeps_only_in_scope(self, mod):
+        """A file with both in-scope and out-of-scope lines keeps only in-scope."""
+        refs = [{"file": "src/auth.py", "lines": [10, 200, 300]}]
+        annotations = {
+            "src/auth.py:10": "IN_SCOPE:in_hunk",
+            "src/auth.py:200": "OUT_OF_SCOPE:not_in_hunk",
+            "src/auth.py:300": "IN_SCOPE:near_hunk",
+        }
+        result = mod.filter_in_scope_references(refs, annotations)
+        assert len(result) == 1
+        assert result[0]["lines"] == [10, 300]
+
+    def test_drops_file_when_all_lines_out_of_scope(self, mod):
+        """A file where ALL lines are out-of-scope is dropped."""
+        refs = [{"file": "src/auth.py", "lines": [200, 300]}]
+        annotations = {
+            "src/auth.py:200": "OUT_OF_SCOPE:not_in_hunk",
+            "src/auth.py:300": "OUT_OF_SCOPE:not_in_hunk",
+        }
+        result = mod.filter_in_scope_references(refs, annotations)
+        assert result == []
+
+    def test_empty_inputs(self, mod):
+        assert mod.filter_in_scope_references([], {}) == []
+
+    def test_missing_annotation_treated_as_out_of_scope(self, mod):
+        """References without annotations are dropped (fail-closed)."""
+        refs = [{"file": "unknown.py", "lines": [1]}]
+        result = mod.filter_in_scope_references(refs, {})
+        assert result == []
+
+
+# ===========================================================================
 # TestCheckScopeHunkLevel — with mocked diff hunks
 # ===========================================================================
 
@@ -551,7 +743,7 @@ class TestCheckScopeHunkLevel:
         """Line inside a changed hunk gets IN_SCOPE:in_hunk."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [15]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -561,7 +753,7 @@ class TestCheckScopeHunkLevel:
         """Line within ±5 of a hunk gets IN_SCOPE:near_hunk."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [24]}]  # 4 lines after hunk end
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -571,7 +763,7 @@ class TestCheckScopeHunkLevel:
         """Line within 5 lines before a hunk gets IN_SCOPE:near_hunk."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [6]}]  # 4 lines before hunk start
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -581,7 +773,7 @@ class TestCheckScopeHunkLevel:
         """Line far from any hunk gets OUT_OF_SCOPE:not_in_hunk."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [100]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -591,7 +783,7 @@ class TestCheckScopeHunkLevel:
         """Lines near different hunks in the same file."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 15), (50, 55)]}
+            lambda git_range: ({"src/auth.py": [(10, 15), (50, 55)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [12, 30, 53]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -603,7 +795,7 @@ class TestCheckScopeHunkLevel:
         """Line exactly at hunk boundary is in_hunk."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [10, 20]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -614,7 +806,7 @@ class TestCheckScopeHunkLevel:
         """Line exactly at proximity boundary (±5) is near_hunk."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         # 5 lines after hunk end = line 25
         refs = [{"file": "src/auth.py", "lines": [5, 25]}]
@@ -626,7 +818,7 @@ class TestCheckScopeHunkLevel:
         """Line one beyond proximity boundary (±6) is not_in_hunk."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         # 6 lines after hunk end = line 26, 6 before start = line 4
         refs = [{"file": "src/auth.py", "lines": [4, 26]}]
@@ -638,7 +830,7 @@ class TestCheckScopeHunkLevel:
         """Agent uses repo-relative path, diff uses same — suffix match works."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [15, 100]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -649,7 +841,7 @@ class TestCheckScopeHunkLevel:
         """File not in changed_files stays OUT_OF_SCOPE regardless of hunks."""
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 20)]}
+            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
         )
         refs = [{"file": "src/other.py", "lines": [15]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -661,7 +853,7 @@ class TestCheckScopeHunkLevel:
         # Findings near the deletion are in scope; far ones are not.
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": [(10, 10)]}
+            lambda git_range: ({"src/auth.py": [(10, 10)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [10, 14, 50]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
@@ -669,26 +861,55 @@ class TestCheckScopeHunkLevel:
         assert result["src/auth.py:14"] == "IN_SCOPE:near_hunk"
         assert result["src/auth.py:50"] == "OUT_OF_SCOPE:not_in_hunk"
 
-    def test_empty_hunk_list_falls_back_to_in_scope(self, mod, monkeypatch):
-        """Defensive: file with truly empty hunk list → IN_SCOPE fallback."""
+    def test_large_deletion_old_side_lines_in_scope(self, mod, monkeypatch):
+        """Old-side lines from large deletions are IN_SCOPE via separate ranges.
+
+        @@ -10,20 +10,3 @@ → old=(10,29), new=(10,12) stored separately.
+        Old-side lines 10-29 are in range via (10,29); new-side via (10,12).
+        """
+        # Simulate the separate ranges that _parse_diff_hunks now produces
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/auth.py": []}
+            lambda git_range: ({"src/auth.py": [(10, 29), (10, 12)]}, {"src/auth.py"})
+        )
+        refs = [{"file": "src/auth.py", "lines": [10, 15, 25, 29, 50]}]
+        result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
+        assert result["src/auth.py:10"] == "IN_SCOPE:in_hunk"
+        assert result["src/auth.py:15"] == "IN_SCOPE:in_hunk"
+        assert result["src/auth.py:25"] == "IN_SCOPE:in_hunk"
+        assert result["src/auth.py:29"] == "IN_SCOPE:in_hunk"
+        assert result["src/auth.py:50"] == "OUT_OF_SCOPE:not_in_hunk"
+
+    def test_empty_hunk_list_metadata_only(self, mod, monkeypatch):
+        """File with empty hunk list (rename/chmod) → OUT_OF_SCOPE:metadata_only."""
+        monkeypatch.setattr(
+            mod, "_parse_diff_hunks",
+            lambda git_range: ({"src/auth.py": []}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [5]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
-        assert result["src/auth.py:5"] == "IN_SCOPE:in_hunk"
+        assert result["src/auth.py:5"] == "OUT_OF_SCOPE:metadata_only"
 
     def test_file_not_in_diff_hunks_falls_back(self, mod, monkeypatch):
         """File in changed_files but not in diff_hunks → fallback IN_SCOPE:in_hunk."""
         # This happens when git diff fails or the file has a suffix-matching miss.
         monkeypatch.setattr(
             mod, "_parse_diff_hunks",
-            lambda git_range: {"src/other.py": [(1, 5)]}
+            lambda git_range: ({"src/other.py": [(1, 5)]}, set())
         )
         refs = [{"file": "src/auth.py", "lines": [10]}]
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
         assert result["src/auth.py:10"] == "IN_SCOPE:in_hunk"
+
+    def test_accepts_pre_parsed_diff_hunks(self, mod):
+        """check_scope uses diff_hunks parameter instead of calling git."""
+        hunks = {"src/auth.py": [(10, 20)]}
+        refs = [{"file": "src/auth.py", "lines": [15, 100]}]
+        result = mod.check_scope(
+            refs, ["src/auth.py"], "abc..HEAD", diff_hunks=hunks,
+        )
+        assert result["src/auth.py:15"] == "IN_SCOPE:in_hunk"
+        assert result["src/auth.py:100"] == "OUT_OF_SCOPE:not_in_hunk"
 
 
 # ===========================================================================
@@ -714,9 +935,11 @@ class TestParseDiffHunks:
                 "returncode": 0, "stdout": diff_output, "stderr": ""
             })()
         )
-        result = mod._parse_diff_hunks("abc..HEAD")
-        assert "src/auth.py" in result
-        assert result["src/auth.py"] == [(10, 14)]
+        hunks, deletions = mod._parse_diff_hunks("abc..HEAD")
+        assert "src/auth.py" in hunks
+        # Separate: old=(10,12), new=(10,14) → two entries
+        assert hunks["src/auth.py"] == [(10, 12), (10, 14)]
+        assert deletions == set()  # new_count > old_count → no deletion
 
     def test_parses_multiple_hunks(self, mod, monkeypatch):
         """Parses multiple hunks in one file."""
@@ -735,8 +958,11 @@ class TestParseDiffHunks:
                 "returncode": 0, "stdout": diff_output, "stderr": ""
             })()
         )
-        result = mod._parse_diff_hunks("abc..HEAD")
-        assert result["src/auth.py"] == [(5, 6), (22, 24)]
+        hunks, deletions = mod._parse_diff_hunks("abc..HEAD")
+        # Hunk 1: old_count=0 → skip old, new=(5,6)
+        # Hunk 2: old_count=0 → skip old, new=(22,24)
+        assert hunks["src/auth.py"] == [(5, 6), (22, 24)]
+        assert deletions == set()
 
     def test_parses_multiple_files(self, mod, monkeypatch):
         """Parses hunks across multiple files."""
@@ -758,9 +984,10 @@ class TestParseDiffHunks:
                 "returncode": 0, "stdout": diff_output, "stderr": ""
             })()
         )
-        result = mod._parse_diff_hunks("abc..HEAD")
-        assert result["src/a.py"] == [(1, 1)]
-        assert result["src/b.py"] == [(10, 11)]
+        hunks, deletions = mod._parse_diff_hunks("abc..HEAD")
+        assert hunks["src/a.py"] == [(1, 1)]
+        assert hunks["src/b.py"] == [(10, 11)]
+        assert deletions == set()
 
     def test_handles_single_line_hunk(self, mod, monkeypatch):
         """A single-line hunk (no count) parses correctly."""
@@ -777,16 +1004,21 @@ class TestParseDiffHunks:
                 "returncode": 0, "stdout": diff_output, "stderr": ""
             })()
         )
-        result = mod._parse_diff_hunks("abc..HEAD")
-        assert result["src/a.py"] == [(5, 5)]
+        hunks, deletions = mod._parse_diff_hunks("abc..HEAD")
+        assert hunks["src/a.py"] == [(5, 5)]
+        assert deletions == set()
 
-    def test_preserves_pure_deletion_hunks_as_markers(self, mod, monkeypatch):
-        """A hunk with +count=0 (pure deletion) is stored as a zero-width marker."""
+    def test_pure_deletion_covers_old_side_range(self, mod, monkeypatch):
+        """A pure deletion hunk covers the full old-side range.
+
+        @@ -5,3 +5,0 @@ deletes old lines 5-7. Only old-side range stored
+        (new_count=0), covering all deleted lines as IN_SCOPE.
+        """
         diff_output = (
             "diff --git a/src/a.py b/src/a.py\n"
             "--- a/src/a.py\n"
             "+++ b/src/a.py\n"
-            "@@ -5,3 +5,0 @@\n"  # 0 new lines = deletion only
+            "@@ -5,3 +5,0 @@\n"  # 3 old lines deleted, 0 new
         )
         monkeypatch.setattr(
             mod.subprocess, "run",
@@ -794,19 +1026,45 @@ class TestParseDiffHunks:
                 "returncode": 0, "stdout": diff_output, "stderr": ""
             })()
         )
-        result = mod._parse_diff_hunks("abc..HEAD")
-        assert result["src/a.py"] == [(5, 5)]
+        hunks, deletions = mod._parse_diff_hunks("abc..HEAD")
+        # old=(5,7), new_count=0 → only old range
+        assert hunks["src/a.py"] == [(5, 7)]
+        assert "src/a.py" in deletions
+
+    def test_replacement_hunk_covers_both_sides(self, mod, monkeypatch):
+        """Replacement hunk where old > new stores both ranges separately.
+
+        @@ -10,20 +10,3 @@ replaces 20 old lines with 3 new lines.
+        Separate entries: old=(10,29) and new=(10,12).
+        """
+        diff_output = (
+            "diff --git a/src/auth.py b/src/auth.py\n"
+            "--- a/src/auth.py\n"
+            "+++ b/src/auth.py\n"
+            "@@ -10,20 +10,3 @@\n"
+        )
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *a, **kw: type("R", (), {
+                "returncode": 0, "stdout": diff_output, "stderr": ""
+            })()
+        )
+        hunks, deletions = mod._parse_diff_hunks("abc..HEAD")
+        # Separate: old=(10,29), new=(10,12)
+        assert hunks["src/auth.py"] == [(10, 29), (10, 12)]
+        assert "src/auth.py" in deletions
 
     def test_git_failure_returns_empty(self, mod, monkeypatch):
-        """Non-zero exit code returns empty dict."""
+        """Non-zero exit code returns empty tuple."""
         monkeypatch.setattr(
             mod.subprocess, "run",
             lambda *a, **kw: type("R", (), {
                 "returncode": 1, "stdout": "", "stderr": "fatal: bad range"
             })()
         )
-        result = mod._parse_diff_hunks("bad..range")
-        assert result == {}
+        hunks, deletions = mod._parse_diff_hunks("bad..range")
+        assert hunks == {}
+        assert deletions == set()
 
 
 # ===========================================================================
