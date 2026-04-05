@@ -1697,19 +1697,21 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         pr_id = config.get("pr_number", "")
         if pr_id:
             recon_ctx_cmd.extend(["--pr-id", str(pr_id)])
-        # Pass dispatched agents only when real dispatch metadata exists.
-        # _DEFAULT_STATE always populates state["agents"] with empty lists,
-        # so checking `is not None` is insufficient — we must check that
-        # dispatched is non-empty (i.e., the dispatch plan was actually
-        # loaded and had agents). When dispatched is empty (default state
-        # or plan with 0 agents), omit the flag entirely so
-        # reconciliation_context.py falls back to discovering all
-        # *-review.json files on disk.
+        # Pass dispatched agents when real dispatch metadata exists.
+        # Distinguish three cases:
+        # 1. dispatched is non-empty → pass agent names (filter to those agents)
+        # 2. dispatched is empty BUT dispatch-plan.json exists → plan ran and
+        #    selected 0 agents (e.g., docs-only change). Pass empty string so
+        #    reconciliation_context.py loads nothing (not stale files).
+        # 3. No dispatch plan file → truly unknown, omit flag so
+        #    reconciliation_context.py falls back to scanning all *-review.json.
         agents_info = state.get("agents")
         if agents_info is not None:
             dispatched = agents_info.get("dispatched", [])
             if dispatched:
                 recon_ctx_cmd.extend(["--dispatched-agents", ",".join(dispatched)])
+            elif os.path.isfile(plan_path):
+                recon_ctx_cmd.extend(["--dispatched-agents", ""])
         _, ctx_ok = _run_subprocess(recon_ctx_cmd, timeout=30)
         recon_ctx_path = os.path.join(output_dir, "reconciliation-context.json")
         if not ctx_ok or not os.path.isfile(recon_ctx_path):
