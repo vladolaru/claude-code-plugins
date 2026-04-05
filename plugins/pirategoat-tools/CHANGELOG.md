@@ -5,10 +5,15 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.95.0] - 2026-04-04
+## [1.95.0] - 2026-04-05
 
 ### Changed
 - **Reconciliator performance: pre-gathered context.** New `reconciliation_context.py` script pre-gathers all agent findings, source snippets (±10 lines around each referenced location), scope annotations, and the ReviewOutputBuilder path into a single `reconciliation-context.json` before dispatching the reconciliator agent. The reconciliator now reads one file instead of 11+ agent JSONs and 15-25 source files individually, reducing LLM turns from ~50 to ~5-8 (est. 5-10x speedup). Pipeline step 8 calls the new script during orchestration and passes the context file path in the briefing.
+
+### Fixed
+- **Hunk-level scope: false in-scope gap on shifted hunks.** `_parse_diff_hunks()` was computing a union range across old-side and new-side coordinates. When insertions shift later hunks (e.g., `@@ -200,2 +300,2 @@`), this marked untouched lines between the old and new positions as IN_SCOPE. Now stores old-side and new-side ranges as separate entries, eliminating the false gap while preserving old-side coverage for deletion hunks.
+- **Reconciliator: pre-change snippet lookup guidance.** Added instructions telling the reconciliator to check `[pre-change] <file>` entries in `source_snippets` when a finding's claim doesn't match the post-change snippet — prevents valid findings on deleted/rewritten code from being incorrectly marked as false positives.
+- **Zero-dispatch reconciliation context.** When the dispatch plan selects 0 agents (e.g., docs-only change), pipeline now passes `--dispatched-agents ""` so the context builder loads nothing instead of falling back to stale `*-review.json` files from prior runs.
 
 ## [1.94.0] - 2026-04-02
 
