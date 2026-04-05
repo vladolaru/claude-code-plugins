@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.96.0] - 2026-04-06
+
+### Changed
+- **Reconciliation context: Markdown format for LLM consumption.** The reconciliation context is now written as both Markdown (`reconciliation-context.md`) and JSON (`reconciliation-context.json`). The reconciliator agent reads the Markdown version — structured with section headers, tables, and fenced code blocks — which is ~40% more token-efficient and eliminates the 11-chunk Read pattern observed with the JSON format (down to ~3-5 reads). JSON is retained as a data artifact for debugging and tooling. Pipeline step 8 briefing now points to the `.md` file and provides the output builder path explicitly.
+
 ## [1.95.0] - 2026-04-05
 
 ### Changed
