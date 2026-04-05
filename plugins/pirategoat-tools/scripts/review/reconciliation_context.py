@@ -42,6 +42,7 @@ _NON_REVIEW_FILES = frozenset([
     "decision-critic-verdict.json",
     "clarity-assessment.json",
     "reconciliation-context.json",
+    "reconciliation-context.md",
 ])
 
 
@@ -874,8 +875,13 @@ def main() -> int:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(context, f, indent=2, ensure_ascii=False)
 
+        # Write Markdown version for LLM consumption
+        md_path = os.path.join(output_dir, "reconciliation-context.md")
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(to_markdown(context))
+
         # Print success status
-        result = {"status": "ok", "path": output_path}
+        result = {"status": "ok", "path": output_path, "markdown_path": md_path}
         print(json.dumps(result))
         return 0
 

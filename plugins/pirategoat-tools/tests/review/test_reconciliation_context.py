@@ -1355,6 +1355,42 @@ class TestFullScript:
             "security-review", "performance-review"
         ]
 
+    def test_produces_markdown_file(self, tmp_path):
+        """Full run produces reconciliation-context.md alongside JSON."""
+        review = _make_review_json(
+            reviewer="security",
+            issues=[_make_issue(file="src/auth.py", line=10)],
+        )
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "src/auth.py,src/db.py",
+            "--change-purpose", "Fix auth bug",
+            "--pr-id", "42",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        # Verify Markdown file exists
+        md_path = tmp_path / "reconciliation-context.md"
+        assert md_path.is_file()
+
+        content = md_path.read_text()
+
+        # Starts with the expected heading
+        assert content.startswith("# Reconciliation Context")
+
+        # Contains the agent name from the review JSON
+        assert "security-review" in content
+
+        # Verify stdout includes the markdown_path
+        stdout_json = json.loads(result.stdout.strip())
+        assert "markdown_path" in stdout_json
+        assert stdout_json["markdown_path"].endswith("reconciliation-context.md")
+
 
 # ===========================================================================
 # TestToMarkdown
