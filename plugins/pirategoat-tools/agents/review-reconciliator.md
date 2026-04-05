@@ -89,6 +89,7 @@ For each concern group:
 
 2. **Fact verification using source snippets:**
    - For in-scope concerns: look up the referenced file in `source_snippets`. The snippet includes ±10 lines of context around each referenced line.
+   - **Deleted/rewritten code:** For files with deletion or replacement hunks, `source_snippets` may contain a `[pre-change] <file>` entry alongside the `<file>` entry. The `<file>` key holds the current (post-change) content; the `[pre-change] <file>` key holds the original content before the patch. When a finding references a line that doesn't match the post-change snippet (e.g., the code described in the finding isn't at that line anymore), check the `[pre-change]` entry — the finding may reference old-side line numbers from deleted or rewritten code.
    - Verify the claim against the snippet: Does the issue actually exist as described? Are the line numbers accurate? Does the code do what the finding claims?
    - **Fallback only:** If the snippet is insufficient (e.g., you need broader context to understand the code flow, or the referenced file is missing from snippets), use the Read tool to read the source file directly. This should be rare — the snippets cover the vast majority of cases.
 
