@@ -68,6 +68,21 @@ def _make_issue(
     return issue
 
 
+def _make_context_with_findings(agent_findings):
+    """Create a minimal reconciliation context dict with given agent findings."""
+    return {
+        "agent_findings": agent_findings,
+        "source_snippets": {},
+        "scope_annotations": {},
+        "changed_files": ["src/app.py"],
+        "git_range": "abc123..HEAD",
+        "change_purpose": "Test change",
+        "pr_id": "42",
+        "output_dir": "/tmp/test-review",
+        "output_builder_path": "/path/to/output.py",
+    }
+
+
 def _make_review_json(
     reviewer="security",
     pr_id="42",
@@ -1339,3 +1354,209 @@ class TestFullScript:
         assert ctx["dispatched_agents"] == [
             "security-review", "performance-review"
         ]
+
+
+# ===========================================================================
+# TestToMarkdown
+# ===========================================================================
+
+class TestToMarkdown:
+    """Tests for to_markdown() — Markdown serialization of reconciliation context."""
+
+    def test_metadata_section(self, mod):
+        """All metadata fields appear in the Metadata section."""
+        ctx = _make_context_with_findings({})
+        md = mod.to_markdown(ctx)
+        assert "## Metadata" in md
+        assert "`abc123..HEAD`" in md
+        assert "**PR ID:** 42" in md
+        assert "`/tmp/test-review`" in md
+        assert "`/path/to/output.py`" in md
+        assert "`src/app.py`" in md
+
+    def test_agent_findings_with_issues(self, mod):
+        """Issues render with severity, file:line, description, recommendation."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        severity="high",
+                        title="XSS vulnerability",
+                        file="src/auth.py",
+                        line=42,
+                        description="Unescaped user input",
+                        recommendation="Use esc_html()",
+                        category="xss",
+                        confidence=0.95,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "### security-review" in md
+        assert "1 issues" in md or "1 issue" in md
+        assert "verdict: comment" in md
+        assert "**1. XSS vulnerability**" in md
+        assert "high" in md
+        assert "confidence: 0.95" in md
+        assert "`src/auth.py:42`" in md
+        assert "Unescaped user input" in md
+        assert "Use esc_html()" in md
+
+    def test_agent_no_issues(self, mod):
+        """Agent with 0 issues shows verdict and count."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="approve",
+                issues=[],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "### security-review" in md
+        assert "0 issues" in md
+        assert "verdict: approve" in md
+
+    def test_not_applicable_agent(self, mod):
+        """Agent with skip_reason shows the reason."""
+        findings = {
+            "security-review": {
+                "verdict": "not_applicable",
+                "skip_reason": "No security-relevant files in diff",
+                "issues": [],
+                "summary": {"total_issues": 0, "by_severity": {}},
+            },
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "### security-review" in md
+        assert "No security-relevant files in diff" in md
+
+    def test_source_snippets_in_code_blocks(self, mod):
+        """Source snippets appear in fenced code blocks."""
+        ctx = _make_context_with_findings({})
+        ctx["source_snippets"] = {
+            "src/auth.py": "    40 | def login():\n    41 |     pass",
+        }
+        md = mod.to_markdown(ctx)
+        assert "## Source Snippets" in md
+        assert "### `src/auth.py`" in md
+        assert "```" in md
+        assert "40 | def login():" in md
+
+    def test_scope_annotations_table(self, mod):
+        """Scope annotations appear as a table."""
+        ctx = _make_context_with_findings({})
+        ctx["scope_annotations"] = {
+            "src/auth.py:42": "IN_SCOPE:in_hunk",
+            "src/utils.py:10": "OUT_OF_SCOPE:file_not_in_diff",
+        }
+        md = mod.to_markdown(ctx)
+        assert "## Scope Annotations" in md
+        assert "| File:Line | Status |" in md
+        assert "`src/auth.py:42`" in md
+        assert "IN_SCOPE:in_hunk" in md
+        assert "`src/utils.py:10`" in md
+
+    def test_dispatched_agents_listed(self, mod):
+        """Dispatched agents appear in the metadata section."""
+        ctx = _make_context_with_findings({})
+        ctx["dispatched_agents"] = ["security-review", "performance-review"]
+        md = mod.to_markdown(ctx)
+        assert "**Dispatched agents (2):**" in md
+        assert "security-review" in md
+        assert "performance-review" in md
+
+    def test_empty_change_purpose(self, mod):
+        """Empty change_purpose does not crash and produces valid Markdown."""
+        ctx = _make_context_with_findings({})
+        ctx["change_purpose"] = ""
+        md = mod.to_markdown(ctx)
+        # Should still have the section header
+        assert "## Change Purpose" in md
+        # Should be valid (no crash = test passes)
+        assert "# Reconciliation Context" in md
+
+    def test_special_chars_in_description(self, mod):
+        """Pipe chars and backticks in descriptions don't break output."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Issue with `backticks` and | pipes",
+                        description="The value `foo | bar` is dangerous",
+                        recommendation="Escape the `|` character",
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        # Should contain the special characters without crashing
+        assert "`backticks`" in md
+        assert "foo | bar" in md
+
+    def test_pre_change_snippets(self, mod):
+        """Pre-change snippets are labeled distinctly."""
+        ctx = _make_context_with_findings({})
+        ctx["source_snippets"] = {
+            "src/auth.py": "    10 | current code",
+            "[pre-change] src/auth.py": "    10 | old code",
+        }
+        md = mod.to_markdown(ctx)
+        assert "### `[pre-change] src/auth.py`" in md
+        assert "old code" in md
+
+    def test_deleted_file_snippets(self, mod):
+        """Deleted file snippets are labeled with [deleted]."""
+        ctx = _make_context_with_findings({})
+        ctx["source_snippets"] = {
+            "src/removed.py": "[deleted]     5 | def old_func():",
+        }
+        md = mod.to_markdown(ctx)
+        assert "[deleted]" in md
+        assert "old_func" in md
+
+    def test_positive_observations_included(self, mod):
+        """Positive observations from agents are rendered."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="approve",
+                issues=[],
+            ),
+        }
+        findings["security-review"]["positive_observations"] = [
+            "Good input validation on all endpoints",
+        ]
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "Good input validation on all endpoints" in md
+        assert "Positives" in md
+
+    def test_multiple_agents_ordered(self, mod):
+        """Agents are rendered in alphabetical order."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security", verdict="approve", issues=[]
+            ),
+            "architecture-review": _make_review_json(
+                reviewer="architecture", verdict="approve", issues=[]
+            ),
+            "performance-review": _make_review_json(
+                reviewer="performance", verdict="comment", issues=[]
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        # Check that architecture comes before performance, which comes before security
+        arch_pos = md.index("### architecture-review")
+        perf_pos = md.index("### performance-review")
+        sec_pos = md.index("### security-review")
+        assert arch_pos < perf_pos < sec_pos

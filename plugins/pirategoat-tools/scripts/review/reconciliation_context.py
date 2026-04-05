@@ -626,6 +626,144 @@ def resolve_output_builder_path() -> str:
     return str(SCRIPTS_DIR / "agent" / "output.py")
 
 
+def to_markdown(context: Dict[str, Any]) -> str:
+    """Convert a reconciliation context dict to structured Markdown.
+
+    Produces a human-readable (and LLM-efficient) Markdown document with
+    sections for metadata, change purpose, agent findings, source snippets,
+    and scope annotations. Designed as a drop-in alternative to the JSON
+    format for the reconciliator agent, which processes Markdown ~40% more
+    token-efficiently than JSON.
+
+    Args:
+        context: The reconciliation context dict (same structure as written
+            to ``reconciliation-context.json`` by ``main()``).
+
+    Returns:
+        A Markdown string with ``---`` separators between major sections.
+    """
+    parts: List[str] = []
+
+    # --- Title ---
+    parts.append("# Reconciliation Context\n")
+
+    # --- Metadata ---
+    parts.append("## Metadata\n")
+    parts.append(f"- **Git range:** `{context.get('git_range', '')}`")
+    parts.append(f"- **PR ID:** {context.get('pr_id', '')}")
+    parts.append(f"- **Output directory:** `{context.get('output_dir', '')}`")
+    parts.append(f"- **Output builder path:** `{context.get('output_builder_path', '')}`")
+
+    changed_files = context.get("changed_files", [])
+    n_files = len(changed_files)
+    if n_files <= 20:
+        files_str = ", ".join(f"`{f}`" for f in changed_files)
+    else:
+        files_str = ", ".join(f"`{f}`" for f in changed_files[:20])
+        files_str += f", ... and {n_files - 20} more"
+    parts.append(f"- **Changed files ({n_files}):** {files_str}")
+
+    dispatched = context.get("dispatched_agents")
+    if dispatched is not None:
+        n_dispatched = len(dispatched)
+        agents_str = ", ".join(dispatched)
+        parts.append(f"- **Dispatched agents ({n_dispatched}):** {agents_str}")
+
+    parts.append("")  # blank line after metadata
+
+    # --- Change Purpose ---
+    parts.append("## Change Purpose\n")
+    change_purpose = context.get("change_purpose", "")
+    parts.append(change_purpose if change_purpose else "(not provided)")
+    parts.append("")
+
+    parts.append("---\n")
+
+    # --- Agent Findings ---
+    parts.append("## Agent Findings\n")
+
+    agent_findings = context.get("agent_findings", {})
+    if not agent_findings:
+        parts.append("No agent findings.\n")
+    else:
+        for agent_name in sorted(agent_findings.keys()):
+            data = agent_findings[agent_name]
+            issues = data.get("issues", [])
+            n_issues = len(issues) if isinstance(issues, list) else 0
+            verdict = data.get("verdict", "unknown")
+
+            parts.append(f"### {agent_name} -- {n_issues} issues, verdict: {verdict}\n")
+
+            # Skip reason for not_applicable agents
+            skip_reason = data.get("skip_reason")
+            if skip_reason:
+                parts.append(f"**Skipped:** {skip_reason}\n")
+
+            # Render issues
+            for idx, issue in enumerate(issues if isinstance(issues, list) else [], 1):
+                title = issue.get("title", "Untitled")
+                severity = issue.get("severity", "unknown")
+                confidence = issue.get("confidence", "")
+                file_path = issue.get("file", "")
+                line = issue.get("line", "")
+                category = issue.get("category", "")
+                description = issue.get("description", "")
+                recommendation = issue.get("recommendation", "")
+
+                conf_str = f", confidence: {confidence}" if confidence else ""
+                parts.append(f"**{idx}. {title}** [{severity}{conf_str}]")
+                if file_path:
+                    loc = f"`{file_path}:{line}`" if line else f"`{file_path}`"
+                    parts.append(f"- File: {loc}")
+                if category:
+                    parts.append(f"- Category: {category}")
+                if description:
+                    parts.append(f"- Description: {description}")
+                if recommendation:
+                    parts.append(f"- Recommendation: {recommendation}")
+                parts.append("")  # blank line between issues
+
+            # Positive observations
+            positives = data.get("positive_observations")
+            if positives and isinstance(positives, list) and len(positives) > 0:
+                positives_str = "; ".join(positives)
+                parts.append(f"> **Positives:** {positives_str}\n")
+
+    parts.append("---\n")
+
+    # --- Source Snippets ---
+    parts.append("## Source Snippets\n")
+
+    source_snippets = context.get("source_snippets", {})
+    if not source_snippets:
+        parts.append("No source snippets.\n")
+    else:
+        for file_key in sorted(source_snippets.keys()):
+            snippet = source_snippets[file_key]
+            parts.append(f"### `{file_key}`\n")
+            parts.append("```")
+            parts.append(snippet)
+            parts.append("```\n")
+
+    parts.append("---\n")
+
+    # --- Scope Annotations ---
+    parts.append("## Scope Annotations\n")
+
+    scope_annotations = context.get("scope_annotations", {})
+    if not scope_annotations:
+        parts.append("No scope annotations.\n")
+    else:
+        parts.append("| File:Line | Status |")
+        parts.append("|-----------|--------|")
+        for key in sorted(scope_annotations.keys()):
+            status = scope_annotations[key]
+            parts.append(f"| `{key}` | {status} |")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 def main() -> int:
     """CLI entry point. Gathers all reconciliation context and writes JSON."""
     parser = argparse.ArgumentParser(
