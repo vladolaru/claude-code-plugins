@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Markdown context: agent headers match dispatched names.** Subsection headers baked issue count and verdict into the `###` heading, so the reconciliator's dispatched-vs-reported agent name matching failed. Headers are now plain `### agent-name` with metadata on a separate line.
 - **Markdown context: multiline text contained.** Issue description/recommendation fields and agent-level recommendation items with embedded newlines spilled into top-level Markdown. Continuation lines are now indented to stay inside list items.
 - **Markdown context: change-purpose isolated.** The change-purpose block (a `.md` artifact from step 3/4) was injected verbatim — fenced code blocks or headings in it could corrupt or spoof subsequent sections. Now wrapped in a dynamically-sized code fence.
-- **Markdown context: positive observations sanitized.** Backtick runs and newlines in positive observations were written raw, risking structure corruption. Now escaped consistently with issue text.
+- **Markdown context: positive observations excluded.** Like observations, positive observations bypass the scope/snippet pipeline and can skew reconciliation decisions without evidence. Excluded from Markdown; retained in JSON for debugging.
+- **Reconciliator prompt: `metadata_only` scope status documented.** `check_scope()` emits `OUT_OF_SCOPE:metadata_only` for rename/chmod-only diffs, but the prompt only listed 4 statuses. The reconciliator now correctly treats those entries as out-of-scope.
 
 ## [1.95.0] - 2026-04-05
 
