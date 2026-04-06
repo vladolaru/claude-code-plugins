@@ -1697,3 +1697,43 @@ class TestToMarkdown:
         assert len(raw_fences) % 2 == 0, (
             f"Unbalanced code fences in agent findings section: {raw_fences}"
         )
+
+    def test_agent_header_is_plain_name(self, mod):
+        """Agent subsection header contains only the agent name.
+
+        The reconciliator compares dispatched agent names against ### headers
+        to detect missing outputs. Baking metadata into the header breaks
+        that match.
+        """
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security", verdict="comment"
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        # Header must be exactly the agent name — no appended metadata
+        assert "### security-review\n" in md
+        assert "### security-review --" not in md
+        # Verdict and count still appear, just on a separate line
+        assert "1 issues, verdict: comment" in md
+
+    def test_multiline_description_stays_inside_issue(self, mod):
+        """Newlines in description/recommendation are indented as list continuations."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        description="Line one\nLine two\nLine three",
+                        recommendation="Step 1\nStep 2",
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        # Continuation lines must be indented with 2 spaces
+        assert "- Description: Line one\n  Line two\n  Line three" in md
+        assert "- Recommendation: Step 1\n  Step 2" in md

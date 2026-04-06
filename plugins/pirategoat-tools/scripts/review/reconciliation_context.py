@@ -703,7 +703,8 @@ def to_markdown(context: Dict[str, Any]) -> str:
             n_issues = len(issues) if isinstance(issues, list) else 0
             verdict = data.get("verdict", "unknown")
 
-            parts.append(f"### {agent_name} -- {n_issues} issues, verdict: {verdict}\n")
+            parts.append(f"### {agent_name}\n")
+            parts.append(f"**{n_issues} issues, verdict: {verdict}**\n")
 
             # Skip reason for not_applicable agents
             skip_reason = data.get("skip_reason")
@@ -729,9 +730,15 @@ def to_markdown(context: Dict[str, Any]) -> str:
                 if category:
                     parts.append(f"- Category: {category}")
                 if description:
-                    parts.append(f"- Description: {_escape_backtick_runs(description)}")
+                    desc = _escape_backtick_runs(description)
+                    # Indent continuation lines so multiline text stays
+                    # inside the list item instead of spilling into top-level Markdown.
+                    desc = desc.replace("\n", "\n  ")
+                    parts.append(f"- Description: {desc}")
                 if recommendation:
-                    parts.append(f"- Recommendation: {_escape_backtick_runs(recommendation)}")
+                    rec = _escape_backtick_runs(recommendation)
+                    rec = rec.replace("\n", "\n  ")
+                    parts.append(f"- Recommendation: {rec}")
                 parts.append("")  # blank line between issues
 
             # Observations (file-level notes without specific lines)
