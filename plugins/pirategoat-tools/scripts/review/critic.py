@@ -57,9 +57,6 @@ def get_step_guidance(
             "- SEVERITY ASSERTIONS [S1, S2, ...]: Claims about impact level (\"this is HIGH "
             "because it could cause a PHP fatal\", \"this is MEDIUM — coding standards "
             "violation\"). Include the stated justification.",
-            "- SCOPE CLAIMS [SC1, ...]: Assertions about what's changed vs pre-existing "
-            "(\"this was ADDED in this PR\", \"this pattern exists in 8 other files\", "
-            "\"the sibling class has 426+ lines of tests\")",
             "- JUDGMENT CALLS [J1, ...]: Subjective recommendations (\"should fix before "
             "merge\", \"consider for follow-up\", \"this is a preference, not a defect\")",
             "",
@@ -114,7 +111,6 @@ def get_step_guidance(
             "- Check: does the code actually do what the finding claims?",
             "- Check: are line numbers accurate?",
             "- Check: is the severity proportionate to actual impact in context?",
-            "- For scope claims: run `git diff` to verify the line is actually in the diff",
             "- For quantitative claims (line counts, occurrence counts): run the command to verify",
             "",
             "SEPARATE your answer from its implication:",
