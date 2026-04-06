@@ -25,7 +25,7 @@ def get_step_guidance(
     total_steps: int,
     report: str,
     output_dir: str,
-    findings_json: Optional[str],
+    context_path: Optional[str],
 ) -> dict:
     """Return step-specific guidance and actions."""
 
@@ -47,13 +47,14 @@ def get_step_guidance(
             "entire workflow.",
             "",
             "Read the review report"
-            + (" and findings JSON" if findings_json else "")
-            + ". Extract and assign stable IDs that "
-            "will persist through ALL subsequent steps:",
+            + (" and critic context document" if context_path else "")
+            + ". Extract claims using the stable IDs from the context document "
+            "(F1, F2, ...) that will persist through ALL subsequent steps:",
             "",
-            "- FACTUAL CLAIMS [F1, F2, ...]: Statements about what the code does or doesn't "
-            "do (\"line 54 is missing an is_array guard\", \"the function uses non-Yoda "
-            "comparison\"). These are the review's core assertions.",
+            "- FACTUAL CLAIMS [use F1, F2, ... IDs from context]: Statements about what the "
+            "code does or doesn't do. When a critic-context document is provided, use its "
+            "pre-assigned finding IDs (F1, F2, ...) — each finding maps to a factual claim "
+            "to verify.",
             "- SEVERITY ASSERTIONS [S1, S2, ...]: Claims about impact level (\"this is HIGH "
             "because it could cause a PHP fatal\", \"this is MEDIUM — coding standards "
             "violation\"). Include the stated justification.",
@@ -68,8 +69,8 @@ def get_step_guidance(
         # Surface input files
         actions.append("")
         actions.append(f"REVIEW REPORT: {report}")
-        if findings_json:
-            actions.append(f"FINDINGS JSON: {findings_json}")
+        if context_path:
+            actions.append(f"CRITIC CONTEXT: {context_path}")
 
         return {
             "phase": "DECOMPOSITION",
@@ -89,9 +90,9 @@ def get_step_guidance(
             "important step — your accuracy here directly determines verdict quality. "
             "Take your time and be rigorous.",
         ]
-        if findings_json:
+        if context_path:
             actions_2.append("")
-            actions_2.append(f"FINDINGS JSON (for targeted verification): {findings_json}")
+            actions_2.append(f"CRITIC CONTEXT (for targeted verification): {context_path}")
         actions_2.extend([
             "",
             "For each VERIFIABLE item from Step 1, verify INDEPENDENTLY:",
@@ -281,10 +282,16 @@ def main():
         help="Path to the review report being criticized",
     )
     parser.add_argument(
+        "--context",
+        type=str,
+        default=None,
+        help="Path to critic-context.md (curated Markdown with report + findings)",
+    )
+    parser.add_argument(
         "--findings-json",
         type=str,
         default=None,
-        help="Path to review findings JSON (optional)",
+        help="Deprecated: use --context instead. Kept for backward compatibility.",
     )
     parser.add_argument(
         "--output-dir",
@@ -317,13 +324,16 @@ def main():
         )
         sys.exit(1)
 
+    # Resolve --context (preferred) or --findings-json (deprecated alias)
+    context_path = args.context or args.findings_json
+
     # Get guidance for current step
     guidance = get_step_guidance(
         args.step_number,
         args.total_steps,
         args.report,
         args.output_dir,
-        args.findings_json,
+        context_path,
     )
 
     # Print formatted output

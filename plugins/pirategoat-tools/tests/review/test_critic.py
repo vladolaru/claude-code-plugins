@@ -118,10 +118,23 @@ class TestOutputPathInSynthesis:
         assert "decision-critic-findings.md" in result.stdout
 
 
-class TestFindingsJsonArg:
-    """The --findings-json flag should be accepted and surfaced in step 1."""
+class TestCriticContextArg:
+    """The --context flag replaces --findings-json for curated Markdown input."""
 
-    def test_findings_json_surfaced_in_step_1(self):
+    def test_context_surfaced_in_step_1(self):
+        result = run_critic(
+            "--step-number", "1",
+            "--total-steps", "4",
+            "--report", "/tmp/test-report.md",
+            "--context", "/tmp/test-critic-context.md",
+            "--output-dir", "/tmp/test-critic",
+            "--thoughts", "initial",
+        )
+        assert result.returncode == 0
+        assert "test-critic-context.md" in result.stdout
+
+    def test_findings_json_still_accepted(self):
+        """Backward compat: --findings-json should still be accepted."""
         result = run_critic(
             "--step-number", "1",
             "--total-steps", "4",
@@ -131,7 +144,35 @@ class TestFindingsJsonArg:
             "--thoughts", "initial",
         )
         assert result.returncode == 0
+        # The old flag should work (surfaced somehow)
         assert "test-findings.json" in result.stdout
+
+    def test_context_surfaced_in_step_2(self):
+        """Step 2 should also reference the context path."""
+        result = run_critic(
+            "--step-number", "2",
+            "--total-steps", "4",
+            "--report", "/tmp/test-report.md",
+            "--context", "/tmp/test-critic-context.md",
+            "--output-dir", "/tmp/test-critic",
+            "--thoughts", "state",
+        )
+        assert result.returncode == 0
+        assert "test-critic-context.md" in result.stdout
+
+    def test_step_1_references_finding_ids(self):
+        """Step 1 should reference F1, F2 finding IDs from context."""
+        result = run_critic(
+            "--step-number", "1",
+            "--total-steps", "4",
+            "--report", "/tmp/test-report.md",
+            "--context", "/tmp/test-critic-context.md",
+            "--output-dir", "/tmp/test-critic",
+            "--thoughts", "initial",
+        )
+        assert result.returncode == 0
+        # Should mention using pre-assigned IDs
+        assert "F1" in result.stdout or "finding IDs" in result.stdout.lower()
 
 
 class TestReviewSpecificLanguage:
