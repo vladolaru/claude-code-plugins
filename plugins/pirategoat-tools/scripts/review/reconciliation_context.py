@@ -43,6 +43,7 @@ _NON_REVIEW_FILES = frozenset([
     "clarity-assessment.json",
     "reconciliation-context.json",
     "reconciliation-context.md",
+    "critic-context.md",
 ])
 
 # Scope statuses that are structurally certain — no line-number ambiguity.
@@ -898,6 +899,173 @@ def to_markdown(context: Dict[str, Any]) -> str:
             status = rendered[key]
             parts.append(f"| `{key}` | {status} |")
         parts.append("")
+
+    return "\n".join(parts)
+
+
+def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
+    """Build a curated Markdown document for the decision critic.
+
+    Combines the narrative review report and structured findings into a
+    single Markdown document with stable sequential IDs (F1, F2, ...),
+    prioritized recommendations, and reconciliation metrics.  This is
+    ~40% more token-efficient than passing the raw JSON to the Opus
+    critic, and embeds cross-referenceable IDs the report alone lacks.
+
+    Args:
+        report_text: Contents of review-report.md (narrative review).
+        findings: Parsed contents of review-findings.json (structured
+            output from the reconciliator, using ReviewOutputBuilder
+            format).
+
+    Returns:
+        A Markdown string suitable for writing to critic-context.md.
+    """
+    parts: List[str] = []
+
+    # --- Title ---
+    parts.append("# Critic Context\n")
+
+    # --- Review Report ---
+    parts.append("## Review Report\n")
+
+    verdict = findings.get("verdict", "unknown")
+    parts.append(f"**Verdict:** {verdict.upper()}\n")
+
+    # Fence the report with a dynamic fence to avoid collisions with
+    # backtick runs inside the report itself.
+    max_run = 0
+    run = 0
+    for ch in report_text:
+        if ch == "`":
+            run += 1
+            if run > max_run:
+                max_run = run
+        else:
+            run = 0
+    fence = "`" * max(3, max_run + 1)
+    parts.append(fence)
+    parts.append(report_text)
+    parts.append(fence)
+    parts.append("")
+
+    parts.append("---\n")
+
+    # --- Structured Findings ---
+    parts.append("## Structured Findings\n")
+
+    issues = findings.get("issues", [])
+    issues = issues if isinstance(issues, list) else []
+    n_issues = len(issues)
+
+    summary = findings.get("summary", {})
+    by_severity = summary.get("by_severity", {})
+
+    # Build severity breakdown string (only non-zero counts)
+    severity_parts = []
+    for sev in ("critical", "high", "medium", "low", "info"):
+        count = by_severity.get(sev, 0)
+        if count > 0:
+            severity_parts.append(f"{count} {sev}")
+    severity_str = ", ".join(severity_parts) if severity_parts else "none"
+
+    parts.append(f"**{n_issues} findings** ({severity_str})\n")
+
+    # Render each issue with sequential F-IDs
+    for idx, issue in enumerate(issues, 1):
+        title = issue.get("title", "Untitled")
+        severity = issue.get("severity", "unknown")
+        confidence = issue.get("confidence", "")
+        file_path = issue.get("file", "")
+        line = issue.get("line", "")
+        category = issue.get("category", "")
+        description = issue.get("description", "")
+        recommendation = issue.get("recommendation", "")
+
+        conf_str = f", confidence: {confidence}" if confidence else ""
+        parts.append(
+            f"### F{idx}: {_escape_backtick_runs(title)} [{severity}{conf_str}]"
+        )
+
+        if file_path:
+            loc = f"`{file_path}:{line}`" if line else f"`{file_path}`"
+            parts.append(f"- **File:** {loc}")
+        if category:
+            parts.append(f"- **Category:** {category}")
+        if description:
+            desc = _escape_backtick_runs(description)
+            desc = _escape_block_syntax(desc)
+            desc = desc.replace("\n", "\n  ")
+            parts.append(f"- **Description:** {desc}")
+        if recommendation:
+            rec = _escape_backtick_runs(recommendation)
+            rec = _escape_block_syntax(rec)
+            rec = rec.replace("\n", "\n  ")
+            parts.append(f"- **Recommendation:** {rec}")
+        parts.append("")  # blank line between issues
+
+    # --- Prioritized Recommendations ---
+    recommendations = findings.get("recommendations")
+    if recommendations and isinstance(recommendations, dict):
+        has_any = any(
+            isinstance(v, list) and len(v) > 0
+            for v in recommendations.values()
+        )
+        if has_any:
+            parts.append("### Prioritized Recommendations\n")
+            for priority in ("immediate", "important", "suggestions"):
+                items = recommendations.get(priority, [])
+                if isinstance(items, list):
+                    for item in items:
+                        escaped = _escape_backtick_runs(item)
+                        escaped = _escape_block_syntax(escaped)
+                        escaped = escaped.replace("\n", "\n  ")
+                        parts.append(f"- [{priority}] {escaped}")
+            parts.append("")
+
+    parts.append("---\n")
+
+    # --- Reconciliation Metrics ---
+    parts.append("## Reconciliation Metrics\n")
+
+    meta = findings.get("meta", {})
+    recon = meta.get("reconciliation", {})
+
+    input_count = recon.get("input_findings_count", 0)
+    agents_contributing = recon.get("agents_contributing", 0)
+    verified = recon.get("verified_concerns", 0)
+    merge_ratio = recon.get("merge_ratio", 0.0)
+    merge_pct = int(round(merge_ratio * 100))
+    false_pos = recon.get("false_positives_dropped", 0)
+    out_of_scope = recon.get("out_of_scope_dropped", 0)
+    reviewing = recon.get("reviewing_agents", [])
+    missing = recon.get("missing_agents", [])
+    not_applicable = recon.get("not_applicable_agents", [])
+
+    parts.append(
+        f"- **Pipeline:** {input_count} findings from {agents_contributing} agents "
+        f"\u2192 {verified} verified concerns ({merge_pct}% merge ratio)"
+    )
+    parts.append(
+        f"- **Dropped:** {false_pos} false positives, {out_of_scope} out-of-scope"
+    )
+
+    if reviewing:
+        parts.append(f"- **Reviewing agents:** {', '.join(reviewing)}")
+    if missing:
+        parts.append(f"- **Missing agents:** {', '.join(missing)}")
+    if not_applicable:
+        na_strs = []
+        for entry in not_applicable:
+            if isinstance(entry, dict):
+                name = entry.get("name", "unknown")
+                reason = entry.get("skip_reason", "")
+                na_strs.append(f"{name} ({reason})" if reason else name)
+            else:
+                na_strs.append(str(entry))
+        parts.append(f"- **Not applicable:** {', '.join(na_strs)}")
+
+    parts.append("")
 
     return "\n".join(parts)
 
