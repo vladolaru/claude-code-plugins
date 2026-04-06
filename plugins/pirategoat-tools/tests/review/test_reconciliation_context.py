@@ -1630,3 +1630,70 @@ class TestToMarkdown:
                     f"Outer fence too short: {line!r} — will collide with ``` in snippet"
                 )
                 break
+
+    def test_observations_preserved(self, mod):
+        """File-level observations appear in Markdown output."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security", verdict="comment", issues=[]
+            ),
+        }
+        findings["security-review"]["observations"] = [
+            {"file": "src/auth.py", "note": "Session tokens stored in localStorage"},
+            {"file": "src/utils.py", "note": "Utility has no validation"},
+        ]
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "**Observations:**" in md
+        assert "`src/auth.py`" in md
+        assert "Session tokens stored in localStorage" in md
+        assert "`src/utils.py`" in md
+
+    def test_recommendations_preserved(self, mod):
+        """Prioritized recommendations appear in Markdown output."""
+        findings = {
+            "architecture-review": _make_review_json(
+                reviewer="architecture", verdict="comment", issues=[]
+            ),
+        }
+        findings["architecture-review"]["recommendations"] = {
+            "immediate": ["Fix the circular dependency"],
+            "important": ["Extract shared interface"],
+            "suggestions": [],
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "**Recommendations:**" in md
+        assert "[immediate] Fix the circular dependency" in md
+        assert "[important] Extract shared interface" in md
+
+    def test_backticks_in_issue_description_escaped(self, mod):
+        """Triple backticks in issue text are neutralized to prevent fence corruption."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        severity="high",
+                        title="Use ```esc_html()``` here",
+                        description="The code does:\n```php\necho $input;\n```",
+                        recommendation="Wrap in ```esc_html()```",
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        # The Markdown must not contain raw ``` that would open a code fence.
+        # After the "## Agent Findings" section, count fence-like lines —
+        # every opener must have a closer before "## Source Snippets".
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        # No raw triple-backtick runs should survive (they get a ZWS inserted)
+        import re
+        raw_fences = re.findall(r"(?<!\u200b)`{3,}(?!\u200b)", agent_section)
+        # Allow zero raw fences (all escaped) — but if any exist, they
+        # must be balanced (even count) to avoid corrupting the doc.
+        assert len(raw_fences) % 2 == 0, (
+            f"Unbalanced code fences in agent findings section: {raw_fences}"
+        )

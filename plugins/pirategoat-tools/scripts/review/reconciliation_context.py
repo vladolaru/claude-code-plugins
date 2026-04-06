@@ -627,6 +627,20 @@ def resolve_output_builder_path() -> str:
     return str(SCRIPTS_DIR / "agent" / "output.py")
 
 
+def _escape_backtick_runs(text: str) -> str:
+    """Neutralize backtick runs of 3+ in free-form text.
+
+    Markdown interprets ````` as a code fence opener.  When agent-written
+    issue descriptions or recommendations contain fenced code samples, the
+    raw backticks corrupt the surrounding document structure.  This helper
+    inserts a zero-width space after the second backtick in any run of 3+,
+    breaking the fence pattern while keeping the text visually identical
+    for the LLM consumer.
+    """
+    import re
+    return re.sub(r"(`{3,})", lambda m: m.group(0)[:2] + "\u200b" + m.group(0)[2:], text)
+
+
 def to_markdown(context: Dict[str, Any]) -> str:
     """Convert a reconciliation context dict to structured Markdown.
 
@@ -708,17 +722,48 @@ def to_markdown(context: Dict[str, Any]) -> str:
                 recommendation = issue.get("recommendation", "")
 
                 conf_str = f", confidence: {confidence}" if confidence else ""
-                parts.append(f"**{idx}. {title}** [{severity}{conf_str}]")
+                parts.append(f"**{idx}. {_escape_backtick_runs(title)}** [{severity}{conf_str}]")
                 if file_path:
                     loc = f"`{file_path}:{line}`" if line else f"`{file_path}`"
                     parts.append(f"- File: {loc}")
                 if category:
                     parts.append(f"- Category: {category}")
                 if description:
-                    parts.append(f"- Description: {description}")
+                    parts.append(f"- Description: {_escape_backtick_runs(description)}")
                 if recommendation:
-                    parts.append(f"- Recommendation: {recommendation}")
+                    parts.append(f"- Recommendation: {_escape_backtick_runs(recommendation)}")
                 parts.append("")  # blank line between issues
+
+            # Observations (file-level notes without specific lines)
+            observations = data.get("observations")
+            if observations and isinstance(observations, list) and len(observations) > 0:
+                parts.append("**Observations:**")
+                for obs in observations:
+                    obs_file = obs.get("file", "")
+                    obs_note = _escape_backtick_runs(obs.get("note", ""))
+                    if obs_file:
+                        parts.append(f"- `{obs_file}` — {obs_note}")
+                    else:
+                        parts.append(f"- {obs_note}")
+                parts.append("")
+
+            # Recommendations (immediate / important / suggestions)
+            recommendations = data.get("recommendations")
+            if recommendations and isinstance(recommendations, dict):
+                has_any = any(
+                    isinstance(v, list) and len(v) > 0
+                    for v in recommendations.values()
+                )
+                if has_any:
+                    parts.append("**Recommendations:**")
+                    for priority in ("immediate", "important", "suggestions"):
+                        items = recommendations.get(priority, [])
+                        if isinstance(items, list):
+                            for item in items:
+                                parts.append(
+                                    f"- [{priority}] {_escape_backtick_runs(item)}"
+                                )
+                    parts.append("")
 
             # Positive observations
             positives = data.get("positive_observations")
