@@ -1178,23 +1178,38 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 
     has_findings = not degradation.get("reconciliation_failed")
     findings_path = f"{od}/review-findings.json"
+    critic_context_path = f"{od}/critic-context.md"
+
+    if has_findings:
+        # Build curated critic context before dispatching
+        actions.append("Build the critic context document:")
+        actions.append("```bash")
+        actions.append(
+            f'python3 -c "\nimport sys, json, pathlib\n'
+            f"sys.path.insert(0, str(pathlib.Path('{SCRIPTS_DIR}').parent))\n"
+            f"from review.reconciliation_context import build_critic_context\n"
+            f"report = pathlib.Path('{critic_target}').read_text()\n"
+            f"findings = json.loads(pathlib.Path('{findings_path}').read_text())\n"
+            f"pathlib.Path('{critic_context_path}').write_text(build_critic_context(report, findings))\n"
+            f'"'
+        )
+        actions.append("```")
+        actions.append("")
+
     actions.append(
         f"Dispatch the `decision-reviewer` agent to stress-test the review conclusions."
     )
     actions.append("")
     actions.append("Use this dispatch prompt:")
     actions.append("```")
-    actions.append(f"Stress-test the conclusions in this review report: {critic_target}")
     if has_findings:
-        actions.append(f"Structured findings with per-issue evidence: {findings_path}")
+        actions.append(f"Stress-test the conclusions in this review: {critic_context_path}")
+    else:
+        actions.append(f"Stress-test the conclusions in this review report: {critic_target}")
     actions.append(f"Output directory: {od}")
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(f"Return STAND, REVISE, or ESCALATE with findings written to {od}/decision-critic-findings.md.")
     actions.append("```")
-    if has_findings:
-        actions.append("")
-        actions.append(f"The structured findings give the critic targeted verification anchors "
-                       f"(files, lines, agent sources, confidence scores) for direct claim verification.")
     actions.append("")
     actions.append("**Wait for the critic to finish — do not run in background.**")
     actions.append("")

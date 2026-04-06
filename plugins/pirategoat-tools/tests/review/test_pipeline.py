@@ -1062,13 +1062,16 @@ class TestStep10DecisionCritic:
             "no changes", "no action", "proceed to writing",
         ]), "STAND must convey no report edits needed"
 
-    def test_includes_findings_json_for_critic(self, mod, tmp_path):
-        """Step 10 must include review-findings.json path so critic can target verification."""
+    def test_builds_critic_context_md_before_dispatch(self, mod, tmp_path):
+        """Step 10 must instruct building critic-context.md before dispatching the critic."""
         state = {"completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "review-findings.json" in text
+        assert "critic-context.md" in text
+        # The build step must appear before the dispatch prompt
+        build_pos = text.index("critic-context.md")
+        assert "decision-reviewer" in text[build_pos:]
 
     def test_escalate_instructs_override_to_comment(self, mod, tmp_path):
         """ESCALATE verdict instructions must say to override verdict to COMMENT."""
@@ -1085,21 +1088,28 @@ class TestStep10DecisionCritic:
             "ESCALATE instructions must mention overriding verdict to COMMENT"
         )
 
-    def test_omits_findings_json_when_reconciliation_failed(self, mod, tmp_path):
-        """When reconciliation failed, findings JSON doesn't exist -- don't reference it."""
+    def test_degraded_mode_skips_critic_context_and_passes_report(self, mod, tmp_path):
+        """When reconciliation failed, skip critic-context.md and pass report directly."""
         state = {"completed_steps": [], "degradation": {"reconciliation_failed": True}}
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "review-findings.json" not in text
+        assert "critic-context.md" not in text
+        assert "review-report.md" in text
 
-    def test_includes_findings_json_in_normal_flow(self, mod, tmp_path):
-        """In normal flow (no degradation), findings JSON should be referenced."""
+    def test_normal_flow_dispatches_with_critic_context(self, mod, tmp_path):
+        """In normal flow, dispatch prompt references critic-context.md (not raw JSON)."""
         state = {"completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "review-findings.json" in text
+        # Dispatch prompt should use critic-context.md
+        assert "critic-context.md" in text
+        # Should NOT reference review-findings.json in the dispatch prompt
+        # (it's consumed during the build step, not passed to the critic)
+        dispatch_start = text.index("dispatch prompt")
+        dispatch_section = text[dispatch_start:]
+        assert "review-findings.json" not in dispatch_section
 
     def test_step_10_dispatch_includes_output_dir(self, mod, tmp_path):
         """Step 10 dispatch prompt should include the output directory path."""
