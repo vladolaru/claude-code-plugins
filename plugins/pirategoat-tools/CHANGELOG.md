@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Markdown context: change-purpose isolated.** The change-purpose block (a `.md` artifact from step 3/4) was injected verbatim — fenced code blocks or headings in it could corrupt or spoof subsequent sections. Now wrapped in a dynamically-sized code fence.
 - **Markdown context: positive observations excluded.** Like observations, positive observations bypass the scope/snippet pipeline and can skew reconciliation decisions without evidence. Excluded from Markdown; retained in JSON for debugging.
 - **Reconciliator prompt: `metadata_only` scope status documented.** `check_scope()` emits `OUT_OF_SCOPE:metadata_only` for rename/chmod-only diffs, but the prompt only listed 4 statuses. The reconciliator now correctly treats those entries as out-of-scope.
+- **Markdown context: block syntax in agent text escaped.** Agent-written descriptions or recommendations containing ATX headings (`## …`), thematic breaks (`---`), setext underlines (`===`), or block quotes (`>`) could corrupt the document structure — CommonMark recognises these with up to 3 leading spaces, so indentation alone cannot prevent them. Triggering characters are now backslash-escaped.
 
 ## [1.95.0] - 2026-04-05
 

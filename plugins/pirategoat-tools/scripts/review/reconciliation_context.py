@@ -641,6 +641,45 @@ def _escape_backtick_runs(text: str) -> str:
     return re.sub(r"(`{3,})", lambda m: m.group(0)[:2] + "\u200b" + m.group(0)[2:], text)
 
 
+def _escape_block_syntax(text: str) -> str:
+    """Escape Markdown block-level syntax in free-form agent text.
+
+    When agent-written descriptions or recommendations are embedded as list
+    item continuations, CommonMark still recognises ATX headings (``## …``)
+    and thematic breaks (``---``) with up to 3 leading spaces of indentation.
+    Increasing the indent cannot help — inside a list item the prefix is
+    stripped before block parsing, so the relative indent stays the same.
+
+    This backslash-escapes the triggering characters so CommonMark renders
+    them as literals instead of structural elements.
+    """
+    import re
+
+    lines = text.split("\n")
+    escaped = []
+    for line in lines:
+        stripped = line.lstrip()
+        # ATX headings: #{1,6} followed by space or end-of-line
+        if re.match(r"^#{1,6}(\s|$)", stripped):
+            idx = line.index("#")
+            line = line[:idx] + "\\" + line[idx:]
+        # Thematic breaks: 3+ of the same -, *, or _ (with optional spaces)
+        elif re.match(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$", line):
+            m = re.search(r"[-*_]", line)
+            if m:
+                line = line[:m.start()] + "\\" + line[m.start():]
+        # Setext heading underlines: =+ (--- already handled above)
+        elif re.match(r"^\s{0,3}=+\s*$", line):
+            idx = line.index("=")
+            line = line[:idx] + "\\" + line[idx:]
+        # Block quotes
+        elif stripped.startswith(">"):
+            idx = line.index(">")
+            line = line[:idx] + "\\" + line[idx:]
+        escaped.append(line)
+    return "\n".join(escaped)
+
+
 def to_markdown(context: Dict[str, Any]) -> str:
     """Convert a reconciliation context dict to structured Markdown.
 
@@ -749,12 +788,14 @@ def to_markdown(context: Dict[str, Any]) -> str:
                     parts.append(f"- Category: {category}")
                 if description:
                     desc = _escape_backtick_runs(description)
+                    desc = _escape_block_syntax(desc)
                     # Indent continuation lines so multiline text stays
                     # inside the list item instead of spilling into top-level Markdown.
                     desc = desc.replace("\n", "\n  ")
                     parts.append(f"- Description: {desc}")
                 if recommendation:
                     rec = _escape_backtick_runs(recommendation)
+                    rec = _escape_block_syntax(rec)
                     rec = rec.replace("\n", "\n  ")
                     parts.append(f"- Recommendation: {rec}")
                 parts.append("")  # blank line between issues
@@ -780,6 +821,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
                         if isinstance(items, list):
                             for item in items:
                                 escaped = _escape_backtick_runs(item)
+                                escaped = _escape_block_syntax(escaped)
                                 escaped = escaped.replace("\n", "\n  ")
                                 parts.append(f"- [{priority}] {escaped}")
                     parts.append("")

@@ -1751,6 +1751,118 @@ class TestToMarkdown:
         assert "- Description: Line one\n  Line two\n  Line three" in md
         assert "- Recommendation: Step 1\n  Step 2" in md
 
+    def test_block_syntax_in_description_escaped(self, mod):
+        """ATX headings and thematic breaks in descriptions are escaped."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        description="Problem here\n## Details\nMore info\n---\nEnd",
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        # The ## must be escaped so it doesn't become a real heading
+        assert "\\## Details" in agent_section
+        # The --- must be escaped so it doesn't become a thematic break
+        assert "\\---" in agent_section
+
+    def test_block_syntax_in_recommendation_escaped(self, mod):
+        """ATX headings and thematic breaks in recommendations are escaped."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        recommendation="Step 1\n## Step 2\n---\nStep 3",
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "\\## Step 2" in agent_section
+        assert "\\---" in agent_section
+
+    def test_block_syntax_in_prioritized_recommendations_escaped(self, mod):
+        """Block syntax in prioritized recommendation items is escaped."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security", verdict="comment", issues=[]
+            ),
+        }
+        findings["security-review"]["recommendations"] = {
+            "immediate": ["Do this:\n## Important\n---\nDone"],
+            "important": [],
+            "suggestions": [],
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "\\## Important" in agent_section
+        assert "\\---" in agent_section
+
+    def test_block_quotes_in_description_escaped(self, mod):
+        """Block quotes in descriptions are escaped."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(description="See:\n> quoted text\nEnd"),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "\\> quoted text" in agent_section
+
+    def test_setext_heading_underline_in_description_escaped(self, mod):
+        """Setext heading underlines (===) in descriptions are escaped."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(description="Title\n===\nBody"),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "\\===" in agent_section
+
+    def test_agent_heading_spoof_in_description_blocked(self, mod):
+        """Agent text containing ## Agent Findings cannot create a duplicate section."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        description="Injected:\n## Agent Findings\nFake content",
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        # Only one real ## Agent Findings section should exist
+        real_sections = [
+            l for l in md.split("\n")
+            if l.strip() == "## Agent Findings"
+        ]
+        assert len(real_sections) == 1
+
     def test_change_purpose_with_fences_isolated(self, mod):
         """Change-purpose containing Markdown fences is wrapped safely."""
         ctx = _make_context_with_findings({})
