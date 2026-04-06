@@ -1900,3 +1900,306 @@ class TestToMarkdown:
     # test_positive_observations_newlines_flattened were removed —
     # positives are now excluded from the Markdown context entirely
     # (same reasoning as observations: bypass scope/snippet pipeline).
+
+
+# ===========================================================================
+# TestPrefilterOutOfScope
+# ===========================================================================
+
+class TestPrefilterOutOfScope:
+    """Tests for pre-filtering structurally certain out-of-scope findings."""
+
+    def test_file_not_in_diff_excluded(self, mod):
+        """Issue with OUT_OF_SCOPE:file_not_in_diff annotation is excluded from Markdown."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Out of scope issue",
+                        file="src/other.py",
+                        line=10,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/other.py:10": "OUT_OF_SCOPE:file_not_in_diff",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "Out of scope issue" not in agent_section
+
+    def test_metadata_only_excluded(self, mod):
+        """Issue with OUT_OF_SCOPE:metadata_only annotation is excluded."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Metadata only issue",
+                        file="src/app.py",
+                        line=5,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:5": "OUT_OF_SCOPE:metadata_only",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "Metadata only issue" not in agent_section
+
+    def test_not_in_hunk_kept(self, mod):
+        """Issue with OUT_OF_SCOPE:not_in_hunk annotation is kept (ambiguous)."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Near but not in hunk",
+                        file="src/app.py",
+                        line=100,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:100": "OUT_OF_SCOPE:not_in_hunk",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "Near but not in hunk" in agent_section
+
+    def test_in_scope_kept(self, mod):
+        """Issues with IN_SCOPE:in_hunk and IN_SCOPE:near_hunk are kept."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="In hunk issue",
+                        file="src/app.py",
+                        line=42,
+                    ),
+                    _make_issue(
+                        title="Near hunk issue",
+                        file="src/app.py",
+                        line=50,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:42": "IN_SCOPE:in_hunk",
+            "src/app.py:50": "IN_SCOPE:near_hunk",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "In hunk issue" in agent_section
+        assert "Near hunk issue" in agent_section
+
+    def test_no_scope_annotation_kept(self, mod):
+        """Issue with no matching scope annotation is kept (conservative)."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Unannotated issue",
+                        file="src/app.py",
+                        line=42,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        # scope_annotations is empty — no annotation for this issue
+        ctx["scope_annotations"] = {}
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "Unannotated issue" in agent_section
+
+    def test_issue_without_file_kept(self, mod):
+        """Issue with empty file/zero line is kept (can't determine scope)."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="No file issue",
+                        file="",
+                        line=0,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:42": "OUT_OF_SCOPE:file_not_in_diff",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "No file issue" in agent_section
+
+    def test_filtered_count_in_header(self, mod):
+        """Agent header shows 'N issues (M pre-filtered as out-of-scope)' when issues are filtered."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Kept issue",
+                        file="src/app.py",
+                        line=42,
+                    ),
+                    _make_issue(
+                        title="Filtered issue",
+                        file="src/other.py",
+                        line=10,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:42": "IN_SCOPE:in_hunk",
+            "src/other.py:10": "OUT_OF_SCOPE:file_not_in_diff",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "1 issues (1 pre-filtered as out-of-scope)" in agent_section
+
+    def test_no_filtered_no_annotation_in_header(self, mod):
+        """Agent header shows normal 'N issues, verdict: X' when nothing filtered."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Normal issue",
+                        file="src/app.py",
+                        line=42,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:42": "IN_SCOPE:in_hunk",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "1 issues, verdict: comment" in agent_section
+        assert "pre-filtered" not in agent_section
+
+    def test_all_issues_filtered_shows_header(self, mod):
+        """Agent with all issues filtered shows header and '0 issues (N pre-filtered)'."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Filtered 1",
+                        file="src/other.py",
+                        line=10,
+                    ),
+                    _make_issue(
+                        title="Filtered 2",
+                        file="src/gone.py",
+                        line=20,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/other.py:10": "OUT_OF_SCOPE:file_not_in_diff",
+            "src/gone.py:20": "OUT_OF_SCOPE:metadata_only",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "### security-review" in agent_section
+        assert "0 issues (2 pre-filtered as out-of-scope)" in agent_section
+
+    def test_issue_numbering_contiguous_after_filter(self, mod):
+        """Kept issues are numbered 1, 2, ... with no gaps."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="First kept",
+                        file="src/app.py",
+                        line=10,
+                    ),
+                    _make_issue(
+                        title="Filtered out",
+                        file="src/other.py",
+                        line=20,
+                    ),
+                    _make_issue(
+                        title="Second kept",
+                        file="src/app.py",
+                        line=30,
+                    ),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:10": "IN_SCOPE:in_hunk",
+            "src/other.py:20": "OUT_OF_SCOPE:file_not_in_diff",
+            "src/app.py:30": "IN_SCOPE:in_hunk",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        assert "**1. First kept**" in agent_section
+        assert "**2. Second kept**" in agent_section
+        assert "Filtered out" not in agent_section
+
+    def test_prefilter_does_not_affect_recommendations(self, mod):
+        """Agent-level recommendations are NOT filtered (they have no file:line)."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(
+                        title="Filtered issue",
+                        file="src/other.py",
+                        line=10,
+                    ),
+                ],
+            ),
+        }
+        findings["security-review"]["recommendations"] = {
+            "immediate": ["Fix the auth bypass immediately"],
+            "important": ["Add rate limiting"],
+            "suggestions": [],
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/other.py:10": "OUT_OF_SCOPE:file_not_in_diff",
+        }
+        md = mod.to_markdown(ctx)
+        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
+        # Issue is filtered but recommendations survive
+        assert "Filtered issue" not in agent_section
+        assert "Fix the auth bypass immediately" in agent_section
+        assert "Add rate limiting" in agent_section

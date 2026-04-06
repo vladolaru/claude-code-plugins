@@ -45,6 +45,15 @@ _NON_REVIEW_FILES = frozenset([
     "reconciliation-context.md",
 ])
 
+# Scope statuses that are structurally certain — no line-number ambiguity.
+# Pre-filtered from the Markdown context; kept in the JSON artifact.
+# not_in_hunk is intentionally excluded: agent line numbers may be
+# slightly off, and the ±5 proximity window doesn't catch all cases.
+_PREFILTER_SCOPES = frozenset([
+    "OUT_OF_SCOPE:file_not_in_diff",
+    "OUT_OF_SCOPE:metadata_only",
+])
+
 
 def load_agent_findings(
     output_dir: str,
@@ -751,25 +760,49 @@ def to_markdown(context: Dict[str, Any]) -> str:
     parts.append("## Agent Findings\n")
 
     agent_findings = context.get("agent_findings", {})
+    scope_annotations = context.get("scope_annotations", {})
     if not agent_findings:
         parts.append("No agent findings.\n")
     else:
         for agent_name in sorted(agent_findings.keys()):
             data = agent_findings[agent_name]
-            issues = data.get("issues", [])
-            n_issues = len(issues) if isinstance(issues, list) else 0
+            all_issues = data.get("issues", [])
+            all_issues = all_issues if isinstance(all_issues, list) else []
             verdict = data.get("verdict", "unknown")
 
+            # Pre-filter structurally certain out-of-scope findings.
+            # Issues without a file or line are always kept (conservative).
+            # Issues with no scope annotation are kept (conservative).
+            kept_issues = []
+            n_filtered = 0
+            for issue in all_issues:
+                file_path = issue.get("file", "")
+                line = issue.get("line", "")
+                if file_path and line:
+                    key = f"{file_path}:{line}"
+                    status = scope_annotations.get(key, "")
+                    if status in _PREFILTER_SCOPES:
+                        n_filtered += 1
+                        continue
+                kept_issues.append(issue)
+
+            n_kept = len(kept_issues)
+
             parts.append(f"### {agent_name}\n")
-            parts.append(f"**{n_issues} issues, verdict: {verdict}**\n")
+            if n_filtered > 0:
+                parts.append(
+                    f"**{n_kept} issues ({n_filtered} pre-filtered as out-of-scope), verdict: {verdict}**\n"
+                )
+            else:
+                parts.append(f"**{n_kept} issues, verdict: {verdict}**\n")
 
             # Skip reason for not_applicable agents
             skip_reason = data.get("skip_reason")
             if skip_reason:
                 parts.append(f"**Skipped:** {skip_reason}\n")
 
-            # Render issues
-            for idx, issue in enumerate(issues if isinstance(issues, list) else [], 1):
+            # Render kept issues with contiguous numbering
+            for idx, issue in enumerate(kept_issues, 1):
                 title = issue.get("title", "Untitled")
                 severity = issue.get("severity", "unknown")
                 confidence = issue.get("confidence", "")
