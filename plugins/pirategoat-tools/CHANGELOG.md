@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Markdown context: full changed-file list preserved.** `to_markdown()` was truncating the changed-files list to 20 entries. The reconciliator uses this list for in-scope decisions ("file not in this list → out of scope"), so findings on file 21+ were silently misclassified as out-of-scope.
 - **Markdown context: safe fencing for source snippets.** Source snippets containing triple backticks (common in `.md` file reviews) would close the outer ``` fence early, corrupting all subsequent sections. Fences now dynamically size to be longer than any backtick run in the snippet.
+- **Markdown context: observations and recommendations preserved.** `to_markdown()` was skipping `observations` (file-level notes, including line-less issues soft-redirected by `add_issue(line=None)`) and `recommendations` (immediate/important/suggestions). Both are valid review schema fields that now render in the Markdown output.
+- **Markdown context: backtick escaping in issue text.** Agent-written Markdown in issue title, description, or recommendation (e.g., fenced code samples) was injected verbatim, corrupting the document structure when it contained triple backticks. Runs of 3+ backticks in free-form text are now neutralized with a zero-width space.
 
 ## [1.95.0] - 2026-04-05
 
