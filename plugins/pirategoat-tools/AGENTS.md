@@ -15,6 +15,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/plan_dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review/pipeline.py. |
 | `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. |
 | `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
+| `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8. |
 | `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
 | `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
@@ -45,8 +46,12 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   │           Section 2: REVIEW CONTENT  (middle — processing zone)
   │           Section 3: OUTPUT          (bottom — recency effect)
   │
+  ├─ Step 8: review/reconciliation_context.py
+  │   └─ Gathers all agent JSONs + source snippets + scope annotations
+  │       → reconciliation-context.json + reconciliation-context.md
+  │
   ├─ review-reconciliator agent (semantic dedup + scope check + fact verification)
-  │   └─ Produces review-findings.json + review-findings.md
+  │   └─ Reads reconciliation-context.md → produces review-findings.json + review-findings.md
   │
   └─ decision-reviewer agent (independent stress test)
       └─ Produces decision-critic-findings.md with STAND/REVISE/ESCALATE verdict
