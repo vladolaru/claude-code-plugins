@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Markdown context: safe fencing for source snippets.** Source snippets containing triple backticks (common in `.md` file reviews) would close the outer ``` fence early, corrupting all subsequent sections. Fences now dynamically size to be longer than any backtick run in the snippet.
 - **Markdown context: observations and recommendations preserved.** `to_markdown()` was skipping `observations` (file-level notes, including line-less issues soft-redirected by `add_issue(line=None)`) and `recommendations` (immediate/important/suggestions). Both are valid review schema fields that now render in the Markdown output.
 - **Markdown context: backtick escaping in issue text.** Agent-written Markdown in issue title, description, or recommendation (e.g., fenced code samples) was injected verbatim, corrupting the document structure when it contained triple backticks. Runs of 3+ backticks in free-form text are now neutralized with a zero-width space.
+- **Markdown context: agent headers match dispatched names.** Subsection headers baked issue count and verdict into the `###` heading, so the reconciliator's dispatched-vs-reported agent name matching failed. Headers are now plain `### agent-name` with metadata on a separate line.
+- **Markdown context: multiline issue text contained.** Description and recommendation strings with embedded newlines spilled into top-level Markdown. Continuation lines are now indented to stay inside the list item.
 
 ## [1.95.0] - 2026-04-05
 
