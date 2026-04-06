@@ -5,6 +5,11 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.96.2] - 2026-04-06
+
+### Changed
+- **Agent status line colors.** Updated colors for concurrency-reviewer (magenta → orange), a11y-reviewer (green → pink), and docs-drift-reviewer (yellow → pink).
+
 ## [1.96.0] - 2026-04-06
 
 ### Changed
