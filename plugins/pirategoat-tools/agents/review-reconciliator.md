@@ -31,12 +31,10 @@ The Markdown document has these sections:
 2. **Change Purpose** — what the change accomplishes (may be derived from commits, prefixed with "Derived from commit messages:"). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility.
 3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, file:line, description, recommendation, category, and confidence. May also include **Recommendations** (prioritized as immediate/important/suggestions). Agents are sorted alphabetically.
 4. **Source Snippets** — pre-read source code around every referenced file:line in fenced code blocks, with ±10 lines of context. Format: `<line_num> | <code>` per line. May include `[pre-change]` entries for files with deletion hunks and `[deleted]` prefixed content for removed files.
-5. **Scope Annotations** — table mapping `file:line` to scope status:
+5. **Scope Annotations** — table mapping `file:line` to scope status. Structurally certain out-of-scope entries (`file_not_in_diff`, `metadata_only`) are pre-filtered along with their findings — you will not see them:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
    - `IN_SCOPE:near_hunk` — within ±5 lines of a hunk
-   - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (pre-existing code)
-   - `OUT_OF_SCOPE:metadata_only` — file in the diff but only rename/chmod/metadata changes, no content modified (pre-existing code)
-   - `OUT_OF_SCOPE:file_not_in_diff` — file not in the diff
+   - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (possibly pre-existing, but agent line numbers can be imprecise — check the source snippet before dropping)
 
 **Key fields:**
 - **Dispatched agents** (in Metadata) — compare against agent findings subsection headers to detect agents dispatched but failed to report. Note these in `meta.reconciliation` so coverage is accurately represented. May be absent for backward compatibility (treat as "unknown").
@@ -66,10 +64,10 @@ Read `reconciliation-context.md`. Agent findings are in the "## Agent Findings" 
 For each concern group:
 
 1. **Scope check — file and line in diff:**
-   - Look up `scope_annotations["file:line"]` for each finding's file and line. If the value starts with `OUT_OF_SCOPE:`, drop the concern immediately.
-   - `OUT_OF_SCOPE:file_not_in_diff` — file not in the diff at all.
-   - `OUT_OF_SCOPE:not_in_hunk` — file is changed but this line is far from any changed hunk (pre-existing code, not introduced by this PR).
+   - **Already handled:** Findings on files not in the diff (`file_not_in_diff`) or with only rename/chmod changes (`metadata_only`) have been pre-filtered — you will not see them.
+   - Look up `scope_annotations["file:line"]` for each finding's file and line.
    - `IN_SCOPE:in_hunk` or `IN_SCOPE:near_hunk` — proceed with verification.
+   - `OUT_OF_SCOPE:not_in_hunk` — file is changed but this line is far from any changed hunk. Usually pre-existing code, but agent line numbers can be imprecise — check the source snippet before dropping. If the snippet shows the code IS adjacent to changed lines, keep the finding.
    - If no annotation exists for the file:line, check whether the file appears in `changed_files`. If not → OUT OF SCOPE, drop it. If yes → proceed conservatively with verification.
 
 2. **Fact verification using source snippets:**
