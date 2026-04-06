@@ -741,18 +741,12 @@ def to_markdown(context: Dict[str, Any]) -> str:
                     parts.append(f"- Recommendation: {rec}")
                 parts.append("")  # blank line between issues
 
-            # Observations (file-level notes without specific lines)
-            observations = data.get("observations")
-            if observations and isinstance(observations, list) and len(observations) > 0:
-                parts.append("**Observations:**")
-                for obs in observations:
-                    obs_file = obs.get("file", "")
-                    obs_note = _escape_backtick_runs(obs.get("note", ""))
-                    if obs_file:
-                        parts.append(f"- `{obs_file}` — {obs_note}")
-                    else:
-                        parts.append(f"- {obs_note}")
-                parts.append("")
+            # NOTE: Observations are intentionally excluded from the
+            # Markdown context. They bypass extract_references(),
+            # check_scope(), and read_source_snippets(), so including them
+            # would give the reconciliator unverified file-level claims
+            # with no scope annotation or source evidence. They remain in
+            # the JSON artifact for debugging/tooling.
 
             # Recommendations (immediate / important / suggestions)
             recommendations = data.get("recommendations")

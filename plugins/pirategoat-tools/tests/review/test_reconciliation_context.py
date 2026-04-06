@@ -1631,8 +1631,8 @@ class TestToMarkdown:
                 )
                 break
 
-    def test_observations_preserved(self, mod):
-        """File-level observations appear in Markdown output."""
+    def test_observations_excluded_from_markdown(self, mod):
+        """Observations are excluded — they bypass the scope/snippet pipeline."""
         findings = {
             "security-review": _make_review_json(
                 reviewer="security", verdict="comment", issues=[]
@@ -1640,14 +1640,11 @@ class TestToMarkdown:
         }
         findings["security-review"]["observations"] = [
             {"file": "src/auth.py", "note": "Session tokens stored in localStorage"},
-            {"file": "src/utils.py", "note": "Utility has no validation"},
         ]
         ctx = _make_context_with_findings(findings)
         md = mod.to_markdown(ctx)
-        assert "**Observations:**" in md
-        assert "`src/auth.py`" in md
-        assert "Session tokens stored in localStorage" in md
-        assert "`src/utils.py`" in md
+        assert "**Observations:**" not in md
+        assert "Session tokens stored in localStorage" not in md
 
     def test_recommendations_preserved(self, mod):
         """Prioritized recommendations appear in Markdown output."""

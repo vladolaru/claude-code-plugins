@@ -29,7 +29,7 @@ The Markdown document has these sections:
 
 1. **Metadata** — git range, PR ID, output directory, output builder path, changed files, dispatched agents
 2. **Change Purpose** — what the change accomplishes (may be derived from commits, prefixed with "Derived from commit messages:"). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility.
-3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, file:line, description, recommendation, category, and confidence. May also include **Observations** (file-level notes without specific line references — including findings where the agent couldn't pinpoint a line) and **Recommendations** (prioritized as immediate/important/suggestions). Agents are sorted alphabetically.
+3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, file:line, description, recommendation, category, and confidence. May also include **Recommendations** (prioritized as immediate/important/suggestions). Agents are sorted alphabetically.
 4. **Source Snippets** — pre-read source code around every referenced file:line in fenced code blocks, with ±10 lines of context. Format: `<line_num> | <code>` per line. May include `[pre-change]` entries for files with deletion hunks and `[deleted]` prefixed content for removed files.
 5. **Scope Annotations** — table mapping `file:line` to scope status:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
