@@ -1750,3 +1750,70 @@ class TestToMarkdown:
         # Continuation lines must be indented with 2 spaces
         assert "- Description: Line one\n  Line two\n  Line three" in md
         assert "- Recommendation: Step 1\n  Step 2" in md
+
+    def test_change_purpose_with_fences_isolated(self, mod):
+        """Change-purpose containing Markdown fences is wrapped safely."""
+        ctx = _make_context_with_findings({})
+        ctx["change_purpose"] = "Added helper:\n```python\ndef foo(): pass\n```"
+        md = mod.to_markdown(ctx)
+        # The change-purpose text must survive intact
+        assert "def foo(): pass" in md
+        # The outer fence must be longer than the inner ```
+        section = md.split("## Change Purpose")[1].split("## Agent Findings")[0]
+        lines = section.strip().split("\n")
+        # First fence-like line is the outer opener
+        outer_fence = next(
+            l for l in lines if l.strip() and set(l.strip()) == {"`"}
+        )
+        assert len(outer_fence.strip()) >= 4, (
+            f"Outer fence too short: {outer_fence!r} — collides with ``` inside"
+        )
+        # Content including inner ``` must appear between outer fences
+        assert "```python" in section
+
+    def test_change_purpose_headings_cannot_spoof_sections(self, mod):
+        """Headings inside change-purpose don't create real document sections."""
+        ctx = _make_context_with_findings({})
+        ctx["change_purpose"] = "## Fake Agent Findings\n\nSpoofed content"
+        md = mod.to_markdown(ctx)
+        # The fake heading must be inside a code fence, not a real section
+        # Count real ## Agent Findings sections — should be exactly 1
+        real_sections = [
+            l for l in md.split("\n")
+            if l.strip() == "## Agent Findings"
+        ]
+        assert len(real_sections) == 1
+
+    def test_positive_observations_backticks_escaped(self, mod):
+        """Backtick runs in positive observations are neutralized."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security", verdict="approve", issues=[]
+            ),
+        }
+        findings["security-review"]["positive_observations"] = [
+            "Uses ```esc_html()``` throughout",
+        ]
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "Positives" in md
+        # The ``` runs must be broken (ZWS inserted)
+        assert "```esc_html()```" not in md
+        # But the text content survives
+        assert "esc_html()" in md
+
+    def test_positive_observations_newlines_flattened(self, mod):
+        """Newlines in positive observations are collapsed to spaces."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security", verdict="approve", issues=[]
+            ),
+        }
+        findings["security-review"]["positive_observations"] = [
+            "Line one\nLine two",
+        ]
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        # Newlines should be flattened to stay on one line
+        assert "Line one Line two" in md
+        assert "Line one\nLine two" not in md

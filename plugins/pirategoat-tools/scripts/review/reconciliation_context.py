@@ -685,7 +685,25 @@ def to_markdown(context: Dict[str, Any]) -> str:
     # --- Change Purpose ---
     parts.append("## Change Purpose\n")
     change_purpose = context.get("change_purpose", "")
-    parts.append(change_purpose if change_purpose else "(not provided)")
+    if not change_purpose:
+        parts.append("(not provided)")
+    else:
+        # Wrap in a dynamically-sized fence to isolate from the outer
+        # document structure — change-purpose.md is a Markdown artifact
+        # that may contain headings or fenced code blocks.
+        max_run = 0
+        run = 0
+        for ch in change_purpose:
+            if ch == "`":
+                run += 1
+                if run > max_run:
+                    max_run = run
+            else:
+                run = 0
+        fence = "`" * max(3, max_run + 1)
+        parts.append(fence)
+        parts.append(change_purpose)
+        parts.append(fence)
     parts.append("")
 
     parts.append("---\n")
@@ -769,7 +787,8 @@ def to_markdown(context: Dict[str, Any]) -> str:
             # Positive observations
             positives = data.get("positive_observations")
             if positives and isinstance(positives, list) and len(positives) > 0:
-                positives_str = "; ".join(positives)
+                escaped = [_escape_backtick_runs(p).replace("\n", " ") for p in positives]
+                positives_str = "; ".join(escaped)
                 parts.append(f"> **Positives:** {positives_str}\n")
 
     parts.append("---\n")
