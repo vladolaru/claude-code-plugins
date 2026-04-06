@@ -35,6 +35,7 @@ The Markdown document has these sections:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
    - `IN_SCOPE:near_hunk` — within ±5 lines of a hunk
    - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (pre-existing code)
+   - `OUT_OF_SCOPE:metadata_only` — file in the diff but only rename/chmod/metadata changes, no content modified (pre-existing code)
    - `OUT_OF_SCOPE:file_not_in_diff` — file not in the diff
 
 **Key fields:**

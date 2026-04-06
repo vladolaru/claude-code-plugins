@@ -784,12 +784,12 @@ def to_markdown(context: Dict[str, Any]) -> str:
                                 parts.append(f"- [{priority}] {escaped}")
                     parts.append("")
 
-            # Positive observations
-            positives = data.get("positive_observations")
-            if positives and isinstance(positives, list) and len(positives) > 0:
-                escaped = [_escape_backtick_runs(p).replace("\n", " ") for p in positives]
-                positives_str = "; ".join(escaped)
-                parts.append(f"> **Positives:** {positives_str}\n")
+            # NOTE: Positive observations are intentionally excluded from
+            # the Markdown context.  Like observations, they bypass
+            # extract_references(), check_scope(), and read_source_snippets()
+            # — unsupported positives (e.g., from not_applicable exits)
+            # can skew dedupe/severity decisions without evidence.  They
+            # remain in the JSON artifact for debugging/tooling.
 
     parts.append("---\n")
 

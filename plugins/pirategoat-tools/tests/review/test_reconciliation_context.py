@@ -1559,8 +1559,8 @@ class TestToMarkdown:
         assert "[deleted]" in md
         assert "old_func" in md
 
-    def test_positive_observations_included(self, mod):
-        """Positive observations from agents are rendered."""
+    def test_positive_observations_excluded(self, mod):
+        """Positive observations are excluded — they bypass the scope/snippet pipeline."""
         findings = {
             "security-review": _make_review_json(
                 reviewer="security",
@@ -1573,8 +1573,8 @@ class TestToMarkdown:
         ]
         ctx = _make_context_with_findings(findings)
         md = mod.to_markdown(ctx)
-        assert "Good input validation on all endpoints" in md
-        assert "Positives" in md
+        assert "Good input validation on all endpoints" not in md
+        assert "Positives" not in md
 
     def test_multiple_agents_ordered(self, mod):
         """Agents are rendered in alphabetical order."""
@@ -1784,36 +1784,7 @@ class TestToMarkdown:
         ]
         assert len(real_sections) == 1
 
-    def test_positive_observations_backticks_escaped(self, mod):
-        """Backtick runs in positive observations are neutralized."""
-        findings = {
-            "security-review": _make_review_json(
-                reviewer="security", verdict="approve", issues=[]
-            ),
-        }
-        findings["security-review"]["positive_observations"] = [
-            "Uses ```esc_html()``` throughout",
-        ]
-        ctx = _make_context_with_findings(findings)
-        md = mod.to_markdown(ctx)
-        assert "Positives" in md
-        # The ``` runs must be broken (ZWS inserted)
-        assert "```esc_html()```" not in md
-        # But the text content survives
-        assert "esc_html()" in md
-
-    def test_positive_observations_newlines_flattened(self, mod):
-        """Newlines in positive observations are collapsed to spaces."""
-        findings = {
-            "security-review": _make_review_json(
-                reviewer="security", verdict="approve", issues=[]
-            ),
-        }
-        findings["security-review"]["positive_observations"] = [
-            "Line one\nLine two",
-        ]
-        ctx = _make_context_with_findings(findings)
-        md = mod.to_markdown(ctx)
-        # Newlines should be flattened to stay on one line
-        assert "Line one Line two" in md
-        assert "Line one\nLine two" not in md
+    # NOTE: test_positive_observations_backticks_escaped and
+    # test_positive_observations_newlines_flattened were removed —
+    # positives are now excluded from the Markdown context entirely
+    # (same reasoning as observations: bypass scope/snippet pipeline).
