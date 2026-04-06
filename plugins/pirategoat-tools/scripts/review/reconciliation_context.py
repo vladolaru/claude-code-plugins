@@ -900,13 +900,18 @@ def to_markdown(context: Dict[str, Any]) -> str:
     parts.append("## Scope Annotations\n")
 
     scope_annotations = context.get("scope_annotations", {})
-    if not scope_annotations:
+    # Exclude entries already pre-filtered from agent findings
+    rendered = {
+        k: v for k, v in scope_annotations.items()
+        if v not in _PREFILTER_SCOPES
+    }
+    if not rendered:
         parts.append("No scope annotations.\n")
     else:
         parts.append("| File:Line | Status |")
         parts.append("|-----------|--------|")
-        for key in sorted(scope_annotations.keys()):
-            status = scope_annotations[key]
+        for key in sorted(rendered.keys()):
+            status = rendered[key]
             parts.append(f"| `{key}` | {status} |")
         parts.append("")
 

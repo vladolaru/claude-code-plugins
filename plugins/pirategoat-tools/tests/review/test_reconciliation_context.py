@@ -1485,18 +1485,21 @@ class TestToMarkdown:
         assert "40 | def login():" in md
 
     def test_scope_annotations_table(self, mod):
-        """Scope annotations appear as a table."""
+        """Scope annotations appear as a table, excluding pre-filtered statuses."""
         ctx = _make_context_with_findings({})
         ctx["scope_annotations"] = {
             "src/auth.py:42": "IN_SCOPE:in_hunk",
             "src/utils.py:10": "OUT_OF_SCOPE:file_not_in_diff",
+            "src/app.py:100": "OUT_OF_SCOPE:not_in_hunk",
         }
         md = mod.to_markdown(ctx)
         assert "## Scope Annotations" in md
         assert "| File:Line | Status |" in md
         assert "`src/auth.py:42`" in md
         assert "IN_SCOPE:in_hunk" in md
-        assert "`src/utils.py:10`" in md
+        assert "`src/app.py:100`" in md
+        # file_not_in_diff is pre-filtered from the table
+        assert "`src/utils.py:10`" not in md
 
     def test_dispatched_agents_listed(self, mod):
         """Dispatched agents appear in the metadata section."""
@@ -2203,3 +2206,33 @@ class TestPrefilterOutOfScope:
         assert "Filtered issue" not in agent_section
         assert "Fix the auth bypass immediately" in agent_section
         assert "Add rate limiting" in agent_section
+
+    def test_scope_annotations_table_excludes_prefiltered(self, mod):
+        """Scope annotations table omits file_not_in_diff and metadata_only entries."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security",
+                verdict="comment",
+                issues=[
+                    _make_issue(file="src/app.py", line=42),
+                    _make_issue(file="src/other.py", line=10),
+                    _make_issue(file="src/renamed.py", line=5),
+                    _make_issue(file="src/app.py", line=100),
+                ],
+            ),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["scope_annotations"] = {
+            "src/app.py:42": "IN_SCOPE:in_hunk",
+            "src/other.py:10": "OUT_OF_SCOPE:file_not_in_diff",
+            "src/renamed.py:5": "OUT_OF_SCOPE:metadata_only",
+            "src/app.py:100": "OUT_OF_SCOPE:not_in_hunk",
+        }
+        md = mod.to_markdown(ctx)
+        scope_section = md.split("## Scope Annotations")[1]
+        # IN_SCOPE and not_in_hunk entries present
+        assert "src/app.py:42" in scope_section
+        assert "src/app.py:100" in scope_section
+        # Pre-filtered entries absent
+        assert "src/other.py:10" not in scope_section
+        assert "src/renamed.py:5" not in scope_section
