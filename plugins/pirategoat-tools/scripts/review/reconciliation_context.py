@@ -657,11 +657,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
 
     changed_files = context.get("changed_files", [])
     n_files = len(changed_files)
-    if n_files <= 20:
-        files_str = ", ".join(f"`{f}`" for f in changed_files)
-    else:
-        files_str = ", ".join(f"`{f}`" for f in changed_files[:20])
-        files_str += f", ... and {n_files - 20} more"
+    files_str = ", ".join(f"`{f}`" for f in changed_files)
     parts.append(f"- **Changed files ({n_files}):** {files_str}")
 
     dispatched = context.get("dispatched_agents")
@@ -742,9 +738,21 @@ def to_markdown(context: Dict[str, Any]) -> str:
         for file_key in sorted(source_snippets.keys()):
             snippet = source_snippets[file_key]
             parts.append(f"### `{file_key}`\n")
-            parts.append("```")
+            # Use a fence longer than any backtick run in the snippet
+            # to avoid closing the fence early on source containing ```
+            max_run = 0
+            run = 0
+            for ch in snippet:
+                if ch == "`":
+                    run += 1
+                    if run > max_run:
+                        max_run = run
+                else:
+                    run = 0
+            fence = "`" * max(3, max_run + 1)
+            parts.append(fence)
             parts.append(snippet)
-            parts.append("```\n")
+            parts.append(fence + "\n")
 
     parts.append("---\n")
 

@@ -1596,3 +1596,37 @@ class TestToMarkdown:
         perf_pos = md.index("### performance-review")
         sec_pos = md.index("### security-review")
         assert arch_pos < perf_pos < sec_pos
+
+    def test_all_changed_files_listed_when_over_20(self, mod):
+        """All changed files appear in Markdown — no truncation at 20."""
+        ctx = _make_context_with_findings({})
+        ctx["changed_files"] = [f"src/file{i}.py" for i in range(30)]
+        md = mod.to_markdown(ctx)
+        assert "**Changed files (30):**" in md
+        # Every file must be present — the reconciliator uses this list
+        # for in-scope decisions, so truncation causes misclassification.
+        for i in range(30):
+            assert f"`src/file{i}.py`" in md
+
+    def test_source_snippet_with_backticks_fenced_safely(self, mod):
+        """Snippets containing triple backticks get a longer fence."""
+        ctx = _make_context_with_findings({})
+        snippet = '10 | ```python\n11 | print("hi")\n12 | ```'
+        ctx["source_snippets"] = {"README.md": snippet}
+        md = mod.to_markdown(ctx)
+        # The snippet must appear intact
+        assert snippet in md
+        # The outer fence must be longer than the inner ``` to avoid
+        # closing early and corrupting the rest of the document.
+        lines = md.split("\n")
+        snippet_section = False
+        for line in lines:
+            if line.startswith("### `README.md`"):
+                snippet_section = True
+                continue
+            if snippet_section and line.startswith("`") and line.strip().replace("`", "") == "":
+                # This is a fence line — must be at least 4 backticks
+                assert len(line.strip()) >= 4, (
+                    f"Outer fence too short: {line!r} — will collide with ``` in snippet"
+                )
+                break
