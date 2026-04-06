@@ -25,14 +25,27 @@ Verify claims before accepting them. The document's framing, confidence level, a
 
 ## Context You Will Receive
 
-You receive a Document Path plus an Output Directory:
+You receive a Critic Context Path plus an Output Directory:
 
-- **Document Path**: Path to a review report or findings document to critique. Read it first.
+- **Critic Context Path**: Path to `critic-context.md` — a curated Markdown document containing the review report, structured findings with stable IDs (F1, F2, ...), recommendations, and reconciliation metrics. Read this file first.
 - **Output Directory**: Directory where you write your findings.
+
+### `critic-context.md` Structure
+
+The Markdown document has these sections:
+
+1. **Review Report** — the full narrative review (fenced). This is what you are stress-testing.
+2. **Structured Findings** — each finding with a stable ID (F1, F2, ...), severity, file:line, description, recommendation, category, and confidence. Use these IDs when referencing specific findings in your critique.
+3. **Prioritized Recommendations** — immediate/important/suggestions from the reconciliator.
+4. **Reconciliation Metrics** — pipeline statistics (input count, merge ratio, agents contributing, false positives dropped, etc.). Use these to assess whether the reconciliation process was thorough.
+
+**Fallback:** In degraded mode (when reconciliation failed), you receive a plain report path instead of `critic-context.md`, and no `--context` flag. Critique the report directly — assign your own claim IDs (F1, F2, ...) during decomposition since there are no pre-assigned finding IDs.
 
 ## Step 1: Gather the Subject Matter
 
-Read the document at the provided path. This is what you will critique.
+**Normal path (critic-context.md provided):** Read the critic context document. This contains both the narrative review (what you are critiquing) and the structured findings (your verification anchors). Use the stable finding IDs (F1, F2, ...) from the context document when decomposing claims — these map directly to the structured findings section, making cross-referencing precise.
+
+**Degraded path (plain report, no context):** Read the report at the provided path. This is all you have — no structured findings, no reconciliation metrics. Assign your own claim IDs during decomposition and verify claims directly against the source code.
 
 If the input contains multiple decisions or no explicit conclusion, identify the primary claims and recommendations as your critique targets. State what you are critiquing before proceeding.
 
@@ -42,21 +55,32 @@ If the input is empty, unreadable, or contains no claims to evaluate, write a fi
 
 Run the 4-phase review criticism pipeline. Each phase builds on the prior — pass your accumulated analysis in `--thoughts`.
 
+**Normal path** (critic-context.md + report path both provided):
+
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
 [ -z "$PLUGIN_ROOT" ] || [ ! -d "$PLUGIN_ROOT/scripts" ] && PLUGIN_ROOT=$(find ~/.claude -path "*/pirategoat-tools/*/scripts/review/agent/bootstrap.py" -type f 2>/dev/null | sort | tail -1 | xargs dirname | xargs dirname | xargs dirname | xargs dirname)
 
 # Phase 1: Decompose — extract claims, severity assertions, scope claims
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<report-path>" --findings-json "<findings-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<report-path>" --context "<context-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
 
 # Phase 2: Verify — read actual source code, check each claim
-python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 2 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 2 --total-steps 4 --report "<report-path>" --context "<context-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phase 1>"
 
 # Phase 3: Challenge — adversarial analysis, false positives, severity inflation
 python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 3 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-2>"
 
 # Phase 4: Synthesize — verdict + write findings
 python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 4 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
+```
+
+**Degraded path** (plain report, no context — omit `--context`):
+
+```bash
+# Phase 1: Decompose — no --context, assign your own claim IDs
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+
+# Phases 2-4: same as above but without --context
 ```
 
 Follow each phase's instructions. Between phases, do the verification work (Read files, Grep for patterns, check git diffs) that the phase directs.

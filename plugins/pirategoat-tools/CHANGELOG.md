@@ -5,6 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.97.0] - 2026-04-06
+
+### Added
+- **Curated critic context document.** The decision critic now receives a single Markdown file (`critic-context.md`) with the review report, sequentially-IDed findings (F1, F2, ...), recommendations, and reconciliation metrics — instead of reading raw `review-findings.json` + a separate report. Mirrors the reconciliator's curated Markdown pattern for ~40% token savings on the Opus-tier critic agent.
+
+### Changed
+- `critic.py` accepts `--context` flag replacing the removed `--findings-json`.
+- Pipeline step 10 builds `critic-context.md` before dispatching the decision critic.
+- Decision reviewer agent definition updated for the new single-file input contract with `critic-context.md` structure documentation.
+- Critic step 1 now reuses the pre-assigned finding IDs (F1, F2, ...) from the context document instead of inventing new ones, eliminating the ID namespace collision between findings and factual claims.
+
 ## [1.96.2] - 2026-04-06
 
 ### Changed
