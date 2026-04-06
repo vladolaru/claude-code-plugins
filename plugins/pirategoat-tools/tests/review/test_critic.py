@@ -133,20 +133,6 @@ class TestCriticContextArg:
         assert result.returncode == 0
         assert "test-critic-context.md" in result.stdout
 
-    def test_findings_json_still_accepted(self):
-        """Backward compat: --findings-json should still be accepted."""
-        result = run_critic(
-            "--step-number", "1",
-            "--total-steps", "4",
-            "--report", "/tmp/test-report.md",
-            "--findings-json", "/tmp/test-findings.json",
-            "--output-dir", "/tmp/test-critic",
-            "--thoughts", "initial",
-        )
-        assert result.returncode == 0
-        # The old flag should work (surfaced somehow)
-        assert "test-findings.json" in result.stdout
-
     def test_context_surfaced_in_step_2(self):
         """Step 2 should also reference the context path."""
         result = run_critic(

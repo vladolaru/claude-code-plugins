@@ -298,12 +298,6 @@ def main():
         help="Path to critic-context.md (curated Markdown with report + findings)",
     )
     parser.add_argument(
-        "--findings-json",
-        type=str,
-        default=None,
-        help="Deprecated: use --context instead. Kept for backward compatibility.",
-    )
-    parser.add_argument(
         "--output-dir",
         type=str,
         required=True,
@@ -334,8 +328,7 @@ def main():
         )
         sys.exit(1)
 
-    # Resolve --context (preferred) or --findings-json (deprecated alias)
-    context_path = args.context or args.findings_json
+    context_path = args.context
 
     # Get guidance for current step
     guidance = get_step_guidance(
