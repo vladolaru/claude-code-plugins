@@ -761,9 +761,9 @@ def to_markdown(context: Dict[str, Any]) -> str:
                         items = recommendations.get(priority, [])
                         if isinstance(items, list):
                             for item in items:
-                                parts.append(
-                                    f"- [{priority}] {_escape_backtick_runs(item)}"
-                                )
+                                escaped = _escape_backtick_runs(item)
+                                escaped = escaped.replace("\n", "\n  ")
+                                parts.append(f"- [{priority}] {escaped}")
                     parts.append("")
 
             # Positive observations

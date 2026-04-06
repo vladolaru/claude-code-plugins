@@ -1664,6 +1664,22 @@ class TestToMarkdown:
         assert "[immediate] Fix the circular dependency" in md
         assert "[important] Extract shared interface" in md
 
+    def test_multiline_recommendation_stays_inside_item(self, mod):
+        """Newlines in recommendation text are indented as list continuations."""
+        findings = {
+            "security-review": _make_review_json(
+                reviewer="security", verdict="comment", issues=[]
+            ),
+        }
+        findings["security-review"]["recommendations"] = {
+            "immediate": ["Step 1: do X\nStep 2: do Y\nStep 3: verify"],
+            "important": [],
+            "suggestions": [],
+        }
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "- [immediate] Step 1: do X\n  Step 2: do Y\n  Step 3: verify" in md
+
     def test_backticks_in_issue_description_escaped(self, mod):
         """Triple backticks in issue text are neutralized to prevent fence corruption."""
         findings = {
