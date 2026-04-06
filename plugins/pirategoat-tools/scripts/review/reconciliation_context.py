@@ -362,30 +362,6 @@ def _merge_windows(windows: List[tuple]) -> List[tuple]:
     return merged
 
 
-def _derive_change_purpose_from_commits(git_range: str) -> str:
-    """Extract a one-line-per-commit summary from the git range.
-
-    Returns a short block of commit subjects the reconciliator can use to
-    calibrate severity when no explicit change-purpose artifact exists.
-    Returns empty string on failure.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "log", "--format=%s", git_range],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return ""
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return ""
-
-    subjects = [s.strip() for s in result.stdout.strip().splitlines() if s.strip()]
-    if not subjects:
-        return ""
-    return "Derived from commit messages:\n" + "\n".join(f"- {s}" for s in subjects)
-
 
 _HUNK_HEADER_RE = re.compile(
     r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE
@@ -964,8 +940,6 @@ def main() -> int:
     git_range = args.git_range
     changed_files = [f.strip() for f in args.changed_files.split(",") if f.strip()]
     change_purpose = args.change_purpose
-    if not change_purpose and args.git_range:
-        change_purpose = _derive_change_purpose_from_commits(args.git_range)
     pr_id = args.pr_id
     dispatched_agents: Optional[List[str]] = None
     if args.dispatched_agents is not None:
