@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Reconciliation context: Markdown format for LLM consumption.** The reconciliation context is now written as both Markdown (`reconciliation-context.md`) and JSON (`reconciliation-context.json`). The reconciliator agent reads the Markdown version — structured with section headers, tables, and fenced code blocks — which is ~40% more token-efficient and eliminates the 11-chunk Read pattern observed with the JSON format (down to ~3-5 reads). JSON is retained as a data artifact for debugging and tooling. Pipeline step 8 briefing now points to the `.md` file and provides the output builder path explicitly.
 
+### Fixed
+- **Markdown context: full changed-file list preserved.** `to_markdown()` was truncating the changed-files list to 20 entries. The reconciliator uses this list for in-scope decisions ("file not in this list → out of scope"), so findings on file 21+ were silently misclassified as out-of-scope.
+- **Markdown context: safe fencing for source snippets.** Source snippets containing triple backticks (common in `.md` file reviews) would close the outer ``` fence early, corrupting all subsequent sections. Fences now dynamically size to be longer than any backtick run in the snippet.
+
 ## [1.95.0] - 2026-04-05
 
 ### Changed
