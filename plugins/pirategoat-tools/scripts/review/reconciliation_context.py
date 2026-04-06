@@ -728,6 +728,14 @@ def to_markdown(context: Dict[str, Any]) -> str:
         agents_str = ", ".join(dispatched)
         parts.append(f"- **Dispatched agents ({n_dispatched}):** {agents_str}")
 
+        # Pre-compute missing agents (dispatched but no output file)
+        af = context.get("agent_findings", {})
+        reported = set(af.keys()) if af else set()
+        missing = sorted(set(dispatched) - reported)
+        if missing:
+            missing_str = ", ".join(missing)
+            parts.append(f"- **Missing agents ({len(missing)}):** {missing_str}")
+
     parts.append("")  # blank line after metadata
 
     # --- Change Purpose ---

@@ -2236,3 +2236,59 @@ class TestPrefilterOutOfScope:
         # Pre-filtered entries absent
         assert "src/other.py:10" not in scope_section
         assert "src/renamed.py:5" not in scope_section
+
+
+class TestMissingAgentDetection:
+    """Tests for pre-computed missing agent detection in metadata."""
+
+    def test_missing_agents_shown(self, mod):
+        """Missing agents (dispatched but no output) are listed in metadata."""
+        findings = {
+            "security-review": _make_review_json(reviewer="security", verdict="comment"),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["dispatched_agents"] = ["security-review", "performance-review", "a11y-review"]
+        md = mod.to_markdown(ctx)
+        meta = md.split("## Change Purpose")[0]
+        assert "**Missing agents (2):**" in meta
+        assert "performance-review" in meta
+        assert "a11y-review" in meta
+
+    def test_no_missing_agents(self, mod):
+        """No missing agents line when all dispatched agents reported."""
+        findings = {
+            "security-review": _make_review_json(reviewer="security", verdict="comment"),
+        }
+        ctx = _make_context_with_findings(findings)
+        ctx["dispatched_agents"] = ["security-review"]
+        md = mod.to_markdown(ctx)
+        assert "Missing agents" not in md
+
+    def test_no_dispatched_agents_list(self, mod):
+        """No missing agents line when dispatched_agents is absent (backward compat)."""
+        findings = {
+            "security-review": _make_review_json(reviewer="security", verdict="comment"),
+        }
+        ctx = _make_context_with_findings(findings)
+        # No dispatched_agents key at all
+        md = mod.to_markdown(ctx)
+        assert "Missing agents" not in md
+
+    def test_not_applicable_agent_not_missing(self, mod):
+        """Agent that returned not_applicable produced output — not missing."""
+        findings = {
+            "security-review": _make_review_json(reviewer="security", verdict="comment"),
+            "a11y-review": _make_review_json(reviewer="a11y", verdict="not_applicable"),
+        }
+        findings["a11y-review"]["skip_reason"] = "No frontend changes"
+        ctx = _make_context_with_findings(findings)
+        ctx["dispatched_agents"] = ["security-review", "a11y-review"]
+        md = mod.to_markdown(ctx)
+        assert "Missing agents" not in md
+
+    def test_empty_dispatched_list(self, mod):
+        """No missing agents when dispatched list is empty."""
+        ctx = _make_context_with_findings({})
+        ctx["dispatched_agents"] = []
+        md = mod.to_markdown(ctx)
+        assert "Missing agents" not in md

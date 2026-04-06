@@ -37,7 +37,8 @@ The Markdown document has these sections:
    - `OUT_OF_SCOPE:not_in_hunk` — file changed but line far from any hunk (possibly pre-existing, but agent line numbers can be imprecise — check the source snippet before dropping)
 
 **Key fields:**
-- **Dispatched agents** (in Metadata) — compare against agent findings subsection headers to detect agents dispatched but failed to report. Note these in `meta.reconciliation` so coverage is accurately represented. May be absent for backward compatibility (treat as "unknown").
+- **Dispatched agents** (in Metadata) — list of agents that were dispatched. May be absent for backward compatibility (treat as "unknown").
+- **Missing agents** (in Metadata, if any) — pre-computed list of agents dispatched but with no output (crashed/timed out). Include these directly in `meta.reconciliation.missing_agents`. If absent, no agents are missing.
 - **Changed files** (in Metadata) — files in the diff. When a finding references a file not in this list, it's out of scope.
 
 ## Phase 1: Load & Group
