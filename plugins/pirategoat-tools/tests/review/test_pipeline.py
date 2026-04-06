@@ -1096,6 +1096,8 @@ class TestStep10DecisionCritic:
         text = "\n".join(g["actions"])
         assert "critic-context.md" not in text
         assert "review-report.md" in text
+        # Must tell the agent there's no structured findings / no --context
+        assert "without" in text.lower() or "no structured" in text.lower() or "no --context" in text.lower()
 
     def test_normal_flow_dispatches_with_critic_context(self, mod, tmp_path):
         """In normal flow, dispatch prompt references critic-context.md (not raw JSON)."""
@@ -1110,6 +1112,24 @@ class TestStep10DecisionCritic:
         dispatch_start = text.index("dispatch prompt")
         dispatch_section = text[dispatch_start:]
         assert "review-findings.json" not in dispatch_section
+
+    def test_normal_flow_includes_report_path_in_dispatch(self, mod, tmp_path):
+        """Normal flow dispatch must include the report path for critic.py --report."""
+        state = {"completed_steps": []}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        # The dispatch prompt section (between ``` markers) must have the report path
+        assert "review-report.md" in text
+        assert "report" in text.lower()  # label for the report path
+
+    def test_report_synthesis_failed_includes_findings_md_as_report(self, mod, tmp_path):
+        """When report synthesis failed, the report path should be review-findings.md."""
+        state = {"completed_steps": [], "degradation": {"report_synthesis_failed": True}}
+        ctx = {}
+        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        assert "review-findings.md" in text
 
     def test_step_10_dispatch_includes_output_dir(self, mod, tmp_path):
         """Step 10 dispatch prompt should include the output directory path."""

@@ -1203,9 +1203,11 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("Use this dispatch prompt:")
     actions.append("```")
     if has_findings:
-        actions.append(f"Stress-test the conclusions in this review: {critic_context_path}")
+        actions.append(f"Critic context (report + structured findings): {critic_context_path}")
+        actions.append(f"Report path (for critic.py --report): {critic_target}")
     else:
-        actions.append(f"Stress-test the conclusions in this review report: {critic_target}")
+        actions.append(f"Review report to stress-test: {critic_target}")
+        actions.append(f"No structured findings available (reconciliation failed) — critique the report directly without --context.")
     actions.append(f"Output directory: {od}")
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(f"Return STAND, REVISE, or ESCALATE with findings written to {od}/decision-critic-findings.md.")

@@ -39,13 +39,13 @@ The Markdown document has these sections:
 3. **Prioritized Recommendations** — immediate/important/suggestions from the reconciliator.
 4. **Reconciliation Metrics** — pipeline statistics (input count, merge ratio, agents contributing, false positives dropped, etc.). Use these to assess whether the reconciliation process was thorough.
 
-**Fallback:** In degraded mode (when reconciliation failed), you may receive a plain report path instead of `critic-context.md`. In that case, critique the report without structured findings.
+**Fallback:** In degraded mode (when reconciliation failed), you receive a plain report path instead of `critic-context.md`, and no `--context` flag. Critique the report directly — assign your own claim IDs (F1, F2, ...) during decomposition since there are no pre-assigned finding IDs.
 
 ## Step 1: Gather the Subject Matter
 
-Read the critic context document at the provided path. This contains both the narrative review (what you are critiquing) and the structured findings (your verification anchors).
+**Normal path (critic-context.md provided):** Read the critic context document. This contains both the narrative review (what you are critiquing) and the structured findings (your verification anchors). Use the stable finding IDs (F1, F2, ...) from the context document when decomposing claims — these map directly to the structured findings section, making cross-referencing precise.
 
-Use the stable finding IDs (F1, F2, ...) from the context document when decomposing claims — these map directly to the structured findings section, making cross-referencing precise.
+**Degraded path (plain report, no context):** Read the report at the provided path. This is all you have — no structured findings, no reconciliation metrics. Assign your own claim IDs during decomposition and verify claims directly against the source code.
 
 If the input contains multiple decisions or no explicit conclusion, identify the primary claims and recommendations as your critique targets. State what you are critiquing before proceeding.
 
@@ -54,6 +54,8 @@ If the input is empty, unreadable, or contains no claims to evaluate, write a fi
 ## Step 2: Run the Review Critic Workflow
 
 Run the 4-phase review criticism pipeline. Each phase builds on the prior — pass your accumulated analysis in `--thoughts`.
+
+**Normal path** (critic-context.md + report path both provided):
 
 ```bash
 PLUGIN_ROOT=$(cat /tmp/.pirategoat-tools-root 2>/dev/null)
@@ -70,6 +72,15 @@ python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 3 --total-steps 4 --
 
 # Phase 4: Synthesize — verdict + write findings
 python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 4 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "<your accumulated analysis from phases 1-3>"
+```
+
+**Degraded path** (plain report, no context — omit `--context`):
+
+```bash
+# Phase 1: Decompose — no --context, assign your own claim IDs
+python3 $PLUGIN_ROOT/scripts/review/critic.py --step-number 1 --total-steps 4 --report "<report-path>" --output-dir "<output-dir>" --thoughts "Starting analysis"
+
+# Phases 2-4: same as above but without --context
 ```
 
 Follow each phase's instructions. Between phases, do the verification work (Read files, Grep for patterns, check git diffs) that the phase directs.
