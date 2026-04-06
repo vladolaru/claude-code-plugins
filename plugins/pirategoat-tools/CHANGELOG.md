@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Markdown context: recommendations preserved.** `to_markdown()` was skipping `recommendations` (immediate/important/suggestions). These now render in the Markdown output. Observations are intentionally excluded — they bypass the scope/snippet pipeline and would give the reconciliator unverified claims.
 - **Markdown context: backtick escaping in issue text.** Agent-written Markdown in issue title, description, or recommendation (e.g., fenced code samples) was injected verbatim, corrupting the document structure when it contained triple backticks. Runs of 3+ backticks in free-form text are now neutralized with a zero-width space.
 - **Markdown context: agent headers match dispatched names.** Subsection headers baked issue count and verdict into the `###` heading, so the reconciliator's dispatched-vs-reported agent name matching failed. Headers are now plain `### agent-name` with metadata on a separate line.
-- **Markdown context: multiline issue text contained.** Description and recommendation strings with embedded newlines spilled into top-level Markdown. Continuation lines are now indented to stay inside the list item.
+- **Markdown context: multiline text contained.** Issue description/recommendation fields and agent-level recommendation items with embedded newlines spilled into top-level Markdown. Continuation lines are now indented to stay inside list items.
 
 ## [1.95.0] - 2026-04-05
 
