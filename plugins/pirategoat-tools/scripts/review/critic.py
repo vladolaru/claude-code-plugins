@@ -47,14 +47,24 @@ def get_step_guidance(
             "entire workflow.",
             "",
             "Read the review report"
-            + (" and critic context document" if context_path else "")
-            + ". Extract claims using the stable IDs from the context document "
-            "(F1, F2, ...) that will persist through ALL subsequent steps:",
+            + (
+                " and critic context document. Extract claims using the stable IDs "
+                "from the context document (F1, F2, ...) that will persist through "
+                "ALL subsequent steps:"
+                if context_path
+                else ". Extract and assign stable IDs that will persist through ALL "
+                "subsequent steps:"
+            ),
             "",
-            "- FACTUAL CLAIMS [use F1, F2, ... IDs from context]: Statements about what the "
-            "code does or doesn't do. When a critic-context document is provided, use its "
-            "pre-assigned finding IDs (F1, F2, ...) — each finding maps to a factual claim "
-            "to verify.",
+            (
+                "- FACTUAL CLAIMS [use F1, F2, ... IDs from context]: Statements about what the "
+                "code does or doesn't do. Use the pre-assigned finding IDs (F1, F2, ...) from "
+                "the context document — each finding maps to a factual claim to verify."
+                if context_path
+                else "- FACTUAL CLAIMS [F1, F2, ...]: Statements about what the code does or "
+                "doesn't do (\"line 54 is missing an is_array guard\", \"the function uses "
+                "non-Yoda comparison\"). These are the review's core assertions."
+            ),
             "- SEVERITY ASSERTIONS [S1, S2, ...]: Claims about impact level (\"this is HIGH "
             "because it could cause a PHP fatal\", \"this is MEDIUM — coding standards "
             "violation\"). Include the stated justification.",
