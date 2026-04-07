@@ -34,7 +34,7 @@ from helpers.command_helpers import (
 
 @pytest.fixture(scope="module")
 def marketplace_agents():
-    """Agent names from marketplace.json (e.g., 'pr-reviewer', 'security-reviewer')."""
+    """Agent names from marketplace.json (e.g., 'code-reviewer', 'security-reviewer')."""
     return load_marketplace_agents()
 
 

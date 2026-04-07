@@ -68,7 +68,7 @@ class TestStart:
 
     def test_default_log_dir_is_pirategoat_tools(self, mod):
         assert "/.pirategoat-tools/" in mod.LOG_DIR
-        assert mod.LOG_DIR.endswith("/logs/pr-reviews")
+        assert mod.LOG_DIR.endswith("/logs/reviews")
 
     def test_creates_log_with_pipeline_start_event(self, telemetry):
         """start() creates a JSONL log file with a pipeline_start event."""

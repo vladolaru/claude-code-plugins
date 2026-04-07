@@ -3,7 +3,7 @@
 Review Telemetry — JSONL telemetry for PR review pipelines.
 
 Captures timing, decisions, and outcomes at each pipeline step.
-Logs to ~/.pirategoat-tools/logs/pr-reviews/.
+Logs to ~/.pirategoat-tools/logs/reviews/.
 
 Best-effort: failures never break the pipeline.
 Zero external dependencies (stdlib only).
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
-LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/pr-reviews")
+LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
 
 

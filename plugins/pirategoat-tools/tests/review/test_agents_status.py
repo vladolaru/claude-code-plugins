@@ -241,7 +241,7 @@ class TestFilenameConvention:
         )
 
     def test_agent_without_reviewer_suffix(self, mod, tmp_path):
-        """pr-reviewer → code-review.json (same convention applies)."""
+        """code-reviewer → code-review.json (same convention applies)."""
         plan = {"agents": [{"name": "code-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
