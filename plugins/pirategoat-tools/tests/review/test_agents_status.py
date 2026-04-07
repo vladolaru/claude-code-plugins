@@ -53,12 +53,12 @@ def _finish_agent(tmp_path, name, issues=None, verdict="APPROVE"):
 class TestCheckStatus:
     def test_all_finished(self, mod, tmp_path):
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "security-reviewer", "status": "DISPATCH"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
         _start_agent(tmp_path, "security-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer", [{"severity": "critical"}], "REQUEST_CHANGES")
+        _finish_agent(tmp_path, "code-reviewer", [{"severity": "critical"}], "REQUEST_CHANGES")
         _finish_agent(tmp_path, "security-reviewer")
 
         result = mod.check_status(str(tmp_path))
@@ -69,11 +69,11 @@ class TestCheckStatus:
 
     def test_running_has_started_but_no_review(self, mod, tmp_path):
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "security-reviewer", "status": "DISPATCH"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
         _start_agent(tmp_path, "security-reviewer")
 
         result = mod.check_status(str(tmp_path))
@@ -83,11 +83,11 @@ class TestCheckStatus:
 
     def test_not_dispatched_has_no_started_marker(self, mod, tmp_path):
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "security-reviewer", "status": "DISPATCH"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
 
         result = mod.check_status(str(tmp_path))
         assert result["all_done"] is True  # NOT_DISPATCHED no longer blocks
@@ -98,11 +98,11 @@ class TestCheckStatus:
     def test_timed_out_agent(self, mod, tmp_path):
         """Agent started 25 minutes ago, no review file → TIMED_OUT."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "slow-reviewer", "status": "DISPATCH"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
         _start_agent(tmp_path, "slow-reviewer", minutes_ago=25)
 
         # Default timeout is 1200s (20 min) — 25 min exceeds it
@@ -116,11 +116,11 @@ class TestCheckStatus:
     def test_timed_out_does_not_block_all_done(self, mod, tmp_path):
         """ALL_DONE should be true when agents are finished or timed out."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "slow-reviewer", "status": "DISPATCH"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
         _start_agent(tmp_path, "slow-reviewer", minutes_ago=25)
 
         result = mod.check_status(str(tmp_path))
@@ -142,11 +142,11 @@ class TestCheckStatus:
 
     def test_skipped_agents_dont_count(self, mod, tmp_path):
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "a11y-reviewer", "status": "SKIP", "reason": "no frontend files"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
 
         result = mod.check_status(str(tmp_path))
         assert result["all_done"] is True
@@ -154,9 +154,9 @@ class TestCheckStatus:
         assert result["skipped"] == 1
 
     def test_extracts_severity_counts(self, mod, tmp_path):
-        _write_plan(tmp_path, [{"name": "pr-reviewer", "status": "DISPATCH"}])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer", [
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer", [
             {"severity": "critical"},
             {"severity": "high"},
             {"severity": "high"},
@@ -181,11 +181,11 @@ class TestNotDispatchedDoesNotBlockPipeline:
     def test_not_dispatched_does_not_block_all_done(self, mod, tmp_path):
         """Pipeline should proceed even if some DISPATCH agents never started."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "security-reviewer", "status": "DISPATCH"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
         # security-reviewer: plan says DISPATCH but never started (triaged out)
 
         result = mod.check_status(str(tmp_path))
@@ -199,11 +199,11 @@ class TestNotDispatchedDoesNotBlockPipeline:
     def test_not_dispatched_shown_as_note_not_action_required(self, mod, tmp_path):
         """NOT_DISPATCHED should produce a NOTE, not ACTION REQUIRED."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "dead-code-reviewer", "status": "DISPATCH"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
 
         result = mod.check_status(str(tmp_path))
         output = mod.format_output(result)
@@ -213,7 +213,7 @@ class TestNotDispatchedDoesNotBlockPipeline:
     def test_all_not_dispatched_still_all_done(self, mod, tmp_path):
         """Even if ALL agents are NOT_DISPATCHED, pipeline should not hang."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "security-reviewer", "status": "DISPATCH"},
         ])
         # Neither agent started
@@ -241,12 +241,12 @@ class TestFilenameConvention:
         )
 
     def test_agent_without_reviewer_suffix(self, mod, tmp_path):
-        """pr-reviewer → pr-review.json (same convention applies)."""
-        plan = {"agents": [{"name": "pr-reviewer", "status": "DISPATCH"}]}
+        """pr-reviewer → code-review.json (same convention applies)."""
+        plan = {"agents": [{"name": "code-reviewer", "status": "DISPATCH"}]}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
         review = {"issues": [{"title": "Bug", "file": "a.py", "severity": "high"}], "verdict": "request_changes"}
-        (tmp_path / "pr-review.json").write_text(json.dumps(review))
+        (tmp_path / "code-review.json").write_text(json.dumps(review))
 
         result = mod.check_status(str(tmp_path))
         agent = result["agents"][0]
@@ -295,11 +295,11 @@ class TestOverrideStatuses:
     def test_skipped_override_treated_as_skip(self, mod, tmp_path):
         """SKIPPED_OVERRIDE agent should be counted as skipped, not dispatched."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no UI changes"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
 
         result = mod.check_status(str(tmp_path))
         assert result["all_done"] is True
@@ -310,11 +310,11 @@ class TestOverrideStatuses:
     def test_skipped_override_shown_in_output(self, mod, tmp_path):
         """format_output should show SKIPPED_OVERRIDE with reason, not NOT_DISPATCHED."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no UI changes"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
 
         result = mod.check_status(str(tmp_path))
         output = mod.format_output(result)
@@ -325,11 +325,11 @@ class TestOverrideStatuses:
     def test_dispatch_override_treated_as_dispatch(self, mod, tmp_path):
         """DISPATCH_OVERRIDE agent should be counted as dispatched and FINISHED when review file exists."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "perf-reviewer", "status": "DISPATCH_OVERRIDE"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
         _start_agent(tmp_path, "perf-reviewer")
         _finish_agent(tmp_path, "perf-reviewer")
 
@@ -341,13 +341,13 @@ class TestOverrideStatuses:
     def test_multiple_override_statuses_mixed(self, mod, tmp_path):
         """Mix of DISPATCH, SKIPPED, SKIPPED_OVERRIDE, DISPATCH_OVERRIDE all handled correctly."""
         _write_plan(tmp_path, [
-            {"name": "pr-reviewer", "status": "DISPATCH"},
+            {"name": "code-reviewer", "status": "DISPATCH"},
             {"name": "security-reviewer", "status": "SKIPPED", "reason": "no security-relevant files"},
             {"name": "a11y-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "LLM override: no frontend"},
             {"name": "perf-reviewer", "status": "DISPATCH_OVERRIDE"},
         ])
-        _start_agent(tmp_path, "pr-reviewer")
-        _finish_agent(tmp_path, "pr-reviewer")
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
         _start_agent(tmp_path, "perf-reviewer")
         _finish_agent(tmp_path, "perf-reviewer")
 

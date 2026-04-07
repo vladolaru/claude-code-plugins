@@ -216,7 +216,7 @@ class TestDecideAgentDispatch:
     def test_always_agent_with_files_dispatches(self):
         config = {"dispatch_class": "always", "domain": "code"}
         counts = self._make_counts(code=5)
-        status, reason = decide_agent_dispatch("pr-reviewer", config, counts)
+        status, reason = decide_agent_dispatch("code-reviewer", config, counts)
         assert status == "DISPATCH"
 
     def test_always_agent_without_files_skips(self):
@@ -411,10 +411,10 @@ class TestBuildDispatchPlan:
 class TestAlwaysDispatchAgents:
     """Agents with dispatch_class 'always' that have domain files are dispatched."""
 
-    ALWAYS_AGENTS_WITH_CODE_DOMAIN = ["pr-reviewer", "history-insights-reviewer", "patterns-reviewer"]
+    ALWAYS_AGENTS_WITH_CODE_DOMAIN = ["code-reviewer", "history-insights-reviewer", "patterns-reviewer"]
 
     def test_code_domain_always_agents_dispatch(self, registry):
-        """pr-reviewer, history-insights, patterns always dispatch when code files exist."""
+        """code-reviewer, history-insights, patterns always dispatch when code files exist."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",

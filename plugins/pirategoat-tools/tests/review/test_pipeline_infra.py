@@ -368,7 +368,7 @@ class TestCLIIntegration:
         # Seed stale artifacts
         (tmp_path / "pipeline-state.json").write_text('{"stale": true}')
         (tmp_path / "dispatch-plan.json").write_text('{"stale": true}')
-        (tmp_path / "pr-review.json").write_text('{"stale": true}')
+        (tmp_path / "code-review.json").write_text('{"stale": true}')
         (tmp_path / "review-findings.json").write_text('{"stale": true}')
         (tmp_path / "review-findings.md").write_text("stale")
         (tmp_path / "review-report.md").write_text("stale")

@@ -133,15 +133,15 @@ class TestLoadAgentFindings:
         """Loads *-review.json files and keys by stem."""
         review = _make_review_json(reviewer="security")
         (tmp_path / "security-review.json").write_text(json.dumps(review))
-        (tmp_path / "pr-review.json").write_text(
-            json.dumps(_make_review_json(reviewer="pr"))
+        (tmp_path / "code-review.json").write_text(
+            json.dumps(_make_review_json(reviewer="code"))
         )
 
         result = mod.load_agent_findings(str(tmp_path))
         assert "security-review" in result
-        assert "pr-review" in result
+        assert "code-review" in result
         assert result["security-review"]["reviewer"] == "security"
-        assert result["pr-review"]["reviewer"] == "pr"
+        assert result["code-review"]["reviewer"] == "code"
 
     def test_skips_non_review_files(self, mod, tmp_path):
         """Pipeline infrastructure files are not loaded."""

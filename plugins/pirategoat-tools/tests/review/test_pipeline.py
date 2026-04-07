@@ -96,7 +96,7 @@ class TestStructuredDataDiscipline:
         state = {
             "completed_steps": [1, 3, 5, 6, 7],
             "resolved_params": {"git_range": "abc..HEAD"},
-            "agents": {"dispatched": ["pr-reviewer"], "completed": ["pr-reviewer"], "failed": []},
+            "agents": {"dispatched": ["code-reviewer"], "completed": ["code-reviewer"], "failed": []},
         }
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
@@ -343,7 +343,7 @@ class TestStep5DispatchPlan:
             "completed_steps": [1, 2, 3],
             "dispatch_plan_summary": {"dispatched": 7, "skipped": 3, "conditional": 2},
             "dispatch_plan_agents": [
-                {"name": "pr-reviewer", "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
+                {"name": "code-reviewer", "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection, CSRF, sanitization", "status": "SKIPPED", "reason": "no files in security domain"},
                 {"name": "architecture-reviewer", "focus": "SOLID, design patterns, coupling", "status": "DISPATCH", "reason": "conditional (large change)"},
             ],
@@ -355,7 +355,7 @@ class TestStep5DispatchPlan:
         g = mod.get_step_guidance(5, "pr", state, ctx)
         text = "\n".join(g["situation"])
         # Human-readable summary lists dispatched and skipped agents with focus
-        assert "pr-reviewer" in text
+        assert "code-reviewer" in text
         assert "security-reviewer" in text
         assert "Dispatching" in text
         assert "Skipped" in text
@@ -370,7 +370,7 @@ class TestStep5DispatchPlan:
         g = mod.get_step_guidance(5, "pr", state, ctx)
         text = "\n".join(g["situation"])
         # Focus descriptions should be visible for both dispatched and skipped agents
-        assert "goal alignment" in text.lower()  # pr-reviewer's focus
+        assert "goal alignment" in text.lower()  # code-reviewer's focus
         assert "XSS" in text  # security-reviewer's focus
         assert "SOLID" in text  # architecture-reviewer's focus
 
@@ -403,7 +403,7 @@ class TestStep5QuickMode:
             "completed_steps": [1, 2, 3],
             "dispatch_plan_summary": {"dispatched": 5, "skipped": 2, "conditional": 1},
             "dispatch_plan_agents": [
-                {"name": "pr-reviewer", "focus": "PR overall goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
+                {"name": "code-reviewer", "focus": "PR overall goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "DISPATCH", "reason": "keywords matched (commits: auth)"},
                 {"name": "wp-architecture-reviewer", "focus": "WordPress hooks", "status": "SKIPPED_QUICK_MODE", "reason": "excluded in quick review mode"},
                 {"name": "history-insights-reviewer", "focus": "Git history", "status": "SKIPPED_QUICK_MODE", "reason": "excluded in quick review mode"},
@@ -417,7 +417,7 @@ class TestStep5QuickMode:
         config = {"quick": True}
         g = mod.get_step_guidance(5, "pr", state, {}, config=config)
         text = "\n".join(g["situation"])
-        assert "pr-reviewer" in text
+        assert "code-reviewer" in text
         assert "security-reviewer" in text
         assert "wp-architecture-reviewer" not in text
         assert "history-insights-reviewer" not in text
@@ -450,7 +450,7 @@ class TestStep5AdditionalInstructions:
             "completed_steps": [1, 2, 3],
             "dispatch_plan_summary": {"dispatched": 2, "skipped": 1, "conditional": 0},
             "dispatch_plan_agents": [
-                {"name": "pr-reviewer", "focus": "PR goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
+                {"name": "code-reviewer", "focus": "PR goal alignment", "status": "DISPATCH", "reason": "always dispatch (domain has files)"},
                 {"name": "security-reviewer", "focus": "XSS, SQL injection", "status": "SKIPPED", "reason": "no files in security domain"},
             ],
         }
@@ -481,7 +481,7 @@ class TestStep6DispatchAgents:
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3, 5],
             "dispatched_agents": [
-                {"name": "pr-reviewer", "domain": "code"},
+                {"name": "code-reviewer", "domain": "code"},
                 {"name": "security-reviewer", "domain": "security"},
             ],
         }
@@ -506,7 +506,7 @@ class TestStep6DispatchAgents:
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(6, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "pr-reviewer" in text
+        assert "code-reviewer" in text
         assert "security-reviewer" in text
         assert "abc..HEAD" in text  # concrete range, not template
 
@@ -534,7 +534,7 @@ class TestStep6DispatchAgents:
         # Write a dispatch plan with overrides applied
         plan = {
             "agents": [
-                {"name": "pr-reviewer", "status": "DISPATCH", "reason": "always"},
+                {"name": "code-reviewer", "status": "DISPATCH", "reason": "always"},
                 {"name": "security-reviewer", "status": "DISPATCH", "reason": "keywords"},
                 {"name": "concurrency-reviewer", "status": "SKIPPED_OVERRIDE", "reason": "conditional", "override_reason": "test"},
                 {"name": "a11y-reviewer", "status": "SKIPPED", "reason": "no files"},
@@ -555,7 +555,7 @@ class TestStep6DispatchAgents:
 
         # Summary should reflect post-override counts
         summary = state["dispatch_plan_summary"]
-        assert summary["dispatched"] == 2  # pr-reviewer + security-reviewer
+        assert summary["dispatched"] == 2  # code-reviewer + security-reviewer
         assert summary["skipped"] == 2  # SKIPPED + SKIPPED_OVERRIDE
 
 
@@ -612,8 +612,8 @@ class TestStep8Reconcile:
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
             "agents": {
-                "dispatched": ["pr-reviewer", "security-reviewer", "performance-reviewer"],
-                "completed": ["pr-reviewer", "security-reviewer"],
+                "dispatched": ["code-reviewer", "security-reviewer", "performance-reviewer"],
+                "completed": ["code-reviewer", "security-reviewer"],
                 "failed": [],
             },
             "change_purpose": "Adds retry logic to the payment gateway." if change_purpose_exists else None,
@@ -633,7 +633,7 @@ class TestStep8Reconcile:
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["situation"])
-        assert "pr-reviewer" in text
+        assert "code-reviewer" in text
         assert "security-reviewer" in text
 
     def test_includes_reconciliation_context_path(self, mod, tmp_path):
@@ -673,7 +673,7 @@ class TestStep8Reconcile:
         """Step 8 should reference pre-gathered reconciliation-context.md instead of individual review files."""
         state = self._make_state_with_agents(change_purpose_exists=True)
         state["agents"]["review_files"] = [
-            "/tmp/out/pr-review.json",
+            "/tmp/out/code-review.json",
             "/tmp/out/security-review.json",
         ]
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
@@ -681,7 +681,7 @@ class TestStep8Reconcile:
         text = "\n".join(g["actions"])
         assert "reconciliation-context.md" in text
         # Individual review files are no longer listed — they're inside the context file
-        assert "pr-review.json" not in text
+        assert "code-review.json" not in text
 
 
 class TestStep8AdditionalInstructions:
@@ -692,8 +692,8 @@ class TestStep8AdditionalInstructions:
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
             "agents": {
-                "dispatched": ["pr-reviewer", "security-reviewer"],
-                "completed": ["pr-reviewer", "security-reviewer"],
+                "dispatched": ["code-reviewer", "security-reviewer"],
+                "completed": ["code-reviewer", "security-reviewer"],
                 "failed": [],
             },
         }
@@ -730,8 +730,8 @@ class TestStep8ReadinessGate:
                 "not_dispatched": [],
             },
             "agents": {
-                "dispatched": ["pr-reviewer", "security-reviewer", "performance-reviewer"],
-                "completed": ["pr-reviewer"],
+                "dispatched": ["code-reviewer", "security-reviewer", "performance-reviewer"],
+                "completed": ["code-reviewer"],
                 "failed": [],
             },
         }
@@ -767,8 +767,8 @@ class TestStep8ReadinessGate:
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
             "agents": {
-                "dispatched": ["pr-reviewer"],
-                "completed": ["pr-reviewer"],
+                "dispatched": ["code-reviewer"],
+                "completed": ["code-reviewer"],
                 "failed": [],
             },
             "change_purpose": "Test change.",
@@ -813,8 +813,8 @@ class TestStep8ReadinessGate:
                 "agent_timeout_seconds": 1200,
             },
             "agents": {
-                "dispatched": ["pr-reviewer", "security-reviewer"],
-                "completed": ["pr-reviewer"],
+                "dispatched": ["code-reviewer", "security-reviewer"],
+                "completed": ["code-reviewer"],
                 "failed": [],
             },
         }
@@ -863,8 +863,8 @@ class TestStep8ReadinessGate:
                 "not_dispatched": ["dead-code-reviewer"],
             },
             "agents": {
-                "dispatched": ["pr-reviewer"],
-                "completed": ["pr-reviewer"],
+                "dispatched": ["code-reviewer"],
+                "completed": ["code-reviewer"],
                 "failed": [],
             },
             "change_purpose": "Test change.",

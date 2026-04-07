@@ -258,7 +258,7 @@ class TestSnapshot:
         log_dir = tmp_path / "logs"
         dispatch = {
             "agents": [
-                {"name": "pr-reviewer", "status": "DISPATCH", "domain": "code", "reason": "always"},
+                {"name": "code-reviewer", "status": "DISPATCH", "domain": "code", "reason": "always"},
                 {"name": "security-reviewer", "status": "DISPATCH", "domain": "security", "reason": "triage match"},
                 {"name": "performance-reviewer", "status": "SKIPPED_TRIAGE", "domain": "performance", "reason": "no perf files"},
             ]
@@ -272,7 +272,7 @@ class TestSnapshot:
         assert d["total_agents"] == 3
         assert "DISPATCH" in d["by_status"]
         assert len(d["by_status"]["DISPATCH"]) == 2
-        assert d["agents"]["pr-reviewer"]["status"] == "DISPATCH"
+        assert d["agents"]["code-reviewer"]["status"] == "DISPATCH"
 
     def test_extracts_agent_results(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs"
@@ -556,7 +556,7 @@ class TestSummaryOverrideCounting:
     def test_dispatch_override_counted_as_dispatched(self, mod, output_dir, tmp_path):
         plan = {
             "agents": [
-                {"name": "pr-reviewer", "status": "DISPATCH"},
+                {"name": "code-reviewer", "status": "DISPATCH"},
                 {"name": "perf-reviewer", "status": "DISPATCH_OVERRIDE"},
                 {"name": "a11y-reviewer", "status": "SKIPPED"},
                 {"name": "concurrency-reviewer", "status": "SKIPPED_OVERRIDE"},

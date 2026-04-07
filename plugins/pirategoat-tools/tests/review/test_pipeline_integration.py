@@ -233,7 +233,7 @@ class TestStep6Orchestration:
                    "--output-dir", str(tmp_path))
         plan = {
             "agents": [
-                {"name": "pr-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
+                {"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
                 {"name": "security-reviewer", "domain": "security", "status": "DISPATCH", "reason": "always"},
                 {"name": "go-tests-reviewer", "domain": "go-tests", "status": "SKIPPED", "reason": "no files"},
             ],
@@ -247,7 +247,7 @@ class TestStep6Orchestration:
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         names = [a["name"] for a in state.get("dispatched_agents", [])]
-        assert "pr-reviewer" in names
+        assert "code-reviewer" in names
         assert "security-reviewer" in names
         assert "go-tests-reviewer" not in names
 
@@ -257,7 +257,7 @@ class TestStep6Orchestration:
                    "--output-dir", str(tmp_path))
         plan = {
             "agents": [
-                {"name": "pr-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
+                {"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
             ],
             "git_range": "abc..HEAD",
         }
@@ -267,7 +267,7 @@ class TestStep6Orchestration:
         r = self._run("--step", "6", "--mode", "full",
                        "--output-dir", str(tmp_path))
         assert "bootstrap.py" in r.stdout
-        assert "pr-reviewer" in r.stdout
+        assert "code-reviewer" in r.stdout
         assert "abc..HEAD" in r.stdout
 
 
@@ -337,14 +337,14 @@ class TestStep8Orchestration:
                    "--output-dir", str(tmp_path))
         plan = {
             "agents": [
-                {"name": "pr-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
+                {"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"},
                 {"name": "security-reviewer", "domain": "security", "status": "DISPATCH", "reason": "always"},
             ],
             "git_range": "abc..HEAD",
         }
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
-        # Simulate pr-reviewer finished, security-reviewer not
-        (tmp_path / "pr-review.json").write_text('{"verdict": "approve", "issues": []}')
+        # Simulate code-reviewer finished, security-reviewer not
+        (tmp_path / "code-review.json").write_text('{"verdict": "approve", "issues": []}')
         ctx = {"git": {"git_range": "abc..HEAD"}}
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         r = self._run("--step", "8", "--mode", "full",
@@ -352,7 +352,7 @@ class TestStep8Orchestration:
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         review_files = state.get("agents", {}).get("review_files", [])
-        assert any("pr-review.json" in f for f in review_files)
+        assert any("code-review.json" in f for f in review_files)
 
 
 class TestStep11Orchestration:
@@ -452,8 +452,8 @@ class TestStep8AgentPrompt:
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 3, 5, 6, 7],
             "agents": {
-                "dispatched": ["pr-reviewer", "security-reviewer"],
-                "completed": ["pr-reviewer", "security-reviewer"],
+                "dispatched": ["code-reviewer", "security-reviewer"],
+                "completed": ["code-reviewer", "security-reviewer"],
                 "failed": [],
             },
             "change_purpose": "Adds retry logic.",
@@ -508,7 +508,7 @@ class TestFullSequenceIntegration:
         assert r.returncode == 0
 
         # Pre-write dispatch plan as if planner succeeded
-        plan = {"agents": [{"name": "pr-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"}], "git_range": "abc..HEAD"}
+        plan = {"agents": [{"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"}], "git_range": "abc..HEAD"}
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
 
         # Step 6: dispatch agents
@@ -618,7 +618,7 @@ class TestQuickModeDispatch:
             )
 
     def test_quick_mode_non_blocked_agents_triage_normally(self, registry):
-        """quick=True does not affect non-blocked agents — pr-reviewer still dispatches."""
+        """quick=True does not affect non-blocked agents — code-reviewer still dispatches."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -628,8 +628,8 @@ class TestQuickModeDispatch:
             quick=True,
         )
         dispatch_map = {d["name"]: d for d in plan["agents"]}
-        assert dispatch_map["pr-reviewer"]["status"] == "DISPATCH", (
-            "pr-reviewer should still DISPATCH in quick mode"
+        assert dispatch_map["code-reviewer"]["status"] == "DISPATCH", (
+            "code-reviewer should still DISPATCH in quick mode"
         )
 
     def test_quick_mode_honors_keyword_triage(self, registry):
