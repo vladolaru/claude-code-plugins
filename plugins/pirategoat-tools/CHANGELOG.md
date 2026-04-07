@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.98.0] - 2026-04-07
+
+### Changed
+- Renamed `pr-reviewer` agent to `code-reviewer` to reflect its role as the generalist code reviewer across all review modes (PR, full, incremental)
+- Renamed telemetry log directory from `~/.pirategoat-tools/logs/pr-reviews/` to `~/.pirategoat-tools/logs/reviews/` — move existing logs manually if needed
+
 ## [1.97.0] - 2026-04-06
 
 ### Added
