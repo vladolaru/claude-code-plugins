@@ -68,7 +68,7 @@ _TEST_EXCLUDE = r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.p
 
 DOMAIN_CATALOG = {
     "code": {
-        "description": "All code files (pr-reviewer)",
+        "description": "All code files (code-reviewer)",
         "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
         "exclude": None,
     },

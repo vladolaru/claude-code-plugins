@@ -31,7 +31,7 @@ def _reviewer_filename(agent_name: str) -> str:
 
     Matches bootstrap.py's derive_reviewer_name():
     'security-reviewer' -> 'security-review.json'
-    'pr-reviewer' -> 'pr-review.json'
+    'code-reviewer' -> 'code-review.json'
     """
     if agent_name.endswith("-reviewer"):
         base = agent_name[: -len("-reviewer")]

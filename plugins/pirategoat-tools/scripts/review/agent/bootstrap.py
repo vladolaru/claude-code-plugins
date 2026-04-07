@@ -219,7 +219,7 @@ def derive_reviewer_name(agent_name: str) -> str:
     """Derive the reviewer output name from agent name.
 
     Removes '-reviewer' suffix for output file naming.
-    e.g. 'security-reviewer' -> 'security', 'pr-reviewer' -> 'pr'
+    e.g. 'security-reviewer' -> 'security', 'code-reviewer' -> 'code'
     """
     if agent_name.endswith("-reviewer"):
         return agent_name[: -len("-reviewer")]

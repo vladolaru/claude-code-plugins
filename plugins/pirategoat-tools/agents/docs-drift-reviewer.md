@@ -235,4 +235,4 @@ Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/docs-drift-r
 - README mentions a function that was renamed → your finding; dead-code-reviewer handles the code side
 - Doc quality issues unrelated to this change → nobody's finding in this review
 
-**Handoff signal:** If your analysis reveals a code issue (e.g., a function was renamed but callers weren't updated), note it as an observation with `[dead-code-reviewer]` or `[pr-reviewer]` tag.
+**Handoff signal:** If your analysis reveals a code issue (e.g., a function was renamed but callers weren't updated), note it as an observation with `[dead-code-reviewer]` or `[code-reviewer]` tag.

@@ -234,7 +234,7 @@ def infer_agent_type(prompt: str) -> str:
     patterns = {
         "security-reviewer": ["security review", "security issues"],
         "patterns-reviewer": ["pattern consistency", "codebase consistency"],
-        "pr-reviewer": ["code quality", "general review"],
+        "code-reviewer": ["code quality", "general review"],
         "Explore": ["explore", "find files", "search code"],
         "Plan": ["plan", "design", "architect"],
     }

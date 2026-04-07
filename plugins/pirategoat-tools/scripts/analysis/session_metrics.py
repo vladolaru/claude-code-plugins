@@ -17,7 +17,7 @@ Usage:
     python3 extract-session-metrics.py --sessions-dir ~/.claude/projects/-Users-foo-myproject/
 
     # Filter to specific agent types
-    python3 extract-session-metrics.py --agents security-reviewer,pr-reviewer
+    python3 extract-session-metrics.py --agents security-reviewer,code-reviewer
 
     # Output as JSON only
     python3 extract-session-metrics.py --format json
@@ -51,7 +51,7 @@ KNOWN_REVIEWER_AGENTS = [
     "history-insights-reviewer",
     "dead-code-reviewer",
     "performance-reviewer",
-    "pr-reviewer",
+    "code-reviewer",
     "js-tests-reviewer",
     "php-tests-reviewer",
     "e2e-tests-reviewer",
@@ -1105,7 +1105,7 @@ def main():
     parser.add_argument(
         "--agents",
         help="Comma-separated list of agent types to include "
-        "(e.g. security-reviewer,pr-reviewer)",
+        "(e.g. security-reviewer,code-reviewer)",
     )
     parser.add_argument(
         "--all",
