@@ -71,7 +71,7 @@
       ],
       "agents": [
         "./agents/technical-writer.md",
-        "./agents/pr-reviewer.md",
+        "./agents/code-reviewer.md",
         "./agents/security-reviewer.md",
         "./agents/performance-reviewer.md",
         "./agents/architecture-reviewer.md",

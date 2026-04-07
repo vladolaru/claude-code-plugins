@@ -1,14 +1,14 @@
 {
   "$schema": "Agent registry \u2014 single source of truth for all reviewer agent configuration.",
   "agents": {
-    "pr-reviewer": {
+    "code-reviewer": {
       "domain": "code",
       "protocols": [
         "reviewer"
       ],
       "scope_flags": [],
       "dispatch_class": "always",
-      "focus": "PR overall goal alignment, cross-domain bugs and regressions, overall code quality",
+      "focus": "Overall goal alignment, cross-domain bugs and regressions, overall code quality",
       "model_tier": "opus"
     },
     "security-reviewer": {
