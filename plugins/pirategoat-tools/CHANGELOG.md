@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed `pr-reviewer` agent to `code-reviewer` to reflect its role as the generalist code reviewer across all review modes (PR, full, incremental)
 - Renamed telemetry log directory from `~/.pirategoat-tools/logs/pr-reviews/` to `~/.pirategoat-tools/logs/reviews/` — move existing logs manually if needed
 
+### Fixed
+- Telemetry logs from test runs no longer pollute `~/.pirategoat-tools/logs/reviews/` — added session-scoped `PIRATEGOAT_TELEMETRY_LOG_DIR` isolation in conftest
+
 ## [1.97.0] - 2026-04-06
 
 ### Added

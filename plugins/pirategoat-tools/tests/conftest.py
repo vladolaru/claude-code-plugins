@@ -24,6 +24,15 @@ PIPELINE_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "rev
 PIPELINE_TOTAL_STEPS = 12
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_telemetry_logs(tmp_path_factory):
+    """Redirect telemetry logs to a temp dir so tests never pollute ~/.pirategoat-tools/logs/."""
+    log_dir = str(tmp_path_factory.mktemp("telemetry-logs"))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PIRATEGOAT_TELEMETRY_LOG_DIR", log_dir)
+        yield
+
+
 def _load_pipeline_module():
     spec = importlib.util.spec_from_file_location("review_pipeline", PIPELINE_SCRIPT_PATH)
     mod = importlib.util.module_from_spec(spec)
