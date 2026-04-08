@@ -9,8 +9,10 @@ Best-effort: failures never break the pipeline.
 Zero external dependencies (stdlib only).
 """
 
+import glob as glob_mod
 import json
 import os
+import re
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -47,16 +49,25 @@ class ReviewTelemetry:
         return self._log_path
 
     def start(self, pr_number: str = "", total_steps: int = 15,
-              bot_mode: bool = False, quick_mode: bool = False) -> str:
-        """Create log file + marker. Write pipeline_start. Return log path."""
+              bot_mode: bool = False, quick_mode: bool = False,
+              mode: str = "", repo_path: str = "",
+              identifier: str = "") -> str:
+        """Create log file + marker. Write pipeline_start. Return log path.
+
+        Args:
+            mode: Review mode (``pr``, ``full``, ``incremental``).
+            repo_path: Absolute path to the repo being reviewed.
+            identifier: PR number or branch name.
+        """
         os.makedirs(self.log_dir, exist_ok=True)
 
         self._quick_mode = quick_mode
 
         now = datetime.now(timezone.utc)
-        basename = self._derive_log_basename()
         timestamp = now.strftime("%Y%m%dT%H%M%S")
-        filename = f"{basename}--{timestamp}.jsonl"
+        prefix = self._build_filename_prefix(mode, repo_path, identifier)
+        run_num = self._next_run_number(prefix)
+        filename = f"{prefix}-run{run_num}--{timestamp}.jsonl"
         self._log_path = os.path.join(self.log_dir, filename)
 
         # Write marker so subsequent invocations can find the log
@@ -196,31 +207,47 @@ class ReviewTelemetry:
 
     # ── Private helpers ──────────────────────────────────────────────
 
-    # Generic basenames that don't identify a review run on their own.
-    # When the output_dir ends with one of these, include parent path
-    # components so the telemetry filename stays descriptive.
-    _GENERIC_BASENAMES = frozenset({"first", "second", "third", "latest", "run"})
+    # Characters unsafe for filenames — replaced with ``-``.
+    _UNSAFE_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
-    def _derive_log_basename(self) -> str:
-        """Derive a descriptive basename for the telemetry log file.
+    @classmethod
+    def path_to_slug(cls, path: str) -> str:
+        """Convert an absolute path to a filename-safe slug.
 
-        For flat output dirs (e.g. ``branch-review-…``), the directory
-        name already encodes repo + branch info → use it directly.
+        Strips the leading separator then replaces every run of
+        non-alphanumeric characters (except ``.``, ``_``, ``-``) with a
+        single ``-``.  Trailing ``-`` is stripped.
 
-        For nested bot-mode dirs like
-        ``…/pr-reviews/<repo-slug>/<pr>/<run>``, the final component
-        alone (``first``) is meaningless.  Walk up until we have enough
-        context, joining components with ``-``.
+        Example::
+
+            /Users/vladolaru/Work/a8c/woocommerce-payments
+            → Users-vladolaru-Work-a8c-woocommerce-payments
         """
-        parts = os.path.normpath(self.output_dir).rstrip(os.sep).split(os.sep)
-        basename = parts[-1] if parts else "review"
+        normalized = os.path.normpath(path).lstrip(os.sep)
+        return cls._UNSAFE_RE.sub("-", normalized).strip("-")
 
-        if basename in self._GENERIC_BASENAMES and len(parts) >= 4:
-            # Take last 4 components: review-type / repo-slug / pr-number / run-name
-            # e.g. pr-reviews/work-a8c-…-woocommerce/64051/first
-            basename = "-".join(parts[-4:])
+    def _build_filename_prefix(self, mode: str, repo_path: str,
+                               identifier: str) -> str:
+        """Build the structured prefix for a telemetry log filename.
 
-        return basename
+        Format: ``<mode>-<repo_slug>-<identifier>``
+
+        Falls back to ``output_dir`` basename when structured parts are
+        missing (backward compat with callers that don't pass them).
+        """
+        if mode and repo_path:
+            repo_slug = self.path_to_slug(repo_path)
+            id_slug = self._UNSAFE_RE.sub("-", identifier).strip("-") if identifier else "branch"
+            return f"{mode}-{repo_slug}-{id_slug}"
+
+        # Fallback: use output_dir basename (legacy callers)
+        return os.path.basename(os.path.normpath(self.output_dir)) or "review"
+
+    def _next_run_number(self, prefix: str) -> int:
+        """Count existing log files with the same prefix and return the next run number."""
+        pattern = os.path.join(self.log_dir, f"{prefix}-run*--*.jsonl")
+        existing = glob_mod.glob(pattern)
+        return len(existing) + 1
 
     def _append(self, event: dict) -> None:
         """Append a JSON line to the log file."""

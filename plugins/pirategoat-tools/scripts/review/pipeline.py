@@ -1934,8 +1934,21 @@ def main():
                 pr_number = config.get("pr_number", "")
                 bot_mode = not config.get("interactive", True)
                 quick_mode = config.get("quick", False)
+                repo_path = os.getcwd()
+                # Identifier: PR number for pr mode, branch name otherwise
+                identifier = pr_number
+                if not identifier:
+                    try:
+                        identifier = subprocess.check_output(
+                            ["git", "branch", "--show-current"],
+                            text=True, timeout=5
+                        ).strip()
+                    except Exception:
+                        identifier = ""
                 telemetry.start(pr_number=pr_number, total_steps=12,
-                                bot_mode=bot_mode, quick_mode=quick_mode)
+                                bot_mode=bot_mode, quick_mode=quick_mode,
+                                mode=mode, repo_path=repo_path,
+                                identifier=identifier)
             except Exception:
                 pass
 

@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.98.1] - 2026-04-08
 
-### Fixed
-- Telemetry log filenames for bot-mode reviews now include repo slug and PR number instead of just the generic run name (e.g., `work-a8c-…-woocommerce-64051-first--<ts>.jsonl` instead of `first--<ts>.jsonl`)
+### Changed
+- Telemetry log filenames now use a structured format: `<mode>-<repo_slug>-<identifier>-run<N>--<timestamp>.jsonl` (e.g., `pr-Users-vladolaru-Work-a8c-woocommerce-payments-64051-run1--20260408T075342.jsonl`). Replaces the old approach of deriving names from the output directory basename, which produced non-descriptive filenames like `first--<ts>.jsonl` for bot-mode reviews.
+- `ReviewTelemetry.start()` accepts new `mode`, `repo_path`, and `identifier` parameters. Falls back to output dir basename for legacy callers.
+- Added `ReviewTelemetry.path_to_slug()` classmethod for converting absolute paths to filename-safe slugs
 
 ## [1.98.0] - 2026-04-07
 

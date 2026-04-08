@@ -100,53 +100,101 @@ class TestStart:
         assert marker.read_text().strip() == path
 
 
-# ── _derive_log_basename() ─────────────────────────────────────────
+# ── path_to_slug() ─────────────────────────────────────────────────
 
 
-class TestDeriveLogBasename:
-    """Telemetry log filenames should be descriptive for both flat and nested output dirs."""
+class TestPathToSlug:
+    """path_to_slug converts absolute paths to filename-safe slugs."""
 
-    def test_flat_output_dir_uses_basename(self, mod, tmp_path):
-        """Flat dirs like branch-review-… already encode context."""
-        out = tmp_path / "branch-review-Users-vladolaru-Work-a8c-woocommerce--feat-xyz"
+    def test_absolute_path(self, mod):
+        assert mod.ReviewTelemetry.path_to_slug("/Users/vladolaru/Work/a8c/woocommerce-payments") == \
+            "Users-vladolaru-Work-a8c-woocommerce-payments"
+
+    def test_strips_leading_separator(self, mod):
+        slug = mod.ReviewTelemetry.path_to_slug("/foo/bar")
+        assert not slug.startswith("-")
+
+    def test_preserves_dots_and_underscores(self, mod):
+        assert mod.ReviewTelemetry.path_to_slug("/my_project/.duplicates/repo") == \
+            "my_project-.duplicates-repo"
+
+    def test_collapses_consecutive_separators(self, mod):
+        slug = mod.ReviewTelemetry.path_to_slug("/a///b//c")
+        assert "--" not in slug
+
+
+# ── Structured filename ────────────────────────────────────────────
+
+
+class TestStructuredFilename:
+    """Telemetry log filenames use structured <mode>-<repo_slug>-<identifier>-run<N> format."""
+
+    def test_pr_mode_filename(self, mod, tmp_path):
+        """PR reviews use mode-repo_slug-pr_number-runN."""
+        out = tmp_path / "output"
         out.mkdir()
-        t = mod.ReviewTelemetry(str(out))
-        assert t._derive_log_basename() == "branch-review-Users-vladolaru-Work-a8c-woocommerce--feat-xyz"
-
-    @pytest.mark.parametrize("generic_name", ["first", "second", "third", "latest", "run"])
-    def test_generic_basename_includes_parent_components(self, mod, tmp_path, generic_name):
-        """Nested bot-mode dirs expand generic basenames with 4 parent components."""
-        out = tmp_path / "pr-reviews" / "repo-slug" / "42" / generic_name
-        out.mkdir(parents=True)
-        t = mod.ReviewTelemetry(str(out))
-        assert t._derive_log_basename() == f"pr-reviews-repo-slug-42-{generic_name}"
-
-    def test_trailing_slash_handled(self, mod, tmp_path):
-        out = tmp_path / "pr-reviews" / "repo-slug" / "99" / "first"
-        out.mkdir(parents=True)
-        t = mod.ReviewTelemetry(str(out) + "/")
-        assert t._derive_log_basename() == "pr-reviews-repo-slug-99-first"
-
-    def test_shallow_path_falls_back_to_3_components(self, mod, tmp_path):
-        """When only 3 components available, use all 3."""
-        out = tmp_path / "repo-slug" / "42" / "first"
-        out.mkdir(parents=True)
-        t = mod.ReviewTelemetry(str(out))
-        # Only 3 non-tmp components in the meaningful part, but the full
-        # path has enough parts — takes last 4 from absolute path
-        basename = t._derive_log_basename()
-        assert basename.endswith("repo-slug-42-first")
-        assert "first" != basename  # Not just the generic name
-
-    def test_generic_basename_in_log_filename(self, mod, tmp_path):
-        """End-to-end: start() produces a descriptive filename for nested dirs."""
-        out = tmp_path / "pr-reviews" / "my-repo" / "123" / "first"
-        out.mkdir(parents=True)
         t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
-        path = t.start(pr_number="123")
+        path = t.start(pr_number="42", mode="pr",
+                       repo_path="/Users/vlad/Work/a8c/woocommerce-payments",
+                       identifier="42")
         filename = os.path.basename(path)
-        assert filename.startswith("pr-reviews-my-repo-123-first--")
+        assert filename.startswith("pr-Users-vlad-Work-a8c-woocommerce-payments-42-run1--")
         assert filename.endswith(".jsonl")
+
+    def test_full_mode_with_branch(self, mod, tmp_path):
+        """Full reviews use mode-repo_slug-branch_slug-runN."""
+        out = tmp_path / "output"
+        out.mkdir()
+        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
+        path = t.start(mode="full",
+                       repo_path="/Users/vlad/Work/a8c/ciab-admin",
+                       identifier="fix/WOOPLUG-123-some-bug")
+        filename = os.path.basename(path)
+        assert filename.startswith("full-Users-vlad-Work-a8c-ciab-admin-fix-WOOPLUG-123-some-bug-run1--")
+
+    def test_incremental_mode(self, mod, tmp_path):
+        out = tmp_path / "output"
+        out.mkdir()
+        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
+        path = t.start(mode="incremental",
+                       repo_path="/Users/vlad/Work/a8c/ciab-admin",
+                       identifier="feat/add-settings")
+        filename = os.path.basename(path)
+        assert filename.startswith("incremental-Users-vlad-Work-a8c-ciab-admin-feat-add-settings-run1--")
+
+    def test_run_number_increments(self, mod, tmp_path):
+        """Subsequent runs of the same review get incrementing run numbers."""
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        out1 = tmp_path / "output1"
+        out1.mkdir()
+        t1 = mod.ReviewTelemetry(str(out1), log_dir=str(log_dir))
+        path1 = t1.start(mode="pr", repo_path="/repo", identifier="99")
+        assert "-run1--" in os.path.basename(path1)
+
+        out2 = tmp_path / "output2"
+        out2.mkdir()
+        t2 = mod.ReviewTelemetry(str(out2), log_dir=str(log_dir))
+        path2 = t2.start(mode="pr", repo_path="/repo", identifier="99")
+        assert "-run2--" in os.path.basename(path2)
+
+    def test_missing_identifier_falls_back_to_branch(self, mod, tmp_path):
+        out = tmp_path / "output"
+        out.mkdir()
+        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
+        path = t.start(mode="full", repo_path="/repo", identifier="")
+        filename = os.path.basename(path)
+        assert filename.startswith("full-repo-branch-run1--")
+
+    def test_fallback_without_structured_params(self, mod, tmp_path):
+        """Legacy callers that don't pass mode/repo_path get output_dir basename."""
+        out = tmp_path / "branch-review-some-repo"
+        out.mkdir()
+        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
+        path = t.start(pr_number="42")
+        filename = os.path.basename(path)
+        assert filename.startswith("branch-review-some-repo-run1--")
 
 
 # ── log_step() ──────────────────────────────────────────────────────
@@ -456,7 +504,7 @@ class TestReReviews:
             t2 = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
             t2.start(pr_number="42")
 
-        pattern = str(log_dir / "pr-review-org-repo-42--*.jsonl")
+        pattern = str(log_dir / "pr-review-org-repo-42-run*--*.jsonl")
         matches = glob.glob(pattern)
         assert len(matches) == 2
 
