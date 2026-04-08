@@ -1934,7 +1934,13 @@ def main():
                 pr_number = config.get("pr_number", "")
                 bot_mode = not config.get("interactive", True)
                 quick_mode = config.get("quick", False)
-                repo_path = os.getcwd()
+                try:
+                    repo_path = subprocess.check_output(
+                        ["git", "rev-parse", "--show-toplevel"],
+                        text=True, timeout=5
+                    ).strip()
+                except Exception:
+                    repo_path = os.getcwd()
                 # Identifier: PR number for pr mode, branch name otherwise
                 identifier = pr_number
                 if not identifier:
