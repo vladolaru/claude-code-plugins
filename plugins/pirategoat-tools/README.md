@@ -37,6 +37,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **code-clarity-reviewer** | Naming accuracy, documentation correctness, name-behavior mismatches, stale docblocks | sonnet |
 | **docs-drift-reviewer** | Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs after code changes | sonnet |
 | **toolchain-reviewer** | Package manager configs, build tools, linting configs, version constraints, CI pipelines, supply chain settings | sonnet |
+| **reference-integrity-reviewer** | Reference resolution — verifies plugin slugs, asset paths, URLs, and config references point to real targets | sonnet |
 
 #### 2 Pipeline Agents
 
@@ -153,7 +154,7 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 
 ```
 pirategoat-tools/
-├── agents/           # 28 agent definitions (23 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
+├── agents/           # 29 agent definitions (24 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
 ├── commands/         # 7 slash commands
 ├── skills/           # 21 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library

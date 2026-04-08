@@ -25,7 +25,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 | Plugin | What it does |
 |--------|-------------|
-| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 28 agents (23 domain reviewers + pipeline/cross-validation/utility), 21 skills, rich feedback loops |
+| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 29 agents (24 domain reviewers + pipeline/cross-validation/utility), 21 skills, rich feedback loops |
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
@@ -34,7 +34,7 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 
 ### pirategoat-tools
 
-The main plugin. 28 agents — 23 domain reviewers running in parallel, 2 pipeline agents (reconciliation + decision critic), 2 cross-validators (Gemini + Codex), 1 utility (technical writer). Plus 21 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, Figma-to-code workflows, and browser automation.
+The main plugin. 29 agents — 24 domain reviewers running in parallel, 2 pipeline agents (reconciliation + decision critic), 2 cross-validators (Gemini + Codex), 1 utility (technical writer). Plus 21 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, Figma-to-code workflows, and browser automation.
 
 **[Full documentation →](plugins/pirategoat-tools/README.md)** | [Changelog](plugins/pirategoat-tools/CHANGELOG.md)
 
@@ -75,7 +75,7 @@ vladolaru-claude-code-plugins/
 ├── .claude-plugin/
 │   └── marketplace.json          # Plugin registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 28 agents, 21 skills, 7 commands
+│   ├── pirategoat-tools/         # 29 agents, 21 skills, 7 commands
 │   ├── dex/                      # 7 commands, 1 skill, tests
 │   ├── prompt-engineer/          # 1 command, 1 skill, reference library
 │   ├── image-optimizer/          # 1 command, optimization scripts

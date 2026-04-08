@@ -595,6 +595,46 @@
       ],
       "focus": "Package manager configs, build tools, linting configs, version constraints, CI pipelines, supply chain settings — proactively searches changelogs for deprecations and behavior changes",
       "model_tier": "sonnet"
+    },
+    "reference-integrity-reviewer": {
+      "domain": "reference-integrity",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "triage_criteria": [
+        "Plugin or package registry declarations (slug, name, type mappings)",
+        "Asset path constructions (plugins_url, wp_enqueue_script/style, icon paths, image references)",
+        "URL literals in configuration arrays or constants (docs links, API endpoints, CDN references)",
+        "External constant or class references in data/config arrays",
+        "New dependency declarations (composer.json require, package.json dependencies)",
+        "Hook or filter names referencing external plugins",
+        "Enum values mapping to external standards (country codes, currency codes, status codes)"
+      ],
+      "triage_keywords": [
+        "plugin",
+        "slug",
+        "extension",
+        "registry",
+        "wporg",
+        "plugins_url",
+        "enqueue",
+        "asset",
+        "icon",
+        "cdn",
+        "endpoint",
+        "package",
+        "dependency",
+        "require",
+        "composer",
+        "payment",
+        "gateway",
+        "provider",
+        "suggestion"
+      ],
+      "focus": "Reference resolution — verifies plugin slugs exist on declared registries, asset files exist at declared paths, URLs resolve, and config references point to real targets",
+      "model_tier": "sonnet"
     }
   }
 }

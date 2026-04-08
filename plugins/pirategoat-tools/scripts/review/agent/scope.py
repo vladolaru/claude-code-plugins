@@ -197,6 +197,11 @@ DOMAIN_CATALOG = {
         "include": r"(\.github/workflows/|\.gitlab-ci|Dockerfile|docker-compose|\.tf$|\.tfvars$|\.toml$|Jenkinsfile|\.circleci/|Makefile$|\.helmfile|chart\.yaml$|values\.yaml$)",
         "exclude": None,
     },
+    "reference-integrity": {
+        "description": "Code and config files for reference integrity verification",
+        "include": r"\.(php|js|ts|jsx|tsx|py|java|rb|go|json|yaml|yml)$",
+        "exclude": _TEST_EXCLUDE,
+    },
 }
 
 # Noise patterns — files no reviewer should waste context on

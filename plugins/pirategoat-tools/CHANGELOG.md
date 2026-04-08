@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.99.0] - 2026-04-08
+
+### Added
+- **reference-integrity-reviewer** — new domain reviewer agent that verifies references in code actually resolve to existing targets. Checks plugin slugs against declared registries (WordPress.org, npm, etc.), verifies asset files exist at declared paths, validates URLs in configuration, and confirms constant/class references resolve. Uses a three-step resolution cascade: verify on declared target, search broadly if not found, advisory for unreachable private systems. Inspired by a CodeRabbit finding on woocommerce/woocommerce#64059 where a plugin slug was declared as `PLUGIN_TYPE_WPORG` but only existed on WooCommerce.com Marketplace.
+- New `reference-integrity` domain in scope.py — includes code + config files (JSON, YAML), excludes tests
+
 ## [1.98.1] - 2026-04-08
 
 ### Changed
