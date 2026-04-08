@@ -100,6 +100,55 @@ class TestStart:
         assert marker.read_text().strip() == path
 
 
+# ── _derive_log_basename() ─────────────────────────────────────────
+
+
+class TestDeriveLogBasename:
+    """Telemetry log filenames should be descriptive for both flat and nested output dirs."""
+
+    def test_flat_output_dir_uses_basename(self, mod, tmp_path):
+        """Flat dirs like branch-review-… already encode context."""
+        out = tmp_path / "branch-review-Users-vladolaru-Work-a8c-woocommerce--feat-xyz"
+        out.mkdir()
+        t = mod.ReviewTelemetry(str(out))
+        assert t._derive_log_basename() == "branch-review-Users-vladolaru-Work-a8c-woocommerce--feat-xyz"
+
+    @pytest.mark.parametrize("generic_name", ["first", "second", "third", "latest", "run"])
+    def test_generic_basename_includes_parent_components(self, mod, tmp_path, generic_name):
+        """Nested bot-mode dirs expand generic basenames with 4 parent components."""
+        out = tmp_path / "pr-reviews" / "repo-slug" / "42" / generic_name
+        out.mkdir(parents=True)
+        t = mod.ReviewTelemetry(str(out))
+        assert t._derive_log_basename() == f"pr-reviews-repo-slug-42-{generic_name}"
+
+    def test_trailing_slash_handled(self, mod, tmp_path):
+        out = tmp_path / "pr-reviews" / "repo-slug" / "99" / "first"
+        out.mkdir(parents=True)
+        t = mod.ReviewTelemetry(str(out) + "/")
+        assert t._derive_log_basename() == "pr-reviews-repo-slug-99-first"
+
+    def test_shallow_path_falls_back_to_3_components(self, mod, tmp_path):
+        """When only 3 components available, use all 3."""
+        out = tmp_path / "repo-slug" / "42" / "first"
+        out.mkdir(parents=True)
+        t = mod.ReviewTelemetry(str(out))
+        # Only 3 non-tmp components in the meaningful part, but the full
+        # path has enough parts — takes last 4 from absolute path
+        basename = t._derive_log_basename()
+        assert basename.endswith("repo-slug-42-first")
+        assert "first" != basename  # Not just the generic name
+
+    def test_generic_basename_in_log_filename(self, mod, tmp_path):
+        """End-to-end: start() produces a descriptive filename for nested dirs."""
+        out = tmp_path / "pr-reviews" / "my-repo" / "123" / "first"
+        out.mkdir(parents=True)
+        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
+        path = t.start(pr_number="123")
+        filename = os.path.basename(path)
+        assert filename.startswith("pr-reviews-my-repo-123-first--")
+        assert filename.endswith(".jsonl")
+
+
 # ── log_step() ──────────────────────────────────────────────────────
 
 

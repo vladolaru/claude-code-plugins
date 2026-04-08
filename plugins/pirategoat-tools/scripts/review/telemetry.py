@@ -54,7 +54,7 @@ class ReviewTelemetry:
         self._quick_mode = quick_mode
 
         now = datetime.now(timezone.utc)
-        basename = os.path.basename(self.output_dir.rstrip("/"))
+        basename = self._derive_log_basename()
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         filename = f"{basename}--{timestamp}.jsonl"
         self._log_path = os.path.join(self.log_dir, filename)
@@ -195,6 +195,32 @@ class ReviewTelemetry:
         self._append(event)
 
     # ── Private helpers ──────────────────────────────────────────────
+
+    # Generic basenames that don't identify a review run on their own.
+    # When the output_dir ends with one of these, include parent path
+    # components so the telemetry filename stays descriptive.
+    _GENERIC_BASENAMES = frozenset({"first", "second", "third", "latest", "run"})
+
+    def _derive_log_basename(self) -> str:
+        """Derive a descriptive basename for the telemetry log file.
+
+        For flat output dirs (e.g. ``branch-review-…``), the directory
+        name already encodes repo + branch info → use it directly.
+
+        For nested bot-mode dirs like
+        ``…/pr-reviews/<repo-slug>/<pr>/<run>``, the final component
+        alone (``first``) is meaningless.  Walk up until we have enough
+        context, joining components with ``-``.
+        """
+        parts = os.path.normpath(self.output_dir).rstrip(os.sep).split(os.sep)
+        basename = parts[-1] if parts else "review"
+
+        if basename in self._GENERIC_BASENAMES and len(parts) >= 4:
+            # Take last 4 components: review-type / repo-slug / pr-number / run-name
+            # e.g. pr-reviews/work-a8c-…-woocommerce/64051/first
+            basename = "-".join(parts[-4:])
+
+        return basename
 
     def _append(self, event: dict) -> None:
         """Append a JSON line to the log file."""
