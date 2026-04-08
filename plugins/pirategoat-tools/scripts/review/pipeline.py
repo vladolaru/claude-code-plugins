@@ -1937,17 +1937,17 @@ def main():
                 try:
                     repo_path = subprocess.check_output(
                         ["git", "rev-parse", "--show-toplevel"],
-                        text=True, timeout=5
+                        text=True, stderr=subprocess.DEVNULL, timeout=5
                     ).strip()
                 except Exception:
-                    repo_path = os.getcwd()
+                    repo_path = ""
                 # Identifier: PR number for pr mode, branch name otherwise
                 identifier = pr_number
                 if not identifier:
                     try:
                         identifier = subprocess.check_output(
                             ["git", "branch", "--show-current"],
-                            text=True, timeout=5
+                            text=True, stderr=subprocess.DEVNULL, timeout=5
                         ).strip()
                     except Exception:
                         identifier = ""
