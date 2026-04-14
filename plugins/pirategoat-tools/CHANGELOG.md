@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.100.1] - 2026-04-14
 
+### Changed
+- **devils-advocate-reviewer prompt optimized.** Unified Gate/Step numbering into consistent Step 1-5, restructured evidence constraint as affirmative RULE 0, fixed contradictory Step 2 language, normalized "no finding" exit as expected outcome, rebalanced confidence scoring (start at 80, floor 85), balanced stakes with false-positive cost, connected Step 1 to bootstrap output.
+- **simplification-reviewer prompt optimized.** Added RULE 0 (framework conventions are not over-engineering), balanced stakes with false-positive cost, connected Step 1 to bootstrap output, expanded complexity categories into scannable list, converted confidence modifiers to table with -15 penalties for framework-related reducers.
+
 ### Fixed
 - **Production `*Page.ts` files no longer get misrouted as E2E tests.** Tightened the `e2e-tests` scope heuristic so it only matches Playwright/E2E-owned paths instead of any filename ending in `Page.ts` or `PageObject.ts`. This fixes both over-dispatch to `e2e-tests-reviewer` and under-dispatch in conditional reviewers that rely on test-file detection.
 - **devils-advocate-reviewer triage now matches its registry criteria.** Large architecture-scope production changes dispatch again even without hard-coded keywords. The reviewer now uses structural triage for new abstraction-shaped files plus an explicit substantial-non-test-additions signal, instead of treating the keyword list as a strict gate.
