@@ -5,6 +5,15 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.100.0] - 2026-04-14
+
+### Added
+- **simplification-reviewer** — new always-on domain reviewer that catches unnecessary complexity: over-abstraction, premature generalization, defensive code for impossible cases, unnecessary indirection, and verbose logic. Every finding includes a concrete simpler alternative with line-count comparison.
+- **devils-advocate-reviewer** — new conditional domain reviewer (opus tier) that questions the fundamental approach of substantial PRs (50+ added lines). Three-gate methodology: identify approach, search for reframing, pass strict evidence test. 85+ confidence floor.
+- **Simplification bias principle** added to shared reviewer protocol — all agents now have permission to recommend simplification within their domain
+- New `simplification` domain in scope.py — all production code file types excluding tests
+- New `min_added_lines` registry field for dispatch gating — agents with this field set are skipped when PR additions fall below threshold
+
 ## [1.99.0] - 2026-04-08
 
 ### Added
