@@ -226,6 +226,16 @@
       "focus": "Codebase pattern consistency, reinvention prevention, consolidation opportunities — low value for isolated additions to well-established modules; high value when PR introduces new patterns or touches areas with existing conventions",
       "model_tier": "sonnet"
     },
+    "simplification-reviewer": {
+      "domain": "simplification",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "always",
+      "focus": "Over-abstraction, premature generalization, unnecessary indirection, defensive code for impossible cases, verbose logic — complexity disproportionate to problem size",
+      "model_tier": "sonnet"
+    },
     "history-insights-reviewer": {
       "domain": "code",
       "protocols": [
