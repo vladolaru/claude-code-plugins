@@ -5,6 +5,17 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.100.1] - 2026-04-14
+
+### Fixed
+- **Production `*Page.ts` files no longer get misrouted as E2E tests.** Tightened the `e2e-tests` scope heuristic so it only matches Playwright/E2E-owned paths instead of any filename ending in `Page.ts` or `PageObject.ts`. This fixes both over-dispatch to `e2e-tests-reviewer` and under-dispatch in conditional reviewers that rely on test-file detection.
+- **devils-advocate-reviewer triage now matches its registry criteria.** Large architecture-scope production changes dispatch again even without hard-coded keywords. The reviewer now uses structural triage for new abstraction-shaped files plus an explicit substantial-non-test-additions signal, instead of treating the keyword list as a strict gate.
+- **`min_added_lines` now counts in-scope production additions.** The 50-line gate for `devils-advocate-reviewer` now uses non-test additions in the reviewer’s own scope, preventing test-heavy or docs-heavy PRs from dispatching it based on unrelated diff volume.
+- **Renamed files now preserve per-file addition counts in triage.** `git diff --numstat` rename entries are normalized to the post-rename path before `file_stats` is recorded, so reviewer thresholds still see added lines on rename-heavy refactors.
+- **Quick mode now actually skips `simplification-reviewer`.** Quick reviews now exclude low-signal blocklisted agents even when they are `dispatch_class: "always"`, while still honoring stronger explicit triage signals for conditional agents.
+- **SQL migrations now reach architecture triage.** Expanded the `architecture` scope domain to include `.sql` files so database schema and migration changes can trigger architecture-oriented reviewers, including `devils-advocate-reviewer`.
+- **devils-advocate database/infrastructure signals strengthened.** Added `database`, `schema`, and `table` triage keywords to better catch infrastructure PRs whose intent is expressed in file paths, commit messages, or PR text.
+
 ## [1.100.0] - 2026-04-14
 
 ### Added

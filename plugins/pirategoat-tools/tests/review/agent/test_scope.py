@@ -288,6 +288,12 @@ class TestFilterDomain:
         assert "src/utils.spec.js" in matched
         assert "e2e/login.spec.ts" in excluded
 
+    def test_e2e_tests_domain_does_not_match_production_page_file(self):
+        files = ["src/HomePage.ts", "e2e/pages/HomePage.ts"]
+        matched, excluded = review_scope.filter_domain(files, "e2e-tests")
+        assert matched == ["e2e/pages/HomePage.ts"]
+        assert "src/HomePage.ts" in excluded
+
     def test_rust_tests_domain_matches_all_rs_files(self):
         """rust-tests domain includes all .rs files so inline #[cfg(test)] blocks are visible."""
         files = ["src/lib.rs", "tests/integration.rs", "benches/my_bench.rs"]

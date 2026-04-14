@@ -244,6 +244,10 @@
       "scope_flags": [],
       "dispatch_class": "conditional",
       "min_added_lines": 50,
+      "triage_checks": [
+        "new_abstraction_files",
+        "substantial_non_test_additions"
+      ],
       "triage_criteria": [
         "New classes, interfaces, or module-level abstractions introduced",
         "New infrastructure components (database tables, caches, queues, background jobs)",
@@ -261,6 +265,9 @@
         "retry",
         "fallback",
         "migration",
+        "database",
+        "schema",
+        "table",
         "queue",
         "background",
         "infrastructure",

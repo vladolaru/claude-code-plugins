@@ -178,6 +178,39 @@ _QUICK_MODE_EXCLUDED_AGENTS = frozenset([
     "devils-advocate-reviewer",
 ])
 
+_LOW_SIGNAL_DISPATCH_REASONS = frozenset([
+    "always dispatch (domain has files)",
+    "conditional (domain has files)",
+    "conditional (domain has files, no triage signal to skip)",
+    "default",
+])
+
+_ABSTRACTION_SUFFIXES = (
+    "service",
+    "manager",
+    "provider",
+    "factory",
+    "adapter",
+    "wrapper",
+    "bridge",
+    "client",
+    "repository",
+    "resolver",
+    "strategy",
+    "interface",
+    "contract",
+    "module",
+    "orchestrator",
+    "coordinator",
+    "registry",
+    "pipeline",
+    "driver",
+    "transport",
+    "connector",
+    "facade",
+    "gateway",
+)
+
 
 def is_test_file(filepath: str) -> bool:
     """Check if a file matches any test domain pattern."""
@@ -210,6 +243,17 @@ def get_commit_messages(git_range: str) -> str:
         return ""
 
 
+def _normalize_numstat_path(path: str) -> str:
+    """Normalize git numstat rename paths to the post-rename file path."""
+    if " => " not in path:
+        return path
+
+    normalized = re.sub(r"\{[^{}]* => ([^{}]*)\}", r"\1", path)
+    if " => " in normalized:
+        _, _, normalized = normalized.rpartition(" => ")
+    return normalized
+
+
 def get_diffstat(git_range: str) -> Dict:
     """Get diffstat summary from a git range.
 
@@ -218,10 +262,19 @@ def get_diffstat(git_range: str) -> Dict:
         removed: total lines removed
         deleted_files: list of deleted file paths
         renamed_files: list of renamed file paths
+        added_files: list of newly added file paths
+        file_stats: per-file added/removed counts
 
     Returns zeros/empty on failure (fault-tolerant).
     """
-    empty = {"added": 0, "removed": 0, "deleted_files": [], "renamed_files": []}
+    empty = {
+        "added": 0,
+        "removed": 0,
+        "deleted_files": [],
+        "renamed_files": [],
+        "added_files": [],
+        "file_stats": {},
+    }
 
     # Get numstat for add/remove counts
     try:
@@ -231,21 +284,40 @@ def get_diffstat(git_range: str) -> Dict:
         )
         added = 0
         removed = 0
+        file_stats = {}
         if result.returncode == 0 and result.stdout.strip():
             for line in result.stdout.strip().splitlines():
                 parts = line.split("\t")
-                if len(parts) >= 2:
+                if len(parts) >= 3:
+                    path = _normalize_numstat_path(parts[-1])
                     try:
-                        added += int(parts[0]) if parts[0] != "-" else 0
-                        removed += int(parts[1]) if parts[1] != "-" else 0
+                        added_count = int(parts[0]) if parts[0] != "-" else 0
+                        removed_count = int(parts[1]) if parts[1] != "-" else 0
+                        added += added_count
+                        removed += removed_count
+                        file_stats[path] = {
+                            "added": added_count,
+                            "removed": removed_count,
+                        }
                     except ValueError:
                         pass
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return empty
 
     # Get deleted/renamed files
+    added_files = []
     deleted_files = []
     renamed_files = []
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--diff-filter=A", "--name-only", git_range],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            added_files = result.stdout.strip().splitlines()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
     try:
         result = subprocess.run(
             ["git", "diff", "--diff-filter=D", "--name-only", git_range],
@@ -269,8 +341,10 @@ def get_diffstat(git_range: str) -> Dict:
     return {
         "added": added,
         "removed": removed,
+        "added_files": added_files,
         "deleted_files": deleted_files,
         "renamed_files": renamed_files,
+        "file_stats": file_stats,
     }
 
 
@@ -318,6 +392,50 @@ def _match_keywords_multi_source(
     return matches
 
 
+def _get_file_added_lines(diffstat: Dict, filepath: str) -> int:
+    """Return added lines for a specific file from diffstat."""
+    stats = diffstat.get("file_stats", {}).get(filepath)
+    if isinstance(stats, dict):
+        return int(stats.get("added", 0) or 0)
+    if isinstance(stats, (tuple, list)) and stats:
+        try:
+            return int(stats[0])
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def _count_in_scope_non_test_additions(domain_files: List[str], diffstat: Dict) -> int:
+    """Count added lines in non-test domain files only."""
+    non_test_files = [f for f in domain_files if not is_test_file(f)]
+    file_stats = diffstat.get("file_stats") or {}
+    if not non_test_files:
+        return 0
+    if not file_stats:
+        return diffstat.get("added", 0)
+    return sum(_get_file_added_lines(diffstat, filepath) for filepath in non_test_files)
+
+
+def _looks_like_abstraction_file(filepath: str) -> bool:
+    """Heuristic for class/module abstraction file names."""
+    stem = Path(filepath).stem.lower()
+    return any(stem.endswith(suffix) for suffix in _ABSTRACTION_SUFFIXES)
+
+
+def _get_new_abstraction_files(domain_files: List[str], diffstat: Dict) -> List[str]:
+    """Return newly added non-test files that look like abstractions."""
+    added_files = set(diffstat.get("added_files", []) or [])
+    if not added_files:
+        return []
+    return [
+        filepath
+        for filepath in domain_files
+        if filepath in added_files
+        and not is_test_file(filepath)
+        and _looks_like_abstraction_file(filepath)
+    ]
+
+
 def triage_conditional_agent(
     agent_name: str,
     config: dict,
@@ -332,7 +450,7 @@ def triage_conditional_agent(
     1. Test-only filter: if ALL domain files are test files → SKIPPED_TRIAGE
     2. Keyword match: if triage_keywords match any signal source → DISPATCH
        Signal sources (checked in order): commit messages, file paths, PR title/body
-    3. Agent-specific checks (dead-code: deletions, net removal) → DISPATCH
+    3. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
     4. Default: DISPATCH (conservative — when in doubt, dispatch)
 
     Args:
@@ -353,10 +471,12 @@ def triage_conditional_agent(
     if domain_files and all(is_test_file(f) for f in domain_files):
         return "SKIPPED_TRIAGE", "all matching files are test files"
 
-    # Gate: min_added_lines — skip if PR doesn't add enough code
+    in_scope_added = _count_in_scope_non_test_additions(domain_files, diffstat)
+
+    # Gate: min_added_lines — skip if PR doesn't add enough code in non-test scope
     min_lines = config.get("min_added_lines", 0)
-    if min_lines > 0 and diffstat.get("added", 0) < min_lines:
-        return "SKIPPED_TRIAGE", f"below minimum addition threshold ({diffstat.get('added', 0)} < {min_lines} lines)"
+    if min_lines > 0 and in_scope_added < min_lines:
+        return "SKIPPED_TRIAGE", f"below minimum addition threshold ({in_scope_added} < {min_lines} lines)"
 
     # Layer 2: Keyword match from triage_keywords against all signal sources
     keywords = config.get("triage_keywords", [])
@@ -381,7 +501,14 @@ def triage_conditional_agent(
     # Layer 3: Agent-specific checks
     triage_checks = config.get("triage_checks", [])
     for check in triage_checks:
-        if check == "file_deletions":
+        if check == "new_abstraction_files":
+            abstraction_files = _get_new_abstraction_files(domain_files, diffstat)
+            if abstraction_files:
+                return "DISPATCH", f"new abstraction file(s): {', '.join(abstraction_files[:3])}"
+        elif check == "substantial_non_test_additions":
+            if in_scope_added >= min_lines > 0:
+                return "DISPATCH", f"substantial non-test additions in scope ({in_scope_added} lines)"
+        elif check == "file_deletions":
             if diffstat.get("deleted_files") or diffstat.get("renamed_files"):
                 count = len(diffstat.get("deleted_files", [])) + len(diffstat.get("renamed_files", []))
                 return "DISPATCH", f"{count} file(s) deleted or renamed"
@@ -393,8 +520,8 @@ def triage_conditional_agent(
                 return "DISPATCH", f"large change ({len(domain_files)} files in domain)"
 
     # Layer 4: Default — DISPATCH when no triage signal skips the agent.
-    # If the agent has keywords but none matched AND no special checks triggered,
-    # it STILL dispatches by default. Keywords are an optimization, not a gate.
+    # Keywords and triage checks provide positive evidence, but conditional
+    # agents still dispatch conservatively when their domain has files.
     return "DISPATCH", "conditional (domain has files, no triage signal to skip)"
 
 
@@ -606,8 +733,7 @@ def build_dispatch_plan(
         # keyword-confirmed ones.
         if (quick and agent_name in _QUICK_MODE_EXCLUDED_AGENTS
                 and status == "DISPATCH"
-                and "keywords matched" not in reason
-                and reason.startswith("conditional")):
+                and reason in _LOW_SIGNAL_DISPATCH_REASONS):
             status = "SKIPPED_QUICK_MODE"
             reason = "excluded in quick review mode (no triage signal to override)"
 

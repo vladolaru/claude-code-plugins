@@ -65,6 +65,10 @@ def apply_semantic_filter(diff_text: str) -> str:
 
 # Shared test-file exclusion pattern for production-code domains.
 _TEST_EXCLUDE = r"(tests?/|__tests__/|__mocks__/|spec/|\.test\.|\.spec\.|Test\.php$|_test\.php$|_test\.go$)"
+_E2E_TEST_INCLUDE = (
+    r"(^e2e/|/e2e/|playwright\.config|"
+    r"(^|/)(playwright|page-objects?)/.*(Page|PageObject)\.(js|ts)$)"
+)
 
 DOMAIN_CATALOG = {
     "code": {
@@ -89,7 +93,7 @@ DOMAIN_CATALOG = {
     },
     "architecture": {
         "description": "Implementation files, excluding tests",
-        "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb)$",
+        "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb|sql)$",
         "exclude": _TEST_EXCLUDE,
     },
     "wp-architecture": {
@@ -109,7 +113,7 @@ DOMAIN_CATALOG = {
     },
     "e2e-tests": {
         "description": "Playwright E2E test files",
-        "include": r"(^e2e/|/e2e/|playwright\.config|Page\.(js|ts)$|PageObject\.(js|ts)$)",
+        "include": _E2E_TEST_INCLUDE,
         "exclude": None,
     },
     "go-tests": {

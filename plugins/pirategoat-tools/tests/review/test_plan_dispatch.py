@@ -7,6 +7,7 @@ validating output schema. Mocks subprocess calls to avoid git dependency.
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -36,6 +37,7 @@ count_files_in_domain = _mod.count_files_in_domain
 build_domain_counts = _mod.build_domain_counts
 decide_agent_dispatch = _mod.decide_agent_dispatch
 build_dispatch_plan = _mod.build_dispatch_plan
+get_diffstat = _mod.get_diffstat
 DOMAIN_CATALOG = _mod.DOMAIN_CATALOG
 
 
@@ -85,6 +87,10 @@ SAMPLE_CONFIG_ONLY_FILES = [
     ".github/workflows/ci.yml",
     "Dockerfile",
     "terraform/main.tf",
+]
+
+SAMPLE_SQL_MIGRATION_FILES = [
+    "db/migrations/20260414_add_orders_table.sql",
 ]
 
 SAMPLE_NOISE_ONLY_FILES = [
@@ -141,6 +147,10 @@ class TestCountFilesInDomain:
         count = count_files_in_domain(SAMPLE_JS_FILES, "code")
         assert count > 0
 
+    def test_architecture_domain_matches_sql_migrations(self):
+        count = count_files_in_domain(SAMPLE_SQL_MIGRATION_FILES, "architecture")
+        assert count == 1
+
     def test_a11y_domain_matches_tsx_and_scss(self):
         count = count_files_in_domain(SAMPLE_JS_FILES, "a11y")
         assert count > 0
@@ -196,6 +206,53 @@ class TestBuildDomainCounts:
         counts = build_domain_counts(SAMPLE_MIXED_FILES)
         for domain in DOMAIN_CATALOG:
             assert domain in counts, f"Domain '{domain}' missing from counts"
+
+
+# =============================================================================
+# Unit Tests — get_diffstat
+# =============================================================================
+
+class TestGetDiffstat:
+    """Git diffstat parsing and path normalization."""
+
+    def test_normalizes_renamed_numstat_paths_to_new_path(self):
+        """Renamed numstat entries should key file_stats by the new path."""
+        subprocess_results = [
+            subprocess.CompletedProcess(
+                args=["git", "diff", "--numstat", "main..HEAD"],
+                returncode=0,
+                stdout="55\t10\tsrc/legacy/CheckoutService.php => src/modern/CheckoutService.php\n",
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "diff", "--diff-filter=A", "--name-only", "main..HEAD"],
+                returncode=0,
+                stdout="",
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "diff", "--diff-filter=D", "--name-only", "main..HEAD"],
+                returncode=0,
+                stdout="",
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "diff", "--diff-filter=R", "--name-only", "main..HEAD"],
+                returncode=0,
+                stdout="src/modern/CheckoutService.php\n",
+                stderr="",
+            ),
+        ]
+
+        with patch("subprocess.run", side_effect=subprocess_results):
+            diffstat = get_diffstat("main..HEAD")
+
+        assert diffstat["added"] == 55
+        assert diffstat["removed"] == 10
+        assert diffstat["renamed_files"] == ["src/modern/CheckoutService.php"]
+        assert diffstat["file_stats"] == {
+            "src/modern/CheckoutService.php": {"added": 55, "removed": 10},
+        }
 
 
 # =============================================================================
@@ -609,6 +666,9 @@ class TestIsTestFile:
     def test_production_ts_file(self):
         assert is_test_file("src/hooks/useData.ts") is False
 
+    def test_production_page_ts_file(self):
+        assert is_test_file("src/HomePage.ts") is False
+
     def test_config_file(self):
         assert is_test_file(".github/workflows/ci.yml") is False
 
@@ -648,6 +708,15 @@ class TestTriageConditionalAgent:
             "security-reviewer", config, domain_files, "", {},
         )
         assert status == "DISPATCH"
+
+    def test_production_page_ts_file_does_not_trigger_test_only_skip(self):
+        """Conditional reviewers should treat src/*Page.ts as production code."""
+        config = self._make_config()
+        status, reason = triage_conditional_agent(
+            "security-reviewer", config, ["src/HomePage.ts"], "", {},
+        )
+        assert status == "DISPATCH"
+        assert "test files" not in reason
 
     def test_production_only_files_dispatches(self):
         """Only production files → DISPATCH."""
@@ -694,6 +763,109 @@ class TestTriageConditionalAgent:
             {},
         )
         assert status == "DISPATCH"
+
+    def test_devils_advocate_dispatches_for_substantial_in_scope_additions(self):
+        """Large in-scope production additions dispatch even without keywords."""
+        config = self._make_config(
+            domain="architecture",
+            min_added_lines=50,
+            triage_checks=["substantial_non_test_additions"],
+            triage_keywords=["cache", "adapter", "workaround"],
+        )
+        status, reason = triage_conditional_agent(
+            "devils-advocate-reviewer", config,
+            ["src/CheckoutService.php"],
+            "refine checkout service orchestration",
+            {
+                "added": 75,
+                "removed": 10,
+                "deleted_files": [],
+                "renamed_files": [],
+                "file_stats": {
+                    "src/CheckoutService.php": {"added": 75, "removed": 10},
+                },
+            },
+        )
+        assert status == "DISPATCH"
+        assert "substantial non-test additions" in reason
+
+    def test_devils_advocate_counts_production_page_ts_additions(self):
+        """Production *Page.ts files count toward architecture additions."""
+        config = self._make_config(
+            domain="architecture",
+            min_added_lines=50,
+            triage_checks=["substantial_non_test_additions"],
+            triage_keywords=["adapter"],
+        )
+        status, reason = triage_conditional_agent(
+            "devils-advocate-reviewer", config,
+            ["src/HomePage.ts"],
+            "build homepage application flow",
+            {
+                "added": 75,
+                "removed": 10,
+                "deleted_files": [],
+                "renamed_files": [],
+                "file_stats": {
+                    "src/HomePage.ts": {"added": 75, "removed": 10},
+                },
+            },
+        )
+        assert status == "DISPATCH"
+        assert "substantial non-test additions" in reason
+
+    def test_devils_advocate_dispatches_for_new_abstraction_file(self):
+        """New abstraction-shaped files count as positive triage signals."""
+        config = self._make_config(
+            domain="architecture",
+            min_added_lines=50,
+            triage_checks=["new_abstraction_files", "substantial_non_test_additions"],
+            triage_keywords=["cache", "adapter", "workaround"],
+        )
+        status, reason = triage_conditional_agent(
+            "devils-advocate-reviewer", config,
+            ["src/CheckoutService.php"],
+            "refine checkout service orchestration",
+            {
+                "added": 75,
+                "removed": 10,
+                "deleted_files": [],
+                "renamed_files": [],
+                "added_files": ["src/CheckoutService.php"],
+                "file_stats": {
+                    "src/CheckoutService.php": {"added": 75, "removed": 10},
+                },
+            },
+        )
+        assert status == "DISPATCH"
+        assert "new abstraction file" in reason
+
+    def test_min_added_lines_uses_in_scope_non_test_additions(self):
+        """Threshold gates on in-scope production additions, not total diff lines."""
+        config = self._make_config(
+            domain="architecture",
+            min_added_lines=50,
+            triage_checks=["new_abstraction_files", "substantial_non_test_additions"],
+            triage_keywords=["adapter"],
+        )
+        status, reason = triage_conditional_agent(
+            "devils-advocate-reviewer", config,
+            ["src/CheckoutAdapter.php", "tests/CheckoutAdapterTest.php"],
+            "",
+            {
+                "added": 105,
+                "removed": 5,
+                "deleted_files": [],
+                "renamed_files": [],
+                "added_files": ["src/CheckoutAdapter.php", "tests/CheckoutAdapterTest.php"],
+                "file_stats": {
+                    "src/CheckoutAdapter.php": {"added": 5, "removed": 0},
+                    "tests/CheckoutAdapterTest.php": {"added": 100, "removed": 5},
+                },
+            },
+        )
+        assert status == "SKIPPED_TRIAGE"
+        assert "5 < 50" in reason
 
     # --- Agent-specific checks ---
 
@@ -798,6 +970,65 @@ class TestTriageInDispatchPlan:
         assert dispatch_map["security-reviewer"]["status"] == "DISPATCH"
         assert "keyword" in dispatch_map["security-reviewer"]["reason"]
 
+    def test_devils_advocate_dispatches_for_large_architecture_change_without_keywords(self, registry):
+        """Large architecture diffs still dispatch without keyword matches."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["src/CheckoutService.php"],
+            registry=registry,
+            commit_messages="refine checkout service orchestration",
+            diffstat={"added": 75, "removed": 10, "deleted_files": [], "renamed_files": []},
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+
+        assert dispatch_map["devils-advocate-reviewer"]["status"] == "DISPATCH"
+        assert (
+            "new abstraction file" in dispatch_map["devils-advocate-reviewer"]["reason"]
+            or "substantial non-test additions" in dispatch_map["devils-advocate-reviewer"]["reason"]
+        )
+
+    def test_devils_advocate_dispatches_for_large_production_page_file(self, registry):
+        """Production *Page.ts files should not be treated as E2E-only code."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["src/HomePage.ts"],
+            registry=registry,
+            commit_messages="build homepage application flow",
+            diffstat={
+                "added": 75,
+                "removed": 10,
+                "deleted_files": [],
+                "renamed_files": [],
+                "file_stats": {
+                    "src/HomePage.ts": {"added": 75, "removed": 10},
+                },
+            },
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+
+        assert dispatch_map["devils-advocate-reviewer"]["status"] == "DISPATCH"
+        assert "substantial non-test additions" in dispatch_map["devils-advocate-reviewer"]["reason"]
+
+    def test_devils_advocate_dispatches_for_sql_migration(self, registry):
+        """SQL migrations that look like new infrastructure should reach triage."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=SAMPLE_SQL_MIGRATION_FILES,
+            registry=registry,
+            commit_messages="",
+            diffstat={"added": 75, "removed": 0, "deleted_files": [], "renamed_files": []},
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+
+        assert dispatch_map["devils-advocate-reviewer"]["status"] == "DISPATCH"
+        assert "migration" in dispatch_map["devils-advocate-reviewer"]["reason"]
+
     def test_plan_includes_changed_files(self, registry):
         """Dispatch plan includes changed_files for downstream use."""
         plan = build_dispatch_plan(
@@ -827,3 +1058,28 @@ class TestTriageInDispatchPlan:
         assert len(triage_skipped) > 0
         for signal in triage_skipped:
             assert "STATUS=SKIPPED_TRIAGE" in signal
+
+    def test_quick_mode_skips_simplification_reviewer(self, registry):
+        """Quick mode excludes the always-dispatch simplification reviewer."""
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["src/Controller.php"],
+            registry=registry,
+            commit_messages="refine controller flow",
+            diffstat={
+                "added": 20,
+                "removed": 5,
+                "deleted_files": [],
+                "renamed_files": [],
+                "file_stats": {
+                    "src/Controller.php": {"added": 20, "removed": 5},
+                },
+            },
+            quick=True,
+        )
+        dispatch_map = {d["name"]: d for d in plan["agents"]}
+
+        assert dispatch_map["simplification-reviewer"]["status"] == "SKIPPED_QUICK_MODE"
+        assert "quick review mode" in dispatch_map["simplification-reviewer"]["reason"]
