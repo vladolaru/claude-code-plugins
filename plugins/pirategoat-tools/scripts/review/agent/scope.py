@@ -167,6 +167,11 @@ DOMAIN_CATALOG = {
         "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb)$",
         "exclude": _TEST_EXCLUDE,
     },
+    "simplification": {
+        "description": "All production code for complexity analysis, excluding tests",
+        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|cs|go|rb|sql)$",
+        "exclude": _TEST_EXCLUDE,
+    },
     "docs-drift": {
         "description": "Code and documentation files for drift detection",
         "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb|md|txt|rst|yaml|yml|json)$",
