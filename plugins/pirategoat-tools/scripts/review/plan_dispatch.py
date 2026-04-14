@@ -174,6 +174,8 @@ _QUICK_MODE_EXCLUDED_AGENTS = frozenset([
     "data-flow-privacy-reviewer",
     "concurrency-reviewer",
     "reliability-reviewer",
+    "simplification-reviewer",
+    "devils-advocate-reviewer",
 ])
 
 
@@ -354,7 +356,7 @@ def triage_conditional_agent(
     # Gate: min_added_lines — skip if PR doesn't add enough code
     min_lines = config.get("min_added_lines", 0)
     if min_lines > 0 and diffstat.get("added", 0) < min_lines:
-        return "SKIP", f"below minimum addition threshold ({diffstat.get('added', 0)} < {min_lines} lines)"
+        return "SKIPPED_TRIAGE", f"below minimum addition threshold ({diffstat.get('added', 0)} < {min_lines} lines)"
 
     # Layer 2: Keyword match from triage_keywords against all signal sources
     keywords = config.get("triage_keywords", [])

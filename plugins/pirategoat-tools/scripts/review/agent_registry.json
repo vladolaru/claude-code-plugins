@@ -236,6 +236,39 @@
       "focus": "Over-abstraction, premature generalization, unnecessary indirection, defensive code for impossible cases, verbose logic — complexity disproportionate to problem size",
       "model_tier": "sonnet"
     },
+    "devils-advocate-reviewer": {
+      "domain": "architecture",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "min_added_lines": 50,
+      "triage_criteria": [
+        "New classes, interfaces, or module-level abstractions introduced",
+        "New infrastructure components (database tables, caches, queues, background jobs)",
+        "Compatibility shims or adapter layers added",
+        "Workarounds for upstream limitations",
+        "Substantial new logic (50+ added lines in non-test files)"
+      ],
+      "triage_keywords": [
+        "cache",
+        "shim",
+        "compat",
+        "adapter",
+        "wrapper",
+        "workaround",
+        "retry",
+        "fallback",
+        "migration",
+        "queue",
+        "background",
+        "infrastructure",
+        "layer"
+      ],
+      "focus": "Fundamental approach questioning — reframes problems to find simpler paths when strong evidence supports an alternative. Only fires on substantial PRs (50+ added lines).",
+      "model_tier": "opus"
+    },
     "history-insights-reviewer": {
       "domain": "code",
       "protocols": [
