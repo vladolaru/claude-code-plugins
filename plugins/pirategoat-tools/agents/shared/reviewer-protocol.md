@@ -150,6 +150,8 @@ When uncertain, read the actual source file to confirm.
 "validate_email() at line 200 is missing sanitization — found while exploring the file for context."
 </example>
 
+**Simplification bias:** When evaluating a change, consider whether the same goal could be achieved by removing or simplifying existing code rather than adding new code. The best fix is sometimes less code, not more. If you spot a simplification opportunity within your domain, include it. This is a lens, not a mandate — don't force it.
+
 **Preexisting-code agents** (patterns-reviewer, history-insights-reviewer): search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes.
 
 ## Output Directory
