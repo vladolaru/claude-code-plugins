@@ -6,6 +6,9 @@
 # Serena
 .serena/
 
+# Markdown tooling
+.mdsrc/
+
 # IDE
 .idea/
 
