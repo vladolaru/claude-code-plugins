@@ -91,6 +91,7 @@ class TestIntegrationAsk:
         r = self._run_hook("Bash", {"command": "git push --force origin main"})
         assert r.returncode == 0
         output = json.loads(r.stdout)
+        assert output["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
         assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
         assert "force-with-lease" in output["hookSpecificOutput"]["systemMessage"]
 

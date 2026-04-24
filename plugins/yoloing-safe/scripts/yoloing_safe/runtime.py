@@ -38,6 +38,7 @@ def ask(message, mark=None):
         mark("exit")
     output = {
         "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
             "permissionDecision": "ask",
             "systemMessage": message,
         }
