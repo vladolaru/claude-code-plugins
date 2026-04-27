@@ -5,6 +5,20 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.101.1] - 2026-04-27
+
+Behavioral-alignment scope for `ecosystem-integration-reviewer`. The reviewer now also catches mismatches where the wiring is shape-correct but the downstream code's runtime expectations contradict upstream's runtime behavior at the same site — state assumptions, timing/lifecycle, return-value semantics, side-effect ordering, implicit pre/post conditions. The standalone "Lifecycle reasoning" section folds into this broader category.
+
+### Added
+
+- **`Behavioral assumption alignment` check class** in `agents/ecosystem-integration-reviewer.md`. Distinct from the three shape-correctness checks: requires two citations (downstream assumption site + upstream behavior site), forbids speculative findings, and surfaces five categories — state assumptions, timing/lifecycle, return-value semantics, side-effect ordering, implicit pre/post conditions. Includes worked CORRECT/INCORRECT examples mirroring the canonical shape-check sections.
+
+### Changed
+
+- **`ecosystem-integration-reviewer` description and registry `focus`** broadened to cover behavioral-alignment scope (kept in sync per `agents/<name>.md` description ↔ `agent_registry.json` focus rule).
+- **`lifecycle_confidence` field renamed to `behavior_evidence`** in `scripts/review/agent/output.py` and `schemas/review-output.ts`. The field captures "how was upstream behavior determined" — generic to any behavioral claim, not timing-specific. Enum tightened from `('cited' | 'inferred' | 'speculative')` to `('cited' | 'inferred')` since `speculative` was already disallowed by the "inferred or higher" rule. New `behavior-assumption` value joins the finding `category` enum, replacing `lifecycle`. Findings with `category: "behavior-assumption"` should set `behavior_evidence` and provide both downstream (`file:line`) and upstream (`source_cited`) citations.
+- **`tests/grading/test_graders.py`** renames lifecycle_confidence assertions to behavior_evidence and adds a regression test that `speculative` is rejected.
+
 ## [1.101.0] - 2026-04-27
 
 Upstream host context for the review pipeline. Reviewer agents now receive advisory paths to upstream runtime hosts (WordPress core, WooCommerce, bundled libraries) and library-dep roots on disk, and a new specialist agent (`ecosystem-integration-reviewer`) verifies integration correctness against that source. Two cache layers populate dependencies opportunistically — a per-clone library-dep install cache during review setup, and a machine-wide WordPress + WooCommerce source cache the bot updates on its own cadence.

@@ -339,26 +339,26 @@ class TestGradeReviewBaseline:
         assert any("git_range_used" in f for f in result.failures)
 
 
-def test_issue_accepts_lifecycle_confidence_and_source_cited():
+def test_issue_accepts_behavior_evidence_and_source_cited():
     b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
     b.add_issue(
         severity="medium",
-        category="filter-arity",
-        title="Arity mismatch",
-        description="Filter subscribed with 2 args, upstream passes 3.",
+        category="behavior-assumption",
+        title="State assumption mismatch",
+        description="Callback reads saved status before save fires.",
         file="src/hooks.php",
         line=42,
-        recommendation="Change add_filter 4th arg to 3.",
-        lifecycle_confidence="cited",
+        recommendation="Switch to woocommerce_after_order_object_save.",
+        behavior_evidence="cited",
         source_cited="woocommerce/.../class-wc-order.php:200",
     )
     output = b.to_dict()
     issue = output["issues"][0]
-    assert issue["lifecycle_confidence"] == "cited"
+    assert issue["behavior_evidence"] == "cited"
     assert issue["source_cited"] == "woocommerce/.../class-wc-order.php:200"
 
 
-def test_issue_lifecycle_confidence_optional():
+def test_issue_behavior_evidence_optional():
     b = ReviewOutputBuilder(reviewer="security-reviewer", pr_id="0")
     b.add_issue(
         severity="low", category="xss", title="X", description="y",
@@ -366,17 +366,29 @@ def test_issue_lifecycle_confidence_optional():
     )
     output = b.to_dict()
     # Fields omitted when not provided
-    assert "lifecycle_confidence" not in output["issues"][0]
+    assert "behavior_evidence" not in output["issues"][0]
     assert "source_cited" not in output["issues"][0]
 
 
-def test_issue_lifecycle_confidence_invalid_rejected():
+def test_issue_behavior_evidence_invalid_rejected():
     import pytest
 
     b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
-    with pytest.raises(ValueError, match="lifecycle_confidence"):
+    with pytest.raises(ValueError, match="behavior_evidence"):
         b.add_issue(
             severity="low", category="other", title="T", description="d",
             file="f.php", line=1, recommendation="r",
-            lifecycle_confidence="MAYBE",
+            behavior_evidence="MAYBE",
+        )
+
+
+def test_issue_behavior_evidence_rejects_speculative():
+    import pytest
+
+    b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
+    with pytest.raises(ValueError, match="behavior_evidence"):
+        b.add_issue(
+            severity="low", category="behavior-assumption", title="T", description="d",
+            file="f.php", line=1, recommendation="r",
+            behavior_evidence="speculative",
         )

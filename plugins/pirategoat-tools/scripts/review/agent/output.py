@@ -76,7 +76,7 @@ class ReviewOutputBuilder:
         category: str = "general",
         line: int = None,
         confidence: float = 0.95,
-        lifecycle_confidence: Optional[str] = None,
+        behavior_evidence: Optional[str] = None,
         source_cited: Optional[str] = None,
         **extra_fields
     ) -> Optional[str]:
@@ -94,13 +94,13 @@ class ReviewOutputBuilder:
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
 
-        # Validate lifecycle_confidence enum
-        if lifecycle_confidence is not None:
-            valid_lifecycle = ("cited", "inferred", "speculative")
-            if lifecycle_confidence not in valid_lifecycle:
+        # Validate behavior_evidence enum
+        if behavior_evidence is not None:
+            valid_evidence = ("cited", "inferred")
+            if behavior_evidence not in valid_evidence:
                 raise ValueError(
-                    f"Invalid lifecycle_confidence: {lifecycle_confidence!r}. "
-                    f"Must be one of {valid_lifecycle}."
+                    f"Invalid behavior_evidence: {behavior_evidence!r}. "
+                    f"Must be one of {valid_evidence}."
                 )
 
         # Validate line — soft enforcement for None (redirect to observation),
@@ -147,8 +147,8 @@ class ReviewOutputBuilder:
             'confidence': confidence,
             **extra_fields
         }
-        if lifecycle_confidence is not None:
-            issue['lifecycle_confidence'] = lifecycle_confidence
+        if behavior_evidence is not None:
+            issue['behavior_evidence'] = behavior_evidence
         if source_cited is not None:
             issue['source_cited'] = source_cited
 

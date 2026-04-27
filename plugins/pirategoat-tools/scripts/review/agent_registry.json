@@ -184,7 +184,7 @@
       "protocols": ["reviewer"],
       "scope_flags": [],
       "dispatch_class": "conditional",
-      "focus": "filter/action callback signatures, class override correctness, abstract implementations, final-method conflicts, REST route schemas against upstream source",
+      "focus": "filter/action callback signatures, class override correctness, abstract implementations, final-method conflicts, REST route schemas, behavioral assumption alignment (state, timing, return-value semantics, ordering) against upstream source",
       "model_tier": "sonnet",
       "triage_criteria": [
         "Diff touches PHP WordPress/WooCommerce integration surfaces. Explicit hook/registration APIs are strong signals, but upstream subclass/callback signature changes may still need review without those keywords."

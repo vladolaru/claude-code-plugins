@@ -37,7 +37,7 @@ export interface Issue {
     recommendation: string; // How to fix
     confidence: ConfidenceScore;
     references?: string[]; // Links to docs, patterns, skills
-    lifecycle_confidence?: 'cited' | 'inferred' | 'speculative';
+    behavior_evidence?: 'cited' | 'inferred';
     source_cited?: string; // "<file>:<line>" pointer to upstream evidence
 }
 
