@@ -6,9 +6,9 @@ Everything here is opinionated, actively used, and evolving.
 
 ## What's Inside
 
-### 31 Agents
+### 32 Agents
 
-#### 26 Domain Review Agents
+#### 27 Domain Review Agents
 
 These run in parallel by default — total review time equals the slowest agent, not the sum of all agents.
 
@@ -18,6 +18,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **security-reviewer** | WordPress security — SQL injection, XSS, CSRF, capabilities, sanitization | sonnet |
 | **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | sonnet |
 | **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | sonnet |
+| **ecosystem-integration-reviewer** | Integration correctness against upstream runtime hosts — filter/action callback signatures, class override correctness, REST route schemas | sonnet |
 | **performance-reviewer** | N+1 queries, caching, autoloaded options, WP_Query optimization | sonnet |
 | **php-tests-reviewer** | PHPUnit test quality, WordPress factories, WooCommerce patterns | sonnet |
 | **js-tests-reviewer** | Jest/Vitest quality, React Testing Library queries, async patterns | sonnet |
@@ -70,7 +71,7 @@ External LLM cross-validation — shell out to other CLI tools for independent p
 Not all work requires the same level of reasoning. Agents are assigned to model tiers based on what their task demands:
 
 - **opus** (4 agents) — Deep judgment work requiring nuanced reasoning. The code-reviewer must understand change intent and exercise blocker-vs-preference decisions. The a11y-reviewer needs contextual reasoning about accessibility impact. The decision-reviewer needs full reasoning depth for adversarial analysis of review conclusions. The devils-advocate-reviewer questions fundamental approach choices on substantial PRs.
-- **sonnet** (20 agents) — Structured analysis against well-defined checklists. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. The API contract reviewer detects backwards-incompatible changes against public interfaces. The data flow/privacy reviewer traces PII through code paths. The concurrency reviewer identifies race conditions and missing transactions. The code-clarity reviewer catches naming-behavior mismatches and stale inline documentation with behavioral proof. The docs-drift reviewer detects when code changes cause external documentation (README, CLAUDE.md, guides) to become stale. The toolchain reviewer verifies package manager configs, build tool settings, and CI pipelines against actual tool versions via changelog research. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
+- **sonnet** (21 agents) — Structured analysis against well-defined checklists. The review-reconciliator performs judgment-heavy synthesis — conflict resolution, deduplication, and 10:1 compression across all agent outputs. Architecture reviewers apply SOLID principles and WordPress ecosystem patterns. Security tracing follows a source-to-sink framework. Performance detection matches known antipatterns (N+1, unbounded queries). The reliability reviewer checks error handling, rollback safety, and observability against concrete checklists. The API contract reviewer detects backwards-incompatible changes against public interfaces. The data flow/privacy reviewer traces PII through code paths. The concurrency reviewer identifies race conditions and missing transactions. The code-clarity reviewer catches naming-behavior mismatches and stale inline documentation with behavioral proof. The docs-drift reviewer detects when code changes cause external documentation (README, CLAUDE.md, guides) to become stale. The toolchain reviewer verifies package manager configs, build tool settings, and CI pipelines against actual tool versions via changelog research. Test reviewers check against catalogued smells. The patterns and history-insights reviewers search for codebase precedents. The mutation reviewer follows a rigid 5-phase protocol. The dead-code reviewer traces dependency graphs. All of these benefit from competence but don't need the deep ambiguity-resolution that the most capable models provide.
 - **haiku** (6 agents) — Orchestration or highly mechanical work. The gemini and codex reviewers just build prompts, shell out to external CLIs, and parse responses. The technical writer fills token-constrained templates. The go-tests-reviewer, rust-tests-reviewer, and python-tests-reviewer match against highly standardized testing idioms — nearly every finding maps to a known pattern.
 
 ### 21 Skills
@@ -156,7 +157,7 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 
 ```
 pirategoat-tools/
-├── agents/           # 31 agent definitions (26 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
+├── agents/           # 32 agent definitions (27 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
 ├── commands/         # 7 slash commands
 ├── skills/           # 21 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
@@ -164,6 +165,9 @@ pirategoat-tools/
 ├── scripts/          # Helper scripts organized by domain
 │   ├── review/             # Review pipeline, dispatch, context, telemetry
 │   │   └── agent/          # Agent bootstrap, scope filtering, output builder
+│   ├── hosts/              # Upstream host discovery (host_context CLI, chain, resolvers, ensure_installed, ecosystem_cache)
+│   │   ├── install/        # Internal install submodule (lockfile, cache, runner, overrides)
+│   │   └── cache/          # Internal ecosystem-cache manager (WordPress + WooCommerce)
 │   ├── linear/             # Linear issue pipeline, events
 │   ├── figma/              # Figma spec extraction, node parsing
 │   ├── analysis/           # Session analysis, metrics extraction

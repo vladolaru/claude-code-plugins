@@ -99,6 +99,22 @@ def get_changed_files_from_git(git_range: str) -> List[str]:
         return []
 
 
+def get_diff_text(git_range: str, files: Optional[List[str]] = None) -> str:
+    """Get lowercased patch text from a git range for keyword triage."""
+    cmd = ["git", "diff", git_range]
+    if files:
+        cmd.extend(["--", *files])
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return ""
+        return result.stdout.lower()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+
+
 def parse_changed_files_list(files_str: str) -> List[str]:
     """Parse a comma-separated file list string.
 
@@ -443,15 +459,18 @@ def triage_conditional_agent(
     commit_messages: str,
     diffstat: Dict,
     pr_text: str = "",
+    diff_text: str = "",
 ) -> Tuple[str, str]:
     """Apply deterministic triage for a conditional agent.
 
     Triage layers (first match wins):
     1. Test-only filter: if ALL domain files are test files → SKIPPED_TRIAGE
-    2. Keyword match: if triage_keywords match any signal source → DISPATCH
-       Signal sources (checked in order): commit messages, file paths, PR title/body
-    3. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
-    4. Default: DISPATCH (conservative — when in doubt, dispatch)
+    2. Optional PHP-source gate: if configured and no PHP source files → SKIPPED_TRIAGE
+    3. Keyword match: if triage_keywords match any signal source → DISPATCH
+       Signal sources (checked in order): commit messages, file paths, PR
+       title/body, patch text
+    4. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
+    5. Default: DISPATCH (conservative — when in doubt, dispatch)
 
     Args:
         agent_name: Name of the agent.
@@ -460,6 +479,7 @@ def triage_conditional_agent(
         commit_messages: Lowercased combined commit messages.
         diffstat: Diffstat summary dict.
         pr_text: Lowercased PR title + body (empty if unavailable).
+        diff_text: Lowercased patch text (empty if unavailable).
 
     Returns:
         (status, reason) where status is DISPATCH or SKIPPED_TRIAGE.
@@ -478,7 +498,14 @@ def triage_conditional_agent(
     if min_lines > 0 and in_scope_added < min_lines:
         return "SKIPPED_TRIAGE", f"below minimum addition threshold ({in_scope_added} < {min_lines} lines)"
 
-    # Layer 2: Keyword match from triage_keywords against all signal sources
+    # Layer 2: Agent-wide source gate.
+    if config.get("require_php_source_file") and not any(
+        f.lower().endswith(".php") and not is_test_file(f)
+        for f in domain_files
+    ):
+        return "SKIPPED_TRIAGE", "requires PHP source file"
+
+    # Layer 3: Keyword match from triage_keywords against all signal sources
     keywords = config.get("triage_keywords", [])
     if keywords:
         file_paths_text = _build_file_paths_text(domain_files)
@@ -486,6 +513,7 @@ def triage_conditional_agent(
             ("commits", commit_messages),
             ("files", file_paths_text),
             ("pr", pr_text),
+            ("diff", diff_text),
         ]
         matches = _match_keywords_multi_source(keywords, sources)
         if matches:
@@ -497,8 +525,10 @@ def triage_conditional_agent(
             for src, kws in by_source.items():
                 reason_parts.append(f"{src}: {', '.join(kws[:3])}")
             return "DISPATCH", f"keywords matched ({'; '.join(reason_parts)})"
+    if config.get("require_triage_keyword_match"):
+        return "SKIPPED_TRIAGE", "requires triage keyword match; none found"
 
-    # Layer 3: Agent-specific checks
+    # Layer 4: Agent-specific checks
     triage_checks = config.get("triage_checks", [])
     for check in triage_checks:
         if check == "new_abstraction_files":
@@ -537,6 +567,9 @@ def decide_agent_dispatch(
     commit_messages: str = "",
     diffstat: Optional[Dict] = None,
     pr_text: str = "",
+    diff_text: Optional[str] = None,
+    git_range: Optional[str] = None,
+    diff_text_cache: Optional[Dict[Tuple[str, ...], str]] = None,
 ) -> Tuple[str, str]:
     """Decide whether to dispatch a single agent.
 
@@ -552,6 +585,8 @@ def decide_agent_dispatch(
         commit_messages: Lowercased combined commit messages.
         diffstat: Diffstat summary dict.
         pr_text: Lowercased PR title + body + labels + branch + issue titles.
+        diff_text: Lowercased patch text.
+        git_range: Git range used to fetch domain-specific patch text.
 
     Returns:
         (status, reason) tuple where status is "DISPATCH", "SKIPPED",
@@ -594,11 +629,20 @@ def decide_agent_dispatch(
             domain_files.extend(get_domain_files(clean_files, sec_domain))
         # Deduplicate
         domain_files = sorted(set(domain_files))
+        if diff_text is None and git_range and config.get("triage_keywords"):
+            cache_key = tuple(domain_files)
+            if diff_text_cache is not None:
+                if cache_key not in diff_text_cache:
+                    diff_text_cache[cache_key] = get_diff_text(git_range, domain_files)
+                diff_text = diff_text_cache[cache_key]
+            else:
+                diff_text = get_diff_text(git_range, domain_files)
 
         return triage_conditional_agent(
             agent_name, config, domain_files,
             commit_messages, diffstat or {},
             pr_text=pr_text,
+            diff_text=diff_text or "",
         )
 
     # Conditional agents without triage context: dispatch by default
@@ -709,6 +753,7 @@ def build_dispatch_plan(
     # Build dispatch decisions
     dispatch_list = []
     agent_signals = []
+    diff_text_cache: Dict[Tuple[str, ...], str] = {}
 
     for agent_name in sorted(agents.keys()):
         config = agents[agent_name]
@@ -724,6 +769,8 @@ def build_dispatch_plan(
             commit_messages=commit_messages,
             diffstat=diffstat,
             pr_text=pr_text,
+            git_range=git_range,
+            diff_text_cache=diff_text_cache,
         )
 
         # Quick mode: skip blocklisted agents ONLY if triage did not find

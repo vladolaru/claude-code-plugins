@@ -179,6 +179,29 @@
       "focus": "Playwright locators, Page Object Model, auto-waiting, network interception",
       "model_tier": "sonnet"
     },
+    "ecosystem-integration-reviewer": {
+      "domain": "wp-architecture",
+      "protocols": ["reviewer"],
+      "scope_flags": [],
+      "dispatch_class": "conditional",
+      "focus": "filter/action callback signatures, class override correctness, abstract implementations, final-method conflicts, REST route schemas against upstream source",
+      "model_tier": "sonnet",
+      "triage_criteria": [
+        "Diff touches PHP WordPress/WooCommerce integration surfaces. Explicit hook/registration APIs are strong signals, but upstream subclass/callback signature changes may still need review without those keywords."
+      ],
+      "triage_keywords": [
+        "add_filter",
+        "add_action",
+        "apply_filters",
+        "do_action",
+        "register_rest_route",
+        "register_post_type",
+        "register_block_type",
+        "register_taxonomy"
+      ],
+      "require_php_source_file": true,
+      "budget_override": 120
+    },
     "go-tests-reviewer": {
       "domain": "go-tests",
       "protocols": [

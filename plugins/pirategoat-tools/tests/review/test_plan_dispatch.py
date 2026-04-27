@@ -36,6 +36,7 @@ parse_changed_files_list = _mod.parse_changed_files_list
 count_files_in_domain = _mod.count_files_in_domain
 build_domain_counts = _mod.build_domain_counts
 decide_agent_dispatch = _mod.decide_agent_dispatch
+triage_conditional_agent = _mod.triage_conditional_agent
 build_dispatch_plan = _mod.build_dispatch_plan
 get_diffstat = _mod.get_diffstat
 DOMAIN_CATALOG = _mod.DOMAIN_CATALOG
@@ -459,6 +460,71 @@ class TestBuildDispatchPlan:
         assert plan["scope_summary"]["reviewable_files"] == 0
         for entry in plan["agents"]:
             assert entry["status"] in ("SKIPPED", "SKIPPED_TRIAGE")
+
+    def test_domain_patch_text_is_memoized_across_agents(self):
+        registry = {
+            "agents": {
+                "first-reviewer": {
+                    "dispatch_class": "conditional",
+                    "domain": "security",
+                    "focus": "",
+                    "triage_keywords": ["auth"],
+                },
+                "second-reviewer": {
+                    "dispatch_class": "conditional",
+                    "domain": "security",
+                    "focus": "",
+                    "triage_keywords": ["token"],
+                },
+            }
+        }
+
+        with patch.object(_mod, "get_diff_text", return_value="auth token") as diff_mock:
+            plan = build_dispatch_plan(
+                mode="full",
+                git_range="main..HEAD",
+                output_dir="/tmp/test",
+                changed_files=["src/Auth.php"],
+                registry=registry,
+                commit_messages="",
+                diffstat={"added": 5, "removed": 0, "deleted_files": [], "renamed_files": []},
+            )
+
+        assert diff_mock.call_count == 1
+        assert [entry["status"] for entry in plan["agents"]] == ["DISPATCH", "DISPATCH"]
+
+    def test_integration_agent_dispatches_on_diff_keyword_without_host_context(self, tmp_path):
+        output_dir = tmp_path / "review"
+        output_dir.mkdir()
+        (output_dir / "review-context.json").write_text(json.dumps({
+            "host_context": {"resolved": []},
+        }))
+        registry = {
+            "agents": {
+                "ecosystem-integration-reviewer": {
+                    "dispatch_class": "conditional",
+                    "domain": "wp-architecture",
+                    "focus": "",
+                    "triage_keywords": ["add_filter"],
+                    "require_triage_keyword_match": True,
+                },
+            }
+        }
+
+        with patch.object(_mod, "get_diff_text", return_value="add_filter") as diff_mock:
+            plan = build_dispatch_plan(
+                mode="full",
+                git_range="main..HEAD",
+                output_dir=str(output_dir),
+                changed_files=["plugin.php"],
+                registry=registry,
+                commit_messages="",
+                diffstat={"added": 5, "removed": 0, "deleted_files": [], "renamed_files": []},
+            )
+
+        assert diff_mock.call_count == 1
+        assert plan["agents"][0]["status"] == "DISPATCH"
+        assert "diff" in plan["agents"][0]["reason"]
 
 
 # =============================================================================
@@ -1083,3 +1149,136 @@ class TestTriageInDispatchPlan:
 
         assert dispatch_map["simplification-reviewer"]["status"] == "SKIPPED_QUICK_MODE"
         assert "quick review mode" in dispatch_map["simplification-reviewer"]["reason"]
+
+
+# =============================================================================
+# Keyword triage — shares the class grouping used by other triage tests
+# =============================================================================
+
+
+class TestKeywordRequiredTriage:
+    """Keyword triage remains a positive signal, not an ecosystem-review hard gate."""
+
+    def test_ecosystem_integration_dispatches_php_subclass_without_hook_keyword(self, registry):
+        config = registry["agents"]["ecosystem-integration-reviewer"]
+        status, reason = triage_conditional_agent(
+            agent_name="ecosystem-integration-reviewer",
+            config=config,
+            domain_files=["src/OrdersController.php"],
+            commit_messages="refactor orders controller",
+            diffstat={"added": 10, "removed": 0},
+            pr_text="",
+            diff_text=(
+                "+class OrdersController extends WC_REST_Orders_Controller {\n"
+                "+    public function prepare_item_for_response( $object, $request ) {}\n"
+                "+}\n"
+            ),
+        )
+
+        assert status == "DISPATCH"
+
+    def test_triage_dispatches_without_runtime_host_when_keyword_matches(self):
+        config = {
+            "domain": "wp-architecture",
+            "dispatch_class": "conditional",
+            "triage_keywords": ["add_filter"],
+            "require_triage_keyword_match": True,
+        }
+        status, reason = triage_conditional_agent(
+            agent_name="ecosystem-integration-reviewer",
+            config=config,
+            domain_files=["plugin.php"],
+            commit_messages="added add_filter hook",
+            diffstat={"added": 10, "removed": 0},
+            pr_text="",
+        )
+        assert status == "DISPATCH"
+        assert "commits" in reason.lower()
+
+    def test_triage_dispatches_when_keyword_matches(self):
+        config = {
+            "domain": "wp-architecture",
+            "dispatch_class": "conditional",
+            "triage_keywords": ["add_filter"],
+            "require_triage_keyword_match": True,
+        }
+        status, reason = triage_conditional_agent(
+            agent_name="ecosystem-integration-reviewer",
+            config=config,
+            domain_files=["plugin.php"],
+            commit_messages="added add_filter hook",
+            diffstat={"added": 10, "removed": 0},
+            pr_text="",
+        )
+        assert status == "DISPATCH"
+
+    def test_triage_skips_when_no_keyword_matches(self):
+        """Keyword-required agents do not fall through to default dispatch."""
+        config = {
+            "domain": "wp-architecture",
+            "dispatch_class": "conditional",
+            "triage_keywords": ["add_filter", "apply_filters", "do_action"],
+            "require_triage_keyword_match": True,
+        }
+        status, reason = triage_conditional_agent(
+            agent_name="ecosystem-integration-reviewer",
+            config=config,
+            domain_files=["plugin.php"],
+            commit_messages="refactored internal helper",  # no keywords
+            diffstat={"added": 10, "removed": 0},
+            pr_text="",
+        )
+        assert status == "SKIPPED_TRIAGE"
+        assert "keyword" in reason.lower()
+
+    def test_triage_dispatches_when_diff_keyword_matches(self):
+        config = {
+            "domain": "wp-architecture",
+            "dispatch_class": "conditional",
+            "triage_keywords": ["add_filter", "apply_filters", "do_action"],
+            "require_triage_keyword_match": True,
+        }
+        status, reason = triage_conditional_agent(
+            agent_name="ecosystem-integration-reviewer",
+            config=config,
+            domain_files=["src/Foo.php"],
+            commit_messages="refactored internal helper",
+            diffstat={"added": 10, "removed": 0},
+            pr_text="generic pr title",
+            diff_text="+add_filter( 'woocommerce_cart_item_name', 'prefix_name' );",
+        )
+        assert status == "DISPATCH"
+        assert "diff" in reason
+
+    def test_ecosystem_integration_skips_plain_js_ts_inheritance(self, registry):
+        config = registry["agents"]["ecosystem-integration-reviewer"]
+        status, reason = triage_conditional_agent(
+            agent_name="ecosystem-integration-reviewer",
+            config=config,
+            domain_files=["src/components/CheckoutPanel.tsx"],
+            commit_messages="refactor checkout panel",
+            diffstat={"added": 10, "removed": 0},
+            pr_text="",
+            diff_text=(
+                "+class CheckoutPanel extends Component {}\n"
+                "+interface Props extends BaseProps {}\n"
+            ),
+        )
+
+        assert status == "SKIPPED_TRIAGE"
+        assert "php source" in reason.lower()
+
+    def test_ecosystem_integration_requires_php_source_before_keyword_dispatch(self, registry):
+        config = registry["agents"]["ecosystem-integration-reviewer"]
+        status, reason = triage_conditional_agent(
+            agent_name="ecosystem-integration-reviewer",
+            config=config,
+            domain_files=["src/blocks/checkout/index.ts"],
+            commit_messages="register checkout block",
+            diffstat={"added": 10, "removed": 0},
+            pr_text="",
+            diff_text="+register_block_type( 'example/checkout', settings );",
+        )
+
+        assert status == "SKIPPED_TRIAGE"
+        assert "php source" in reason.lower()

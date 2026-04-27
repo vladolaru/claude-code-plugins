@@ -37,6 +37,8 @@ export interface Issue {
     recommendation: string; // How to fix
     confidence: ConfidenceScore;
     references?: string[]; // Links to docs, patterns, skills
+    lifecycle_confidence?: 'cited' | 'inferred' | 'speculative';
+    source_cited?: string; // "<file>:<line>" pointer to upstream evidence
 }
 
 /**
@@ -189,6 +191,21 @@ export interface AggregatedReview {
         total_duration_ms: number;
         parallel_execution: boolean;
     };
+
+    // Host context banner — forwarded from reconciliation when upstream discovery was degraded.
+    host_context_banner?: HostContextBanner | null;
+}
+
+/**
+ * Host Context Banner — present when upstream discovery was degraded.
+ * Reviewers' claims that depend on unresolved hosts must be read in light
+ * of this banner.
+ */
+export interface HostContextBanner {
+    degraded: boolean;
+    reason: "partial_unresolved" | "fully_unavailable" | "install_failed";
+    message: string;
+    unresolved: Array<{ name: string; reason: string; source?: string }>;
 }
 
 /**

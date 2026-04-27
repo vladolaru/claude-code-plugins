@@ -532,3 +532,29 @@ class TestOutputFilenameConsistency:
         )
         assert "/tmp/pr-review-42/dead-code-review.json" in output
         assert "/tmp/pr-review-42/dead-code-review.md" in output
+
+
+def test_ecosystem_integration_reviewer_registered():
+    """ecosystem-integration-reviewer is in the registry with correct shape."""
+    import json
+    from pathlib import Path
+    reg_path = (
+        Path(__file__).parent.parent.parent.parent
+        / "scripts" / "review" / "agent_registry.json"
+    )
+    registry = json.loads(reg_path.read_text())
+    agents = registry["agents"]
+    entry = agents.get("ecosystem-integration-reviewer")
+    assert entry is not None, "Agent must be registered"
+    assert entry["domain"] == "wp-architecture"
+    assert "reviewer" in entry["protocols"]
+    assert entry["dispatch_class"] == "conditional"
+    assert entry["model_tier"] == "sonnet"
+    # Narrative field (human-facing)
+    assert isinstance(entry.get("triage_criteria"), list) and entry["triage_criteria"]
+    # Machine-consumed fields
+    assert isinstance(entry.get("triage_keywords"), list) and entry["triage_keywords"]
+    assert "require_triage_keyword_match" not in entry
+    assert entry.get("require_php_source_file") is True
+    assert "host_context_runtime_host_resolved" not in entry.get("triage_checks", [])
+    assert entry.get("budget_override", 0) > 0

@@ -76,6 +76,8 @@ class ReviewOutputBuilder:
         category: str = "general",
         line: int = None,
         confidence: float = 0.95,
+        lifecycle_confidence: Optional[str] = None,
+        source_cited: Optional[str] = None,
         **extra_fields
     ) -> Optional[str]:
         """Add an issue. Returns issue ID.
@@ -91,6 +93,15 @@ class ReviewOutputBuilder:
         # Validate confidence
         if not 0.0 <= confidence <= 1.0:
             raise ValueError(f"Confidence must be 0.0-1.0, got {confidence}")
+
+        # Validate lifecycle_confidence enum
+        if lifecycle_confidence is not None:
+            valid_lifecycle = ("cited", "inferred", "speculative")
+            if lifecycle_confidence not in valid_lifecycle:
+                raise ValueError(
+                    f"Invalid lifecycle_confidence: {lifecycle_confidence!r}. "
+                    f"Must be one of {valid_lifecycle}."
+                )
 
         # Validate line — soft enforcement for None (redirect to observation),
         # hard enforcement for invalid values (0, negative, non-int)
@@ -136,6 +147,10 @@ class ReviewOutputBuilder:
             'confidence': confidence,
             **extra_fields
         }
+        if lifecycle_confidence is not None:
+            issue['lifecycle_confidence'] = lifecycle_confidence
+        if source_cited is not None:
+            issue['source_cited'] = source_cited
 
         self.issues.append(issue)
         return issue_id

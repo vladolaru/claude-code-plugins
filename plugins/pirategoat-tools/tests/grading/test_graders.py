@@ -337,3 +337,46 @@ class TestGradeReviewBaseline:
         result = grade_review_baseline(path)
         assert not result.passed
         assert any("git_range_used" in f for f in result.failures)
+
+
+def test_issue_accepts_lifecycle_confidence_and_source_cited():
+    b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
+    b.add_issue(
+        severity="medium",
+        category="filter-arity",
+        title="Arity mismatch",
+        description="Filter subscribed with 2 args, upstream passes 3.",
+        file="src/hooks.php",
+        line=42,
+        recommendation="Change add_filter 4th arg to 3.",
+        lifecycle_confidence="cited",
+        source_cited="woocommerce/.../class-wc-order.php:200",
+    )
+    output = b.to_dict()
+    issue = output["issues"][0]
+    assert issue["lifecycle_confidence"] == "cited"
+    assert issue["source_cited"] == "woocommerce/.../class-wc-order.php:200"
+
+
+def test_issue_lifecycle_confidence_optional():
+    b = ReviewOutputBuilder(reviewer="security-reviewer", pr_id="0")
+    b.add_issue(
+        severity="low", category="xss", title="X", description="y",
+        file="f.php", line=1, recommendation="z",
+    )
+    output = b.to_dict()
+    # Fields omitted when not provided
+    assert "lifecycle_confidence" not in output["issues"][0]
+    assert "source_cited" not in output["issues"][0]
+
+
+def test_issue_lifecycle_confidence_invalid_rejected():
+    import pytest
+
+    b = ReviewOutputBuilder(reviewer="ecosystem-integration-reviewer", pr_id="0")
+    with pytest.raises(ValueError, match="lifecycle_confidence"):
+        b.add_issue(
+            severity="low", category="other", title="T", description="d",
+            file="f.php", line=1, recommendation="r",
+            lifecycle_confidence="MAYBE",
+        )
