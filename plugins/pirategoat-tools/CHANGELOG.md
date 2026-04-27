@@ -5,6 +5,28 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.101.2] - 2026-04-27
+
+Cache-based fulfillment for unresolved upstream hosts. When a repo signals it needs WordPress (or WooCommerce) but the resolver chain can't satisfy that signal locally — most commonly when `docker-compose.yml` mounts a vendored copy from inside the repo (`./docker/wordpress:/var/www/html/`) — the chain now falls back to the machine-wide ecosystem cache with a TTL-gated git pull. Repos that don't signal need still don't get cache hits leaked into their host context.
+
+### Added
+
+- **`scripts/hosts/cache/manager.py` — `ensure_fresh(name, max_age_seconds=86400)`.** TTL-gated wrapper around `update_host()`. Returns `{"action": "fresh"}` without git work when the slot's `.last_updated` marker is within the window; otherwise calls `update_host()` synchronously. 24-hour default amortizes the pull cost across a day's reviews while keeping integration findings honest.
+- **`scripts/hosts/resolvers/ecosystem_cache.py` — `EcosystemCacheResolver.resolve_for_names(names)`.** Fulfillment-mode method that emits cache entries only for explicitly requested names (filtered against `_KNOWN_HOSTS = {"wordpress", "woocommerce"}`), refreshing each via `ensure_fresh()` first. Unknown names are silently dropped. Confidence is `high` because the slot is guaranteed within the freshness window after refresh. Empty-cache slots produce `unresolved` entries with `reason: "cache_unpopulated"`.
+- **`scripts/hosts/chain.py` — post-loop fulfillment pass.** After all `_DEFAULT_RESOLVERS` run, the chain calls `EcosystemCacheResolver().resolve_for_names()` with names from the unresolved list, pre-filtered to exclude any `runtime-host:<name>` already in `seen_names`. The pre-filter is critical — it prevents `ensure_fresh()` (a potential network call) from firing for hosts a higher-priority resolver already won. Fulfilled entries promote to `resolved` and clear from `unresolved`. Diagnostics record `ecosystem-cache-fulfillment` in `resolvers_consulted` only when fulfillment actually fires.
+
+### Changed
+
+- **`scripts/hosts/resolvers/docker_compose.py` — `core` self-mount semantics.** When a `/var/www/html` (core) target binds to a path inside the repo but not equal to repo root (e.g. WooPayments' `./docker/wordpress:/var/www/html/`), the resolver now emits an `unresolved` entry with `reason: "vendored_self_mount"` instead of silently dropping. This surfaces the WP need so cache fulfillment can satisfy it. Plugin/theme self-mounts and `core` mounts where source equals repo root keep their silent-skip behavior — those are "repo IS the host" or monorepo subdirectories, not vendored upstream.
+
+### Tests
+
+- New: `tests/hosts/resolvers/test_docker_compose.py` — `core` self-mount inside repo emits unresolved; `core` self-mount where source equals repo root silent-skips; plugin self-mount in subdirectory stays silent.
+- New: `tests/hosts/cache/test_manager.py` — `ensure_fresh` no-ops within window, calls `update_host` when slot missing or stale, respects custom `max_age_seconds`.
+- New: `tests/hosts/resolvers/test_ecosystem_cache.py::TestResolveForNames` — empty input no-ops; unknown names filtered; fresh cache returns `confidence: "high"` with `notes.fulfillment: True`; empty cache slot returns unresolved with `reason: "cache_unpopulated"`.
+- New: `tests/hosts/test_chain.py::TestCacheFulfillment` — fulfillment promotes unresolved → resolved with `source: "ecosystem-cache"`; diagnostics record `ecosystem-cache-fulfillment`; empty repo + populated cache produces no fulfillment (no leakage); pre-filter skips fulfillment when higher-priority resolver already won (no spurious `update_host` calls); cache offline + missing slot → banner falls back to `fully_unavailable`.
+- Updated: `tests/hosts/test_chain.py::test_partial_unresolved_sets_banner` — now mocks `update_host` to block network so the partial-unresolved banner path is exercised without fulfillment rescuing the entry.
+
 ## [1.101.1] - 2026-04-27
 
 Behavioral-alignment scope for `ecosystem-integration-reviewer`. The reviewer now also catches mismatches where the wiring is shape-correct but the downstream code's runtime expectations contradict upstream's runtime behavior at the same site — state assumptions, timing/lifecycle, return-value semantics, side-effect ordering, implicit pre/post conditions. The standalone "Lifecycle reasoning" section folds into this broader category.

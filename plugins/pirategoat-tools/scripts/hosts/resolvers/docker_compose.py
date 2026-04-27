@@ -239,10 +239,36 @@ class DockerComposeResolver(HostResolver):
         resolved = expanded_source if is_absolute else os.path.abspath(
             os.path.join(os.path.dirname(compose_file), expanded_source)
         )
-        if self._is_inside_repo(resolved, repo_path):
-            return  # self-mount of the repo under review
-
         name = self._name_from_target(target, resolved)
+        if self._is_inside_repo(resolved, repo_path):
+            # Two cases produce an in-repo source:
+            # 1. The repo IS the host — `.` mounted at its own slot, or a
+            #    monorepo subdirectory like `./plugins/<name>` providing
+            #    that plugin. Silent skip — the repo can't be its own
+            #    upstream.
+            # 2. The repo VENDORS a copy of WordPress core for its dev
+            #    stack (e.g. `./docker/wordpress:/var/www/html/`). The
+            #    bundled copy isn't useful as upstream source, but the
+            #    repo IS signaling it needs WP. Surface as unresolved so
+            #    the chain's cache-fulfillment pass can satisfy it.
+            #
+            # Only flag (2) for `core` targets where the source isn't the
+            # repo root itself. Plugin/theme self-mounts are almost
+            # always "repo is the plugin/theme" and shouldn't trigger
+            # banners or fulfillment.
+            if (
+                kind == "core"
+                and os.path.realpath(resolved) != os.path.realpath(repo_path)
+            ):
+                unresolved.append({
+                    "name": name,
+                    "reason": "vendored_self_mount",
+                    "source": "docker-compose",
+                    "raw": raw,
+                    "target": target,
+                })
+            return
+
         if not os.path.isdir(resolved):
             unresolved.append({
                 "name": name,

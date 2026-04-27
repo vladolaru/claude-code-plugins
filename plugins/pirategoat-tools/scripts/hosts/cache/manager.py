@@ -25,6 +25,13 @@ KNOWN_ECOSYSTEM_REPOS: List[EcosystemRepo] = [
 
 _STALE_SECONDS = 30 * 24 * 3600
 
+# TTL for fulfillment-mode reads. When the chain's cache-fulfillment pass
+# asks the resolver for a host, the slot must be no older than this — older
+# slots get a synchronous git pull before the read. Tighter than
+# `_STALE_SECONDS` because fulfillment reads are user-facing review context;
+# `_STALE_SECONDS` is the staleness signal surfaced by `verify_hosts()`.
+_FRESHNESS_SECONDS = 24 * 3600
+
 
 def cache_root() -> Path:
     return pirategoat_cache_root("ecosystem")
@@ -94,6 +101,21 @@ def update_host(name: str) -> Dict[str, Any]:
                 lock_path.unlink()
             except FileNotFoundError:
                 pass
+
+
+def ensure_fresh(name: str, max_age_seconds: int = _FRESHNESS_SECONDS) -> Dict[str, Any]:
+    """Guarantee the cache slot for `name` is no older than max_age_seconds.
+
+    No-ops with action="fresh" if the slot exists and was last updated within
+    the window. Otherwise calls update_host() synchronously to refresh.
+    Network/git failures from update_host propagate via the returned dict —
+    callers should fall back to whatever's on disk if "ok": False.
+    """
+    target = cache_dir_for(name)
+    last = _read_last_updated(target) if target.is_dir() else None
+    if last is not None and (time.time() - last) <= max_age_seconds:
+        return {"name": name, "action": "fresh", "ok": True, "stderr": ""}
+    return update_host(name)
 
 
 def list_hosts() -> List[Dict[str, Any]]:

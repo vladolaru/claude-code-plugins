@@ -5,11 +5,12 @@ import time
 from typing import Dict, List, Optional
 
 from hosts.resolvers.base import HostResolver
-from hosts.resolvers.explicit import ExplicitResolver
-from hosts.resolvers.wp_env import WpEnvResolver
 from hosts.resolvers.docker_compose import DockerComposeResolver
+from hosts.resolvers.ecosystem_cache import EcosystemCacheResolver
+from hosts.resolvers.explicit import ExplicitResolver
 from hosts.resolvers.install_cache import InstallCacheResolver
 from hosts.resolvers.vendor import VendorResolver
+from hosts.resolvers.wp_env import WpEnvResolver
 from hosts.types import Banner, HostContextManifest, HostEntry
 
 
@@ -59,6 +60,24 @@ class ResolverChain:
                     resolved.append(entry)
             unresolved.extend(result.unresolved)
 
+        # Fulfillment pass: try to satisfy unresolved names from the
+        # ecosystem cache. Fires only for names earlier resolvers signaled
+        # the repo needs — keeps machine-wide cache state from leaking into
+        # repos that didn't ask for it.
+        fulfilled = self._fulfill_from_cache(unresolved, seen_names)
+        if fulfilled:
+            per_resolver["ecosystem-cache-fulfillment"] = {
+                "entries": len(fulfilled),
+                "unresolved": 0,
+                "notes": {"fulfilled": [e.name for e in fulfilled]},
+            }
+            consulted.append("ecosystem-cache-fulfillment")
+            resolved.extend(fulfilled)
+            fulfilled_names = {e.name for e in fulfilled}
+            unresolved = [
+                u for u in unresolved if u.get("name") not in fulfilled_names
+            ]
+
         unresolved = self._drop_resolved_unresolved(resolved, unresolved)
         banner = self._build_banner(resolved, unresolved)
 
@@ -75,6 +94,31 @@ class ResolverChain:
             banner=banner,
             diagnostics=diagnostics,
         )
+
+    @staticmethod
+    def _fulfill_from_cache(
+        unresolved: List[Dict],
+        seen_names: Dict[str, HostEntry],
+    ) -> List[HostEntry]:
+        # Pre-filter: drop names that a higher-priority resolver already
+        # claimed. Fulfillment calls `ensure_fresh()` which can do a network
+        # git pull — never fire it for hosts the repo already has locally.
+        requested = {
+            u.get("name")
+            for u in unresolved
+            if u.get("name") and f"runtime-host:{u['name']}" not in seen_names
+        }
+        if not requested:
+            return []
+        result = EcosystemCacheResolver().resolve_for_names(requested)
+        out: List[HostEntry] = []
+        for entry in result.entries:
+            key = f"{entry.kind}:{entry.name}"
+            if key in seen_names:
+                continue  # extra safety; pre-filter should prevent this
+            seen_names[key] = entry
+            out.append(entry)
+        return out
 
     @staticmethod
     def _drop_resolved_unresolved(resolved: List[HostEntry], unresolved: List[Dict]) -> List[Dict]:

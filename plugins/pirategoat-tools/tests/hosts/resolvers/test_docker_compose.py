@@ -231,6 +231,62 @@ def test_long_form_bind_mount_resolves_runtime_host(tmp_path):
     assert e.notes.get("personal") is not True
 
 
+def test_core_self_mount_inside_repo_emits_unresolved(tmp_path):
+    """A `./docker/wordpress:/var/www/html/` mount is a vendored WP for the
+    dev stack, not the repo itself. Surface as unresolved so the cache can
+    fulfill it (WooPayments-style setup)."""
+    repo = tmp_path / "woocommerce-payments"
+    repo.mkdir()
+    (repo / "docker" / "wordpress").mkdir(parents=True)
+    _write_compose(repo, "docker-compose.yml", """\
+        services:
+          wordpress:
+            volumes:
+              - ./docker/wordpress:/var/www/html
+    """)
+    result = DockerComposeResolver().resolve(str(repo))
+    assert result.entries == []
+    assert len(result.unresolved) == 1
+    item = result.unresolved[0]
+    assert item["name"] == "wordpress"
+    assert item["reason"] == "vendored_self_mount"
+    assert item["source"] == "docker-compose"
+
+
+def test_core_mount_with_source_eq_repo_root_silent_skips(tmp_path):
+    """When the WP repo itself is mounted as core (`.:/var/www/html`), the
+    repo IS WordPress — silent skip, no unresolved entry."""
+    repo = tmp_path / "wordpress-develop"
+    repo.mkdir()
+    _write_compose(repo, "docker-compose.yml", """\
+        services:
+          wordpress:
+            volumes:
+              - .:/var/www/html
+    """)
+    result = DockerComposeResolver().resolve(str(repo))
+    assert result.entries == []
+    assert result.unresolved == []
+
+
+def test_plugin_self_mount_in_subdirectory_stays_silent(tmp_path):
+    """Even with the new core-target unresolved logic, plugin/theme
+    subdirectory self-mounts (monorepo style) don't trigger unresolved —
+    they're "repo provides this plugin", not "repo vendors upstream"."""
+    repo = tmp_path / "repo"
+    plugin = repo / "plugins" / "my-plugin"
+    plugin.mkdir(parents=True)
+    _write_compose(repo, "docker-compose.yml", """\
+        services:
+          wordpress:
+            volumes:
+              - ./plugins/my-plugin:/var/www/html/wp-content/plugins/my-plugin
+    """)
+    result = DockerComposeResolver().resolve(str(repo))
+    assert result.entries == []
+    assert result.unresolved == []
+
+
 def test_core_mount_produces_wordpress_entry(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

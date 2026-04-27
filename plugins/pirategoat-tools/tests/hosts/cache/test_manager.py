@@ -108,6 +108,85 @@ def test_update_host_handles_git_not_found(monkeypatch, tmp_path):
     assert "git" in result["stderr"].lower() or "not found" in result["stderr"].lower()
 
 
+def test_ensure_fresh_no_op_when_within_window(tmp_path, monkeypatch):
+    """Slot exists with recent .last_updated marker → no git call."""
+    import time as _time
+    from hosts.cache import manager
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = tmp_path / "pirategoat" / "ecosystem" / "wordpress" / "latest"
+    d.mkdir(parents=True)
+    (d / ".last_updated").write_text(str(int(_time.time())))
+
+    update_calls = []
+    monkeypatch.setattr(
+        manager, "update_host",
+        lambda *a, **kw: update_calls.append(a) or {"ok": True, "action": "pulled"},
+    )
+
+    result = manager.ensure_fresh("wordpress")
+    assert result["action"] == "fresh"
+    assert result["ok"] is True
+    assert update_calls == []  # update_host was NOT called
+
+
+def test_ensure_fresh_calls_update_when_slot_missing(tmp_path, monkeypatch):
+    """Slot doesn't exist → ensure_fresh calls update_host."""
+    from hosts.cache import manager
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    update_calls = []
+
+    def fake_update(name):
+        update_calls.append(name)
+        return {"name": name, "action": "cloned", "ok": True, "stderr": ""}
+
+    monkeypatch.setattr(manager, "update_host", fake_update)
+    result = manager.ensure_fresh("wordpress")
+    assert update_calls == ["wordpress"]
+    assert result["action"] == "cloned"
+
+
+def test_ensure_fresh_calls_update_when_slot_stale(tmp_path, monkeypatch):
+    """Slot exists but .last_updated is older than max_age → call update_host."""
+    import os as _os
+    from hosts.cache import manager
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = tmp_path / "pirategoat" / "ecosystem" / "wordpress" / "latest"
+    d.mkdir(parents=True)
+    marker = d / ".last_updated"
+    marker.write_text("0")  # epoch 0 — way stale
+    _os.utime(str(marker), (0, 0))
+
+    update_calls = []
+    monkeypatch.setattr(
+        manager, "update_host",
+        lambda name: update_calls.append(name) or {"ok": True, "action": "pulled"},
+    )
+    manager.ensure_fresh("wordpress", max_age_seconds=3600)
+    assert update_calls == ["wordpress"]
+
+
+def test_ensure_fresh_respects_custom_max_age(tmp_path, monkeypatch):
+    """Custom max_age_seconds works (e.g. 0 forces refresh always)."""
+    import time as _time
+    from hosts.cache import manager
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    d = tmp_path / "pirategoat" / "ecosystem" / "wordpress" / "latest"
+    d.mkdir(parents=True)
+    (d / ".last_updated").write_text(str(int(_time.time())))
+
+    update_calls = []
+    monkeypatch.setattr(
+        manager, "update_host",
+        lambda name: update_calls.append(name) or {"ok": True, "action": "pulled"},
+    )
+    manager.ensure_fresh("wordpress", max_age_seconds=0)
+    assert update_calls == ["wordpress"]  # 0 max_age forces refresh
+
+
 def test_update_host_is_serialized_by_lock(monkeypatch, tmp_path):
     """Two calls into the same host name serialize via advisory lock."""
     from hosts.cache import manager
