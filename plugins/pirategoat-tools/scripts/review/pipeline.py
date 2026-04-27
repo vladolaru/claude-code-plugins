@@ -625,6 +625,25 @@ def _step_3_gather_context(mode, state, context, config, output_dir):
     diff_stats = git.get("diff_stats", "")
     if diff_stats:
         situation.append(f"**Diff stats:**\n```\n{diff_stats}\n```")
+        situation.append("")
+
+    # Host context status — if present, show a one-line summary.
+    host_context = context.get("host_context")
+    if host_context:
+        banner = host_context.get("banner") or {}
+        resolved = host_context.get("resolved", [])
+        runtime_count = sum(1 for e in resolved if e.get("kind") == "runtime-host")
+        library_root_count = sum(1 for e in resolved if e.get("kind") == "library-dep")
+        if banner.get("degraded"):
+            situation.append(
+                f"**Host context:** ⚠ degraded ({banner.get('reason')}) — "
+                f"{runtime_count} runtime-hosts, {library_root_count} dependency roots resolved."
+            )
+        else:
+            situation.append(
+                f"**Host context:** {runtime_count} runtime-hosts, "
+                f"{library_root_count} dependency roots resolved."
+            )
 
     # Actions
     actions.append("Review the context above and write the change-purpose summary.")
@@ -1101,6 +1120,20 @@ def _step_9_review_report(mode, state, context, config, output_dir):
     actions.append(f"Write `{od}/review-report.md` with: findings summary, critical/important "
                    "issues highlighted, and a verdict (APPROVE, REQUEST_CHANGES, or COMMENT).")
     actions.append(f"Source: `{od}/review-findings.json` and `{od}/review-findings.md`.")
+
+    # Host context banner passthrough — if degraded, surface message at top
+    host_context = context.get("host_context")
+    banner = (host_context or {}).get("banner") or {}
+    if banner.get("degraded"):
+        actions.append("")
+        actions.append(
+            f"**Host context banner:** prepend this blockquote to the top of "
+            f"`review-report.md` (reconciliator already did the same for "
+            f"`review-findings.md`):"
+        )
+        actions.append("")
+        actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
+        actions.append("")
 
     handoff = [
         f"Verify `{od}/review-report.md` exists before proceeding.",

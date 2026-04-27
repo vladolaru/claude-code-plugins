@@ -17,6 +17,21 @@ import subprocess
 import sys
 
 
+# Host-context resolver import is best-effort — the scripts/ directory must
+# be importable (and ahead of any shadowing test packages like tests/hosts/)
+# for this to work. We attempt it once at module load so _fill_host_context()
+# does not mutate sys.path on every call.
+_HOSTS_CHAIN = None
+_scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _scripts_dir in sys.path:
+    sys.path.remove(_scripts_dir)
+sys.path.insert(0, _scripts_dir)
+try:
+    from hosts.chain import ResolverChain as _HOSTS_CHAIN  # noqa: E402
+except ImportError:
+    _HOSTS_CHAIN = None
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -86,6 +101,14 @@ def _run_cmd(cmd, cwd=None):
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return None
+
+
+def _resolve_repo_root(path):
+    """Return the git root for path when available, otherwise path itself."""
+    absolute = os.path.abspath(path)
+    cwd = absolute if os.path.isdir(absolute) else os.path.dirname(absolute)
+    root = _run_cmd(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
+    return root or absolute
 
 
 def resolve_gh_cmd():
@@ -302,7 +325,7 @@ def _fill_reviews(ctx):
 # ---------------------------------------------------------------------------
 
 def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
-                  incremental=False, git_range=None):
+                  incremental=False, git_range=None, repo_path=None):
     """Load existing context, fill missing fields, return complete context."""
     ctx = {}
     if os.path.isfile(ctx_path):
@@ -399,6 +422,18 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     # Review defaults
     ctx.setdefault("review", {}).setdefault("agent_timeout_seconds", 1200)
 
+    # Populate the per-clone install cache so InstallCacheResolver can
+    # surface library-dep entries below. Best-effort — install failures
+    # degrade host_context but do not block the review.
+    repo_root = _resolve_repo_root(repo_path or os.getcwd())
+    try:
+        _populate_install_cache(repo_root)
+    except Exception:  # noqa: BLE001 — review must continue
+        pass
+
+    # Host context — discover from the repo root when git can identify it.
+    _fill_host_context(ctx, repo_root)
+
     return ctx
 
 
@@ -472,6 +507,56 @@ def _resolve_author_name(ctx):
         pr["author_name"] = name
 
 
+def _populate_install_cache(repo_path):
+    """Run ensure_installed.py for the repo. Returns parsed payload or empty dict.
+
+    Best-effort: subprocess failure / timeout / unparseable JSON / missing
+    script all degrade silently to {}. The caller wraps this in a try/except
+    too, so a raised exception also doesn't block the review.
+
+    Currently invoked for side effects (cache population) only — load_and_fill
+    discards the return. Returning the payload anyway leaves the door open for
+    a debug command or a future caller to inspect populate status.
+    """
+    # Reuse _scripts_dir resolved at module load — single source of truth for
+    # the scripts/ root path, shared with the hosts.chain import above.
+    script = os.path.join(_scripts_dir, "hosts", "ensure_installed.py")
+    if not os.path.isfile(script):
+        return {}
+    try:
+        result = subprocess.run(
+            [sys.executable, script, "--repo", repo_path],
+            capture_output=True, text=True,
+            # Matches the inner per-manager timeout in
+            # ensure_installed.py:_run_install_command. A pathological install
+            # that consumes the full inner timeout will trip both timeouts at
+            # once — the caller still degrades silently, the inner banner is lost.
+            timeout=20 * 60,
+        )
+        if result.returncode != 0:
+            return {}
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {}
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return {}
+
+
+def _fill_host_context(ctx, repo_path):
+    """Populate host_context using hosts.chain.ResolverChain.
+
+    Failure is soft: if the hosts package cannot be imported at module
+    load, _HOSTS_CHAIN is None and we record host_context=None. Existing
+    values are overwritten because review-context.json may be reused across
+    runs and stale host paths are worse than no host context.
+    """
+    if _HOSTS_CHAIN is None:
+        ctx["host_context"] = None
+        return
+    ctx["host_context"] = _HOSTS_CHAIN().run(repo_path).to_dict()
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -490,6 +575,10 @@ def main():
                         help="Explicit git range (e.g. abc123..HEAD)")
     parser.add_argument("--output-dir", type=str, required=True,
                         help="Output directory for review-context.json")
+    parser.add_argument("--repo-path", type=str, default=None,
+                        help="Path to the repo under review (for host-context "
+                             "discovery). Defaults to the git root of the "
+                             "current working directory when available.")
 
     args = parser.parse_args()
 
@@ -506,6 +595,7 @@ def main():
         branch=args.branch,
         incremental=args.incremental,
         git_range=args.git_range,
+        repo_path=args.repo_path,
     )
 
     # Set output directory

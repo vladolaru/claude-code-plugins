@@ -23,6 +23,13 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/iterative_review/` | Iterative review loop sub-module. Multi-round independent review (Codex primary, Claude Code fallback) with pushback tracking, convergence detection, noise-filtered diff sizing, and telemetry. CLI entry point: `python3 -m iterative_review --action review\|advance [--autonomous]`. |
 | `scripts/linear/pipeline.py` | 15-step curated-context pipeline for investigating and fixing Linear issues. Owns step sequence, routing, state management, and curated briefings. Called by pirategoat-bot via `--step N --mode investigate\|fix`. |
 | `scripts/linear/events.py` | Best-effort JSONL event emission for pipeline progress (step_started, milestone, deliverable, pipeline_complete). Used by both review and linear issue pipelines. |
+| `scripts/hosts/host_context.py` | CLI entrypoint for upstream-host discovery. Runs the resolver chain and writes `host-context.json` under `--output-dir`. Invoked standalone or via `review/context.py`. |
+| `scripts/hosts/chain.py` | Composes repo-signaled advisory resolvers in priority order (explicit → wp-env → docker-compose → install-cache → vendor), dedups by `kind:name`, and generates the degradation banner. The `install-cache` resolver runs before `vendor` so a freshly-populated per-clone cache wins via name-collision dedup; `vendor` still serves repos with in-repo `vendor/`/`node_modules/` but no lockfile. Ambient sibling/ecosystem-cache resolvers exist as standalone helpers but are not in the default chain. |
+| `scripts/hosts/resolvers/` | Individual resolver implementations. Each reads local filesystem signals and emits `HostEntry` records without side effects. |
+| `scripts/hosts/ensure_installed.py` | Per-clone library-dep install cache. One slot per (clone, manager) at `~/.cache/pirategoat/library-deps/<clone_id>/<manager>/`. Replaced when the lockfile content changes; never modifies the working tree. Invoked by `review/context.py` at step 3 (Gather Context); also runnable standalone. Opportunistic stale-clone GC runs at every invocation. Mandatory `--ignore-scripts`; known-failure retry table; banner-on-failure semantics. |
+| `scripts/hosts/ecosystem_cache.py` | Machine-wide ecosystem source cache management (WordPress + WooCommerce). `--update` / `--list` / `--verify`. |
+| `scripts/hosts/install/` | Internal install submodule: lockfile hashing (`lockfile.py`), per-clone cache with atomic staging + stale-clone GC (`cache.py`), subprocess runner with retry table (`runner.py`), overrides parsing (`overrides.py`). |
+| `scripts/hosts/cache/` | Internal ecosystem-cache manager (`manager.py`): clone / git-pull / verify-staleness for WordPress + WooCommerce. |
 
 ## Architecture
 
@@ -105,7 +112,7 @@ Skip-list (sections bootstrap replaces with concrete values):
 The prompt bootstrap builds uses deliberate section ordering. Preserve this order when modifying `review/agent/bootstrap.py` or protocol files:
 
 1. **REVIEW RULES** (top) — behavioral steering via primacy effect. Agent reads rules first, anchoring behavior.
-2. **Context sections** — PR INTENT (raw PR metadata), REVIEW FOCUS (pipeline synthesis from change-purpose.md), REVIEWER-REQUESTED FOCUS (requester's additional instructions from `run-config.json`, present only when steering keywords were provided), and REVIEW BUDGET (scope-proportionate tool call calibration).
+2. **Context sections** — PR INTENT (raw PR metadata), REVIEW FOCUS (pipeline synthesis from change-purpose.md), REVIEWER-REQUESTED FOCUS (requester's additional instructions from `run-config.json`, present only when steering keywords were provided), HOST CONTEXT (advisory upstream runtime-host and library-dep path hints from `review-context.json.host_context`, injected when available), and REVIEW BUDGET (scope-proportionate tool call calibration).
 3. **REVIEW CONTENT** (middle) — the actual diff/scope. Processing zone where the agent does its work.
 4. **OUTPUT INSTRUCTIONS** (bottom) — format and file paths. Recency effect ensures the agent remembers how to produce output.
 

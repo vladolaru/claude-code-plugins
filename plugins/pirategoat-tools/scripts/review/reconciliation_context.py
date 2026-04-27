@@ -56,6 +56,34 @@ _PREFILTER_SCOPES = frozenset([
 ])
 
 
+def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
+    """Return host_context.banner from review-context.json, or None.
+
+    Safe on missing file, malformed JSON, and missing host_context key.
+
+    Args:
+        output_dir: Directory containing pipeline output files, including
+            ``review-context.json``.
+
+    Returns:
+        The ``host_context.banner`` dict if present, or ``None``.
+    """
+    if not output_dir:
+        return None
+    ctx_path = os.path.join(output_dir, "review-context.json")
+    if not os.path.isfile(ctx_path):
+        return None
+    try:
+        with open(ctx_path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    host_context = data.get("host_context") or {}
+    if not isinstance(host_context, dict):
+        return None
+    return host_context.get("banner")
+
+
 def load_agent_findings(
     output_dir: str,
     dispatched_agents: Optional[List[str]] = None,
@@ -613,6 +641,20 @@ def resolve_output_builder_path() -> str:
     return str(SCRIPTS_DIR / "agent" / "output.py")
 
 
+def _markdown_fence_for(text: str) -> str:
+    """Return a Markdown fence longer than any backtick run in text."""
+    max_run = 0
+    run = 0
+    for ch in text:
+        if ch == "`":
+            run += 1
+            if run > max_run:
+                max_run = run
+        else:
+            run = 0
+    return "`" * max(3, max_run + 1)
+
+
 def _escape_backtick_runs(text: str) -> str:
     """Neutralize backtick runs of 3+ in free-form text.
 
@@ -684,6 +726,29 @@ def to_markdown(context: Dict[str, Any]) -> str:
     """
     parts: List[str] = []
 
+    # --- Host Context Banner (prepended when degraded) ---
+    host_banner = context.get("host_context_banner")
+    if host_banner and isinstance(host_banner, dict) and host_banner.get("degraded"):
+        message = host_banner.get("message", "Host context degraded.")
+        banner_json = json.dumps(
+            {"host_context_banner": host_banner},
+            indent=2,
+            sort_keys=True,
+        )
+        fence = _markdown_fence_for(banner_json)
+        parts.append(
+            f"> **⚠ Host Context Banner:** {message}\n"
+            ">\n"
+            "> Reviewers scoped their findings under this banner; treat it as a qualifier"
+            " on claims that depend on unresolved upstream hosts.\n"
+            "\n"
+            "Full banner object for `review-findings.json` passthrough:\n"
+            "\n"
+            f"{fence}json\n"
+            f"{banner_json}\n"
+            f"{fence}\n"
+        )
+
     # --- Title ---
     parts.append("# Reconciliation Context\n")
 
@@ -724,16 +789,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
         # Wrap in a dynamically-sized fence to isolate from the outer
         # document structure — change-purpose.md is a Markdown artifact
         # that may contain headings or fenced code blocks.
-        max_run = 0
-        run = 0
-        for ch in change_purpose:
-            if ch == "`":
-                run += 1
-                if run > max_run:
-                    max_run = run
-            else:
-                run = 0
-        fence = "`" * max(3, max_run + 1)
+        fence = _markdown_fence_for(change_purpose)
         parts.append(fence)
         parts.append(change_purpose)
         parts.append(fence)
@@ -865,16 +921,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
             parts.append(f"### `{file_key}`\n")
             # Use a fence longer than any backtick run in the snippet
             # to avoid closing the fence early on source containing ```
-            max_run = 0
-            run = 0
-            for ch in snippet:
-                if ch == "`":
-                    run += 1
-                    if run > max_run:
-                        max_run = run
-                else:
-                    run = 0
-            fence = "`" * max(3, max_run + 1)
+            fence = _markdown_fence_for(snippet)
             parts.append(fence)
             parts.append(snippet)
             parts.append(fence + "\n")
@@ -934,16 +981,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
 
     # Fence the report with a dynamic fence to avoid collisions with
     # backtick runs inside the report itself.
-    max_run = 0
-    run = 0
-    for ch in report_text:
-        if ch == "`":
-            run += 1
-            if run > max_run:
-                max_run = run
-        else:
-            run = 0
-    fence = "`" * max(3, max_run + 1)
+    fence = _markdown_fence_for(report_text)
     parts.append(fence)
     parts.append(report_text)
     parts.append(fence)
@@ -1162,6 +1200,8 @@ def main() -> int:
             "pr_id": pr_id,
             "output_dir": output_dir,
             "output_builder_path": output_builder_path,
+            # Host context banner — surfaced for reviewer agents to calibrate findings.
+            "host_context_banner": extract_host_banner(output_dir),
         }
         # Include dispatched agents, normalized to match agent_findings keys
         # (e.g., "security-reviewer" → "security-review") so the

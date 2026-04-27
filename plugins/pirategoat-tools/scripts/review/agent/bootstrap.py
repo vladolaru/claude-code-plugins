@@ -64,6 +64,12 @@ AGENT_CONFIG = load_agent_config()
 # Prevents Claude Code's output persistence cascade for large PRs.
 SCOPE_INLINE_CAP = 15 * 1024  # 15KB
 
+# Soft cap on host_context section size to keep prompt growth bounded.
+# Most reviewers only need the top entries; the cap ensures wp-env setups
+# with many mappings don't dominate the prompt.
+_HOST_CONTEXT_MAX_PER_KIND = 20
+_HOST_CONTEXT_MAX_UNRESOLVED = 10
+
 # Sections to SKIP from reviewer-protocol.md.
 # Everything else is included automatically (safe default for new sections).
 # - Setup sections: bootstrap already performed these steps
@@ -456,6 +462,126 @@ def load_additional_instructions(output_dir: str) -> Optional[str]:
         return None
 
 
+def load_host_context(output_dir: str) -> Optional[dict]:
+    """Load host_context from review-context.json if present.
+
+    Returns the host_context dict or None. Safe on missing/invalid files.
+    """
+    if not output_dir:
+        return None
+    ctx_path = os.path.join(output_dir, "review-context.json")
+    if not os.path.isfile(ctx_path):
+        return None
+    try:
+        with open(ctx_path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data.get("host_context")
+
+
+def _library_dep_paths(entries: List[dict]) -> List[str]:
+    paths = set()
+    for entry in entries:
+        path = entry.get("path")
+        if isinstance(path, str) and path:
+            paths.add(path)
+    return sorted(paths)
+
+
+def _prompt_json_string(value: object) -> str:
+    """Render repo-derived prompt values as one JSON string literal."""
+    return json.dumps("" if value is None else str(value), ensure_ascii=True)
+
+
+def render_host_context_section(manifest: Optional[dict]) -> str:
+    """Render the Host Context section to be injected into an agent prompt."""
+    if not manifest or not isinstance(manifest, dict):
+        return ""
+
+    resolved = manifest.get("resolved") or []
+    unresolved = manifest.get("unresolved") or []
+    banner = manifest.get("banner")
+
+    if not resolved and not unresolved and not banner:
+        return ""
+
+    lines = [
+        "## Host Context",
+        "",
+        "Use these paths as starting points, not an exhaustive inventory. "
+        "If they do not match the code path under review, explore normally.",
+        "",
+    ]
+    if resolved:
+        runtime = sorted(
+            [e for e in resolved if e.get("kind") == "runtime-host"],
+            key=lambda e: e.get("name", ""),
+        )
+        library = sorted(
+            [e for e in resolved if e.get("kind") == "library-dep"],
+            key=lambda e: e.get("name", ""),
+        )
+        if runtime:
+            lines.append(
+                "Resolved runtime hosts (Read/Grep freely when your finding "
+                "depends on upstream behavior):"
+            )
+            for e in runtime[:_HOST_CONTEXT_MAX_PER_KIND]:
+                version = (
+                    f" [version {_prompt_json_string(e.get('version'))}]"
+                    if e.get("version") else ""
+                )
+                lines.append(
+                    f"  - name={_prompt_json_string(e.get('name'))} "
+                    f"[runtime-host]: path={_prompt_json_string(e.get('path'))}"
+                    f" (via source={_prompt_json_string(e.get('source'))}{version})"
+                )
+            if len(runtime) > _HOST_CONTEXT_MAX_PER_KIND:
+                extra = len(runtime) - _HOST_CONTEXT_MAX_PER_KIND
+                lines.append(f"  (+{extra} more not shown — explore normally if you need others)")
+            lines.append("")
+        if library:
+            lines.append(
+                "Resolved library dependency roots "
+                "(Read/Grep these roots when you need dependency source):"
+            )
+            # _library_dep_paths dedups; the marker counts what's hidden from
+            # the rendered list, not what was in the raw entries — symmetric
+            # with the runtime / unresolved branches.
+            all_paths = _library_dep_paths(library)
+            paths = all_paths[:_HOST_CONTEXT_MAX_PER_KIND]
+            for path in paths:
+                lines.append(f"  - path={_prompt_json_string(path)}")
+            if len(all_paths) > _HOST_CONTEXT_MAX_PER_KIND:
+                extra = len(all_paths) - _HOST_CONTEXT_MAX_PER_KIND
+                lines.append(f"  (+{extra} more not shown — explore normally if you need others)")
+            lines.append("")
+
+    if unresolved:
+        lines.append(
+            "Unresolved hosts (do not make absence claims about these — "
+            "they may exist elsewhere):"
+        )
+        sorted_unresolved = sorted(unresolved, key=lambda u: u.get("name", ""))
+        for u in sorted_unresolved[:_HOST_CONTEXT_MAX_UNRESOLVED]:
+            reason = u.get("reason", "unknown")
+            lines.append(
+                f"  - name={_prompt_json_string(u.get('name'))}: "
+                f"reason={_prompt_json_string(reason)}"
+            )
+        if len(sorted_unresolved) > _HOST_CONTEXT_MAX_UNRESOLVED:
+            extra = len(sorted_unresolved) - _HOST_CONTEXT_MAX_UNRESOLVED
+            lines.append(f"  (+{extra} more not shown — explore normally if you need others)")
+        lines.append("")
+
+    if banner and banner.get("message"):
+        lines.append(f"Banner: {_prompt_json_string(banner.get('message'))}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 def build_output(
     agent_name: str,
     plugin_root: str,
@@ -472,6 +598,7 @@ def build_output(
     change_purpose: Optional[str] = None,
     additional_instructions: Optional[str] = None,
     review_budget: Optional[int] = None,
+    host_context: Optional[dict] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
     lines = []
@@ -524,6 +651,13 @@ def build_output(
         lines.append(f"> {additional_instructions}")
         lines.append("")
         lines.append("Prioritize findings related to this guidance throughout your analysis.")
+        lines.append("")
+
+    # Host Context — upstream runtime hosts and dependency roots available for
+    # Read/Grep verification (Phase 1 of upstream host context feature).
+    host_section = render_host_context_section(host_context)
+    if host_section:
+        lines.append(host_section)
         lines.append("")
 
     # Review Budget — scope-proportionate tool call calibration
@@ -896,6 +1030,10 @@ def main():
     # Load additional instructions from run-config.json (if provided by requester)
     additional_instructions = load_additional_instructions(output_dir)
 
+    # Load host_context from review-context.json (populated in Phase 1 of
+    # upstream host context). Absent / missing / invalid → None.
+    host_context = load_host_context(output_dir)
+
     # Determine overall status
     overall_status = scope_status
     if config["domain"] is None:
@@ -917,6 +1055,7 @@ def main():
         change_purpose=change_purpose,
         additional_instructions=additional_instructions,
         review_budget=review_budget,
+        host_context=host_context,
     )
 
     print(output)

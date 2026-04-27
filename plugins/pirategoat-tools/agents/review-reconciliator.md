@@ -205,3 +205,7 @@ When an agent has `verdict: "not_applicable"`, it means "these changes are outsi
 - **Do NOT count not-applicable agents toward approval confidence.** They did not review the code.
 - **DO report them separately** so the orchestrator knows how many agents actually reviewed vs. abstained.
 - **Include in the narrative:** "T agents returned not-applicable (changes outside their domain): [names with reasons]"
+
+## Host Context Banner
+
+If the reconciliation context contains `host_context_banner` with `degraded: true`, prepend the banner's `message` to the top of `review-findings.md` as a blockquote, and copy the full banner object into `review-findings.json` under the `host_context_banner` key. This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it.

@@ -186,3 +186,185 @@ class TestCLI:
     def test_exits_1_without_pr_or_branch(self, tmp_path):
         r = self._run("--output-dir", str(tmp_path))
         assert r.returncode == 1
+
+
+# ---------- Host-context integration ----------
+
+def _insert_scripts_onto_path():
+    """Ensure scripts/ is on sys.path so review.context imports cleanly in unit tests.
+
+    The root conftest already does this for pytest collection, but subprocess
+    tests rely on an explicit PYTHONPATH env; unit tests here re-assert it defensively.
+    """
+    scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+
+
+def test_host_context_filled_when_missing(tmp_path, monkeypatch):
+    """review/context.py should populate host_context when absent."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    # Partial review-context.json so load_and_fill has something to fill
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+    }))
+
+    _insert_scripts_onto_path()
+    from review.context import load_and_fill
+
+    ctx = load_and_fill(
+        ctx_path=str(outdir / "review-context.json"),
+        branch=True,
+        repo_path=str(repo),
+    )
+    assert "host_context" in ctx
+    assert ctx["host_context"]["banner"] is None
+
+
+def test_host_context_recomputed_when_present(tmp_path, monkeypatch):
+    """Existing host_context should be refreshed for the current repo."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    existing = {
+        "version": 1,
+        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+        "host_context": {
+            "version": 1,
+            "resolved": [{
+                "name": "wordpress",
+                "kind": "runtime-host",
+                "path": "/stale/wordpress",
+                "source": "explicit",
+                "version": None,
+                "version_freshness": None,
+                "confidence": "high",
+                "notes": {},
+            }],
+            "banner": None,
+            "diagnostics": {"stale": True},
+        },
+    }
+    (outdir / "review-context.json").write_text(json.dumps(existing))
+
+    _insert_scripts_onto_path()
+    from review.context import load_and_fill
+
+    ctx = load_and_fill(
+        ctx_path=str(outdir / "review-context.json"),
+        branch=True,
+        repo_path=str(repo),
+    )
+    assert ctx["host_context"]["resolved"] == []
+    assert ctx["host_context"]["banner"] is None
+
+
+def test_host_context_uses_git_root_when_repo_path_omitted_from_subdir(tmp_path, monkeypatch):
+    """CWD fallback should discover repo-root wp-env config from subdirectories."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    subdir = repo / "src"
+    subdir.mkdir(parents=True)
+    upstream = tmp_path / "woocommerce"
+    upstream.mkdir()
+    (repo / ".wp-env.json").write_text(json.dumps({
+        "mappings": {
+            "wp-content/plugins/woocommerce": "../woocommerce",
+        }
+    }))
+    subprocess.run(
+        ["git", "init"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+    }))
+
+    _insert_scripts_onto_path()
+    from review.context import load_and_fill
+
+    monkeypatch.chdir(subdir)
+    ctx = load_and_fill(
+        ctx_path=str(outdir / "review-context.json"),
+        branch=True,
+    )
+
+    assert ctx["host_context"]["banner"] is None
+    assert ctx["host_context"]["resolved"][0]["name"] == "woocommerce"
+    assert ctx["host_context"]["resolved"][0]["path"] == str(upstream.resolve())
+
+
+def test_context_cli_passes_repo_path_to_host_discovery(tmp_path):
+    """CLI --repo-path is honored and host-context lands in review-context.json."""
+    scripts = Path(__file__).parent.parent.parent / "scripts"
+
+    repo = tmp_path / "some-repo"
+    repo.mkdir()
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+    }))
+
+    env = {**os.environ, "PYTHONPATH": str(scripts), "HOME": str(tmp_path / "home")}
+    env.pop("XDG_CACHE_HOME", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "review.context",
+         "--branch", "--output-dir", str(outdir),
+         "--repo-path", str(repo)],
+        capture_output=True, text=True, env=env, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    ctx = json.loads((outdir / "review-context.json").read_text())
+    assert "host_context" in ctx
+    assert ctx["host_context"]["banner"] is None
+
+
+def test_fill_host_context_does_not_mutate_sys_path(tmp_path, monkeypatch):
+    """_fill_host_context must not reorder sys.path as a side effect."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+    }))
+
+    _insert_scripts_onto_path()
+    from review.context import load_and_fill
+
+    before = list(sys.path)
+    load_and_fill(
+        ctx_path=str(outdir / "review-context.json"),
+        branch=True,
+        repo_path=str(repo),
+    )
+    after = list(sys.path)
+    assert after == before, (
+        f"sys.path was mutated by _fill_host_context. "
+        f"Before: {before!r}\nAfter: {after!r}"
+    )

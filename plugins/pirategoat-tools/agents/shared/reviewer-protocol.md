@@ -232,3 +232,13 @@ find . -type f \( -name "CLAUDE.md" -o -name "*.md" \) -path "*/.claude/*" 2>/de
 
 Read: `CLAUDE.md`, `.claude/skills/`, `.claude/docs/`, ADRs, architecture docs. **Project standards override generic patterns.** Apply project conventions before domain expertise. This is exploration — it informs review but is not itself reviewable.
 
+## Host Context Usage
+
+The bootstrap may inject a **Host Context** section into your prompt with local paths that repo signals made worth checking: upstream runtime hosts (e.g., wp-env'd WordPress at `/x/wp`) and library dependency roots (composer's `vendor/`, npm's `node_modules/` — possibly served from `~/.cache/pirategoat/library-deps/<clone_id>/<manager>/` rather than the repo). Treat these as starting points; explore normally when they don't match the code path under review.
+
+**Rules:**
+- Use Host Context paths as shortcuts when your finding depends on upstream behavior — read or grep the listed paths instead of speculating about hook signatures, class methods, or library function shapes.
+- Prefer targeted `Grep` over wholesale directory reads — `vendor/` and `node_modules/` roots can be huge.
+- If a host is marked **unresolved** or the **Banner** indicates degradation, you cannot verify upstream behavior. Two options: (1) downgrade severity and add a `verify locally` note in the recommendation, or (2) skip the finding if it depends entirely on the unverified host. Do not state absence ("function X doesn't exist") for unresolved hosts.
+- Don't recommend edits to paths under `~/.cache/pirategoat/library-deps/` or any other library-dep root — those are review aids, not editable code. Recommendations should target the reviewed repo.
+- Cite upstream sources using `file:line` so the reconciliator can verify: e.g., `woocommerce/plugins/woocommerce/includes/class-wc-order.php:123`.

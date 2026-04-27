@@ -1232,6 +1232,7 @@ class TestFullScript:
             "pr_id",
             "output_dir",
             "output_builder_path",
+            "host_context_banner",
         }
         assert set(ctx.keys()) == expected_keys
 
@@ -2292,3 +2293,135 @@ class TestMissingAgentDetection:
         ctx["dispatched_agents"] = []
         md = mod.to_markdown(ctx)
         assert "Missing agents" not in md
+
+
+# ===========================================================================
+# Host context banner propagation
+# ===========================================================================
+
+def test_extract_host_banner_reads_from_review_context(mod, tmp_path):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "host_context": {
+            "version": 1,
+            "resolved": [],
+            "unresolved": [{"name": "wordpress", "reason": "not_found"}],
+            "banner": {
+                "degraded": True,
+                "reason": "fully_unavailable",
+                "message": "Host context unavailable.",
+                "unresolved": [{"name": "wordpress", "reason": "not_found"}],
+            },
+            "diagnostics": {},
+        },
+    }))
+    banner = mod.extract_host_banner(str(outdir))
+    assert banner is not None
+    assert banner["degraded"] is True
+    assert banner["reason"] == "fully_unavailable"
+
+
+def test_extract_host_banner_returns_none_when_no_host_context(mod, tmp_path):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({"version": 1}))
+    assert mod.extract_host_banner(str(outdir)) is None
+
+
+def test_extract_host_banner_returns_none_when_host_context_is_null(mod, tmp_path):
+    """Explicit JSON null for host_context should return None, not crash."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "host_context": None,
+    }))
+    assert mod.extract_host_banner(str(outdir)) is None
+
+
+def test_extract_host_banner_returns_none_when_file_missing(mod, tmp_path):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    assert mod.extract_host_banner(str(outdir)) is None
+
+
+def test_extract_host_banner_tolerates_malformed_json(mod, tmp_path):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text("{not json")
+    assert mod.extract_host_banner(str(outdir)) is None
+
+
+def test_to_markdown_prepends_banner_when_degraded(mod):
+    context = {
+        "agent_findings": {},
+        "source_snippets": {},
+        "scope_annotations": {},
+        "changed_files": ["x.php"],
+        "git_range": "a..b",
+        "change_purpose": "",
+        "pr_id": "",
+        "output_dir": "/tmp",
+        "output_builder_path": "/tmp/output.py",
+        "host_context_banner": {
+            "degraded": True,
+            "reason": "fully_unavailable",
+            "message": "Host context unavailable.",
+            "unresolved": [{"name": "wordpress", "reason": "not_found"}],
+        },
+    }
+    md = mod.to_markdown(context)
+    # Banner appears at top as a blockquote
+    first_nonempty = next(line for line in md.splitlines() if line.strip())
+    assert "Host Context Banner" in first_nonempty
+    assert "host_context_banner" in md
+    assert '"reason": "fully_unavailable"' in md
+    assert '"unresolved": [' in md
+    assert '"name": "wordpress"' in md
+
+
+def test_to_markdown_banner_uses_dynamic_fence_for_backticks(mod):
+    context = {
+        "agent_findings": {},
+        "source_snippets": {},
+        "scope_annotations": {},
+        "changed_files": ["x.php"],
+        "git_range": "a..b",
+        "change_purpose": "",
+        "pr_id": "",
+        "output_dir": "/tmp",
+        "output_builder_path": "/tmp/output.py",
+        "host_context_banner": {
+            "degraded": True,
+            "reason": "partial",
+            "message": "Host ```context``` degraded.",
+            "unresolved": [{"name": "bad```host", "reason": "not_found"}],
+        },
+    }
+
+    md = mod.to_markdown(context)
+    banner_section = md.split("# Reconciliation Context", 1)[0]
+    lines = banner_section.splitlines()
+
+    assert "````json" in lines
+    assert "````" in lines
+    assert '"name": "bad```host"' in banner_section
+
+
+def test_to_markdown_no_banner_when_absent(mod):
+    context = {
+        "agent_findings": {},
+        "source_snippets": {},
+        "scope_annotations": {},
+        "changed_files": ["x.php"],
+        "git_range": "a..b",
+        "change_purpose": "",
+        "pr_id": "",
+        "output_dir": "/tmp",
+        "output_builder_path": "/tmp/output.py",
+        "host_context_banner": None,
+    }
+    md = mod.to_markdown(context)
+    assert "Host Context Banner" not in md
