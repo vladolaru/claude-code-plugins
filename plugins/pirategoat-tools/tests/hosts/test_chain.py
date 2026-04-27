@@ -156,7 +156,7 @@ def test_diagnostics_records_which_resolvers_ran(make_repo, monkeypatch, tmp_pat
     manifest = ResolverChain().run(str(repo))
     consulted = manifest.diagnostics.get("resolvers_consulted", [])
     assert set(consulted) == {
-        "explicit", "wp-env", "docker-compose",
+        "explicit", "wp-env", "docker-compose", "plugin-headers",
         "install-cache", "vendor-inspection",
     }
 
@@ -397,6 +397,149 @@ services:
         assert any(u["name"] == "wordpress" for u in manifest.unresolved)
         assert manifest.banner is not None
         assert manifest.banner.reason == "fully_unavailable"
+
+
+class TestPluginHeadersIntegration:
+    """End-to-end: plugin headers declare WP+WC need, fulfillment satisfies
+    both from the cache. Simulates the bot environment (fresh clone, no
+    user-personal docker-compose.override.yml)."""
+
+    def _stub_update_to_populate(self, monkeypatch, cache_root_dir):
+        import time as _time
+
+        def fake_update(name):
+            slot = cache_root_dir / "pirategoat" / "ecosystem" / name / "latest"
+            slot.mkdir(parents=True, exist_ok=True)
+            (slot / ".last_updated").write_text(str(int(_time.time())))
+            return {"name": name, "action": "cloned", "ok": True, "stderr": ""}
+
+        monkeypatch.setattr("hosts.cache.manager.update_host", fake_update)
+
+    def test_woopayments_fresh_clone_resolves_both_wp_and_wc(self, tmp_path, monkeypatch):
+        """Committed config: docker-compose.yml self-mounts WP, plugin file
+        declares WC + WP via headers. Cache fulfillment satisfies both.
+        This is the bot's environment."""
+        cache_root_dir = tmp_path / "xdg-cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root_dir))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        self._stub_update_to_populate(monkeypatch, cache_root_dir)
+
+        repo = tmp_path / "woocommerce-payments"
+        repo.mkdir()
+        # Self-mount WP (vendored docker setup) and the plugin slot
+        (repo / "docker" / "wordpress").mkdir(parents=True)
+        (repo / "docker-compose.yml").write_text("""
+services:
+  wordpress:
+    volumes:
+      - ./docker/wordpress:/var/www/html
+      - .:/var/www/html/wp-content/plugins/woocommerce-payments
+""")
+        # Plugin file with the headers WooPayments actually uses
+        (repo / "woocommerce-payments.php").write_text("""<?php
+/**
+ * Plugin Name: WooPayments
+ * Requires at least: 6.0
+ * WC requires at least: 7.6
+ * Requires Plugins: woocommerce
+ */
+""")
+        manifest = ResolverChain().run(str(repo))
+
+        runtime_hosts = sorted(
+            e.name for e in manifest.resolved if e.kind == "runtime-host"
+        )
+        assert "wordpress" in runtime_hosts
+        assert "woocommerce" in runtime_hosts
+        # Both came from the cache (no local sibling configured)
+        for name in ("wordpress", "woocommerce"):
+            entry = next(e for e in manifest.resolved if e.name == name)
+            assert entry.source == "ecosystem-cache"
+            assert entry.confidence == "high"
+        assert manifest.banner is None
+
+    def test_local_dev_with_sibling_mount_keeps_local_wc(self, tmp_path, monkeypatch):
+        """Local dev: docker-compose mounts a local WC sibling. Plugin
+        headers also declare WC. The local mount wins via dedup; cache
+        fulfillment is correctly skipped (no spurious git pull)."""
+        cache_root_dir = tmp_path / "xdg-cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root_dir))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+        update_calls = []
+        monkeypatch.setattr(
+            "hosts.cache.manager.update_host",
+            lambda name: update_calls.append(name) or {"ok": True, "action": "fresh"},
+        )
+
+        # Sibling WC checkout
+        wc_sibling = tmp_path / "woocommerce-develop" / "plugins" / "woocommerce"
+        wc_sibling.mkdir(parents=True)
+
+        repo = tmp_path / "woocommerce-payments"
+        repo.mkdir()
+        (repo / "docker" / "wordpress").mkdir(parents=True)
+        (repo / "docker-compose.yml").write_text("""
+services:
+  wordpress:
+    volumes:
+      - ./docker/wordpress:/var/www/html
+""")
+        (repo / "docker-compose.override.yml").write_text(f"""
+services:
+  wordpress:
+    volumes:
+      - {wc_sibling}:/var/www/html/wp-content/plugins/woocommerce
+""")
+        (repo / "woocommerce-payments.php").write_text("""<?php
+/**
+ * Plugin Name: WooPayments
+ * Requires at least: 6.0
+ * Requires Plugins: woocommerce
+ */
+""")
+        # Pre-populate WP cache too (will be used by fulfillment for WP).
+        wp_slot = cache_root_dir / "pirategoat" / "ecosystem" / "wordpress" / "latest"
+        wp_slot.mkdir(parents=True)
+        import time as _time
+        (wp_slot / ".last_invalidated").write_text("")
+        (wp_slot / ".last_updated").write_text(str(int(_time.time())))
+
+        manifest = ResolverChain().run(str(repo))
+
+        wc_entry = next(e for e in manifest.resolved if e.name == "woocommerce")
+        # Local docker-compose sibling wins, NOT cache.
+        assert wc_entry.source == "docker-compose"
+        assert wc_entry.path == str(wc_sibling)
+        # No update_host call for woocommerce (pre-filter prevented it).
+        assert "woocommerce" not in update_calls
+
+    def test_unfulfillable_declared_dep_surfaces_in_banner(self, tmp_path, monkeypatch):
+        """`Requires Plugins: jetpack` — not in _FULFILLABLE_PLUGIN_SLUGS —
+        stays unresolved and shows up in the partial-unresolved banner."""
+        cache_root_dir = tmp_path / "xdg-cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root_dir))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        self._stub_update_to_populate(monkeypatch, cache_root_dir)
+
+        repo = tmp_path / "myplugin"
+        repo.mkdir()
+        (repo / "myplugin.php").write_text("""<?php
+/**
+ * Plugin Name: MyPlugin
+ * Requires at least: 6.0
+ * Requires Plugins: jetpack
+ */
+""")
+        manifest = ResolverChain().run(str(repo))
+
+        # WP fulfilled via cache
+        wp = next(e for e in manifest.resolved if e.name == "wordpress")
+        assert wp.source == "ecosystem-cache"
+        # Jetpack stays unresolved
+        assert any(u["name"] == "jetpack" for u in manifest.unresolved)
+        assert manifest.banner is not None
+        assert "jetpack" in manifest.banner.message
 
 
 def test_resolver_chain_tolerates_resolver_exception(tmp_path):
