@@ -738,6 +738,7 @@ class TestStep8ReadinessGate:
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         assert "WAITING" in g["title"]
+        assert g["blocks_progress"] is True
         text = "\n".join(g["situation"])
         assert "security-reviewer" in text
         assert "performance-reviewer" in text

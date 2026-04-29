@@ -176,6 +176,27 @@ class TestStep3Orchestration:
         # Should succeed even without a git repo — subprocess failure is tolerated
         assert r.returncode == 0
 
+    def test_step_3_allows_install_cache_to_reach_inner_timeout(self, mod, tmp_path, monkeypatch):
+        """The context.py wrapper timeout must exceed ensure_installed.py's 20m inner timeout."""
+        seen_timeouts = []
+
+        def fake_run_subprocess(cmd, cwd=None, timeout=60):
+            seen_timeouts.append(timeout)
+            return "", True
+
+        monkeypatch.setattr(mod, "_run_subprocess", fake_run_subprocess)
+        mod._orchestrate_step(
+            3,
+            "full",
+            {},
+            {"resolved_params": {}},
+            {},
+            str(tmp_path),
+        )
+
+        assert seen_timeouts
+        assert seen_timeouts[0] > 20 * 60
+
     def test_step_3_next_step_reflects_unfetched_issues(self, tmp_path):
         """When has_unfetched_issues is True, next step after 3 should be 4 (not 5)."""
         self._run("--step", "1", "--mode", "pr",
@@ -193,6 +214,55 @@ class TestStep3Orchestration:
         assert r.returncode == 0
         # Output should point to step 4, not step 5
         assert "Step 4" in r.stdout
+
+
+class TestStep8WaitingRouting:
+    """Step 8 WAITING state should persist without advancing the pipeline."""
+
+    def test_waiting_step_is_not_completed_or_routed_forward(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
+        mod.write_config(str(tmp_path), {"mode": "pr", "interactive": True})
+        mod.write_state(str(tmp_path), {
+            "completed_steps": [1, 3, 5, 6, 7],
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "workspace": {"original_branch": None, "stash_ref": None},
+            "agents": {
+                "dispatched": ["security-reviewer"],
+                "completed": [],
+                "failed": [],
+            },
+            "verdict": None,
+        })
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"},
+        }))
+
+        def fake_orchestrate(step, mode, config, state, context, output_dir):
+            state["waiting_on_agents"] = {
+                "running": ["security-reviewer"],
+                "not_dispatched": [],
+                "status_output": "security-reviewer RUNNING",
+                "agent_timeout_seconds": 1200,
+            }
+            return context
+
+        monkeypatch.setattr(mod, "_orchestrate_step", fake_orchestrate)
+        monkeypatch.setattr(sys, "argv", [
+            "pipeline.py",
+            "--step", "8",
+            "--output-dir", str(tmp_path),
+        ])
+
+        mod.main()
+
+        output = capsys.readouterr().out
+        saved = mod.read_state(str(tmp_path))
+        assert 8 not in saved["completed_steps"]
+        assert "first_waiting_at" in saved["waiting_on_agents"]
+        assert "Next:" not in output
+        assert "PIPELINE COMPLETE" not in output
+        assert "PIPELINE WAITING" in output
 
 
 class TestStep5Orchestration:
@@ -655,4 +725,3 @@ class TestQuickModeDispatch:
             "wp-architecture-reviewer should DISPATCH when keywords match, "
             f"got {dispatch_map['wp-architecture-reviewer']['status']}"
         )
-

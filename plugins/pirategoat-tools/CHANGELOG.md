@@ -5,6 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.101.3] - 2026-04-29
+
+Pipeline orchestration reliability fixes for waiting-state persistence, context gathering, degraded host context, Linear routing, and registry-driven dispatch checks.
+
+### Fixed
+
+- **Step 8 WAITING state now persists and blocks routing.** The review pipeline records `first_waiting_at` before writing `pipeline-state.json`, does not mark Step 8 complete while agents are still running, and renders a distinct `PIPELINE WAITING` footer instead of the terminal completion sentinel until reconciliation is safe to run.
+- **Context gathering can outlive dependency installs.** The Step 3 wrapper timeout now exceeds `ensure_installed.py`'s 20-minute per-manager timeout, so normal Composer/npm installs are not killed by the outer pipeline.
+- **Install-cache failure banners survive host-context rebuilds.** `review/context.py` now preserves `ensure_installed.py`'s `install_failed` banner in `host_context.banner` when dependency-source verification degrades.
+- **Linear small-fix routing now affects active steps.** The Linear pipeline reads `complexity.json` into state and skips Self-Review/Re-Verify steps for `small` fixes, matching Step 11 guidance.
+- **Registry triage checks fail fast when unsupported.** `plan_dispatch.py` now validates `triage_checks` before domain filtering and implements the structural checks currently declared by the registry.
+
+### Tests
+
+- Added regression coverage for Step 8 waiting persistence/routing, context timeout sizing, host-context install banners, Linear complexity routing, and registry triage-check validation.
+
 ## [1.101.2] - 2026-04-27
 
 Cache-based fulfillment for unresolved upstream hosts, plus a new resolver that reads WordPress plugin/theme headers as host-need declarations. Together: a repo that declares WordPress and WooCommerce as dependencies — via `Requires at least`, `WC requires at least`, or `Requires Plugins:` — gets both fulfilled from the ecosystem cache automatically, even on a fresh clone with no local sibling checkouts and no committed `docker-compose.override.yml`.

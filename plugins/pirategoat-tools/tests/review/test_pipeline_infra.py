@@ -295,6 +295,21 @@ class TestFormatOutput:
         output = mod.format_output(11, guidance)
         assert "COMPLETE" in output
 
+    def test_blocked_step_does_not_show_complete(self, mod):
+        guidance = {
+            "phase": "SYNTHESIS", "title": "Reconcile + Verify — WAITING",
+            "situation": ["Agents still running."],
+            "actions": ["Wait, then re-run step 8."],
+            "handoff": None,
+            "next_step": None,
+            "skip_reason": None,
+            "blocks_progress": True,
+        }
+        output = mod.format_output(8, guidance)
+        assert "PIPELINE COMPLETE" not in output
+        assert "Next:" not in output
+        assert "PIPELINE WAITING" in output
+
     def test_handoff_section(self, mod):
         guidance = {
             "phase": "SETUP", "title": "Gather Context",
@@ -519,4 +534,3 @@ class TestQuickModeConfig:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is False, \
             "interactive step 1 rerun should reset quick to false"
-

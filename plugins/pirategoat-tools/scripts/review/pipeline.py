@@ -106,6 +106,8 @@ _STALE_ARTIFACTS = [
 ]
 
 DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches agents_status.py
+CONTEXT_GATHER_TIMEOUT = (20 * 60) + 60  # install-cache inner timeout + grace
+AGENT_WAIT_GRACE_SECONDS = 60
 
 # Files to preserve across runs
 _PRESERVED_FILES = {
@@ -962,6 +964,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                 "situation": situation,
                 "actions": actions,
                 "handoff": None,
+                "blocks_progress": True,
             }
 
     # Normal reconciliation briefing (agents done or escalated)
@@ -1417,7 +1420,13 @@ def format_output(step, guidance):
 
     # Next step pointer or completion
     next_step = guidance.get("next_step")
-    if next_step:
+    if guidance.get("blocks_progress"):
+        lines.append(f"{'─' * 60}")
+        lines.append("⏸️  PIPELINE WAITING")
+        lines.append("")
+        lines.append("Complete the actions above, then re-run this step.")
+        lines.append(f"Run: python3 {SCRIPTS_DIR / 'pipeline.py'} --step {step} --output-dir <OUTPUT_DIR>")
+    elif next_step:
         lines.append(f"{'─' * 60}")
         ns = next_step
         lines.append(f"➡️  Next: Step {ns['step']} — {ns['title']}")
@@ -1519,7 +1528,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         if git_range:
             gather_cmd.extend(["--git-range", git_range])
 
-        stdout, ok = _run_subprocess(gather_cmd, timeout=120)
+        stdout, ok = _run_subprocess(gather_cmd, timeout=CONTEXT_GATHER_TIMEOUT)
         # Re-read context (context.py writes review-context.json)
         if os.path.isfile(context_path):
             try:
@@ -1662,6 +1671,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         try:
             r = subprocess.run(status_cmd, capture_output=True, text=True, timeout=30)
             if r.returncode == 2:
+                previous_waiting = state.get("waiting_on_agents", {})
                 # Agents still running — parse text output for names
                 running = []
                 not_dispatched = []
@@ -1679,6 +1689,10 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     "not_dispatched": not_dispatched,
                     "status_output": r.stdout.strip(),
                 }
+                if previous_waiting.get("first_waiting_at"):
+                    state["waiting_on_agents"]["first_waiting_at"] = previous_waiting["first_waiting_at"]
+                else:
+                    state["waiting_on_agents"]["first_waiting_at"] = datetime.now(timezone.utc).isoformat()
                 # Read per-agent timeout for escalation threshold
                 agent_timeout = DEFAULT_AGENT_TIMEOUT
                 ctx_path = os.path.join(output_dir, "review-context.json")
@@ -1692,8 +1706,21 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                     except (json.JSONDecodeError, OSError):
                         pass
                 state["waiting_on_agents"]["agent_timeout_seconds"] = agent_timeout
+                try:
+                    first_waiting = datetime.fromisoformat(
+                        state["waiting_on_agents"]["first_waiting_at"]
+                    )
+                    elapsed = (datetime.now(timezone.utc) - first_waiting).total_seconds()
+                except (ValueError, KeyError):
+                    elapsed = 0
+                if elapsed < agent_timeout + AGENT_WAIT_GRACE_SECONDS:
+                    return context
+            else:
+                state.pop("waiting_on_agents", None)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass  # Gate is best-effort; if checker fails, proceed normally
+            # Gate is best-effort; if checker fails, proceed normally and
+            # avoid carrying stale waiting state forward.
+            state.pop("waiting_on_agents", None)
 
         cp_path = os.path.join(output_dir, "change-purpose.md")
         if os.path.isfile(cp_path):
@@ -2045,14 +2072,6 @@ def main():
             except Exception:
                 pass
 
-    # --- Update state ---
-    if step not in state.get("completed_steps", []):
-        state.setdefault("completed_steps", []).append(step)
-    write_state(output_dir, state)
-
-    # --- Compute routing AFTER orchestration (state may have changed) ---
-    active = get_active_steps(mode, config, state, context)
-
     # Check for hard error: non-interactive PR without pre-computed context
     if mode == "pr" and not config.get("interactive", True):
         git_ctx = context.get("git", {})
@@ -2068,8 +2087,18 @@ def main():
         print(f"ERROR: No guidance for step {step}", file=sys.stderr)
         sys.exit(1)
 
+    blocks_progress = guidance.get("blocks_progress", False)
+
+    # --- Update state ---
+    if not blocks_progress and step not in state.get("completed_steps", []):
+        state.setdefault("completed_steps", []).append(step)
+    write_state(output_dir, state)
+
+    # --- Compute routing AFTER orchestration/guidance (state may have changed) ---
+    active = get_active_steps(mode, config, state, context)
+
     # Add next step info
-    next_info = compute_next_step(step, active)
+    next_info = None if blocks_progress else compute_next_step(step, active)
     guidance["next_step"] = next_info
     if next_info:
         guidance["skip_reason"] = next_info.get("skip_reason")
@@ -2077,7 +2106,7 @@ def main():
         guidance["skip_reason"] = None
 
     # Telemetry: finalize at last active step
-    if next_info is None and telemetry:
+    if next_info is None and not blocks_progress and telemetry:
         try:
             step_def = _STEP_MAP.get(step, {})
             bot_mode = not config.get("interactive", True)

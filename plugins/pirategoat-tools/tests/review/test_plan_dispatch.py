@@ -674,6 +674,26 @@ class TestRegistryConsistency:
         )
         assert len(plan["agents"]) == self._cohort_count(registry)
 
+    def test_unsupported_triage_check_fails_even_without_domain_files(self):
+        registry = {
+            "agents": {
+                "security-reviewer": {
+                    "domain": "security",
+                    "dispatch_class": "conditional",
+                    "focus": "Security",
+                    "triage_checks": ["not_a_real_check"],
+                },
+            },
+        }
+        with pytest.raises(ValueError, match="Unsupported triage check"):
+            build_dispatch_plan(
+                mode="full",
+                git_range="main..HEAD",
+                output_dir="/tmp/test",
+                changed_files=["README.md"],
+                registry=registry,
+            )
+
 
 # =============================================================================
 # New imports for triage tests
@@ -973,6 +993,54 @@ class TestTriageConditionalAgent:
         )
         assert status == "DISPATCH"
         assert "large change" in reason
+
+    def test_new_function_check_dispatches(self):
+        """Configured structural checks should be active, not silently ignored."""
+        config = self._make_config(
+            domain="clarity",
+            triage_checks=["has_new_functions"],
+        )
+        status, reason = triage_conditional_agent(
+            "code-clarity-reviewer",
+            config,
+            ["src/service.py"],
+            "",
+            {},
+            diff_text="@@\n+def calculate_total(items):\n+    return sum(items)\n",
+        )
+        assert status == "DISPATCH"
+        assert "new function" in reason
+
+    def test_public_api_check_dispatches(self):
+        """Docs drift registry checks should dispatch for public API surface changes."""
+        config = self._make_config(
+            domain="docs-drift",
+            triage_checks=["has_public_api_changes"],
+        )
+        status, reason = triage_conditional_agent(
+            "docs-drift-reviewer",
+            config,
+            ["src/api.ts"],
+            "",
+            {},
+            diff_text="@@\n+export function createPaymentIntent(input: Input): Promise<Result> {\n",
+        )
+        assert status == "DISPATCH"
+        assert "public API" in reason
+
+    def test_unsupported_triage_check_raises(self):
+        """Unknown registry checks should fail fast instead of falling through."""
+        config = self._make_config(
+            triage_checks=["not_a_real_check"],
+        )
+        with pytest.raises(ValueError, match="Unsupported triage check"):
+            triage_conditional_agent(
+                "security-reviewer",
+                config,
+                ["src/Controller.php"],
+                "",
+                {},
+            )
 
     # --- Empty domain files ---
 

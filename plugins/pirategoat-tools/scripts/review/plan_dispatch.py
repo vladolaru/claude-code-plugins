@@ -452,6 +452,119 @@ def _get_new_abstraction_files(domain_files: List[str], diffstat: Dict) -> List[
     ]
 
 
+_SUPPORTED_TRIAGE_CHECKS = frozenset({
+    "new_abstraction_files",
+    "substantial_non_test_additions",
+    "file_deletions",
+    "net_removal",
+    "large_pr",
+    "has_new_functions",
+    "has_modified_signatures",
+    "has_docblock_changes",
+    "has_documentation_files",
+    "has_public_api_changes",
+})
+
+_SIGNATURE_PATTERNS = (
+    re.compile(r"\bdef\s+[a-z_][a-z0-9_]*\s*\("),
+    re.compile(r"\bfunction\s+[a-z_$][a-z0-9_$]*\s*\("),
+    re.compile(r"\b(public|protected|private)\s+(static\s+)?function\s+[a-z_$][a-z0-9_$]*\s*\("),
+    re.compile(r"\b(export\s+)?(async\s+)?function\s+[a-z_$][a-z0-9_$]*\s*\("),
+    re.compile(r"\b(export\s+)?class\s+[a-z_$][a-z0-9_$]*\b"),
+    re.compile(r"\b(export\s+)?interface\s+[a-z_$][a-z0-9_$]*\b"),
+    re.compile(r"\b(export\s+)?enum\s+[a-z_$][a-z0-9_$]*\b"),
+)
+
+_PUBLIC_API_PATTERNS = (
+    re.compile(r"\bexport\s+(async\s+)?function\s+[a-z_$][a-z0-9_$]*\s*\("),
+    re.compile(r"\bexport\s+(class|interface|enum|type|const)\s+[a-z_$][a-z0-9_$]*\b"),
+    re.compile(r"\bpublic\s+(static\s+)?function\s+[a-z_$][a-z0-9_$]*\s*\("),
+    re.compile(r"\bregister_rest_route\s*\("),
+    re.compile(r"\badd_(action|filter)\s*\("),
+)
+
+_DOCBLOCK_MARKERS = (
+    "/**",
+    "*/",
+    "@param",
+    "@return",
+    "@throws",
+    "@since",
+    "///",
+    '"""',
+    "'''",
+)
+
+_DOCUMENTATION_BASENAMES = {
+    "readme",
+    "changelog",
+    "contributing",
+    "agents",
+    "claude",
+}
+
+
+def _iter_patch_lines(diff_text: str, marker: str):
+    """Yield patch content lines that start with marker, excluding diff metadata."""
+    for line in (diff_text or "").splitlines():
+        if not line.startswith(marker):
+            continue
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        yield line[1:].strip().lower()
+
+
+def _has_pattern_in_patch_lines(diff_text: str, markers: Tuple[str, ...], patterns) -> bool:
+    for marker in markers:
+        for line in _iter_patch_lines(diff_text, marker):
+            if any(pattern.search(line) for pattern in patterns):
+                return True
+    return False
+
+
+def _has_new_functions(diff_text: str) -> bool:
+    return _has_pattern_in_patch_lines(diff_text, ("+",), _SIGNATURE_PATTERNS)
+
+
+def _has_modified_signatures(diff_text: str) -> bool:
+    return (
+        _has_pattern_in_patch_lines(diff_text, ("+",), _SIGNATURE_PATTERNS)
+        and _has_pattern_in_patch_lines(diff_text, ("-",), _SIGNATURE_PATTERNS)
+    )
+
+
+def _has_docblock_changes(diff_text: str) -> bool:
+    for marker in ("+", "-"):
+        for line in _iter_patch_lines(diff_text, marker):
+            if any(token in line for token in _DOCBLOCK_MARKERS):
+                return True
+    return False
+
+
+def _has_documentation_files(domain_files: List[str]) -> bool:
+    for filepath in domain_files:
+        lower = filepath.lower()
+        stem = Path(lower).stem
+        suffix = Path(lower).suffix
+        if lower.startswith("docs/") or "/docs/" in lower:
+            return True
+        if suffix in {".md", ".mdx", ".rst"}:
+            return True
+        if stem in _DOCUMENTATION_BASENAMES:
+            return True
+    return False
+
+
+def _has_public_api_changes(diff_text: str) -> bool:
+    return _has_pattern_in_patch_lines(diff_text, ("+", "-"), _PUBLIC_API_PATTERNS)
+
+
+def _validate_triage_checks(agent_name: str, config: dict) -> None:
+    for check in config.get("triage_checks", []):
+        if check not in _SUPPORTED_TRIAGE_CHECKS:
+            raise ValueError(f"Unsupported triage check for {agent_name}: {check}")
+
+
 def triage_conditional_agent(
     agent_name: str,
     config: dict,
@@ -484,6 +597,8 @@ def triage_conditional_agent(
     Returns:
         (status, reason) where status is DISPATCH or SKIPPED_TRIAGE.
     """
+    _validate_triage_checks(agent_name, config)
+
     # Layer 1: Test-only filter
     # If every domain-matching file is a test file, skip the agent.
     # Conditional agents target production-code concerns; test-only diffs
@@ -548,6 +663,21 @@ def triage_conditional_agent(
         elif check == "large_pr":
             if len(domain_files) >= 20:
                 return "DISPATCH", f"large change ({len(domain_files)} files in domain)"
+        elif check == "has_new_functions":
+            if _has_new_functions(diff_text):
+                return "DISPATCH", "new function, method, or type definition"
+        elif check == "has_modified_signatures":
+            if _has_modified_signatures(diff_text):
+                return "DISPATCH", "modified function or type signature"
+        elif check == "has_docblock_changes":
+            if _has_docblock_changes(diff_text):
+                return "DISPATCH", "docblock or API comment changes"
+        elif check == "has_documentation_files":
+            if _has_documentation_files(domain_files):
+                return "DISPATCH", "documentation file changes"
+        elif check == "has_public_api_changes":
+            if _has_public_api_changes(diff_text):
+                return "DISPATCH", "public API surface changes"
 
     # Layer 4: Default — DISPATCH when no triage signal skips the agent.
     # Keywords and triage checks provide positive evidence, but conditional
@@ -594,6 +724,7 @@ def decide_agent_dispatch(
     """
     dispatch_class = config.get("dispatch_class", "conditional")
     domain = config.get("domain")
+    _validate_triage_checks(agent_name, config)
 
     # Check if the agent's domain has files
     has_domain_files = False

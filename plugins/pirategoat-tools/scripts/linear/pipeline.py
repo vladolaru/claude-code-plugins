@@ -85,8 +85,8 @@ STEP_SEQUENCE = [
     {"step": 9,  "title": "Write Plan",             "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
     {"step": 10, "title": "Implement",              "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
     {"step": 11, "title": "Verify",                 "phase": "IMPLEMENTATION", "condition": "fix_mode_and_unresolved"},
-    {"step": 12, "title": "Self-Review",            "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
-    {"step": 13, "title": "Re-Verify",              "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved"},
+    {"step": 12, "title": "Self-Review",            "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved_review_needed"},
+    {"step": 13, "title": "Re-Verify",              "phase": "VALIDATION",     "condition": "fix_mode_and_unresolved_review_needed"},
     {"step": 14, "title": "Create Draft PR",        "phase": "OUTPUT",         "condition": "fix_mode_and_unresolved"},
     {"step": 15, "title": "Present Results",         "phase": "OUTPUT",         "condition": "always"},
 ]
@@ -100,6 +100,7 @@ _STALE_ARTIFACTS = [
     "pipeline-events.jsonl",
     "investigation-report.md",
     "implementation-plan.md",
+    "complexity.json",
     "clarity-assessment.json",
 ]
 
@@ -135,6 +136,16 @@ def _eval_condition(condition, mode, config, state, context):
         if state.get("clarity_blocked", False):
             return config.get("skip_clarity_gate", False)
         return True
+
+    if condition == "fix_mode_and_unresolved_review_needed":
+        if not _eval_condition("fix_mode_and_unresolved", mode, config, state, context):
+            return False
+        complexity = state.get("complexity")
+        if isinstance(complexity, dict):
+            complexity = complexity.get("complexity")
+        if not complexity:
+            return True
+        return str(complexity).lower() != "small"
 
     return False
 
@@ -208,6 +219,18 @@ def write_state(output_dir, state):
     path = os.path.join(output_dir, "pipeline-state.json")
     with open(path, "w") as f:
         json.dump(state, f, indent=2)
+
+
+def _sync_complexity_from_artifact(output_dir, state):
+    """Load complexity.json into state for routing decisions when present."""
+    path = os.path.join(output_dir, "complexity.json")
+    try:
+        with open(path) as f:
+            complexity = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return
+    if isinstance(complexity, dict):
+        state["complexity"] = complexity
 
 
 def read_config(output_dir):
@@ -1766,6 +1789,7 @@ def main():
 
     # --- Step-specific orchestration ---
     context = _orchestrate_step(step, mode, config, state, context, output_dir, events)
+    _sync_complexity_from_artifact(output_dir, state)
 
     # --- Update state ---
     if step not in state.get("completed_steps", []):

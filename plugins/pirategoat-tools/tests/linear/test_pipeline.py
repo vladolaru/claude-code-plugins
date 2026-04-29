@@ -57,7 +57,12 @@ class TestStepSequence:
             assert s["phase"] in valid_phases, f"Step {s['step']} has invalid phase {s['phase']}"
 
     def test_conditions_are_valid(self, mod):
-        valid_conditions = {"always", "fix_mode_only", "fix_mode_and_unresolved"}
+        valid_conditions = {
+            "always",
+            "fix_mode_only",
+            "fix_mode_and_unresolved",
+            "fix_mode_and_unresolved_review_needed",
+        }
         for s in mod.STEP_SEQUENCE:
             assert s["condition"] in valid_conditions, f"Step {s['step']} has invalid condition {s['condition']}"
 
@@ -110,6 +115,25 @@ class TestActiveSteps:
         assert len(active) == TOTAL_STEPS
         for step in range(1, TOTAL_STEPS + 1):
             assert step in active
+
+    def test_small_complexity_skips_iterative_review_steps(self, mod):
+        state = {"complexity": {"complexity": "small"}}
+        active = mod.get_active_steps("fix", {}, state, {})
+        assert 12 not in active
+        assert 13 not in active
+        assert 14 in active
+
+    def test_medium_complexity_keeps_iterative_review_steps(self, mod):
+        state = {"complexity": {"complexity": "medium"}}
+        active = mod.get_active_steps("fix", {}, state, {})
+        assert 12 in active
+        assert 13 in active
+
+    def test_large_complexity_keeps_iterative_review_steps(self, mod):
+        state = {"complexity": {"complexity": "large"}}
+        active = mod.get_active_steps("fix", {}, state, {})
+        assert 12 in active
+        assert 13 in active
 
     def test_fix_mode_skips_impl_steps_when_resolved(self, mod):
         state = {"issue_resolved": True}
@@ -209,6 +233,13 @@ class TestNextStep:
         result = mod.compute_next_step(7, active)
         assert result["step"] == 8
         assert result["skip_reason"] is None
+
+    def test_small_complexity_routes_11_to_14(self, mod):
+        active = mod.get_active_steps("fix", {}, {"complexity": {"complexity": "small"}}, {})
+        result = mod.compute_next_step(11, active)
+        assert result["step"] == 14
+        assert "Step 12" in result["skip_reason"]
+        assert "Step 13" in result["skip_reason"]
 
 
 # ---------------------------------------------------------------------------

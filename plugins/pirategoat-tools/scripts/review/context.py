@@ -426,13 +426,14 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     # surface library-dep entries below. Best-effort — install failures
     # degrade host_context but do not block the review.
     repo_root = _resolve_repo_root(repo_path or os.getcwd())
+    install_payload = {}
     try:
-        _populate_install_cache(repo_root)
+        install_payload = _populate_install_cache(repo_root)
     except Exception:  # noqa: BLE001 — review must continue
         pass
 
     # Host context — discover from the repo root when git can identify it.
-    _fill_host_context(ctx, repo_root)
+    _fill_host_context(ctx, repo_root, install_payload=install_payload)
 
     return ctx
 
@@ -543,7 +544,34 @@ def _populate_install_cache(repo_path):
         return {}
 
 
-def _fill_host_context(ctx, repo_path):
+def _merge_install_cache_banner(host_context, install_payload):
+    """Preserve install-cache degradation banners in rebuilt host context."""
+    if not isinstance(host_context, dict) or not isinstance(install_payload, dict):
+        return
+
+    banner = install_payload.get("banner")
+    if not banner:
+        return
+
+    diagnostics = host_context.setdefault("diagnostics", {})
+    diagnostics["install_cache"] = {
+        "status": install_payload.get("status"),
+        "managers": install_payload.get("managers", []),
+        "banner": banner,
+    }
+
+    existing = host_context.get("banner")
+    if not existing:
+        host_context["banner"] = banner
+        return
+
+    existing_unresolved = existing.setdefault("unresolved", [])
+    existing_unresolved.extend(banner.get("unresolved", []))
+    if banner.get("message") and banner["message"] not in existing.get("message", ""):
+        existing["message"] = f"{existing.get('message', '').rstrip()} {banner['message']}".strip()
+
+
+def _fill_host_context(ctx, repo_path, install_payload=None):
     """Populate host_context using hosts.chain.ResolverChain.
 
     Failure is soft: if the hosts package cannot be imported at module
@@ -555,6 +583,7 @@ def _fill_host_context(ctx, repo_path):
         ctx["host_context"] = None
         return
     ctx["host_context"] = _HOSTS_CHAIN().run(repo_path).to_dict()
+    _merge_install_cache_banner(ctx["host_context"], install_payload or {})
 
 
 # ---------------------------------------------------------------------------
