@@ -5,9 +5,13 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.101.3] - 2026-04-29
+## [1.102.0] - 2026-05-13
 
-Pipeline orchestration reliability fixes for waiting-state persistence, context gathering, degraded host context, Linear routing, and registry-driven dispatch checks.
+Adds UX-review capabilities to the `browser-interaction` skill so review-class agents can reach specific page states and exercise interaction disciplines without per-agent improvisation. Plus pipeline orchestration reliability fixes for waiting-state persistence, context gathering, degraded host context, Linear routing, and registry-driven dispatch checks.
+
+### Added
+
+- **`skills/browser-interaction/SKILL.md` — Capability Patterns section.** 10 patterns covering page states (responsive, theme, loading, error, accessibility) and interaction disciplines (keyboard, scroll, focus, multi-user sign-in, log inspection). Each pattern maps Chrome DevTools and Playwright invocations alongside verification anchors; a top-of-section Capability Index table gives directional hints for pattern selection. RULE 0 gains a contrastive WRONG/RIGHT example showing the uid-reuse-after-navigation failure mode. Centralizes browser tooling knowledge for `frontend-ux-reviewer`, `e2e-tests-reviewer`, and future browser consumers — capability gaps become a single point of maintenance instead of fanning out to per-agent system prompts.
 
 ### Fixed
 
