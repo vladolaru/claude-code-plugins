@@ -582,6 +582,46 @@ def render_host_context_section(manifest: Optional[dict]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def resolve_overall_status(domain, primary_status, has_secondary_content):
+    """Decide the bootstrap STATUS shown to the agent.
+
+    Defense in depth against secondary-domain masking: when an agent's PRIMARY
+    domain matches no files but a SECONDARY domain (e.g. config-ops) does, the
+    naive behavior leaves a contradictory prompt — a top-level NO_DOMAIN_FILES
+    (which tells the agent to exit) above an appended secondary-scope section
+    with real content. The agent either drops the secondary files or reviews
+    them with a verdict that reads like a full domain review.
+
+    Resolution: flip to OK so the secondary files are actually reviewed, and
+    return ``secondary_only=True`` so the caller can attach a coverage note that
+    forces the agent to scope its verdict honestly.
+
+    Returns:
+        (status, secondary_only)
+    """
+    if domain is None:
+        return "OK", False
+    if primary_status == "NO_DOMAIN_FILES" and has_secondary_content:
+        return "OK", True
+    return primary_status, False
+
+
+def build_coverage_note(primary_domain: str, secondary_domains: List[str]) -> str:
+    """Note injected when only secondary-domain files are in scope.
+
+    Makes partial coverage explicit so an APPROVE can't be mistaken for
+    "the primary domain's code was reviewed" — there was none in this change.
+    """
+    secs = ", ".join(secondary_domains)
+    return (
+        f"PRIMARY DOMAIN ({primary_domain}) matched 0 changed files in this change. "
+        f"You are reviewing ONLY secondary-domain files ({secs}). "
+        f"Review those files normally, but SCOPE YOUR VERDICT to them: an APPROVE "
+        f"here means \"no issues in the {secs} files,\" NOT that {primary_domain}-domain "
+        f"code was reviewed — there was none. State this scope explicitly in your summary."
+    )
+
+
 def build_output(
     agent_name: str,
     plugin_root: str,
@@ -599,6 +639,7 @@ def build_output(
     additional_instructions: Optional[str] = None,
     review_budget: Optional[int] = None,
     host_context: Optional[dict] = None,
+    coverage_note: Optional[str] = None,
 ) -> str:
     """Build the structured bootstrap output block."""
     lines = []
@@ -674,6 +715,12 @@ def build_output(
     # Section 2: Review Content (middle position — processing zone)
     lines.append("--- Section 2: REVIEW CONTENT (what to review) ---")
     lines.append("")
+    # Coverage note FIRST — when only secondary-domain files are in scope, the
+    # agent must scope its verdict honestly before reading the diff.
+    if coverage_note:
+        lines.append("=== COVERAGE NOTE ===")
+        lines.append(coverage_note)
+        lines.append("")
     # scope_output already starts with "=== REVIEW SCOPE ===" from scope.py
     if len(scope_output) > SCOPE_INLINE_CAP:
         # Write full scope to file to avoid output persistence cascade
@@ -883,6 +930,7 @@ def main():
     output_dir = args.output_dir or "/tmp"
     pr_number = None
     exploration_scope = None
+    secondary_with_content = []  # secondary domains that matched files
 
     if config["domain"] is not None:
         # Run primary scope discovery
@@ -934,6 +982,7 @@ def main():
             if sec_status and sec_status == "OK":
                 scope_output += f"\n\n=== SECONDARY SCOPE: {sec_domain} ===\n"
                 scope_output += sec_output
+                secondary_with_content.append(sec_domain)
     else:
         # No domain (tests-mutation-reviewer) — detect output dir manually
         scope_output = "(No scope discovery — this agent does not use domain-based scope)"
@@ -1034,10 +1083,16 @@ def main():
     # upstream host context). Absent / missing / invalid → None.
     host_context = load_host_context(output_dir)
 
-    # Determine overall status
-    overall_status = scope_status
-    if config["domain"] is None:
-        overall_status = "OK"
+    # Determine overall status. When the primary domain matched nothing but
+    # secondary-domain files exist, flip to a scoped OK and attach a coverage
+    # note (defense in depth against secondary-domain masking).
+    overall_status, secondary_only = resolve_overall_status(
+        config["domain"], scope_status, bool(secondary_with_content)
+    )
+    coverage_note = (
+        build_coverage_note(config["domain"], secondary_with_content)
+        if secondary_only else None
+    )
 
     output = build_output(
         agent_name=args.agent,
@@ -1056,6 +1111,7 @@ def main():
         additional_instructions=additional_instructions,
         review_budget=review_budget,
         host_context=host_context,
+        coverage_note=coverage_note,
     )
 
     print(output)

@@ -34,6 +34,7 @@ load_additional_instructions = _mod.load_additional_instructions
 compute_review_budget = _mod.compute_review_budget
 extract_scope_files = _mod.extract_scope_files
 extract_scope_line_count = _mod.extract_scope_line_count
+resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
 
@@ -242,6 +243,78 @@ class TestChangePurposeInjection:
         )
         assert "=== REVIEW FOCUS (pipeline synthesis) ===" in output
         assert "retry logic" in output
+
+class TestResolveOverallStatus:
+    """Defense-in-depth: primary NO_DOMAIN_FILES + secondary content → scoped OK."""
+
+    def test_normal_ok_passes_through(self):
+        status, secondary_only = resolve_overall_status("security", "OK", False)
+        assert status == "OK"
+        assert secondary_only is False
+
+    def test_no_domain_files_without_secondary_stays(self):
+        """No primary files and no secondary content → still NO_DOMAIN_FILES (exit)."""
+        status, secondary_only = resolve_overall_status("security", "NO_DOMAIN_FILES", False)
+        assert status == "NO_DOMAIN_FILES"
+        assert secondary_only is False
+
+    def test_no_domain_files_with_secondary_flips_to_scoped_ok(self):
+        """The masking fix: secondary files exist → review them, flag secondary_only."""
+        status, secondary_only = resolve_overall_status("security", "NO_DOMAIN_FILES", True)
+        assert status == "OK"
+        assert secondary_only is True
+
+    def test_null_domain_is_ok(self):
+        status, secondary_only = resolve_overall_status(None, "OK", False)
+        assert status == "OK"
+        assert secondary_only is False
+
+    def test_error_status_not_overridden(self):
+        status, secondary_only = resolve_overall_status("security", "ERROR", True)
+        assert status == "ERROR"
+        assert secondary_only is False
+
+
+class TestCoverageNoteInjection:
+    """A coverage note forces honest verdict scoping when only secondary files match."""
+
+    def test_coverage_note_rendered_when_provided(self):
+        note = (
+            "PRIMARY DOMAIN (security) matched 0 changed files. You are reviewing "
+            "ONLY secondary-domain files (config-ops)."
+        )
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            coverage_note=note,
+        )
+        assert "=== COVERAGE NOTE ===" in output
+        assert "matched 0 changed files" in output
+        assert "config-ops" in output
+
+    def test_no_coverage_note_when_absent(self):
+        output = build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output="scope",
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+        )
+        assert "=== COVERAGE NOTE ===" not in output
+
 
 class TestLoadPrNumberFromContext:
     """PR number loading from review-context.json."""
