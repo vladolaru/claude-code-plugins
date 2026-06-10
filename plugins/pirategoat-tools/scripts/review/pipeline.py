@@ -721,6 +721,15 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
 
     plan_summary = state.get("dispatch_plan_summary", {})
     plan_agents = state.get("dispatch_plan_agents", [])
+    plan_warnings = state.get("dispatch_plan_warnings", [])
+
+    # Coverage warnings go FIRST — a degraded-coverage signal must not be buried
+    # under the agent list. Unrecognized-source files would otherwise produce a
+    # clean review for code no reviewer read.
+    if plan_warnings:
+        for w in plan_warnings:
+            situation.append(f"⚠️  {w}")
+        situation.append("")
 
     if plan_summary:
         situation.append(
@@ -1589,12 +1598,16 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                         }
                         for a in agents
                     ]
+                    # Surface coverage warnings (e.g. unrecognized source language).
+                    state["dispatch_plan_warnings"] = plan.get("warnings", [])
                 except (json.JSONDecodeError, OSError):
                     state["dispatch_plan_summary"] = {}
                     state["dispatch_plan_agents"] = []
+                    state["dispatch_plan_warnings"] = []
         else:
             state["dispatch_plan_summary"] = {}
             state["dispatch_plan_agents"] = []
+            state["dispatch_plan_warnings"] = []
 
     if step == 6:
         plan_path = os.path.join(output_dir, "dispatch-plan.json")

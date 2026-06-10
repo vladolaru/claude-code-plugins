@@ -5,6 +5,22 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.103.0] - 2026-06-10
+
+Fixes a systematic blind spot in reviewer scoping: non-web languages were invisible to the review domains. On a pure-Rust repo, 12 of 16 production-code domains returned `NO_DOMAIN_FILES` — `security-reviewer` never read `src/auth/` and signed off after reviewing only the CI workflow. Root cause was 16 independently hand-maintained per-domain extension regexes that covered only the web/WordPress stack; `.rs` was wired into the Rust *test* domains but never the production-code ones (`.cs` had the same partial gap). Centralizes language recognition into a single source of truth and adds a fail-loud safety net for languages the catalog still doesn't cover.
+
+### Fixed
+
+- **Reviewer domains now recognize all mainstream languages.** `review/agent/scope.py` composes every general-purpose code domain's include pattern from shared language-group constants (`_PROG_LANGS`, `_STYLE_LANGS`, `_QUERY_LANGS`, `_DOC_LANGS`, `_DATA_LANGS`, `_FRONTEND_LANGS`) instead of 16 separate hand-maintained regexes. Coverage broadens from the web/WordPress stack to Rust, C/C++, C#, Kotlin, Swift, Scala, Objective-C, Elixir, Clojure, Haskell, F#, Lua, Perl, Dart, Vue, Svelte, shell, and more. Adding a language is now a one-line edit picked up by every domain — eliminating the partial-addition drift that caused the Rust (and C#) gaps. Test-reviewer domains, `wp-architecture`, `a11y`, `toolchain`, and `config-ops` keep their intentionally-curated patterns.
+
+### Added
+
+- **Fail-loud safety net for unrecognized source languages.** `review/plan_dispatch.py` detects changed source files whose language no reviewer domain covers (`detect_unrecognized_source`) and surfaces a prominent `UNRECOGNIZED SOURCE` warning in the dispatch plan (`scope_summary.unrecognized_source` + `warnings[]`). The pipeline renders it at the top of the Step 5 briefing, so a coverage gap can no longer masquerade as a clean review. Uses a deliberate superset of the actively-reviewed languages so the next exotic language (e.g. Solidity, Nim) is flagged even before the catalog learns it.
+
+### Tests
+
+- Added language-coverage regression tests in `tests/review/agent/test_scope.py` (`.rs` across all production domains, plus Kotlin/Swift/C++/C#/Scala; `rust-test-dirs` still excludes `src/`) and safety-net tests in `tests/review/test_plan_dispatch.py` (`TestDetectUnrecognizedSource`, `TestSafetyNetInPlan`).
+
 ## [1.102.0] - 2026-05-13
 
 Adds UX-review capabilities to the `browser-interaction` skill so review-class agents can reach specific page states and exercise interaction disciplines without per-agent improvisation. Plus pipeline orchestration reliability fixes for waiting-state persistence, context gathering, degraded host context, Linear routing, and registry-driven dispatch checks.

@@ -50,6 +50,62 @@ DOMAIN_CATALOG = _scope_mod.DOMAIN_CATALOG
 filter_noise = _scope_mod.filter_noise
 filter_domain = _scope_mod.filter_domain
 
+# =============================================================================
+# Unrecognized-source safety net
+# =============================================================================
+#
+# The catalog can only review languages it knows about. If a changed source file
+# uses a language NO domain recognizes, the old behavior was silent: every domain
+# returned NO_DOMAIN_FILES and the review produced a clean bill of health for code
+# nobody read (exactly the Rust failure). This safety net makes that case fail
+# loudly instead.
+#
+# `_SOURCE_EXTENSIONS` is deliberately a SUPERSET of the actively-reviewed
+# languages (`scope._PROG_LANGS`): it adds a long tail of real-but-uncommon
+# languages so a gap is flagged even before someone teaches the catalog about
+# them. A false "unrecognized" warning is benign (it just asks a human to
+# double-check); a silent skip is not. Truly novel extensions outside both lists
+# can still slip through — this trades recall for precision (few false alarms).
+
+# Long-tail programming languages the catalog does NOT actively review.
+_EXTRA_SOURCE_EXTENSIONS = frozenset({
+    "nim", "cr", "v", "jl", "rkt", "elm", "purs",
+    "sol", "move", "cairo", "hx", "tcl", "vala",
+    "ada", "adb", "ads", "cob", "cbl",
+    "ps1", "psm1", "f90", "f95", "f03",
+    "sml", "scm", "lisp", "lsp",
+})
+
+# All extensions we consider "programming source" for the safety net.
+_SOURCE_EXTENSIONS = frozenset(_scope_mod._PROG_LANGS) | _EXTRA_SOURCE_EXTENSIONS
+
+
+def detect_unrecognized_source(clean_files: List[str]) -> List[str]:
+    """Find changed source files that no reviewer domain will read.
+
+    A file is flagged when its extension looks like programming source
+    (`_SOURCE_EXTENSIONS`) but the broad ``code`` domain does not match it —
+    i.e., no general-purpose reviewer covers the language.
+
+    Args:
+        clean_files: Changed files, already noise-filtered.
+
+    Returns:
+        Sorted list of unrecognized-source file paths (empty when all source
+        files are covered, which is the normal case).
+    """
+    if not clean_files:
+        return []
+    covered = set(filter_domain(clean_files, "code")[0])
+    flagged = []
+    for f in clean_files:
+        if f in covered:
+            continue
+        _, _, ext = f.rpartition(".")
+        if ext and ext.lower() in _SOURCE_EXTENSIONS:
+            flagged.append(f)
+    return sorted(flagged)
+
 
 # =============================================================================
 # Registry loading
@@ -935,13 +991,30 @@ def build_dispatch_plan(
             signal = f"{agent_name}: STATUS=SKIPPED ({reason})"
         agent_signals.append(signal)
 
+    # Safety net: changed source files no reviewer domain will read (unrecognized
+    # language). Surfaced loudly so the gap can't masquerade as a clean review.
+    unrecognized_source = detect_unrecognized_source(clean_files)
+
     # Scope summary
     scope_summary = {
         "total_files": len(changed_files),
         "noise_filtered": len(noise_files),
         "reviewable_files": len(clean_files),
         "by_domain": {k: v for k, v in domain_counts.items() if v > 0},
+        "unrecognized_source": unrecognized_source,
     }
+
+    warnings = []
+    if unrecognized_source:
+        shown = ", ".join(unrecognized_source[:10])
+        if len(unrecognized_source) > 10:
+            shown += f", … (+{len(unrecognized_source) - 10} more)"
+        warnings.append(
+            f"UNRECOGNIZED SOURCE: {len(unrecognized_source)} changed file(s) use a "
+            f"language no reviewer domain covers — these will NOT be reviewed: {shown}. "
+            f"Review coverage is degraded; inspect them manually or extend "
+            f"scope.py's language groups."
+        )
 
     return {
         "mode": mode,
@@ -951,6 +1024,7 @@ def build_dispatch_plan(
         "scope_summary": scope_summary,
         "agents": dispatch_list,
         "agent_signals": agent_signals,
+        "warnings": warnings,
     }
 
 

@@ -376,6 +376,53 @@ class TestFilterDomain:
         matched, excluded = review_scope.filter_domain(files, "toolchain")
         assert matched == files
 
+    # --- Language coverage: production-code domains must see non-web languages ---
+    # Regression for the Rust blindness: .rs (and other mainstream languages) were
+    # absent from every production-code domain, so security/code/etc. returned
+    # NO_DOMAIN_FILES on a pure-Rust diff. See
+    # .claude/docs/analysis/2026-06-10-claude-rust-domain-classifier-gap.md
+
+    def test_security_domain_matches_rust_source(self):
+        """The reported bug: security-reviewer must see Rust auth code."""
+        files = ["src/auth/login.rs", "src/auth/store.rs"]
+        matched, excluded = review_scope.filter_domain(files, "security")
+        assert matched == files, "security must match .rs production source"
+        assert excluded == []
+
+    def test_code_domain_matches_rust_source(self):
+        files = ["src/main.rs", "src/lib.rs"]
+        matched, _ = review_scope.filter_domain(files, "code")
+        assert matched == files
+
+    @pytest.mark.parametrize("domain", [
+        "code", "security", "performance", "architecture", "patterns",
+        "concurrency", "clarity", "simplification", "reliability",
+        "api-contract", "data-flow", "dead-code", "reference-integrity",
+    ])
+    def test_production_domains_match_rust(self, domain):
+        """Every general-purpose production-code domain must recognize .rs."""
+        matched, _ = review_scope.filter_domain(["src/auth/refresh.rs"], domain)
+        assert matched == ["src/auth/refresh.rs"], f"{domain} should match .rs source"
+
+    @pytest.mark.parametrize("filename", [
+        "Service.kt",      # Kotlin
+        "App.swift",       # Swift
+        "engine.cpp",      # C++
+        "engine.c",        # C
+        "Handler.cs",      # C# (was the pre-existing partial gap)
+        "actor.scala",     # Scala
+    ])
+    def test_security_domain_matches_other_mainstream_languages(self, filename):
+        """Broadened coverage: not just Rust — all mainstream languages."""
+        matched, _ = review_scope.filter_domain([filename], "security")
+        assert matched == [filename], f"security should match {filename}"
+
+    def test_rust_source_excluded_from_test_only_domain(self):
+        """rust-test-dirs stays narrow — broadening must not leak src/ into it."""
+        matched, excluded = review_scope.filter_domain(["src/auth/login.rs"], "rust-test-dirs")
+        assert matched == []
+        assert "src/auth/login.rs" in excluded
+
     def test_unknown_domain_raises(self):
         with pytest.raises(RuntimeError, match="Unknown domain"):
             review_scope.filter_domain(["app.py"], "nonexistent-domain")

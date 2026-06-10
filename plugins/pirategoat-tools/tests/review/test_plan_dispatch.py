@@ -39,6 +39,7 @@ decide_agent_dispatch = _mod.decide_agent_dispatch
 triage_conditional_agent = _mod.triage_conditional_agent
 build_dispatch_plan = _mod.build_dispatch_plan
 get_diffstat = _mod.get_diffstat
+detect_unrecognized_source = _mod.detect_unrecognized_source
 DOMAIN_CATALOG = _mod.DOMAIN_CATALOG
 
 
@@ -1350,3 +1351,84 @@ class TestKeywordRequiredTriage:
 
         assert status == "SKIPPED_TRIAGE"
         assert "php source" in reason.lower()
+
+
+# ---------------------------------------------------------------------------
+# Unrecognized-source safety net
+# ---------------------------------------------------------------------------
+
+class TestDetectUnrecognizedSource:
+    """detect_unrecognized_source() — fail loud on languages no domain reviews."""
+
+    def test_empty(self):
+        assert detect_unrecognized_source([]) == []
+
+    def test_rust_is_recognized_after_broadening(self):
+        """Rust is now in _PROG_LANGS — must NOT be flagged (the original bug)."""
+        files = ["src/auth/login.rs", "src/main.rs"]
+        assert detect_unrecognized_source(files) == []
+
+    def test_mainstream_languages_recognized(self):
+        files = ["a.kt", "b.swift", "c.cpp", "d.cs", "e.scala", "f.go", "g.py"]
+        assert detect_unrecognized_source(files) == []
+
+    def test_longtail_language_flagged(self):
+        """A language outside the catalog but in the source superset is flagged."""
+        flagged = detect_unrecognized_source(["contract.sol", "lib.nim", "app.py"])
+        assert "contract.sol" in flagged
+        assert "lib.nim" in flagged
+        assert "app.py" not in flagged  # recognized → reviewed → not flagged
+
+    def test_non_source_files_not_flagged(self):
+        """Docs/config/data are not 'unrecognized source' — they have their own domains."""
+        files = ["README.md", "config.yaml", "data.json", "Cargo.toml", "LICENSE"]
+        assert detect_unrecognized_source(files) == []
+
+    def test_result_is_sorted(self):
+        flagged = detect_unrecognized_source(["z.nim", "a.sol"])
+        assert flagged == ["a.sol", "z.nim"]
+
+
+class TestSafetyNetInPlan:
+    """The safety net is surfaced through build_dispatch_plan output."""
+
+    def test_clean_rust_diff_has_no_warning(self, registry):
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["src/auth/login.rs", "src/main.rs"],
+            registry=registry,
+            commit_messages="",
+            diffstat={},
+        )
+        assert plan["warnings"] == []
+        assert plan["scope_summary"]["unrecognized_source"] == []
+
+    def test_unrecognized_source_produces_warning(self, registry):
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["contract.sol", "lib.nim", "src/app.py"],
+            registry=registry,
+            commit_messages="",
+            diffstat={},
+        )
+        assert plan["scope_summary"]["unrecognized_source"] == ["contract.sol", "lib.nim"]
+        assert len(plan["warnings"]) == 1
+        assert "UNRECOGNIZED SOURCE" in plan["warnings"][0]
+        assert "contract.sol" in plan["warnings"][0]
+
+    def test_warnings_field_always_present(self, registry):
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["src/app.php"],
+            registry=registry,
+            commit_messages="",
+            diffstat={},
+        )
+        assert "warnings" in plan
+        assert isinstance(plan["warnings"], list)

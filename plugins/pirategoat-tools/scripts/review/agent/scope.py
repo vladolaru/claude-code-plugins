@@ -70,30 +70,88 @@ _E2E_TEST_INCLUDE = (
     r"(^|/)(playwright|page-objects?)/.*(Page|PageObject)\.(js|ts)$)"
 )
 
+# =============================================================================
+# Language extension groups — SINGLE SOURCE OF TRUTH for file-type recognition.
+#
+# Every general-purpose code domain composes its `include` pattern from these
+# groups via `_ext_re(...)`. To teach the reviewers a new language, add its
+# extension(s) to the right group ONCE here and every domain that should see it
+# picks it up — no per-domain regex edits, no partial-addition drift.
+#
+# (History: `.rs` was wired into the rust-test domains but omitted from all 14
+# production-code domains, so `security`/`code`/etc. returned NO_DOMAIN_FILES on
+# pure-Rust repos. `.cs` had the same partial gap. These groups exist so that
+# class of bug can't recur.)
+# =============================================================================
+
+# General-purpose programming languages (production source, any ecosystem).
+_PROG_LANGS = [
+    # Web / dynamic / scripting
+    "php", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb",
+    # Systems / compiled / managed
+    "go", "rs", "java", "kt", "kts", "scala", "cs",
+    "c", "h", "cc", "cpp", "cxx", "hpp", "hh",
+    # Apple platforms
+    "swift", "m", "mm",
+    # Functional / JVM / other mainstream
+    "ex", "exs", "erl", "clj", "cljs", "hs", "ml", "mli", "fs", "fsx",
+    "lua", "pl", "pm", "dart", "groovy", "zig",
+    # Component-framework single-file modules (markup + logic)
+    "vue", "svelte",
+    # Shell (injection / destructive-command surface — worth security review)
+    "sh", "bash",
+]
+
+# Frontend-only languages — for domains that review UI/markup, not backends (a11y).
+_FRONTEND_LANGS = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte"]
+
+# Stylesheet languages.
+_STYLE_LANGS = ["css", "scss", "sass", "less"]
+
+# Query / data-definition languages.
+_QUERY_LANGS = ["sql"]
+
+# Prose / documentation formats.
+_DOC_LANGS = ["md", "txt", "rst"]
+
+# Structured-data / config formats reviewed for drift or reference integrity.
+_DATA_LANGS = ["json", "yaml", "yml"]
+
+
+def _ext_re(*groups) -> str:
+    """Build an anchored file-extension regex from one or more language groups.
+
+    `_ext_re(_PROG_LANGS, _QUERY_LANGS)` -> r"\\.(php|js|...|go|rs|...|sql)$".
+    Duplicate extensions across groups are harmless (regex alternation).
+    """
+    exts = [ext for group in groups for ext in group]
+    return r"\.(" + "|".join(exts) + r")$"
+
+
 DOMAIN_CATALOG = {
     "code": {
         "description": "All code files (code-reviewer)",
-        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
+        "include": _ext_re(_PROG_LANGS, _STYLE_LANGS, _QUERY_LANGS),
         "exclude": None,
     },
     "security": {
         "description": "Security-relevant code files",
-        "include": r"\.(php|js|ts|jsx|tsx|py|rb|go)$",
+        "include": _ext_re(_PROG_LANGS),
         "exclude": None,
     },
     "performance": {
         "description": "Performance-relevant code files (incl. SQL)",
-        "include": r"\.(php|js|ts|jsx|tsx|py|java|rb|go|sql)$",
+        "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": None,
     },
     "dead-code": {
         "description": "Production code only, excluding tests (dead-code-reviewer)",
-        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go|sql)$",
+        "include": _ext_re(_PROG_LANGS, _STYLE_LANGS, _QUERY_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "architecture": {
         "description": "Implementation files, excluding tests",
-        "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb|sql)$",
+        "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "wp-architecture": {
@@ -138,47 +196,47 @@ DOMAIN_CATALOG = {
     },
     "patterns": {
         "description": "All code files for pattern analysis",
-        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|rb|go)$",
+        "include": _ext_re(_PROG_LANGS, _STYLE_LANGS),
         "exclude": None,
     },
     "a11y": {
         "description": "Frontend files for accessibility review (JS/TS/JSX/TSX/CSS)",
-        "include": r"\.(js|ts|jsx|tsx|css|scss)$",
+        "include": _ext_re(_FRONTEND_LANGS, _STYLE_LANGS),
         "exclude": None,
     },
     "reliability": {
         "description": "Production code for operational resilience review",
-        "include": r"\.(php|js|ts|jsx|tsx|py|java|rb|go|sql)$",
+        "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "api-contract": {
         "description": "API surface files — endpoints, schemas, migrations, hook signatures",
-        "include": r"\.(php|js|ts|jsx|tsx|py|go|sql)$",
+        "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "data-flow": {
         "description": "Data handling files — logging, serialization, storage, privacy",
-        "include": r"\.(php|js|ts|jsx|tsx|py|rb|go|java|sql)$",
+        "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "concurrency": {
         "description": "Concurrency-relevant files — async, transactions, queues, cron",
-        "include": r"\.(php|js|ts|jsx|tsx|py|go|java|sql)$",
+        "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "clarity": {
         "description": "Code files for naming/documentation clarity review, excluding tests",
-        "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb)$",
+        "include": _ext_re(_PROG_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "simplification": {
         "description": "All production code for complexity analysis, excluding tests",
-        "include": r"\.(php|js|ts|jsx|tsx|css|scss|py|java|cs|go|rb|sql)$",
+        "include": _ext_re(_PROG_LANGS, _STYLE_LANGS, _QUERY_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "docs-drift": {
         "description": "Code and documentation files for drift detection",
-        "include": r"\.(php|js|ts|jsx|tsx|py|java|cs|go|rb|md|txt|rst|yaml|yml|json)$",
+        "include": _ext_re(_PROG_LANGS, _DOC_LANGS, _DATA_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
     "toolchain": {
@@ -208,7 +266,7 @@ DOMAIN_CATALOG = {
     },
     "reference-integrity": {
         "description": "Code and config files for reference integrity verification",
-        "include": r"\.(php|js|ts|jsx|tsx|py|java|rb|go|json|yaml|yml)$",
+        "include": _ext_re(_PROG_LANGS, _DATA_LANGS),
         "exclude": _TEST_EXCLUDE,
     },
 }
