@@ -17,7 +17,7 @@ Adds a WooCommerce-focused regression-invariants reviewer, ported from the produ
 ### Fixed
 
 - **Not-applicable reviewers now complete through one persisted contract.** Agent-local applicability gates defer to the shared reviewer protocol's mark → save → `STATUS: FINISHED` sequence, and bootstrap integration tests reject duplicated `mark_not_applicable(...)` calls that could drift into unsaved exits.
-- **WooCommerce extension triage now includes opt-in repository identity.** The dispatch planner supports source-specific `triage_repository_keywords`, which `woo-regression-reviewer` uses to match the repository's `origin` URL and Git top-level name. Extension-native WooPayments and AutomateWoo changes now reach the reviewer even when their paths, commit/PR text, and patch contain no generic WooCommerce keywords. Ambient repository identity is kept out of generic `triage_keywords`, so unrelated reviewers and quick-mode exclusions cannot be re-enabled by checkout-wide signals.
+- **WooCommerce extension triage now includes opt-in repository identity across every fetch remote.** The dispatch planner supports source-specific `triage_repository_keywords`, which `woo-regression-reviewer` matches against all fetch remote URLs plus the Git top-level name. Extension-native WooPayments and AutomateWoo changes now reach the reviewer even when `origin` is a renamed fork or mirror, a canonical `upstream` carries the WooCommerce identity, and paths, commit/PR text, and patch contain no generic WooCommerce keywords. Push-only destinations are excluded, and ambient identity stays out of generic `triage_keywords`, so unrelated reviewers and quick-mode exclusions cannot be re-enabled by checkout-wide signals.
 
 ### Tests
 

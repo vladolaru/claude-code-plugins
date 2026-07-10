@@ -130,7 +130,7 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `model_tier` | yes | `"inherit"` (caller's model), `"sonnet"`, or `"haiku"`. Match reasoning depth needed. |
 | `triage_criteria` | conditional | Required for `dispatch_class: "conditional"`. List of conditions that trigger dispatch. |
 | `triage_keywords` | optional | Change-local keywords matched against commits, changed paths, PR metadata, and scoped patch text. |
-| `triage_repository_keywords` | optional | Ambient repository-identity keywords. Opt in only when repository membership is itself sufficient for applicability. |
+| `triage_repository_keywords` | optional | Ambient repository-identity keywords matched against all fetch remote URLs plus the checkout basename. Opt in only when repository membership is itself sufficient for applicability. |
 | `secondary_domains` | optional | Additional scope domains to include (e.g., `["config-ops"]`). |
 | `extra_scope` | optional | Additional scope invocations (e.g., `["--base-ref-only"]` for patterns-reviewer). |
 | `budget_override` | optional | Fixed tool-call budget, bypassing scope-proportional computation. Use for agents whose workload doesn't correlate with diff size (e.g., history-insights explores git history). |

@@ -1546,6 +1546,73 @@ class TestWooRegressionReviewerTriage:
         assert plan["agents"][0]["status"] == "DISPATCH"
         assert "repository" in plan["agents"][0]["reason"]
 
+    def test_dispatches_from_canonical_upstream_fetch_remote(
+        self, registry, tmp_path, monkeypatch
+    ):
+        repo = tmp_path / "arbitrary-checkout"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(repo), "remote", "add", "origin",
+                "https://github.com/example/payments-fork.git",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(repo), "remote", "add", "upstream",
+                "https://github.com/Automattic/woocommerce-payments.git",
+            ],
+            check=True,
+        )
+        monkeypatch.chdir(repo)
+
+        with patch.object(
+            _mod,
+            "get_diff_text",
+            return_value="+namespace Vendor\\Payments;\n+class Service {}",
+        ):
+            plan = build_dispatch_plan(
+                mode="full",
+                git_range="main..HEAD",
+                output_dir=str(tmp_path / "review"),
+                changed_files=["src/Internal/Service.php"],
+                registry={"agents": {"woo-regression-reviewer": self._config(registry)}},
+                commit_messages="refactor internal service",
+                diffstat={"added": 2, "removed": 0},
+            )
+
+        assert plan["agents"][0]["status"] == "DISPATCH"
+        assert "repository" in plan["agents"][0]["reason"]
+
+    def test_repository_identity_ignores_push_only_urls(
+        self, tmp_path, monkeypatch
+    ):
+        repo = tmp_path / "arbitrary-checkout"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(repo), "remote", "add", "origin",
+                "https://github.com/example/payments-fork.git",
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(repo), "remote", "set-url", "--add", "--push",
+                "origin", "https://github.com/Automattic/woocommerce-payments.git",
+            ],
+            check=True,
+        )
+        monkeypatch.chdir(repo)
+
+        identity = _mod.get_repository_identity()
+
+        assert "payments-fork" in identity
+        assert "woocommerce-payments" not in identity
+
     def test_skipped_without_wc_signal(self, registry):
         """Non-WooCommerce PHP repo → SKIPPED_TRIAGE (the triage-out requirement)."""
         status, reason = triage_conditional_agent(

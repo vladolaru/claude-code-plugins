@@ -315,33 +315,52 @@ def get_commit_messages(git_range: str) -> str:
         return ""
 
 
+_FETCH_REMOTE_LINE_RE = re.compile(r"^\S+\s+(.+?)\s+\(fetch\)$")
+
+
+def _get_fetch_remote_urls() -> List[str]:
+    """Return effective fetch URLs for every configured remote."""
+    try:
+        result = subprocess.run(
+            ["git", "remote", "-v"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+    if result.returncode != 0:
+        return []
+
+    urls = []
+    for line in result.stdout.splitlines():
+        match = _FETCH_REMOTE_LINE_RE.match(line.strip())
+        if match:
+            urls.append(match.group(1))
+    return list(dict.fromkeys(urls))
+
+
 def get_repository_identity() -> str:
-    """Get matchable identity text for the repository under review.
+    """Return matchable fetch-remote and checkout identity.
 
-    The origin URL is the canonical signal when checkouts use arbitrary
-    directory names. The Git top-level basename provides an offline fallback
-    for repositories without an origin remote.
-
-    Returns empty string on failure (fault-tolerant).
+    Every fetch URL participates because ``origin`` can identify a renamed
+    fork while another remote identifies the canonical project. The Git
+    top-level basename remains the offline/no-remote fallback.
     """
-    parts = []
-    commands = (
-        (["git", "remote", "get-url", "origin"], False),
-        (["git", "rev-parse", "--show-toplevel"], True),
-    )
-    for cmd, basename_only in commands:
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=5
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            continue
-        if result.returncode != 0:
-            continue
-        value = result.stdout.strip()
-        if not value:
-            continue
-        parts.append(Path(value).name if basename_only else value)
+    parts = _get_fetch_remote_urls()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        result = None
+    if result is not None and result.returncode == 0:
+        top_level = result.stdout.strip()
+        if top_level:
+            parts.append(Path(top_level).name)
     return "\n".join(dict.fromkeys(parts)).lower()
 
 
