@@ -209,6 +209,19 @@ class TestBuildCriticContext:
 
         assert "- **Severity floor:** medium" in result
 
+    def test_does_not_restore_rejected_legacy_floor(self, mod):
+        issue = _make_issue(
+            severity="medium",
+            description="Severity-floor: silent false-success was rejected",
+        )
+
+        result = mod.build_critic_context(
+            SAMPLE_REPORT,
+            _make_findings(issues=[issue]),
+        )
+
+        assert "Severity floor:" not in result
+
     def test_includes_reconciliation_metrics(self, mod):
         """Pipeline stats are present."""
         result = mod.build_critic_context(SAMPLE_REPORT, _make_findings())

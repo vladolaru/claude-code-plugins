@@ -300,6 +300,13 @@ class TestSeverityFloorNormalization:
             _make_issue(description="Severity-floor: future policy")
         ) is None
 
+    def test_legacy_marker_requires_a_marker_separator(self, mod):
+        assert mod.resolve_severity_floor(
+            _make_issue(
+                description="Severity-floor: silent false-success was rejected"
+            )
+        ) is None
+
     def test_loading_findings_materializes_legacy_floor(self, mod, tmp_path):
         review = _make_review_json(
             issues=[

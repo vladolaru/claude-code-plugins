@@ -59,22 +59,35 @@ _VALID_SEVERITY_FLOORS = frozenset(
     {"critical", "high", "medium", "low", "info"}
 )
 _NUMERIC_SEVERITY_FLOOR_RE = re.compile(
-    r"(?im)^Severity-floor:\s*(critical|high|medium|low|info)\b"
+    r"(?im)^[ \t]*Severity-floor:[ \t]*"
+    r"(critical|high|medium|low|info)(?=[ \t]*(?:[;—-]|$))"
 )
 _LEGACY_SEVERITY_FLOORS = {
     "public-contract change": "medium",
     "silent false-success": "high",
 }
+_LEGACY_SEVERITY_FLOOR_RE = re.compile(
+    r"(?im)^[ \t]*Severity-floor:[ \t]*"
+    r"(public-contract change|silent false-success)(?=[ \t]*(?:;|$))"
+)
 
 
-def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
-    """Resolve a structured or backward-compatible description floor."""
+def resolve_structured_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
+    """Return a valid explicit floor without consulting description prose."""
     structured = issue.get("severity_floor")
     if (
         isinstance(structured, str)
         and structured.lower() in _VALID_SEVERITY_FLOORS
     ):
         return structured.lower()
+    return None
+
+
+def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
+    """Resolve a structured or backward-compatible description floor."""
+    structured = resolve_structured_severity_floor(issue)
+    if structured is not None:
+        return structured
 
     description = issue.get("description", "")
     if not isinstance(description, str):
@@ -82,10 +95,9 @@ def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
     numeric = _NUMERIC_SEVERITY_FLOOR_RE.search(description)
     if numeric:
         return numeric.group(1).lower()
-    lowered = description.lower()
-    for marker, floor in _LEGACY_SEVERITY_FLOORS.items():
-        if f"severity-floor: {marker}" in lowered:
-            return floor
+    legacy = _LEGACY_SEVERITY_FLOOR_RE.search(description)
+    if legacy:
+        return _LEGACY_SEVERITY_FLOORS[legacy.group(1).lower()]
     return None
 
 
@@ -1070,7 +1082,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
         file_path = issue.get("file", "")
         line = issue.get("line", "")
         category = issue.get("category", "")
-        severity_floor = resolve_severity_floor(issue)
+        severity_floor = resolve_structured_severity_floor(issue)
         description = issue.get("description", "")
         recommendation = issue.get("recommendation", "")
 
