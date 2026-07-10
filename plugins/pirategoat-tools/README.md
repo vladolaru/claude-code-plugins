@@ -6,7 +6,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ## What's Inside
 
-### 32 Agents
+### 33 Agents
 
 #### 28 Domain Review Agents
 
