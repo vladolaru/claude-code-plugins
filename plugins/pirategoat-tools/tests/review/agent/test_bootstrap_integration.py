@@ -279,6 +279,29 @@ class TestArchitecturalInvariants:
             )
 
 
+class TestNotApplicableCompletionContract:
+    """The shared protocol is the sole executable abstention recipe."""
+
+    def test_shared_protocol_marks_saves_and_finishes(self):
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+
+        assert "builder.mark_not_applicable(" in protocol
+        assert "builder.save(OUTPUT_DIR)" in protocol
+        assert "STATUS: FINISHED" in protocol
+
+    def test_agent_definitions_do_not_duplicate_abstention_calls(self):
+        offenders = [
+            path.name
+            for path in sorted((PLUGIN_ROOT / "agents").glob("*.md"))
+            if "mark_not_applicable(" in path.read_text()
+        ]
+
+        assert offenders == [], (
+            "Agent-local abstention calls drift from the shared persisted "
+            f"completion sequence: {offenders}"
+        )
+
+
 class TestSmokeAllAgents:
     """Every registered agent must run bootstrap without crashing.
 
