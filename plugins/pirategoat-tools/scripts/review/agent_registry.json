@@ -708,6 +708,34 @@
       ],
       "focus": "Reference resolution — verifies plugin slugs exist on declared registries, asset files exist at declared paths, URLs resolve, and config references point to real targets",
       "model_tier": "sonnet"
+    },
+    "woo-regression-reviewer": {
+      "domain": "wp-architecture",
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "no_semantic_filter": true,
+      "dispatch_class": "conditional",
+      "require_php_source_file": true,
+      "require_triage_keyword_match": true,
+      "triage_criteria": [
+        "Diff belongs to WooCommerce core or a WooCommerce extension (WooPayments, AutomateWoo, etc.)",
+        "PHP changes touching hooks, scheduled actions, meta/options, templates, interfaces, or validators in a WooCommerce codebase"
+      ],
+      "triage_keywords": [
+        "woocommerce",
+        "wc_",
+        "wc-",
+        " wc ",
+        "wc()",
+        "action_scheduler",
+        "as_schedule",
+        "wp_schedule"
+      ],
+      "focus": "WooCommerce regression invariants derived from a shipped-regression corpus — Action Scheduler traps, meta equality/sync-on-read loops, template overrides, broken-until-JS defaults, filter return-type variance, PHP 8.4 coercion, and interface/hook contract breaks with out-of-tree blast radius. Only dispatches for WooCommerce core/extension changes.",
+      "model_tier": "opus",
+      "budget_override": 120
     }
   }
 }

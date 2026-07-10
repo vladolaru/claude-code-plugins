@@ -35,7 +35,7 @@ DOMAIN_CATALOG = _scope_mod.DOMAIN_CATALOG
 VALID_DISPATCH_CLASSES = {"always", "conditional", "manual", "special"}
 VALID_PROTOCOLS = {"reviewer", "tests-reviewer"}
 VALID_MODEL_TIERS = {"inherit", "sonnet", "haiku", "opus"}
-EXPECTED_AGENT_COUNT = 28  # agents from AGENT_CONFIG in review/agent/bootstrap.py
+EXPECTED_AGENT_COUNT = 29  # agents from AGENT_CONFIG in review/agent/bootstrap.py
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ class TestNoSemanticFilterConfig:
 
     def test_no_semantic_filter_only_on_expected_agents(self, agents):
         """Guard against accidental no_semantic_filter proliferation."""
-        expected = {"wp-architecture-reviewer", "patterns-reviewer"}
+        expected = {"wp-architecture-reviewer", "patterns-reviewer", "woo-regression-reviewer"}
         actual = {name for name, cfg in agents.items() if cfg.get("no_semantic_filter")}
         assert actual == expected, (
             f"Expected no_semantic_filter on {expected}, found on {actual}"

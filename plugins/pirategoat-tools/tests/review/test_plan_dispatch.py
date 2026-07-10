@@ -1432,3 +1432,64 @@ class TestSafetyNetInPlan:
         )
         assert "warnings" in plan
         assert isinstance(plan["warnings"], list)
+
+
+# =============================================================================
+# Unit Tests — woo-regression-reviewer triage gating
+# =============================================================================
+
+class TestWooRegressionReviewerTriage:
+    """WC-keyword-gated dispatch: only WooCommerce core/extension diffs dispatch."""
+
+    def _config(self, registry):
+        return registry["agents"]["woo-regression-reviewer"]
+
+    def test_registry_declares_keyword_gate(self, registry):
+        config = self._config(registry)
+        assert config["require_triage_keyword_match"] is True
+        assert config["require_php_source_file"] is True
+        assert config["dispatch_class"] == "conditional"
+
+    def test_dispatches_on_wc_file_path_signal(self, registry):
+        status, reason = triage_conditional_agent(
+            "woo-regression-reviewer", self._config(registry),
+            ["includes/class-wc-order.php"],
+            "fix order total rounding",
+            {},
+        )
+        assert status == "DISPATCH"
+
+    def test_dispatches_on_wc_diff_signal(self, registry):
+        status, reason = triage_conditional_agent(
+            "woo-regression-reviewer", self._config(registry),
+            ["src/OrderTotals.php"],
+            "fix rounding",
+            {},
+            diff_text="$total = apply_filters( 'woocommerce_order_get_total', $total );",
+        )
+        assert status == "DISPATCH"
+        assert "woocommerce" in reason
+
+    def test_skipped_without_wc_signal(self, registry):
+        """Non-WooCommerce PHP repo → SKIPPED_TRIAGE (the triage-out requirement)."""
+        status, reason = triage_conditional_agent(
+            "woo-regression-reviewer", self._config(registry),
+            ["src/Controller.php"],
+            "add csv export feature",
+            {},
+            pr_text="adds a csv export endpoint",
+            diff_text="function export_csv() { return true; }",
+        )
+        assert status == "SKIPPED_TRIAGE"
+        assert "keyword" in reason
+
+    def test_skipped_for_js_only_diff(self, registry):
+        """No PHP source in domain files → SKIPPED_TRIAGE even with WC signal."""
+        status, reason = triage_conditional_agent(
+            "woo-regression-reviewer", self._config(registry),
+            ["assets/js/checkout.js"],
+            "woocommerce checkout tweak",
+            {},
+        )
+        assert status == "SKIPPED_TRIAGE"
+        assert "PHP" in reason
