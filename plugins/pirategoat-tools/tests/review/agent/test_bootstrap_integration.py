@@ -282,12 +282,28 @@ class TestArchitecturalInvariants:
 class TestNotApplicableCompletionContract:
     """The shared protocol is the sole executable abstention recipe."""
 
-    def test_shared_protocol_marks_saves_and_finishes(self):
+    def test_bootstrap_includes_shared_not_applicable_sequence(self):
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        review_rules = _mod.extract_protocol_sections(
+            protocol,
+            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
+        )
+        prompt = build_output(
+            agent_name="woo-regression-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules=review_rules,
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir="/tmp/test-not-applicable-contract",
+            pr_number=None,
+            reviewer_name="woo-regression",
+        )
 
-        assert "builder.mark_not_applicable(" in protocol
-        assert "builder.save(OUTPUT_DIR)" in protocol
-        assert "STATUS: FINISHED" in protocol
+        assert "builder.mark_not_applicable(" in prompt
+        assert "builder.save(OUTPUT_DIR)" in prompt
+        assert "STATUS: FINISHED" in prompt
 
     def test_agent_definitions_do_not_duplicate_abstention_calls(self):
         offenders = [

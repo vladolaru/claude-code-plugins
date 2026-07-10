@@ -64,26 +64,6 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted smallest-first (focused changes before large files). If many files exceed the budget, the `=== NOT DIFFED ===` section shows them with diffstat so you can selectively `git diff <range> -- <file>` the most important ones.
 
-### Quick Relevance Check (BEFORE Deep Review)
-
-Scan the diff hunks (changed lines, not just file names): **does anything relate to your domain?**
-
-**If nothing is relevant**, mark not-applicable and exit:
-
-```python
-builder.mark_not_applicable("No changes relevant to [your domain] — diff contains only [brief description]")
-builder.add_positive("Diff scanned — no changes relevant to [your domain]")
-builder.set_files_reviewed(N)  # count of files you scanned
-result = builder.save(OUTPUT_DIR)
-# Then return STATUS: FINISHED signal as normal
-```
-
-This backstops false-positive dispatch — triage matched on file paths/keywords, but the actual changes may not warrant your review.
-
-**Small changes still warrant review.** A one-line change in a security-sensitive function needs full review. The check is domain relevance, not change size.
-
-**Large PRs (100+ matched files):** Use `--summary` for a diffstat overview, then selectively read the most important diffs.
-
 ### When You Need More Context
 
 Use the Read tool with offset+limit for surrounding context around a finding.
@@ -107,6 +87,26 @@ git diff --name-only $RANGE | grep -v -E '\.(lock|png|jpg|jpeg|gif|svg|ico|woff|
 # Then apply your domain filter (see Scope section)
 # Then: git diff $RANGE -- <file> for each matched file
 ```
+
+## Quick Relevance Check (BEFORE Deep Review)
+
+Scan the diff hunks (changed lines, not just file names): **does anything relate to your domain?**
+
+**If nothing is relevant**, mark not-applicable and exit:
+
+```python
+builder.mark_not_applicable("No changes relevant to [your domain] — diff contains only [brief description]")
+builder.add_positive("Diff scanned — no changes relevant to [your domain]")
+builder.set_files_reviewed(N)  # count of files you scanned
+result = builder.save(OUTPUT_DIR)
+# Then return STATUS: FINISHED signal as normal
+```
+
+This backstops false-positive dispatch — triage matched on file paths/keywords, but the actual changes may not warrant your review.
+
+**Small changes still warrant review.** A one-line change in a security-sensitive function needs full review. The check is domain relevance, not change size.
+
+**Large PRs (100+ matched files):** Use `--summary` for a diffstat overview, then selectively read the most important diffs.
 
 ## RULE: Reviewing vs Exploring
 
