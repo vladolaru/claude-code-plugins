@@ -1470,6 +1470,45 @@ class TestWooRegressionReviewerTriage:
         assert status == "DISPATCH"
         assert "woocommerce" in reason
 
+    @pytest.mark.parametrize(
+        ("remote_url", "diff_text"),
+        [
+            (
+                "git@github.com:Automattic/woocommerce-payments.git",
+                "+namespace WCPay\\Internal;\n+class Service {}",
+            ),
+            (
+                "https://github.com/woocommerce/automatewoo.git",
+                "+namespace AutomateWoo\\Workflows;\n+class Workflow {}",
+            ),
+        ],
+    )
+    def test_dispatches_supported_extension_from_repository_identity(
+        self, registry, tmp_path, monkeypatch, remote_url, diff_text
+    ):
+        repo = tmp_path / "arbitrary-checkout"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "remote", "add", "origin", remote_url],
+            check=True,
+        )
+        monkeypatch.chdir(repo)
+
+        with patch.object(_mod, "get_diff_text", return_value=diff_text):
+            plan = build_dispatch_plan(
+                mode="full",
+                git_range="main..HEAD",
+                output_dir=str(tmp_path / "review"),
+                changed_files=["src/Internal/Service.php"],
+                registry={"agents": {"woo-regression-reviewer": self._config(registry)}},
+                commit_messages="refactor internal service",
+                diffstat={"added": 2, "removed": 0},
+            )
+
+        assert plan["agents"][0]["status"] == "DISPATCH"
+        assert "repository" in plan["agents"][0]["reason"]
+
     def test_skipped_without_wc_signal(self, registry):
         """Non-WooCommerce PHP repo → SKIPPED_TRIAGE (the triage-out requirement)."""
         status, reason = triage_conditional_agent(

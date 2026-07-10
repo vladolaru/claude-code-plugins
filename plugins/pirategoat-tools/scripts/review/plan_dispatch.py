@@ -315,6 +315,36 @@ def get_commit_messages(git_range: str) -> str:
         return ""
 
 
+def get_repository_identity() -> str:
+    """Get matchable identity text for the repository under review.
+
+    The origin URL is the canonical signal when checkouts use arbitrary
+    directory names. The Git top-level basename provides an offline fallback
+    for repositories without an origin remote.
+
+    Returns empty string on failure (fault-tolerant).
+    """
+    parts = []
+    commands = (
+        (["git", "remote", "get-url", "origin"], False),
+        (["git", "rev-parse", "--show-toplevel"], True),
+    )
+    for cmd, basename_only in commands:
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=5
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+        if result.returncode != 0:
+            continue
+        value = result.stdout.strip()
+        if not value:
+            continue
+        parts.append(Path(value).name if basename_only else value)
+    return "\n".join(dict.fromkeys(parts)).lower()
+
+
 def _normalize_numstat_path(path: str) -> str:
     """Normalize git numstat rename paths to the post-rename file path."""
     if " => " not in path:
@@ -629,6 +659,7 @@ def triage_conditional_agent(
     diffstat: Dict,
     pr_text: str = "",
     diff_text: str = "",
+    repository_text: str = "",
 ) -> Tuple[str, str]:
     """Apply deterministic triage for a conditional agent.
 
@@ -636,8 +667,8 @@ def triage_conditional_agent(
     1. Test-only filter: if ALL domain files are test files → SKIPPED_TRIAGE
     2. Optional PHP-source gate: if configured and no PHP source files → SKIPPED_TRIAGE
     3. Keyword match: if triage_keywords match any signal source → DISPATCH
-       Signal sources (checked in order): commit messages, file paths, PR
-       title/body, patch text
+       Signal sources (checked in order): commit messages, file paths,
+       repository identity, PR title/body, patch text
     4. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
     5. Default: DISPATCH (conservative — when in doubt, dispatch)
 
@@ -649,6 +680,7 @@ def triage_conditional_agent(
         diffstat: Diffstat summary dict.
         pr_text: Lowercased PR title + body (empty if unavailable).
         diff_text: Lowercased patch text (empty if unavailable).
+        repository_text: Lowercased repository origin/name (empty if unavailable).
 
     Returns:
         (status, reason) where status is DISPATCH or SKIPPED_TRIAGE.
@@ -683,6 +715,7 @@ def triage_conditional_agent(
         sources = [
             ("commits", commit_messages),
             ("files", file_paths_text),
+            ("repository", repository_text),
             ("pr", pr_text),
             ("diff", diff_text),
         ]
@@ -754,6 +787,7 @@ def decide_agent_dispatch(
     diffstat: Optional[Dict] = None,
     pr_text: str = "",
     diff_text: Optional[str] = None,
+    repository_text: str = "",
     git_range: Optional[str] = None,
     diff_text_cache: Optional[Dict[Tuple[str, ...], str]] = None,
 ) -> Tuple[str, str]:
@@ -761,7 +795,8 @@ def decide_agent_dispatch(
 
     For always-dispatch and manual/special agents, only domain file counts
     matter. For conditional agents, deterministic triage is applied using
-    commit messages, file paths, PR metadata, diffstat, and test-file detection.
+    commit messages, file paths, repository identity, PR metadata, diffstat,
+    and test-file detection.
 
     Args:
         agent_name: Name of the agent.
@@ -772,6 +807,7 @@ def decide_agent_dispatch(
         diffstat: Diffstat summary dict.
         pr_text: Lowercased PR title + body + labels + branch + issue titles.
         diff_text: Lowercased patch text.
+        repository_text: Lowercased repository origin/name.
         git_range: Git range used to fetch domain-specific patch text.
 
     Returns:
@@ -830,6 +866,7 @@ def decide_agent_dispatch(
             commit_messages, diffstat or {},
             pr_text=pr_text,
             diff_text=diff_text or "",
+            repository_text=repository_text,
         )
 
     # Conditional agents without triage context: dispatch by default
@@ -934,8 +971,9 @@ def build_dispatch_plan(
     if diffstat is None:
         diffstat = get_diffstat(git_range)
 
-    # Build PR text for keyword matching (fault-tolerant)
+    # Build stable context signals for keyword matching (fault-tolerant)
     pr_text = _build_pr_text(review_context)
+    repository_text = get_repository_identity()
 
     # Build dispatch decisions
     dispatch_list = []
@@ -956,6 +994,7 @@ def build_dispatch_plan(
             commit_messages=commit_messages,
             diffstat=diffstat,
             pr_text=pr_text,
+            repository_text=repository_text,
             git_range=git_range,
             diff_text_cache=diff_text_cache,
         )

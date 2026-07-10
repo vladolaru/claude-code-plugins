@@ -14,9 +14,13 @@ Adds a WooCommerce-focused regression-invariants reviewer, ported from the produ
 - **`agents/woo-regression-reviewer.md`** — reviews WooCommerce core/extension changes against corpus-derived ecosystem invariants (Action Scheduler traps, meta equality/sync-on-read write loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP 8.4 coercion, migration legacy state, interface/hook contract breaks). Uses a mandatory per-hunk invariant audit and a self-audit pass that promotes soft dismissals ("pre-existing", "unlikely", "guarded elsewhere") to Medium findings. Dispatch is gated on WooCommerce signals via `require_triage_keyword_match` (first consumer of that mechanism) plus `require_php_source_file` — non-WooCommerce repos triage the agent out.
 - **Reconciliator severity floors** (`agents/review-reconciliator.md`): for regression-class findings (`Severity-floor:` marker or `interface-break`/`hook-contract`/`scheduled-action` categories), blast-radius descriptors ("Internal namespace", "only one in-tree implementor", "unreleased") no longer justify downgrades, mitigations must be verified at file:line before dismissing, and absence of in-repo implementors is not evidence of safety for public-contract changes.
 
+### Fixed
+
+- **WooCommerce extension triage now includes repository identity.** The dispatch planner matches conditional-agent keywords against the repository's `origin` URL and Git top-level name in addition to change-local signals. Extension-native WooPayments and AutomateWoo changes now reach `woo-regression-reviewer` even when their paths, commit/PR text, and patch contain no generic WooCommerce keywords; unrelated PHP repositories remain triaged out.
+
 ### Tests
 
-- `tests/review/test_plan_dispatch.py::TestWooRegressionReviewerTriage` — WC-signal dispatch, non-WC skip, PHP-source gate.
+- `tests/review/test_plan_dispatch.py::TestWooRegressionReviewerTriage` — WC-signal dispatch, repository-identity dispatch for WooPayments and AutomateWoo, non-WC skip, PHP-source gate.
 
 ## [1.103.0] - 2026-06-10
 
