@@ -58,17 +58,29 @@ _PREFILTER_SCOPES = frozenset([
 _VALID_SEVERITY_FLOORS = frozenset(
     {"critical", "high", "medium", "low", "info"}
 )
-_NUMERIC_SEVERITY_FLOOR_RE = re.compile(
-    r"(?im)^[ \t]*Severity-floor:[ \t]*"
-    r"(critical|high|medium|low|info)(?=[ \t]*(?:[;—-]|$))"
+_NUMERIC_SEVERITY_FLOOR_PATTERN = "|".join(
+    re.escape(value) for value in sorted(_VALID_SEVERITY_FLOORS)
 )
 _LEGACY_SEVERITY_FLOORS = {
     "public-contract change": "medium",
     "silent false-success": "high",
 }
+_LEGACY_SEVERITY_FLOOR_PATTERN = "|".join(
+    re.escape(marker) for marker in _LEGACY_SEVERITY_FLOORS
+)
+_NUMERIC_SEVERITY_FLOOR_RE = re.compile(
+    rf"(?im)^[ \t]*Severity-floor:[ \t]*"
+    rf"({_NUMERIC_SEVERITY_FLOOR_PATTERN})(?=[ \t]*(?:[;—-]|$))"
+)
 _LEGACY_SEVERITY_FLOOR_RE = re.compile(
-    r"(?im)^[ \t]*Severity-floor:[ \t]*"
-    r"(public-contract change|silent false-success)(?=[ \t]*(?:;|$))"
+    rf"(?im)^[ \t]*Severity-floor:[ \t]*"
+    rf"({_LEGACY_SEVERITY_FLOOR_PATTERN})(?=[ \t]*(?:;|$))"
+)
+_CRITIC_SEVERITY_FLOOR_MARKER_RE = re.compile(
+    rf"(?im)Severity-floor:[ \t]*"
+    rf"(?:{_NUMERIC_SEVERITY_FLOOR_PATTERN}|"
+    rf"{_LEGACY_SEVERITY_FLOOR_PATTERN})"
+    rf"[ \t]*(?:(?:[;—-])[ \t]*|(?=$))"
 )
 
 
@@ -99,6 +111,11 @@ def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
     if legacy:
         return _LEGACY_SEVERITY_FLOORS[legacy.group(1).lower()]
     return None
+
+
+def _strip_critic_severity_floor_markers(text: str) -> str:
+    """Remove prose floor markers before content reaches the critic."""
+    return _CRITIC_SEVERITY_FLOOR_MARKER_RE.sub("", text)
 
 
 def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
@@ -1046,6 +1063,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
 
     # Fence the report with a dynamic fence to avoid collisions with
     # backtick runs inside the report itself.
+    report_text = _strip_critic_severity_floor_markers(report_text)
     fence = _markdown_fence_for(report_text)
     parts.append(fence)
     parts.append(report_text)
@@ -1099,6 +1117,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
         if severity_floor:
             parts.append(f"- **Severity floor:** {severity_floor}")
         if description:
+            description = _strip_critic_severity_floor_markers(description)
             desc = _escape_backtick_runs(description)
             desc = _escape_block_syntax(desc)
             desc = desc.replace("\n", "\n  ")

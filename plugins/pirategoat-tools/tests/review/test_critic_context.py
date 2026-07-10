@@ -209,18 +209,26 @@ class TestBuildCriticContext:
 
         assert "- **Severity floor:** medium" in result
 
-    def test_does_not_restore_rejected_legacy_floor(self, mod):
-        issue = _make_issue(
-            severity="medium",
-            description="Severity-floor: silent false-success was rejected",
-        )
+    @pytest.mark.parametrize("marker_source", ["report", "description"])
+    def test_does_not_expose_rejected_legacy_floor(self, mod, marker_source):
+        marker = "Severity-floor: silent false-success;"
+        retained_context = "The verified issue details remain relevant."
+        legacy_floor_text = f"{marker} {retained_context}"
+        report = SAMPLE_REPORT
+        description = "An unrelated issue description."
+        if marker_source == "report":
+            report = f"{SAMPLE_REPORT}\n{legacy_floor_text}\n"
+        else:
+            description = legacy_floor_text
+        issue = _make_issue(severity="medium", description=description)
 
         result = mod.build_critic_context(
-            SAMPLE_REPORT,
+            report,
             _make_findings(issues=[issue]),
         )
 
-        assert "Severity floor:" not in result
+        assert marker not in result
+        assert retained_context in result
 
     def test_includes_reconciliation_metrics(self, mod):
         """Pipeline stats are present."""
