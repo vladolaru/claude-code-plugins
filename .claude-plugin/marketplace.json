@@ -101,7 +101,8 @@
         "./agents/reference-integrity-reviewer.md",
         "./agents/simplification-reviewer.md",
         "./agents/devils-advocate-reviewer.md",
-        "./agents/ecosystem-integration-reviewer.md"
+        "./agents/ecosystem-integration-reviewer.md",
+        "./agents/woo-regression-reviewer.md"
       ]
     },
     {
