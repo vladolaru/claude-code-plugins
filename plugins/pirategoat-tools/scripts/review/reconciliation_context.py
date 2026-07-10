@@ -80,7 +80,7 @@ _CRITIC_SEVERITY_FLOOR_MARKER_RE = re.compile(
     rf"(?im)Severity-floor:[ \t]*"
     rf"(?:{_NUMERIC_SEVERITY_FLOOR_PATTERN}|"
     rf"{_LEGACY_SEVERITY_FLOOR_PATTERN})"
-    rf"[ \t]*(?:(?:[;—-])[ \t]*|(?=$))"
+    rf"(?!\w)[ \t]*(?:(?:[;—-])[ \t]*)?"
 )
 
 
@@ -1105,6 +1105,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
         recommendation = issue.get("recommendation", "")
 
         conf_str = f", confidence: {confidence}" if confidence else ""
+        title = _strip_critic_severity_floor_markers(title)
         parts.append(
             f"### F{idx}: {_escape_backtick_runs(title)} [{severity}{conf_str}]"
         )
@@ -1123,6 +1124,9 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
             desc = desc.replace("\n", "\n  ")
             parts.append(f"- **Description:** {desc}")
         if recommendation:
+            recommendation = _strip_critic_severity_floor_markers(
+                recommendation
+            )
             rec = _escape_backtick_runs(recommendation)
             rec = _escape_block_syntax(rec)
             rec = rec.replace("\n", "\n  ")
@@ -1142,6 +1146,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
                 items = recommendations.get(priority, [])
                 if isinstance(items, list):
                     for item in items:
+                        item = _strip_critic_severity_floor_markers(item)
                         escaped = _escape_backtick_runs(item)
                         escaped = _escape_block_syntax(escaped)
                         escaped = escaped.replace("\n", "\n  ")

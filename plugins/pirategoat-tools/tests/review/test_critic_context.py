@@ -230,6 +230,35 @@ class TestBuildCriticContext:
         assert marker not in result
         assert retained_context in result
 
+    @pytest.mark.parametrize(
+        "marker_source",
+        ["report", "title", "description", "recommendation", "prioritized"],
+    )
+    def test_strips_rejected_floor_marker_from_all_critic_text(
+        self, mod, marker_source
+    ):
+        marker = "Severity-floor: silent false-success was rejected"
+        report = SAMPLE_REPORT
+        issue = _make_issue()
+        recommendations = None
+        if marker_source == "report":
+            report = f"{SAMPLE_REPORT}\n{marker}\n"
+        elif marker_source == "prioritized":
+            recommendations = {"immediate": [marker]}
+        else:
+            issue[marker_source] = marker
+
+        result = mod.build_critic_context(
+            report,
+            _make_findings(
+                issues=[issue],
+                recommendations=recommendations,
+            ),
+        )
+
+        assert "Severity-floor:" not in result
+        assert "was rejected" in result
+
     def test_includes_reconciliation_metrics(self, mod):
         """Pipeline stats are present."""
         result = mod.build_critic_context(SAMPLE_REPORT, _make_findings())
