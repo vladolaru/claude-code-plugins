@@ -129,6 +129,8 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `focus` | yes | One-line description of the agent's review focus. Surfaced in the step 5 dispatch summary for override decisions — see sync rule below. |
 | `model_tier` | yes | `"inherit"` (caller's model), `"sonnet"`, or `"haiku"`. Match reasoning depth needed. |
 | `triage_criteria` | conditional | Required for `dispatch_class: "conditional"`. List of conditions that trigger dispatch. |
+| `triage_keywords` | optional | Change-local keywords matched against commits, changed paths, PR metadata, and scoped patch text. |
+| `triage_repository_keywords` | optional | Ambient repository-identity keywords. Opt in only when repository membership is itself sufficient for applicability. |
 | `secondary_domains` | optional | Additional scope domains to include (e.g., `["config-ops"]`). |
 | `extra_scope` | optional | Additional scope invocations (e.g., `["--base-ref-only"]` for patterns-reviewer). |
 | `budget_override` | optional | Fixed tool-call budget, bypassing scope-proportional computation. Use for agents whose workload doesn't correlate with diff size (e.g., history-insights explores git history). |
@@ -144,7 +146,7 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `manual` | Only on explicit user request |
 | `special` | Orchestration/synthesis agents, not dispatched by triage |
 
-Commands handle triage at the "Adaptive Agent Triage" step — they check each conditional agent's `triage_criteria` against repository identity, diffstat, changed paths and patch text, commit messages, and PR metadata.
+Commands handle triage at the "Adaptive Agent Triage" step — they check each conditional agent's `triage_criteria` against diffstat, changed paths and patch text, commit messages, and PR metadata. Repository identity participates only when the agent explicitly declares `triage_repository_keywords`.
 
 ### Agent Name and Focus Sync
 

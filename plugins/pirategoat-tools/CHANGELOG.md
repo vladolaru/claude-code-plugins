@@ -16,11 +16,11 @@ Adds a WooCommerce-focused regression-invariants reviewer, ported from the produ
 
 ### Fixed
 
-- **WooCommerce extension triage now includes repository identity.** The dispatch planner matches conditional-agent keywords against the repository's `origin` URL and Git top-level name in addition to change-local signals. Extension-native WooPayments and AutomateWoo changes now reach `woo-regression-reviewer` even when their paths, commit/PR text, and patch contain no generic WooCommerce keywords; unrelated PHP repositories remain triaged out.
+- **WooCommerce extension triage now includes opt-in repository identity.** The dispatch planner supports source-specific `triage_repository_keywords`, which `woo-regression-reviewer` uses to match the repository's `origin` URL and Git top-level name. Extension-native WooPayments and AutomateWoo changes now reach the reviewer even when their paths, commit/PR text, and patch contain no generic WooCommerce keywords. Ambient repository identity is kept out of generic `triage_keywords`, so unrelated reviewers and quick-mode exclusions cannot be re-enabled by checkout-wide signals.
 
 ### Tests
 
-- `tests/review/test_plan_dispatch.py::TestWooRegressionReviewerTriage` — WC-signal dispatch, repository-identity dispatch for WooPayments and AutomateWoo, non-WC skip, PHP-source gate.
+- `tests/review/test_plan_dispatch.py` — WC-signal dispatch, repository-identity dispatch for WooPayments and AutomateWoo, non-WC skip, PHP-source gate, and quick-mode isolation from ambient repository signals.
 
 ## [1.103.0] - 2026-06-10
 

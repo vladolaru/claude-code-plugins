@@ -666,11 +666,12 @@ def triage_conditional_agent(
     Triage layers (first match wins):
     1. Test-only filter: if ALL domain files are test files → SKIPPED_TRIAGE
     2. Optional PHP-source gate: if configured and no PHP source files → SKIPPED_TRIAGE
-    3. Keyword match: if triage_keywords match any signal source → DISPATCH
-       Signal sources (checked in order): commit messages, file paths,
-       repository identity, PR title/body, patch text
-    4. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
-    5. Default: DISPATCH (conservative — when in doubt, dispatch)
+    3. Change-local keyword match: triage_keywords search commit messages,
+       file paths, PR title/body, and patch text → DISPATCH
+    4. Repository keyword match: triage_repository_keywords search repository
+       identity only → DISPATCH
+    5. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
+    6. Default: DISPATCH (conservative — when in doubt, dispatch)
 
     Args:
         agent_name: Name of the agent.
@@ -708,14 +709,14 @@ def triage_conditional_agent(
     ):
         return "SKIPPED_TRIAGE", "requires PHP source file"
 
-    # Layer 3: Keyword match from triage_keywords against all signal sources
+    # Layer 3: Change-local keyword match. Ambient repository identity is
+    # deliberately excluded so existing agents cannot inherit it implicitly.
     keywords = config.get("triage_keywords", [])
     if keywords:
         file_paths_text = _build_file_paths_text(domain_files)
         sources = [
             ("commits", commit_messages),
             ("files", file_paths_text),
-            ("repository", repository_text),
             ("pr", pr_text),
             ("diff", diff_text),
         ]
@@ -729,10 +730,23 @@ def triage_conditional_agent(
             for src, kws in by_source.items():
                 reason_parts.append(f"{src}: {', '.join(kws[:3])}")
             return "DISPATCH", f"keywords matched ({'; '.join(reason_parts)})"
+
+    # Layer 4: Repository identity is an ambient applicability signal. Agents
+    # must opt in with source-specific keywords rather than reusing the generic
+    # change-local keyword set.
+    repository_keywords = config.get("triage_repository_keywords", [])
+    repository_matches = _match_keywords_multi_source(
+        repository_keywords,
+        [("repository", repository_text)],
+    )
+    if repository_matches:
+        matched_keywords = ", ".join(kw for kw, _ in repository_matches[:5])
+        return "DISPATCH", f"repository keywords matched ({matched_keywords})"
+
     if config.get("require_triage_keyword_match"):
         return "SKIPPED_TRIAGE", "requires triage keyword match; none found"
 
-    # Layer 4: Agent-specific checks
+    # Layer 5: Agent-specific checks
     triage_checks = config.get("triage_checks", [])
     for check in triage_checks:
         if check == "new_abstraction_files":
@@ -768,7 +782,7 @@ def triage_conditional_agent(
             if _has_public_api_changes(diff_text):
                 return "DISPATCH", "public API surface changes"
 
-    # Layer 4: Default — DISPATCH when no triage signal skips the agent.
+    # Layer 6: Default — DISPATCH when no triage signal skips the agent.
     # Keywords and triage checks provide positive evidence, but conditional
     # agents still dispatch conservatively when their domain has files.
     return "DISPATCH", "conditional (domain has files, no triage signal to skip)"
@@ -971,9 +985,15 @@ def build_dispatch_plan(
     if diffstat is None:
         diffstat = get_diffstat(git_range)
 
-    # Build stable context signals for keyword matching (fault-tolerant)
+    # Build stable context signals for keyword matching (fault-tolerant).
+    # Repository identity remains opt-in because it describes the checkout,
+    # not the current change.
     pr_text = _build_pr_text(review_context)
-    repository_text = get_repository_identity()
+    repository_text = (
+        get_repository_identity()
+        if any(config.get("triage_repository_keywords") for config in agents.values())
+        else ""
+    )
 
     # Build dispatch decisions
     dispatch_list = []

@@ -1219,6 +1219,43 @@ class TestTriageInDispatchPlan:
         assert dispatch_map["simplification-reviewer"]["status"] == "SKIPPED_QUICK_MODE"
         assert "quick review mode" in dispatch_map["simplification-reviewer"]["reason"]
 
+    def test_quick_mode_ignores_repository_identity_for_generic_keywords(
+        self, registry, tmp_path, monkeypatch
+    ):
+        repo = tmp_path / "arbitrary-checkout"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(
+            [
+                "git", "-C", str(repo), "remote", "add", "origin",
+                "https://github.com/woocommerce/woocommerce.git",
+            ],
+            check=True,
+        )
+        monkeypatch.chdir(repo)
+
+        with patch.object(
+            _mod,
+            "get_diff_text",
+            return_value="-$old_name = 1;\n+$renamed_value = 1;",
+        ):
+            plan = build_dispatch_plan(
+                mode="full",
+                git_range="main..HEAD",
+                output_dir=str(tmp_path / "review"),
+                changed_files=["src/Internal/Service.php"],
+                registry={
+                    "agents": {
+                        "wp-architecture-reviewer": registry["agents"]["wp-architecture-reviewer"],
+                    },
+                },
+                commit_messages="rename local variable",
+                diffstat={"added": 1, "removed": 1},
+                quick=True,
+            )
+
+        assert plan["agents"][0]["status"] == "SKIPPED_QUICK_MODE"
+
 
 # =============================================================================
 # Keyword triage — shares the class grouping used by other triage tests
