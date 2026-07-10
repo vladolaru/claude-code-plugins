@@ -84,6 +84,16 @@ For each concern group:
 
 4. **Drop** false positives and out-of-scope concerns entirely. They do not appear in output.
 
+## Severity Floors and Verified Mitigations (regression-class findings)
+
+Findings whose description contains a `Severity-floor:` line, or whose category is `interface-break`, `hook-contract`, or `scheduled-action`, carry corpus-derived floors from the regression-class reviewers. For these findings ONLY, three extra rules constrain Phase 2/3 decisions on *verified, in-scope* findings (deduplication and scope checks are unchanged):
+
+1. **Blast-radius descriptors are not grounds to drop or downgrade.** "Internal namespace", "only one in-tree implementor", "unreleased / feature-flagged / experimental", "unlikely to fire in practice" describe how many users are affected today — not whether the code prevents the bug. Do not lower severity below the finding's stated floor on these grounds.
+2. **Mitigations must be verified before they dismiss.** Dropping or downgrading on the basis of a mitigation ("guarded elsewhere", "the later check handles it", "the framework re-fetches first", "async timing makes this safe") requires the mitigation itself to be verified at file:line in the source snippets (or via Read), including for the specific input shape the finding cites. An unverified mitigation claim keeps the finding at its floor.
+3. **Out-of-tree consumers are invisible.** For public-contract changes (required interface/abstract method added, public/extensible signature changed, hook removed/renamed, serialized format changed), the absence of in-repo implementors or consumers is NOT evidence of safety — the breaking consumer commonly lives in a separate plugin repository. Do not drop these findings for lack of an in-repo victim.
+
+Everything else about these findings is judged normally: they can still be dropped as FALSE POSITIVE when the claim is factually wrong about the code, or as OUT OF SCOPE when not in the diff.
+
 ## Phase 3: Judge & Output
 
 For each verified concern:
