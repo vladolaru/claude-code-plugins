@@ -256,6 +256,30 @@ class TestArchitecturalInvariants:
                 f"REVIEW RULES differ between {self._REPRESENTATIVE_AGENTS[0]} and {agent}"
             )
 
+    def test_shared_rules_bound_recursive_filesystem_discovery(self, tmp_path):
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        review_rules = _mod.extract_protocol_sections(
+            protocol,
+            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
+        )
+        prompt = build_output(
+            agent_name="code-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules=review_rules,
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number=None,
+            reviewer_name="code",
+        )
+
+        assert "Never run recursive discovery from `/` or `$HOME`" in prompt
+        assert "Every recursive search must name a bounded root" in prompt
+        assert "list the repository parent one level deep" in prompt
+        assert "stop discovery rather than widening the search root" in prompt
+
     def test_domain_rules_identical_across_test_agents(self):
         """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents.
 

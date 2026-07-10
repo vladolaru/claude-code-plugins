@@ -5,6 +5,16 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.104.1] - 2026-07-10
+
+### Fixed
+
+- **Reviewer filesystem discovery is now bounded.** The shared reviewer protocol prohibits recursive searches from `/` and `$HOME`, limits discovery to explicit repository, Host Context, dependency, configuration, and selected-sibling roots, and requires reviewers to stop instead of widening the search. `ecosystem-integration-reviewer` adds a concrete one-pass upstream lookup order and falls back to RULE 0 (omit unverifiable findings) when source remains unavailable, preserving advisory Host Context behavior without allowing whole-filesystem scans.
+
+### Tests
+
+- Added regression coverage for the shared bounded-root contract in generated reviewer prompts and the ecosystem reviewer's ordered discovery and clean-exit behavior.
+
 ## [1.104.0] - 2026-07-10
 
 Adds a WooCommerce-focused regression-invariants reviewer, ported from the production AI regression-review pipeline's tuned WooCommerce prompts, so regression classes that shipped in the WC ecosystem are caught pre-merge instead of post-merge.

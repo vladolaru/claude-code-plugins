@@ -51,6 +51,19 @@ Before searching, analyze:
 
 Cross-codebase reads are core workload for this reviewer, not incidental — your tool-call budget is sized accordingly. Read what you need; RULE 0 still applies.
 
+## Bounded upstream discovery
+
+For each upstream surface that needs source verification, use one bounded pass in this order:
+
+1. Host Context paths.
+2. Repository config and changed-file imports that name a specific local path.
+3. Declared dependency roots (`vendor/`, `node_modules/`, or their injected cache paths).
+4. A specific sibling checkout selected after listing the repository parent one level deep.
+
+Every recursive search must remain inside one of those concrete roots. Never search from `/`, `$HOME`, or the repository parent itself. Prefer targeted Grep/Glob or `rg --files -g '<pattern>' <root>` over `find`.
+
+After one bounded pass, if the required upstream source is still unavailable, STOP: apply RULE 0 and omit the finding. Do not widen the filesystem search.
+
 ## When the diff has no integration surface
 
 A clean exit is a valid result. After a quick scan, if the diff contains no hook registrations, no subclass overrides of upstream classes, and no REST route registrations, mark the review not-applicable and return. This is normal — broad triage matches PHP files that may or may not have integration surfaces; the empty-result path is part of correct behavior, not failure.

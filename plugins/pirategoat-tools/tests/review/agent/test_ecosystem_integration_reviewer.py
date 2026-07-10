@@ -54,6 +54,18 @@ def test_agent_treats_host_context_as_non_exhaustive():
     assert "explore" in content
 
 
+def test_agent_uses_bounded_upstream_discovery_then_rule_zero_exit():
+    content = AGENT_PATH.read_text().lower()
+
+    assert "## bounded upstream discovery" in content
+    assert "host context paths" in content
+    assert "repository config and changed-file imports" in content
+    assert "declared dependency roots" in content
+    assert "specific sibling checkout" in content
+    assert "after one bounded pass" in content
+    assert "apply rule 0 and omit the finding" in content
+
+
 def test_agent_output_filename_matches_review_output_builder_contract():
     content = AGENT_PATH.read_text()
     assert "ecosystem-integration-review.{json,md}" in content
