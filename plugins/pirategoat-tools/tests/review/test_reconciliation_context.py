@@ -52,6 +52,7 @@ def _make_issue(
     recommendation="Fix it",
     category="general",
     confidence=0.9,
+    severity_floor=None,
 ):
     """Create a single issue dict matching ReviewOutputBuilder format."""
     issue = {
@@ -65,6 +66,8 @@ def _make_issue(
         "recommendation": recommendation,
         "confidence": confidence,
     }
+    if severity_floor is not None:
+        issue["severity_floor"] = severity_floor
     return issue
 
 
@@ -184,6 +187,17 @@ class TestLoadAgentFindings:
         assert "security-review" in result
         assert "broken-review" not in result
 
+    def test_skips_non_object_json(self, mod, tmp_path):
+        (tmp_path / "security-review.json").write_text(
+            json.dumps(_make_review_json())
+        )
+        (tmp_path / "broken-review.json").write_text("[]")
+
+        result = mod.load_agent_findings(str(tmp_path))
+
+        assert "security-review" in result
+        assert "broken-review" not in result
+
     def test_skips_non_json_files(self, mod, tmp_path):
         """Files not ending in -review.json are ignored."""
         (tmp_path / "security-review.json").write_text(
@@ -238,6 +252,70 @@ class TestLoadAgentFindings:
 
         result = mod.load_agent_findings(str(tmp_path), dispatched_agents=[])
         assert len(result) == 0
+
+
+class TestSeverityFloorNormalization:
+    def test_structured_floor_wins_over_legacy_marker(self, mod):
+        issue = _make_issue(
+            severity_floor="medium",
+            description="Severity-floor: silent false-success",
+        )
+
+        assert mod.resolve_severity_floor(issue) == "medium"
+
+    @pytest.mark.parametrize(
+        ("description", "expected"),
+        [
+            pytest.param(
+                "Severity-floor: high — verified false-success",
+                "high",
+                id="numeric-marker",
+            ),
+            pytest.param(
+                "Severity-floor: public-contract change; consumers exist",
+                "medium",
+                id="legacy-public-contract",
+            ),
+            pytest.param(
+                "Severity-floor: silent false-success; blast radius is irrelevant",
+                "high",
+                id="legacy-false-success",
+            ),
+        ],
+    )
+    def test_resolves_numeric_and_current_legacy_markers(
+        self, mod, description, expected
+    ):
+        assert mod.resolve_severity_floor(
+            _make_issue(description=description)
+        ) == expected
+
+    def test_category_alone_does_not_create_floor(self, mod):
+        assert mod.resolve_severity_floor(
+            _make_issue(category="scheduled-action")
+        ) is None
+
+    def test_unknown_legacy_marker_does_not_guess_floor(self, mod):
+        assert mod.resolve_severity_floor(
+            _make_issue(description="Severity-floor: future policy")
+        ) is None
+
+    def test_loading_findings_materializes_legacy_floor(self, mod, tmp_path):
+        review = _make_review_json(
+            issues=[
+                _make_issue(
+                    description=(
+                        "Severity-floor: public-contract change; consumers exist"
+                    ),
+                )
+            ]
+        )
+        (tmp_path / "woo-regression-review.json").write_text(json.dumps(review))
+
+        loaded = mod.load_agent_findings(str(tmp_path))
+
+        issue = loaded["woo-regression-review"]["issues"][0]
+        assert issue["severity_floor"] == "medium"
 
 
 # ===========================================================================
@@ -1442,6 +1520,18 @@ class TestToMarkdown:
         assert "`src/auth.py:42`" in md
         assert "Unescaped user input" in md
         assert "Use esc_html()" in md
+
+    def test_agent_finding_includes_severity_floor(self, mod):
+        findings = {
+            "woo-regression-review": _make_review_json(
+                reviewer="woo-regression",
+                issues=[_make_issue(severity_floor="medium")],
+            ),
+        }
+
+        md = mod.to_markdown(_make_context_with_findings(findings))
+
+        assert "- Severity floor: medium" in md
 
     def test_agent_no_issues(self, mod):
         """Agent with 0 issues shows verdict and count."""

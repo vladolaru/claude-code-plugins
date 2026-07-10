@@ -55,6 +55,39 @@ _PREFILTER_SCOPES = frozenset([
     "OUT_OF_SCOPE:metadata_only",
 ])
 
+_VALID_SEVERITY_FLOORS = frozenset(
+    {"critical", "high", "medium", "low", "info"}
+)
+_NUMERIC_SEVERITY_FLOOR_RE = re.compile(
+    r"(?im)^Severity-floor:\s*(critical|high|medium|low|info)\b"
+)
+_LEGACY_SEVERITY_FLOORS = {
+    "public-contract change": "medium",
+    "silent false-success": "high",
+}
+
+
+def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
+    """Resolve a structured or backward-compatible description floor."""
+    structured = issue.get("severity_floor")
+    if (
+        isinstance(structured, str)
+        and structured.lower() in _VALID_SEVERITY_FLOORS
+    ):
+        return structured.lower()
+
+    description = issue.get("description", "")
+    if not isinstance(description, str):
+        return None
+    numeric = _NUMERIC_SEVERITY_FLOOR_RE.search(description)
+    if numeric:
+        return numeric.group(1).lower()
+    lowered = description.lower()
+    for marker, floor in _LEGACY_SEVERITY_FLOORS.items():
+        if f"severity-floor: {marker}" in lowered:
+            return floor
+    return None
+
 
 def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
     """Return host_context.banner from review-context.json, or None.
@@ -131,6 +164,23 @@ def load_agent_findings(
 
         try:
             data = json.loads(entry.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                print(
+                    f"WARNING: skipping malformed file {entry.name}: "
+                    "top-level JSON must be an object",
+                    file=sys.stderr,
+                )
+                continue
+            issues = data.get("issues", [])
+            if isinstance(issues, list):
+                for issue in issues:
+                    if not isinstance(issue, dict):
+                        continue
+                    floor = resolve_severity_floor(issue)
+                    if floor is None:
+                        issue.pop("severity_floor", None)
+                    else:
+                        issue["severity_floor"] = floor
             # Key by filename without .json extension (e.g., "security-review")
             agent_name = entry.stem
             findings[agent_name] = data
@@ -850,6 +900,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
                 file_path = issue.get("file", "")
                 line = issue.get("line", "")
                 category = issue.get("category", "")
+                severity_floor = resolve_severity_floor(issue)
                 description = issue.get("description", "")
                 recommendation = issue.get("recommendation", "")
 
@@ -860,6 +911,8 @@ def to_markdown(context: Dict[str, Any]) -> str:
                     parts.append(f"- File: {loc}")
                 if category:
                     parts.append(f"- Category: {category}")
+                if severity_floor:
+                    parts.append(f"- Severity floor: {severity_floor}")
                 if description:
                     desc = _escape_backtick_runs(description)
                     desc = _escape_block_syntax(desc)
@@ -1017,6 +1070,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
         file_path = issue.get("file", "")
         line = issue.get("line", "")
         category = issue.get("category", "")
+        severity_floor = resolve_severity_floor(issue)
         description = issue.get("description", "")
         recommendation = issue.get("recommendation", "")
 
@@ -1030,6 +1084,8 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
             parts.append(f"- **File:** {loc}")
         if category:
             parts.append(f"- **Category:** {category}")
+        if severity_floor:
+            parts.append(f"- **Severity floor:** {severity_floor}")
         if description:
             desc = _escape_backtick_runs(description)
             desc = _escape_block_syntax(desc)

@@ -29,7 +29,7 @@ The Markdown document has these sections:
 
 1. **Metadata** — git range, PR ID, output directory, output builder path, changed files, dispatched agents
 2. **Change Purpose** — what the change accomplishes. Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility. May be "(not provided)" for non-PR reviews.
-3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, file:line, description, recommendation, category, and confidence. May also include **Recommendations** (prioritized as immediate/important/suggestions). Agents are sorted alphabetically.
+3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, optional severity floor, file:line, description, recommendation, category, and confidence. May also include **Recommendations** (prioritized as immediate/important/suggestions). Agents are sorted alphabetically.
 4. **Source Snippets** — pre-read source code around every referenced file:line in fenced code blocks, with ±10 lines of context. Format: `<line_num> | <code>` per line. May include `[pre-change]` entries for files with deletion hunks and `[deleted]` prefixed content for removed files.
 5. **Scope Annotations** — table mapping `file:line` to scope status. Structurally certain out-of-scope entries (`file_not_in_diff`, `metadata_only`) are pre-filtered along with their findings — you will not see them:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
@@ -86,13 +86,18 @@ For each concern group:
 
 ## Severity Floors and Verified Mitigations (regression-class findings)
 
-Findings whose description contains a `Severity-floor:` line, or whose category is `interface-break`, `hook-contract`, or `scheduled-action`, carry corpus-derived floors from the regression-class reviewers. For these findings ONLY, three extra rules constrain Phase 2/3 decisions on *verified, in-scope* findings (deduplication and scope checks are unchanged):
+A finding carries a numeric floor only when reconciliation context shows an explicit line such as `Severity floor: medium`. Categories never invent a floor. The context builder normalizes the current legacy markers before this stage.
 
-1. **Blast-radius descriptors are not grounds to drop or downgrade.** "Internal namespace", "only one in-tree implementor", "unreleased / feature-flagged / experimental", "unlikely to fire in practice" describe how many users are affected today — not whether the code prevents the bug. Do not lower severity below the finding's stated floor on these grounds.
-2. **Mitigations must be verified before they dismiss.** Dropping or downgrading on the basis of a mitigation ("guarded elsewhere", "the later check handles it", "the framework re-fetches first", "async timing makes this safe") requires the mitigation itself to be verified at file:line in the source snippets (or via Read), including for the specific input shape the finding cites. An unverified mitigation claim keeps the finding at its floor.
-3. **Out-of-tree consumers are invisible.** For public-contract changes (required interface/abstract method added, public/extensible signature changed, hook removed/renamed, serialized format changed), the absence of in-repo implementors or consumers is NOT evidence of safety — the breaking consumer commonly lives in a separate plugin repository. Do not drop these findings for lack of an in-repo victim.
+The rules below apply to findings with an explicit floor and, for mitigation verification only, findings in the `interface-break`, `hook-contract`, or `scheduled-action` categories:
 
-Everything else about these findings is judged normally: they can still be dropped as FALSE POSITIVE when the claim is factually wrong about the code, or as OUT OF SCOPE when not in the diff.
+1. **Verify floor applicability.** Verify both the concern and the predicate that makes its floor applicable. If that predicate is factually wrong, discard the floor only with cited source evidence and judge the verified concern normally.
+2. **Blast-radius descriptors do not lower a floor.** "Internal namespace", "only one in-tree implementor", "unreleased / feature-flagged / experimental", and "unlikely to fire" describe affected population, not structural prevention.
+3. **Mitigations must be verified.** A mitigation must be verified at file:line for the cited input shape. It may prove a concern false or unreachable; it cannot justify retaining an applicable concern below its floor.
+4. **Out-of-tree consumers remain invisible.** For public-contract changes, absence of in-repo implementors or consumers is not evidence of safety.
+
+When grouping duplicate findings, keep the strongest verified source floor. Every retained verified concern must remain at or above that floor. Pass the strongest verified value through the reconciled `builder.add_issue(..., severity_floor="medium")` call (using the actual verified level; omit the argument only when no floor applies) so the constraint survives in `review-findings.json`.
+
+Deduplication and scope behavior are unchanged. Findings may still be dropped as FALSE POSITIVE or OUT OF SCOPE when the source evidence supports that classification.
 
 ## Phase 3: Judge & Output
 
@@ -134,6 +139,7 @@ builder.add_issue(
     description="Unified explanation capturing the essential insight",
     recommendation="Actionable fix guidance",
     category="relevant-category",
+    severity_floor="medium",  # Omit only when no verified floor applies.
     confidence=0.95
 )
 

@@ -49,9 +49,10 @@ def _make_issue(
     recommendation="Fix it",
     category="general",
     confidence=0.9,
+    severity_floor=None,
 ):
     """Create a single issue dict matching ReviewOutputBuilder format."""
-    return {
+    issue = {
         "id": id,
         "severity": severity,
         "title": title,
@@ -62,6 +63,9 @@ def _make_issue(
         "category": category,
         "confidence": confidence,
     }
+    if severity_floor is not None:
+        issue["severity_floor"] = severity_floor
+    return issue
 
 
 def _make_findings(
@@ -194,6 +198,16 @@ class TestBuildCriticContext:
         assert "high" in result
         assert "`src/User.php:42`" in result
         assert "`src/Query.php:88`" in result
+
+    def test_includes_severity_floor(self, mod):
+        issue = _make_issue(severity="medium", severity_floor="medium")
+
+        result = mod.build_critic_context(
+            SAMPLE_REPORT,
+            _make_findings(issues=[issue]),
+        )
+
+        assert "- **Severity floor:** medium" in result
 
     def test_includes_reconciliation_metrics(self, mod):
         """Pipeline stats are present."""

@@ -301,6 +301,24 @@ class TestNotApplicableCompletionContract:
             f"completion sequence: {offenders}"
         )
 
+    def test_woo_reviewer_uses_structured_floors_not_description_markers(self):
+        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
+
+        assert 'severity_floor="medium"' in prompt
+        assert 'severity_floor="high"' in prompt
+        assert "Severity-floor:" not in prompt
+
+    def test_downstream_prompts_preserve_explicit_floor_contract(self):
+        reconciliator = (
+            PLUGIN_ROOT / "agents/review-reconciliator.md"
+        ).read_text().lower()
+        critic = (PLUGIN_ROOT / "agents/decision-reviewer.md").read_text().lower()
+
+        assert "categories never invent a floor" in reconciliator
+        assert "strongest verified" in reconciliator
+        assert "severity_floor" in reconciliator
+        assert "severity floor" in critic
+
 
 class TestSmokeAllAgents:
     """Every registered agent must run bootstrap without crashing.

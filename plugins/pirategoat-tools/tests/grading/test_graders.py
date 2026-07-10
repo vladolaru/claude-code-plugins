@@ -124,6 +124,32 @@ class TestGradeReviewJson:
         assert not result.passed
         assert any("Invalid verdict" in f for f in result.failures)
 
+    def test_valid_severity_floor_passes(self, tmp_dir):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as f:
+            data = json.load(f)
+        data["issues"][0]["severity_floor"] = "medium"
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        result = grade_review_json(path)
+
+        assert result.passed, result.failures
+
+    def test_severity_below_floor_fails(self, tmp_dir):
+        path = _make_valid_json(tmp_dir)
+        with open(path) as f:
+            data = json.load(f)
+        data["issues"][0]["severity"] = "low"
+        data["issues"][0]["severity_floor"] = "medium"
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        result = grade_review_json(path)
+
+        assert not result.passed
+        assert any("below floor" in failure for failure in result.failures)
+
     def test_empty_file_fails(self, tmp_dir):
         path = os.path.join(tmp_dir, "empty.json")
         with open(path, "w") as f:

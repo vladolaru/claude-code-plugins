@@ -35,7 +35,7 @@ You receive a Critic Context Path plus an Output Directory:
 The Markdown document has these sections:
 
 1. **Review Report** — the full narrative review (fenced). This is what you are stress-testing.
-2. **Structured Findings** — each finding with a stable ID (F1, F2, ...), severity, file:line, description, recommendation, category, and confidence. Use these IDs when referencing specific findings in your critique.
+2. **Structured Findings** — each finding with a stable ID (F1, F2, ...), severity, optional severity floor, file:line, description, recommendation, category, and confidence. Use these IDs when referencing specific findings in your critique, and treat a stated floor as a claim to verify rather than silently discard.
 3. **Prioritized Recommendations** — immediate/important/suggestions from the reconciliator.
 4. **Reconciliation Metrics** — pipeline statistics (input count, merge ratio, agents contributing, false positives dropped, etc.). Use these to assess whether the reconciliation process was thorough.
 

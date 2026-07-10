@@ -25,6 +25,7 @@ class GradeResult:
 
 
 VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
+SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 VALID_VERDICTS = {"approve", "block", "request_changes", "comment", "not_applicable"}
 REQUIRED_ISSUE_FIELDS = {"id", "severity", "title", "file", "description", "recommendation"}
 REQUIRED_JSON_TOP_FIELDS = {"pr_id", "reviewer", "verdict", "summary", "issues", "meta"}
@@ -112,6 +113,24 @@ def grade_review_json(path: str) -> GradeResult:
             checks.append(
                 (sev in VALID_SEVERITIES, f"Issue {i} invalid severity: '{sev}'")
             )
+            floor = issue.get("severity_floor")
+            if floor is not None:
+                floor_is_valid = (
+                    isinstance(floor, str) and floor in VALID_SEVERITIES
+                )
+                checks.append(
+                    (
+                        floor_is_valid,
+                        f"Issue {i} invalid severity_floor: '{floor}'",
+                    )
+                )
+                if floor_is_valid and sev in VALID_SEVERITIES:
+                    checks.append(
+                        (
+                            SEVERITY_RANK[sev] >= SEVERITY_RANK[floor],
+                            f"Issue {i} severity '{sev}' is below floor '{floor}'",
+                        )
+                    )
 
     # Check meta exists
     meta = data.get("meta", None)

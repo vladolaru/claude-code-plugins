@@ -73,6 +73,76 @@ class TestAddIssue:
         with pytest.raises(ValueError, match="Invalid severity"):
             b.add_issue("urgent", "Title", "f.py", "desc", "rec", line=1)
 
+    @pytest.mark.parametrize(
+        ("severity", "floor", "expected"),
+        [
+            pytest.param("low", "medium", "medium", id="promotes-to-floor"),
+            pytest.param("medium", "medium", "medium", id="equal-to-floor"),
+            pytest.param("critical", "medium", "critical", id="above-floor"),
+            pytest.param("MEDIUM", "HIGH", "high", id="case-insensitive"),
+        ],
+    )
+    def test_severity_floor_is_serialized_and_enforced(
+        self, severity, floor, expected
+    ):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
+
+        b.add_issue(
+            severity,
+            "Title",
+            "f.php",
+            "desc",
+            "rec",
+            line=1,
+            severity_floor=floor,
+        )
+
+        issue = b.issues[0]
+        assert issue["severity"] == expected
+        assert issue["severity_floor"] == floor.lower()
+
+    @pytest.mark.parametrize(
+        "floor",
+        [
+            pytest.param("urgent", id="unknown-name"),
+            pytest.param(3, id="non-string"),
+        ],
+    )
+    def test_invalid_severity_floor_raises(self, floor):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
+
+        with pytest.raises(ValueError, match="severity_floor"):
+            b.add_issue(
+                "medium",
+                "Title",
+                "f.php",
+                "desc",
+                "rec",
+                line=1,
+                severity_floor=floor,
+            )
+
+    def test_severity_floor_is_optional(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+
+        b.add_issue("medium", "Title", "f.php", "desc", "rec", line=1)
+
+        assert "severity_floor" not in b.issues[0]
+
+    def test_markdown_renders_severity_floor(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="woo-regression")
+        b.add_issue(
+            "medium",
+            "Title",
+            "f.php",
+            "desc",
+            "rec",
+            line=1,
+            severity_floor="medium",
+        )
+
+        assert "**Severity floor:** medium" in b.to_markdown()
+
     def test_confidence_boundaries_valid(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_issue("high", "A", "f.py", "d", "r", line=1, confidence=0.0)

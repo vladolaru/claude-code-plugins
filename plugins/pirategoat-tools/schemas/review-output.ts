@@ -29,6 +29,7 @@ export interface Issue {
     id: string; // Unique identifier for this issue
     category: string; // bug | security | performance | architecture | style
     severity: Severity;
+    severity_floor?: Severity; // Lowest severity allowed after verification/reconciliation
     title: string; // Short description
     description: string; // Detailed explanation
     file: string; // Path to file

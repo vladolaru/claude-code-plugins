@@ -27,6 +27,17 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
+
+_VALID_SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')
+_SEVERITY_RANK = {
+    'info': 0,
+    'low': 1,
+    'medium': 2,
+    'high': 3,
+    'critical': 4,
+}
+
+
 def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, severities):
     """Best-effort telemetry logging on agent completion. Never raises."""
     try:
@@ -78,17 +89,35 @@ class ReviewOutputBuilder:
         confidence: float = 0.95,
         behavior_evidence: Optional[str] = None,
         source_cited: Optional[str] = None,
+        severity_floor: Optional[str] = None,
         **extra_fields
     ) -> Optional[str]:
         """Add an issue. Returns issue ID.
 
         Line is required — the reviewer protocol mandates diff-anchored findings.
         Use add_observation() for file-level notes without a specific line.
+        When severity_floor is provided, lower severities are promoted to it.
         """
-        # Validate severity
-        valid_severities = ['critical', 'high', 'medium', 'low', 'info']
-        if severity.lower() not in valid_severities:
-            raise ValueError(f"Invalid severity: {severity}. Must be one of {valid_severities}")
+        # Validate severity and enforce an optional minimum.
+        severity_value = severity.lower()
+        if severity_value not in _VALID_SEVERITIES:
+            raise ValueError(
+                f"Invalid severity: {severity}. "
+                f"Must be one of {list(_VALID_SEVERITIES)}"
+            )
+
+        floor_value = None
+        if severity_floor is not None:
+            if not isinstance(severity_floor, str):
+                raise ValueError("severity_floor must be a severity name")
+            floor_value = severity_floor.lower()
+            if floor_value not in _VALID_SEVERITIES:
+                raise ValueError(
+                    f"Invalid severity_floor: {severity_floor}. "
+                    f"Must be one of {list(_VALID_SEVERITIES)}"
+                )
+            if _SEVERITY_RANK[severity_value] < _SEVERITY_RANK[floor_value]:
+                severity_value = floor_value
 
         # Validate confidence
         if not 0.0 <= confidence <= 1.0:
@@ -111,7 +140,7 @@ class ReviewOutputBuilder:
             # enforcing the protocol's line requirement.
             self.add_observation(
                 file=file,
-                note=f"[{severity.upper()}] {title}: {description}",
+                note=f"[{severity_value.upper()}] {title}: {description}",
                 category=category,
             )
             return None
@@ -138,7 +167,7 @@ class ReviewOutputBuilder:
         issue = {
             'id': issue_id,
             'category': category,
-            'severity': severity.lower(),
+            'severity': severity_value,
             'title': title,
             'description': description,
             'file': file,
@@ -151,6 +180,8 @@ class ReviewOutputBuilder:
             issue['behavior_evidence'] = behavior_evidence
         if source_cited is not None:
             issue['source_cited'] = source_cited
+        if floor_value is not None:
+            issue['severity_floor'] = floor_value
 
         self.issues.append(issue)
         return issue_id
@@ -301,6 +332,8 @@ class ReviewOutputBuilder:
                     md.append(f"### {issue['title']}\n\n")
                     md.append(f"**File:** `{issue['file']}`" + (f" line {issue['line']}" if issue['line'] else "") + "\n\n")
                     md.append(f"{issue['description']}\n\n")
+                    if issue.get('severity_floor'):
+                        md.append(f"**Severity floor:** {issue['severity_floor']}\n\n")
                     md.append(f"**Fix:** {issue['recommendation']}\n\n")
 
         # Positive
