@@ -5,6 +5,19 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.104.0] - 2026-07-10
+
+Adds a WooCommerce-focused regression-invariants reviewer, ported from the production AI regression-review pipeline's tuned WooCommerce prompts, so regression classes that shipped in the WC ecosystem are caught pre-merge instead of post-merge.
+
+### Added
+
+- **`agents/woo-regression-reviewer.md`** — reviews WooCommerce core/extension changes against corpus-derived ecosystem invariants (Action Scheduler traps, meta equality/sync-on-read write loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP 8.4 coercion, migration legacy state, interface/hook contract breaks). Uses a mandatory per-hunk invariant audit and a self-audit pass that promotes soft dismissals ("pre-existing", "unlikely", "guarded elsewhere") to Medium findings. Dispatch is gated on WooCommerce signals via `require_triage_keyword_match` (first consumer of that mechanism) plus `require_php_source_file` — non-WooCommerce repos triage the agent out.
+- **Reconciliator severity floors** (`agents/review-reconciliator.md`): for regression-class findings (`Severity-floor:` marker or `interface-break`/`hook-contract`/`scheduled-action` categories), blast-radius descriptors ("Internal namespace", "only one in-tree implementor", "unreleased") no longer justify downgrades, mitigations must be verified at file:line before dismissing, and absence of in-repo implementors is not evidence of safety for public-contract changes.
+
+### Tests
+
+- `tests/review/test_plan_dispatch.py::TestWooRegressionReviewerTriage` — WC-signal dispatch, non-WC skip, PHP-source gate.
+
 ## [1.103.0] - 2026-06-10
 
 Fixes a systematic blind spot in reviewer scoping: non-web languages were invisible to the review domains. On a pure-Rust repo, 12 of 16 production-code domains returned `NO_DOMAIN_FILES` — `security-reviewer` never read `src/auth/` and signed off after reviewing only the CI workflow. Root cause was 16 independently hand-maintained per-domain extension regexes that covered only the web/WordPress stack; `.rs` was wired into the Rust *test* domains but never the production-code ones (`.cs` had the same partial gap). Centralizes language recognition into a single source of truth and adds a fail-loud safety net for languages the catalog still doesn't cover.

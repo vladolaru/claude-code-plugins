@@ -8,7 +8,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ### 32 Agents
 
-#### 27 Domain Review Agents
+#### 28 Domain Review Agents
 
 These run in parallel by default — total review time equals the slowest agent, not the sum of all agents.
 
@@ -18,6 +18,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **security-reviewer** | WordPress security — SQL injection, XSS, CSRF, capabilities, sanitization | sonnet |
 | **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | sonnet |
 | **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | sonnet |
+| **woo-regression-reviewer** | WooCommerce regression invariants — Action Scheduler traps, meta/sync-on-read loops, template overrides, broken-until-JS defaults, contract breaks with out-of-tree blast radius (WC core/extensions only) | opus |
 | **ecosystem-integration-reviewer** | Integration correctness against upstream runtime hosts — filter/action callback signatures, class override correctness, REST route schemas | sonnet |
 | **performance-reviewer** | N+1 queries, caching, autoloaded options, WP_Query optimization | sonnet |
 | **php-tests-reviewer** | PHPUnit test quality, WordPress factories, WooCommerce patterns | sonnet |
@@ -157,7 +158,7 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 
 ```
 pirategoat-tools/
-├── agents/           # 32 agent definitions (27 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
+├── agents/           # 33 agent definitions (28 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
 ├── commands/         # 7 slash commands
 ├── skills/           # 21 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library
