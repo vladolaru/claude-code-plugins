@@ -257,7 +257,18 @@ class TestArchitecturalInvariants:
             )
 
     def test_shared_rules_bound_recursive_filesystem_discovery(self, tmp_path):
+        """The bounded-discovery protocol section must reach generated prompts.
+
+        Diffs the section body against source instead of pinning prose, so
+        rewording the protocol doesn't break the test — only dropping the
+        section (or the prompt path losing it) does.
+        """
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        section = self._extract_section(
+            protocol, "### Bounded Filesystem Discovery", "\n## ", "\n### ",
+        )
+        assert section, "protocol must define a Bounded Filesystem Discovery section"
+
         review_rules = _mod.extract_protocol_sections(
             protocol,
             _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
@@ -275,10 +286,7 @@ class TestArchitecturalInvariants:
             reviewer_name="code",
         )
 
-        assert "Never run recursive discovery from `/` or `$HOME`" in prompt
-        assert "Every recursive search must name a bounded root" in prompt
-        assert "list the repository parent one level deep" in prompt
-        assert "stop discovery rather than widening the search root" in prompt
+        assert section in prompt
 
     def test_domain_rules_identical_across_test_agents(self):
         """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents.
