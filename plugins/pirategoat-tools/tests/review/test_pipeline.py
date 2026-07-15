@@ -972,6 +972,7 @@ class TestStep9ReviewReport:
         text = "\n".join(g["actions"])
         assert "summary" in text.lower()
         assert "critical" in text.lower()
+        assert "verdict" in text.lower()
 
     def test_change_purpose_subordinated_to_findings(self, mod, tmp_path):
         """Step 9 must present change purpose as author framing subordinate to
@@ -994,7 +995,7 @@ class TestStep9ReviewReport:
             text = "\n".join(g["actions"])
             assert "do not demote" in text.lower(), mode
             assert "narrow corner" in text, mode
-        assert "verdict" in text.lower()
+            assert "verdict" in text.lower(), mode
 
     def test_reinjects_change_purpose(self, mod, tmp_path):
         """Step 9 should re-inject change purpose to anchor the model."""
