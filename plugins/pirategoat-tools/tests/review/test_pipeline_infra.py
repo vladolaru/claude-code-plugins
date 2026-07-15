@@ -390,6 +390,8 @@ class TestCLIIntegration:
         (tmp_path / "review-verdict.json").write_text('{"stale": true}')
         (tmp_path / "pipeline-result.json").write_text('{"stale": true}')
         (tmp_path / "decision-critic-findings.md").write_text("stale")
+        (tmp_path / "scoped-diff.patch").write_text("legacy")
+        (tmp_path / "security-reviewer-scoped-diff.patch").write_text("current")
         # Seed files that should be PRESERVED
         (tmp_path / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
         (tmp_path / ".branch-review-baseline.json").write_text('{"preserved": true}')
@@ -401,6 +403,8 @@ class TestCLIIntegration:
         assert not (tmp_path / "review-report.md").exists()
         assert not (tmp_path / "review-verdict.json").exists()
         assert not (tmp_path / "pipeline-result.json").exists()
+        assert not (tmp_path / "scoped-diff.patch").exists()
+        assert not (tmp_path / "security-reviewer-scoped-diff.patch").exists()
         # Preserved files should still exist
         assert (tmp_path / "run-config.json").is_file()
         assert (tmp_path / ".branch-review-baseline.json").is_file()

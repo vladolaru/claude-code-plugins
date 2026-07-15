@@ -725,7 +725,7 @@ def build_output(
     if len(scope_output) > SCOPE_INLINE_CAP:
         # Write full scope to file to avoid output persistence cascade
         os.makedirs(output_dir, exist_ok=True)
-        scope_file = os.path.join(output_dir, "scoped-diff.patch")
+        scope_file = os.path.join(output_dir, f"{agent_name}-scoped-diff.patch")
         with open(scope_file, 'w') as f:
             f.write(
                 "# WARNING: When you read this file, the Read tool adds display line numbers\n"

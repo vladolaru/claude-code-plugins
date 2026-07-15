@@ -545,16 +545,49 @@ class TestBootstrapOutputSizeCap:
         # The full 50KB scope should NOT be in the output
         assert len(output) < 40 * 1024  # output should be well under 40KB total
 
-    def test_large_scope_has_file_reference(self):
+    def test_large_scope_has_file_reference(self, tmp_path):
         """When scope is truncated, output tells agent where to read the full scope."""
-        output = self._build_large_output(scope_size_kb=50)
-        assert "scoped-diff.patch" in output or "full scope" in output.lower() or "Read" in output
+        output = self._build_large_output(scope_size_kb=50, output_dir=str(tmp_path))
+        expected_path = tmp_path / "security-reviewer-scoped-diff.patch"
+        assert str(expected_path) in output
 
     def test_large_scope_has_read_instructions(self):
         """When scope is truncated, output tells agent to use offset/limit."""
         output = self._build_large_output(scope_size_kb=50)
         lower = output.lower()
         assert "offset" in lower or "limit" in lower or "head" in lower
+
+    def test_large_scopes_are_namespaced_by_agent(self, tmp_path):
+        """Parallel reviewers retain distinct large scope files."""
+
+        def build(agent_name, reviewer_name, domain):
+            scope = f"DOMAIN: {domain}\n" + (f"{domain} diff line\n" * 2000)
+            return build_output(
+                agent_name=agent_name,
+                plugin_root="/fake/root",
+                status="OK",
+                review_rules="rules here",
+                domain_rules=None,
+                scope_output=scope,
+                exploration_scope=None,
+                output_dir=str(tmp_path),
+                pr_number="42",
+                reviewer_name=reviewer_name,
+            )
+
+        security_output = build("security-reviewer", "security", "security")
+        concurrency_output = build(
+            "concurrency-reviewer", "concurrency", "concurrency"
+        )
+        security_path = tmp_path / "security-reviewer-scoped-diff.patch"
+        concurrency_path = tmp_path / "concurrency-reviewer-scoped-diff.patch"
+
+        assert str(security_path) in security_output
+        assert str(concurrency_path) in concurrency_output
+        assert "DOMAIN: security" in security_path.read_text()
+        assert "DOMAIN: concurrency" not in security_path.read_text()
+        assert "DOMAIN: concurrency" in concurrency_path.read_text()
+        assert "DOMAIN: security" not in concurrency_path.read_text()
 
 
 class TestDynamicDispatchRisk:

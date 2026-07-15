@@ -5,6 +5,16 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.105.1] - 2026-07-15
+
+### Fixed
+
+- **Parallel reviewers now retain their own large scoped diffs.** Bootstrap previously spilled every scope over 15 KiB to one run-global `scoped-diff.patch`, so a later parallel bootstrap could replace the domain diff an earlier reviewer had been instructed to read. Spill files are now namespaced by reviewer agent, and reused review directories clean both the namespaced files and the legacy shared filename before a new run.
+
+### Tests
+
+- Added regression coverage proving two reviewers sharing an output directory receive distinct, domain-correct spill files, plus cleanup coverage for both filename generations.
+
 ## [1.105.0] - 2026-07-15
 
 Hardens the review pipeline against unverified-dismissal misses, prompted by a shipped case (woocommerce/woocommerce#66488 → #66613) where a detected regression was demoted to "narrow and acceptable corner" tradeoff prose: the collision was framed as coincidental when the upstream producer made it systematic for an entire store-configuration class.

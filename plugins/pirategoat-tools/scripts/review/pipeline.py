@@ -103,6 +103,8 @@ _STALE_ARTIFACTS = [
     "decision-critic-findings.md",
     "decision-critic-verdict.json",
     "change-purpose.md",
+    "scoped-diff.patch",
+    "*-scoped-diff.patch",
 ]
 
 DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches agents_status.py
