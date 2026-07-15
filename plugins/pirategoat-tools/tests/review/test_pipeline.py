@@ -332,6 +332,20 @@ class TestStep4FetchLinearIssues:
         text = "\n".join(g["handoff"])
         assert "change-purpose.md" in text
 
+    def test_change_purpose_handoff_requires_attribution(self, mod, tmp_path):
+        """Both change-purpose handoffs must instruct attributing intent to its
+        source so downstream stages treat the summary as claims to verify."""
+        state3 = {"resolved_params": {"has_unfetched_issues": False}, "completed_steps": [1]}
+        ctx3 = {"git": {"merge_base": "abc", "git_range": "abc..HEAD",
+                        "changed_files": ["a.py"], "commit_count": 3},
+                "pr_size": {"files": 1, "lines": 20, "category": "tiny"}}
+        state4 = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
+        for step, state, ctx in ((3, state3, ctx3), (4, state4, COMPLETE_CONTEXT)):
+            g = mod.get_step_guidance(step, "pr", state, ctx)
+            text = "\n".join(g["handoff"])
+            assert "Attribute intent to its source" in text, step
+            assert "verify" in text.lower(), step
+
 
 class TestStep5DispatchPlan:
     """Step 5: Dispatch Plan + Triage. main() runs planner, passes output to get_step_guidance()."""
@@ -653,6 +667,16 @@ class TestStep8Reconcile:
         text = "\n".join(g["situation"] + g["actions"])
         assert "retry logic" in text.lower() or "change purpose" in text.lower()
 
+    def test_change_purpose_framed_as_claims_to_verify(self, mod, tmp_path):
+        """The reconciliator dispatch must present change purpose as author-stated
+        claims to verify, not context to adopt (regression guard for #66488)."""
+        state = self._make_state_with_agents(change_purpose_exists=True)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "author-stated" in text.lower()
+        assert "claims to verify" in text
+
     def test_change_purpose_fallback_when_missing(self, mod, tmp_path):
         """When change-purpose.md is missing, script provides fallback from commits."""
         state = self._make_state_with_agents(change_purpose_exists=False)
@@ -948,6 +972,17 @@ class TestStep9ReviewReport:
         text = "\n".join(g["actions"])
         assert "summary" in text.lower()
         assert "critical" in text.lower()
+
+    def test_change_purpose_subordinated_to_findings(self, mod, tmp_path):
+        """Step 9 must present change purpose as author framing subordinate to
+        the reconciled findings, for both the summary and commit fallbacks."""
+        for state in (
+            {"completed_steps": [], "change_purpose": "Fix retry logic."},
+            {"completed_steps": [], "commit_messages": ["fix: retry logic"]},
+        ):
+            g = mod.get_step_guidance(9, "pr", state, {})
+            text = "\n".join(g["situation"])
+            assert "source of truth" in text
 
     def test_default_instructions_forbid_prose_demotion(self, mod, tmp_path):
         """Both default instruction sets must forbid demoting findings into

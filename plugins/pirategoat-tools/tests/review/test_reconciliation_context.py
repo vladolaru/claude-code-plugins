@@ -1617,6 +1617,21 @@ class TestToMarkdown:
         assert "## Change Purpose" in md
         # Should be valid (no crash = test passes)
         assert "# Reconciliation Context" in md
+        # The claims-to-verify preamble only accompanies actual content
+        assert "claims to verify" not in md.split("## Change Purpose")[1].split("---")[0]
+
+    def test_change_purpose_framed_as_author_claims(self, mod):
+        """Non-empty change purpose carries the claims-to-verify preamble,
+        outside the isolation fence (regression guard for #66488 anchoring)."""
+        ctx = _make_context_with_findings({})
+        ctx["change_purpose"] = "Fix retry logic."
+        md = mod.to_markdown(ctx)
+        section = md.split("## Change Purpose")[1]
+        preamble_pos = section.find("claims to verify")
+        fence_pos = section.find("```")
+        assert preamble_pos != -1
+        assert fence_pos != -1
+        assert preamble_pos < fence_pos
 
     def test_special_chars_in_description(self, mod):
         """Pipe chars and backticks in descriptions don't break output."""

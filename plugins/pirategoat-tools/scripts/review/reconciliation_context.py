@@ -865,6 +865,11 @@ def to_markdown(context: Dict[str, Any]) -> str:
     if not change_purpose:
         parts.append("(not provided)")
     else:
+        parts.append(
+            "_Author-stated intent — treat as claims to verify against the diff, "
+            "not established fact. Author-asserted discriminators and likelihood "
+            "claims are review inputs, not review conclusions._\n"
+        )
         # Wrap in a dynamically-sized fence to isolate from the outer
         # document structure — change-purpose.md is a Markdown artifact
         # that may contain headings or fenced code blocks.

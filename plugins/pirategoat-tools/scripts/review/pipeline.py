@@ -581,6 +581,18 @@ def _format_linked_issues(context):
     return top_lines, bottom_lines
 
 
+def _change_purpose_handoff(output_dir):
+    """Shared handoff instructions for writing change-purpose.md."""
+    return [
+        f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`.",
+        "Include: what the change does, why it's being made, and what to focus on during review.",
+        "Attribute intent to its source (\"the PR description states...\", \"the linked issue asks for...\") "
+        "and keep author-asserted discriminators, assumptions, and likelihood claims recognizable as "
+        "claims — downstream stages treat this summary as material to verify, not as established fact.",
+        "Verify the file exists before proceeding.",
+    ]
+
+
 def _step_3_gather_context(mode, state, context, config, output_dir):
     """Step 3: Gather Context — present curated briefing."""
     git = context.get("git", {})
@@ -653,11 +665,7 @@ def _step_3_gather_context(mode, state, context, config, output_dir):
     # Change-purpose handoff — only when no unfetched issues
     has_unfetched = state.get("resolved_params", {}).get("has_unfetched_issues", False)
     if not has_unfetched:
-        handoff = [
-            f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`.",
-            "Include: what the change does, why it's being made, and what to focus on during review.",
-            "Verify the file exists before proceeding.",
-        ]
+        handoff = _change_purpose_handoff(output_dir)
 
     return {
         "phase": "SETUP",
@@ -693,11 +701,7 @@ def _step_4_fetch_issues(mode, state, context, config, output_dir):
     actions.append("")
     actions.append("After fetching, you'll have enough context to write the change purpose.")
 
-    handoff = [
-        f"Write a brief change-purpose summary to `{output_dir or '<OUTPUT_DIR>'}/change-purpose.md`.",
-        "Include: what the change does, why it's being made, and what to focus on during review.",
-        "Verify the file exists before proceeding.",
-    ]
+    handoff = _change_purpose_handoff(output_dir)
 
     return {
         "phase": "SETUP",
@@ -1000,9 +1004,9 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         situation.append(f"**Agents failed:** {', '.join(failed)}")
 
     if change_purpose:
-        situation.append(f"**Change purpose:** {change_purpose}")
+        situation.append(f"**Change purpose (author-stated — claims to verify, not established fact):** {change_purpose}")
     elif commit_messages:
-        situation.append(f"**Change purpose (derived from commits):** {'; '.join(commit_messages[:3])}")
+        situation.append(f"**Change purpose (derived from commits — claims to verify, not established fact):** {'; '.join(commit_messages[:3])}")
 
     if escalation:
         situation.insert(0, escalation)
@@ -1020,7 +1024,13 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
     ]
 
     if change_purpose:
-        actions.append(f"- **Change purpose:** {change_purpose}")
+        actions.append(
+            f"- **Change purpose (author-stated):** {change_purpose}"
+        )
+        actions.append(
+            "  Treat it as claims to verify against the diff, not context to adopt — "
+            "author-asserted discriminators and likelihood claims are review inputs, not conclusions."
+        )
 
     actions.append("")
     actions.append(f"**Expected output:** `{od}/review-findings.json` + `{od}/review-findings.md`")
@@ -1101,9 +1111,9 @@ def _step_9_review_report(mode, state, context, config, output_dir):
     commit_messages = state.get("commit_messages", [])
 
     if change_purpose:
-        situation.append(f"**Change purpose:** {change_purpose}")
+        situation.append(f"**Change purpose (author-stated — the reconciled findings, not this framing, are the source of truth):** {change_purpose}")
     elif commit_messages:
-        situation.append(f"**Change purpose (from commits):** {'; '.join(commit_messages[:3])}")
+        situation.append(f"**Change purpose (from commits — the reconciled findings, not this framing, are the source of truth):** {'; '.join(commit_messages[:3])}")
 
     if degradation.get("reconciliation_failed"):
         situation.append("⚠️ Reconciliation failed — working with raw agent output in degraded mode.")
