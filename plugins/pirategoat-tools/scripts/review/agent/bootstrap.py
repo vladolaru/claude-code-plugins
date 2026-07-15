@@ -226,6 +226,13 @@ def derive_reviewer_name(agent_name: str) -> str:
 
     Removes '-reviewer' suffix for output file naming.
     e.g. 'security-reviewer' -> 'security', 'code-reviewer' -> 'code'
+
+    Per-agent artifacts in OUTPUT_DIR follow one of two naming conventions;
+    pick the matching one when adding a new per-agent artifact:
+    - Human/deliverable-facing artifacts use this short reviewer_name:
+      '<reviewer_name>-review.json' / '.md'.
+    - Internal/orchestration-facing artifacts keyed on args.agent use the full
+      agent_name: '<agent_name>.started', '<agent_name>-scoped-diff.patch'.
     """
     if agent_name.endswith("-reviewer"):
         return agent_name[: -len("-reviewer")]
@@ -723,7 +730,9 @@ def build_output(
         lines.append("")
     # scope_output already starts with "=== REVIEW SCOPE ===" from scope.py
     if len(scope_output) > SCOPE_INLINE_CAP:
-        # Write full scope to file to avoid output persistence cascade
+        # Write full scope to file to avoid output persistence cascade.
+        # Internal artifact — keyed on the full agent_name so parallel reviewers
+        # sharing OUTPUT_DIR never collide (see derive_reviewer_name for the rule).
         os.makedirs(output_dir, exist_ok=True)
         scope_file = os.path.join(output_dir, f"{agent_name}-scoped-diff.patch")
         with open(scope_file, 'w') as f:
