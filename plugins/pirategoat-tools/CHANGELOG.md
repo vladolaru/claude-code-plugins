@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Hardens the review pipeline against unverified-dismissal misses, prompted by a shipped case (woocommerce/woocommerce#66488 → #66613) where a detected regression was demoted to "narrow and acceptable corner" tradeoff prose: the collision was framed as coincidental when the upstream producer made it systematic for an entire store-configuration class.
 
+### Added
+
+- **`woo-regression-reviewer` invariant 11: heuristic proxy predicates vs. store-configuration variance.** When a change gates behavior on a proxy inferred from persisted state shape ("zero shipping lines ⇒ virtual order", "meta key absent ⇒ feature unused", "field equality ⇒ derived copy"), the agent must enumerate every writer of the compared state and every supported configuration under which the proxy diverges from intent — a guard that is guaranteed-true under some supported configuration is not a narrowing guard for that population, and "coincidental" co-occurrence must be verified at the producers. Adds a per-hunk audit row (so soft dismissals reach the self-audit), a `proxy-predicate` finding category, and updates the agent description/registry focus. Neither this prompt set nor the upstream ai-regression-review checklist previously encoded this failure class; the ai pipeline caught #66613 only via its generic-correctness remit plus triage verification.
+
 ### Changed
 
 - **Dismissal and mitigation verification now applies to every finding, not just floored/regression-category ones.** The reconciliator gains a general "Dismissal & Mitigation Discipline" contract: frequency claims ("unlikely", "rare in practice", "narrow corner", "coincidental") justify nothing without a cited file:line structural reason; "coincidental" co-occurrence must be verified by reading the code that writes the compared values — with upstream-producer tracing beyond the pre-gathered snippets explicitly sanctioned; and mitigation claims must be verified at file:line for the cited input shape before they can dismiss or downgrade a verified concern.

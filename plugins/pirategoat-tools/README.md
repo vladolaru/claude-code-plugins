@@ -18,7 +18,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **security-reviewer** | WordPress security — SQL injection, XSS, CSRF, capabilities, sanitization | sonnet |
 | **architecture-reviewer** | Design patterns, SOLID principles, coupling/cohesion (language-agnostic) | sonnet |
 | **wp-architecture-reviewer** | WordPress-specific — hooks, extensibility, WPCS, backwards compatibility | sonnet |
-| **woo-regression-reviewer** | WooCommerce regression invariants — Action Scheduler traps, meta/sync-on-read loops, template overrides, broken-until-JS defaults, contract breaks with out-of-tree blast radius (WC core/extensions only) | opus |
+| **woo-regression-reviewer** | WooCommerce regression invariants — Action Scheduler traps, meta/sync-on-read loops, template overrides, broken-until-JS defaults, heuristic proxy predicates vs. config variance, contract breaks with out-of-tree blast radius (WC core/extensions only) | opus |
 | **ecosystem-integration-reviewer** | Integration correctness against upstream runtime hosts — filter/action callback signatures, class override correctness, REST route schemas | sonnet |
 | **performance-reviewer** | N+1 queries, caching, autoloaded options, WP_Query optimization | sonnet |
 | **php-tests-reviewer** | PHPUnit test quality, WordPress factories, WooCommerce patterns | sonnet |

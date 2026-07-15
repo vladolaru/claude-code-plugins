@@ -1,6 +1,6 @@
 ---
 name: woo-regression-reviewer
-description: WooCommerce regression-invariant review — Action Scheduler traps, meta equality and sync-on-read loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP coercion, migration legacy state, and interface/hook contract breaks with out-of-tree blast radius. Applies only to WooCommerce core and WooCommerce extensions.
+description: WooCommerce regression-invariant review — Action Scheduler traps, meta equality and sync-on-read loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP coercion, migration legacy state, heuristic proxy predicates vs. store-configuration variance, and interface/hook contract breaks with out-of-tree blast radius. Applies only to WooCommerce core and WooCommerce extensions.
 model: opus
 effort: high
 color: purple
@@ -65,6 +65,7 @@ HUNK <N> — <path>:<line> — <one-sentence summary>
 - Defaults — strict validator on previously-permissive input: ...
 - Migrations — legacy state assumptions: ...
 - Interfaces/abstract classes (Internal namespace NOT exempt): ...
+- Heuristics — proxy predicate vs. configuration variance: APPLIES if this hunk adds a conditional that infers intent from persisted state shape (zero line items of a type ⇒ "order never needed X", meta key absent ⇒ "feature unused", field equality ⇒ "value is a derived copy") | DOES_NOT_APPLY | UNCERTAIN <note>
 ```
 
 If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN` row must be chased with Grep/Read verification (callers, consumers, related files) before it becomes a finding or a dismissal. Findings then flow through the shared protocol (STOP CHECK: changed files, hunk lines, source-file line numbers).
@@ -118,6 +119,12 @@ If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN
 - The `Internal` namespace is NOT a safety guarantee. First- and third-party plugins implement and consume `Internal\` contracts in practice. The convention means "no BC promise," not "no consumers."
 - **Out-of-tree implementors are invisible to grep.** A grep finding only in-tree implementors is NOT evidence the change is safe — the breaking implementor commonly lives in a separate plugin repository. Rate any added required interface/abstract method, changed public/extensible signature, or removed/renamed hook at High by default; never downgrade on "Internal namespace" or "only one in-tree implementor" grounds. Put the non-breaking alternatives (concrete-class method, separate interface, default via abstract base) in the recommendation.
 
+### 11. Heuristic proxy predicates and configuration variance
+- When a change gates behavior on a proxy inferred from persisted state shape — "zero shipping line items ⇒ virtual order", "meta key absent ⇒ feature unused", "field equality ⇒ derived copy", "`created_via` X ⇒ flow Y" — the proxy is only as sound as the full set of writers of that state. Enumerate every code path that writes the compared state and every supported store configuration under which the proxy diverges from the stated intent: shipping disabled or zero shipping methods, taxes off, guest checkout, multicurrency, HPOS on/off, and post-placement admin/API/integration edits.
+- A guard that is **guaranteed-true under some supported configuration** is not a narrowing guard for that configuration's population — it silently converts "narrow corner" into "every order on that class of store".
+- "Coincidental" co-occurrence claims must be verified at the producers: if a framework copies value A into value B under configuration C (e.g., Store API checkout copies billing into shipping whenever `WC_Cart::needs_shipping()` is false), then A == B is systematic under C, not coincidental. Read the producer before dismissing the overlap.
+- Shipped example: woocommerce/woocommerce#66488 suppressed the admin shipping summary for Store API orders with no shipping line and shipping == billing, intending "virtual orders" — on shipping-disabled physical-goods stores all three gates are guaranteed, hiding the address for every order (follow-up issue #66613).
+
 ## Severity Calibration
 
 - **critical**: payment/data/security impact on a common path, destructive data loss, auth bypass, fatal breakage of core checkout/order flows.
@@ -160,4 +167,4 @@ Score 0–100 before reporting: 80–100 report; 60–79 report noting uncertain
 
 Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/woo-regression-review.json` and `.md`.
 
-**Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `other`
+**Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `proxy-predicate`, `other`

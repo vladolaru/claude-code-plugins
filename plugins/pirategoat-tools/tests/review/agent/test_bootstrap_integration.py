@@ -356,6 +356,21 @@ class TestNotApplicableCompletionContract:
         assert 'severity_floor="high"' in prompt
         assert "Severity-floor:" not in prompt
 
+    def test_woo_reviewer_audits_heuristic_proxy_predicates(self):
+        """Invariant 11 (regression guard for woocommerce/woocommerce#66613):
+        proxy predicates inferred from persisted state shape must be audited
+        against every writer of that state and every store configuration."""
+        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
+
+        # Per-hunk audit row exists, so the self-audit can catch dismissals.
+        assert "Heuristics — proxy predicate vs. configuration variance" in prompt
+        # Invariant section with the producer-verification rule.
+        assert "Heuristic proxy predicates and configuration variance" in prompt
+        assert "guaranteed-true under some supported configuration" in prompt
+        assert "verified at the producers" in prompt
+        # Findings can carry the dedicated category.
+        assert "`proxy-predicate`" in prompt
+
     def test_downstream_prompts_preserve_explicit_floor_contract(self):
         reconciliator = (
             PLUGIN_ROOT / "agents/review-reconciliator.md"

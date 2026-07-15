@@ -737,7 +737,7 @@
         "woocommerce",
         "automatewoo"
       ],
-      "focus": "WooCommerce regression invariants derived from a shipped-regression corpus — Action Scheduler traps, meta equality/sync-on-read loops, template overrides, broken-until-JS defaults, filter return-type variance, PHP 8.4 coercion, and interface/hook contract breaks with out-of-tree blast radius. Only dispatches for WooCommerce core/extension changes.",
+      "focus": "WooCommerce regression invariants derived from a shipped-regression corpus — Action Scheduler traps, meta equality/sync-on-read loops, template overrides, broken-until-JS defaults, filter return-type variance, PHP 8.4 coercion, heuristic proxy predicates vs. store-configuration variance, and interface/hook contract breaks with out-of-tree blast radius. Only dispatches for WooCommerce core/extension changes.",
       "model_tier": "opus",
       "budget_override": 120
     }
