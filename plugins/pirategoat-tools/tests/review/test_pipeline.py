@@ -948,6 +948,17 @@ class TestStep9ReviewReport:
         text = "\n".join(g["actions"])
         assert "summary" in text.lower()
         assert "critical" in text.lower()
+
+    def test_default_instructions_forbid_prose_demotion(self, mod, tmp_path):
+        """Both default instruction sets must forbid demoting findings into
+        tradeoff prose and asserting unverified likelihood claims as fact."""
+        for mode in ("pr", "full"):
+            state = {"completed_steps": []}
+            ctx = {}
+            g = mod.get_step_guidance(9, mode, state, ctx)
+            text = "\n".join(g["actions"])
+            assert "do not demote" in text.lower(), mode
+            assert "narrow corner" in text, mode
         assert "verdict" in text.lower()
 
     def test_reinjects_change_purpose(self, mod, tmp_path):

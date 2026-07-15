@@ -75,7 +75,7 @@ For each concern group:
    - For in-scope concerns: look up the referenced file in `source_snippets`. The snippet includes ±10 lines of context around each referenced line.
    - **Deleted/rewritten code:** For files with deletion or replacement hunks, `source_snippets` may contain a `[pre-change] <file>` entry alongside the `<file>` entry. The `<file>` key holds the current (post-change) content; the `[pre-change] <file>` key holds the original content before the patch. When a finding references a line that doesn't match the post-change snippet (e.g., the code described in the finding isn't at that line anymore), check the `[pre-change]` entry — the finding may reference old-side line numbers from deleted or rewritten code.
    - Verify the claim against the snippet: Does the issue actually exist as described? Are the line numbers accurate? Does the code do what the finding claims?
-   - **Fallback only:** If the snippet is insufficient (e.g., you need broader context to understand the code flow, or the referenced file is missing from snippets), use the Read tool to read the source file directly. This should be rare — the snippets cover the vast majority of cases.
+   - **Fallback only:** If the snippet is insufficient (e.g., you need broader context to understand the code flow, or the referenced file is missing from snippets), use the Read tool to read the source file directly. This should be rare — the snippets cover the vast majority of cases. The sanctioned exception is dismissal/mitigation verification (see "Dismissal & Mitigation Discipline" below): establishing who writes a compared value, or which configurations satisfy a guard, usually requires reading upstream producers that no snippet covers — do that tracing rather than accepting a plausible claim.
 
 3. **Mark each concern:**
    - **VERIFIED** — issue exists as described (or close enough that the concern is valid)
@@ -92,12 +92,20 @@ The rules below apply to findings with an explicit floor and, for mitigation ver
 
 1. **Verify floor applicability.** Verify both the concern and the predicate that makes its floor applicable. If that predicate is factually wrong, discard the floor only with cited source evidence and judge the verified concern normally.
 2. **Blast-radius descriptors do not lower a floor.** "Internal namespace", "only one in-tree implementor", "unreleased / feature-flagged / experimental", and "unlikely to fire" describe affected population, not structural prevention.
-3. **Mitigations must be verified.** A mitigation must be verified at file:line for the cited input shape. It may prove a concern false or unreachable; it cannot justify retaining an applicable concern below its floor.
+3. **Mitigations must be verified.** The general rule lives in "Dismissal & Mitigation Discipline" below; for floored findings the additional constraint is that a verified mitigation may prove a concern false or unreachable, but it cannot justify retaining an applicable concern below its floor.
 4. **Out-of-tree consumers remain invisible.** For public-contract changes, absence of in-repo implementors or consumers is not evidence of safety.
 
 When grouping duplicate findings, keep the strongest verified source floor. Every retained verified concern must remain at or above that floor. Pass the strongest verified value through the reconciled `builder.add_issue(..., severity_floor="medium")` call (using the actual verified level; omit the argument only when no floor applies) so the constraint survives in `review-findings.json`.
 
 Deduplication and scope behavior are unchanged. Findings may still be dropped as FALSE POSITIVE or OUT OF SCOPE when the source evidence supports that classification.
+
+## Dismissal & Mitigation Discipline (ALL findings)
+
+These rules are not limited to floored findings or regression categories. They apply to every concern you drop, downgrade, merge away, or reclassify as a tradeoff — and to any "accepted risk" prose you write.
+
+1. **Frequency claims are not structural reasons.** "Unlikely", "rare in practice", "narrow corner", "edge case", "coincidental", "requires unusual configuration" justify nothing on their own. Demoting or dropping on such grounds requires a cited file:line structural reason that the path cannot fire (type system, unreachable branch, enforced upstream sanitization). The question is whether the concern exists in the code as written, not whether you can imagine it firing. Catching yourself reaching for a frequency phrase is a signal to verify, not to demote.
+2. **"Coincidental" co-occurrence must be verified at the producers.** When a concern's reachability depends on two values matching, a field being absent, or a guard being satisfied, read the code that *writes* those values before calling the overlap coincidental. If a framework copies value A into value B under configuration C, then A == B is systematic under C — an entire population, not a corner. Trace producers with Read/Grep even when they live upstream of the diff; unreviewed code is a legitimate verification target even though it can never be a finding target.
+3. **Mitigation claims must be verified at file:line for the cited input shape.** "Guarded elsewhere", "the later check handles it", "the data is still visible elsewhere", "the framework re-fetches before consumers see it" are claims, not facts, until you quote the file:line that enforces them — including the edge cases of the mitigation itself. An unverified mitigation cannot dismiss or downgrade a verified concern.
 
 ## Phase 3: Judge & Output
 
@@ -194,6 +202,8 @@ Write `review-findings.md` with this structure:
 ### Tradeoffs Identified
 ...
 ```
+
+**"Tradeoffs Identified" has exit criteria — it is not a disposal path for findings.** A tradeoff entry is a maintainer-intended design compromise, and each entry must state: (a) the trigger condition, (b) the affected population, verified at file:line per the Dismissal & Mitigation Discipline (who writes the state involved, and which supported configurations satisfy the condition), and (c) why the compromise is intentional. A "tradeoff" whose likelihood or population claim is unverified is an unverified finding wearing prose clothing — emit it through `add_issue()` at Low or Medium severity instead, so it survives as an actionable item the author and downstream tooling can see.
 
 ## Return to Caller
 

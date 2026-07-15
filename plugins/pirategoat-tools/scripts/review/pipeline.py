@@ -1065,6 +1065,10 @@ STRUCTURE:
 
 Include a clear verdict recommendation and summary of key findings.
 Keep it actionable — every finding should have a concrete recommendation.
+Carry every reconciled finding into the report as a finding — do not demote
+one into narrative-only "tradeoff"/"note to be aware of" prose. Never present
+an unverified likelihood claim ("rare", "narrow corner", "coincidental") as
+fact; if the findings don't verify it, don't assert it.
 """
 
 _DEFAULT_OUTPUT_INSTRUCTIONS_BRANCH = """\
@@ -1078,6 +1082,10 @@ STRUCTURE:
 
 Include a clear verdict recommendation and summary of key findings.
 Keep it actionable — every finding should have a concrete recommendation.
+Carry every reconciled finding into the report as a finding — do not demote
+one into narrative-only "tradeoff"/"note to be aware of" prose. Never present
+an unverified likelihood claim ("rare", "narrow corner", "coincidental") as
+fact; if the findings don't verify it, don't assert it.
 """
 
 

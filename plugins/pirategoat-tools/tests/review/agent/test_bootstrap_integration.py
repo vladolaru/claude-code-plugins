@@ -368,6 +368,33 @@ class TestNotApplicableCompletionContract:
         assert "severity floor" in critic
 
 
+class TestDismissalDisciplineContract:
+    """Dismissal/mitigation verification must apply to ALL findings.
+
+    Regression guard for the woocommerce/woocommerce#66488 miss: a detected
+    concern was demoted to "narrow and acceptable corner" tradeoff prose on
+    an unverified frequency claim, because the verification rules were scoped
+    to floored findings and three regression categories only.
+    """
+
+    def test_reconciliator_has_general_dismissal_discipline(self):
+        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
+        assert "## Dismissal & Mitigation Discipline (ALL findings)" in text
+        assert "Frequency claims are not structural reasons" in text
+        assert "verified at the producers" in text
+        assert "verified at file:line for the cited input shape" in text
+
+    def test_reconciliator_sanctions_upstream_producer_tracing(self):
+        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
+        assert "sanctioned exception" in text
+        assert "upstream producers" in text
+
+    def test_tradeoffs_section_has_exit_criteria(self):
+        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
+        assert "not a disposal path for findings" in text
+        assert "`add_issue()` at Low or Medium" in text
+
+
 class TestSmokeAllAgents:
     """Every registered agent must run bootstrap without crashing.
 

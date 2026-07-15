@@ -5,6 +5,20 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.105.0] - Unreleased
+
+Hardens the review pipeline against unverified-dismissal misses, prompted by a shipped case (woocommerce/woocommerce#66488 → #66613) where a detected regression was demoted to "narrow and acceptable corner" tradeoff prose: the collision was framed as coincidental when the upstream producer made it systematic for an entire store-configuration class.
+
+### Changed
+
+- **Dismissal and mitigation verification now applies to every finding, not just floored/regression-category ones.** The reconciliator gains a general "Dismissal & Mitigation Discipline" contract: frequency claims ("unlikely", "rare in practice", "narrow corner", "coincidental") justify nothing without a cited file:line structural reason; "coincidental" co-occurrence must be verified by reading the code that writes the compared values — with upstream-producer tracing beyond the pre-gathered snippets explicitly sanctioned; and mitigation claims must be verified at file:line for the cited input shape before they can dismiss or downgrade a verified concern.
+- **"Tradeoffs Identified" now has exit criteria.** A tradeoff entry must state its trigger condition, a file:line-verified affected-population claim, and why the compromise is intentional. A tradeoff with an unverified likelihood claim is emitted as a Low/Medium finding via `add_issue()` instead of prose, so it survives as an actionable item.
+- **The report-synthesis step forbids prose demotion.** Both default output-instruction sets (PR and branch modes) now require carrying every reconciled finding into the report as a finding and prohibit asserting unverified likelihood claims as fact.
+
+### Tests
+
+- Prompt-contract coverage for the reconciliator's general dismissal discipline, upstream-tracing sanction, and tradeoff exit criteria; step-9 briefing coverage for the prose-demotion prohibition in both modes.
+
 ## [1.104.1] - 2026-07-12
 
 ### Fixed
