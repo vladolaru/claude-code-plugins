@@ -5,7 +5,7 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.105.0] - Unreleased
+## [1.105.0] - 2026-07-15
 
 Hardens the review pipeline against unverified-dismissal misses, prompted by a shipped case (woocommerce/woocommerce#66488 → #66613) where a detected regression was demoted to "narrow and acceptable corner" tradeoff prose: the collision was framed as coincidental when the upstream producer made it systematic for an entire store-configuration class.
 
