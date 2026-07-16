@@ -337,6 +337,29 @@ class TestNotApplicableCompletionContract:
         assert "builder.save(OUTPUT_DIR)" in prompt
         assert "STATUS: FINISHED" in prompt
 
+    def test_output_instructions_require_script_invocation_and_count_reconciliation(self):
+        """Bug 2 regression guard: agents must not drive the builder via
+        inline `python3 -c` (finding prose breaks shell quoting), and must
+        copy COUNTS from save()'s RECORDED echo instead of self-reporting
+        from intent (which masked the line=None demotion)."""
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir="/tmp/test-invocation-contract",
+            pr_number=None,
+            reviewer_name="security",
+        )
+
+        assert "python3 -c" in prompt  # named so it can be forbidden
+        assert "NEVER" in prompt
+        assert "heredoc" in prompt
+        assert "RECORDED COUNTS" in prompt
+
     def test_agent_definitions_do_not_duplicate_abstention_calls(self):
         offenders = [
             path.name

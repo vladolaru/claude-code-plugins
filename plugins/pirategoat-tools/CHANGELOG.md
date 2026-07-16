@@ -15,6 +15,10 @@ Fixes silent reviewer-finding loss discovered by root-cause-analyzing 1,825 revi
 
 - **`save()` now echoes the recorded state to stdout.** After writing the JSON/Markdown pair, the builder prints `RECORDED COUNTS: critical: N, high: N, ...` plus total issues, observation count, and verdict — so the true saved state is visible in the agent transcript. The RCA showed agents composing their final `COUNTS:` from intent rather than saved output, which masked the demotion bug for 60 days; reviewer agents are now required to reconcile their reported COUNTS against this echo before declaring FINISHED.
 
+### Changed
+
+- **Reviewer protocol hardens builder invocation and self-reporting.** Reviewer agents must drive `ReviewOutputBuilder` via a written script file or heredoc — never inline `python3 -c "…"` with finding prose (18% of 1,825 scanned agent runs used inline `-c`; ~10% of those crashed on apostrophes/em-dashes in finding text) — and must copy the final `COUNTS:` return signal from `save()`'s `RECORDED COUNTS` echo, investigating any mismatch with intent before returning `STATUS: FINISHED`. Applied in both the bootstrap output instructions (bootstrap-driven agents) and the shared reviewer protocol (fallback path).
+
 ### Consumer audit
 
 - All `issues[]`/`line` readers verified tolerant of `line: null` before the schema change: reconciliation context builder (keeps line-less issues conservatively, renders file-only locations, skips snippet gathering), agents status, telemetry, critic context, compliance graders (`line` not required), and pirategoat-bot (checks only file existence of `*-review.json`; parses no issue contents — no bot change needed).

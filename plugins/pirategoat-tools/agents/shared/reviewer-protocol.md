@@ -206,7 +206,11 @@ markdown_output = builder.to_markdown()
 # Write to: {output_dir}/{reviewer}-review.json and .md
 ```
 
+**Invocation rule:** run the builder from a script FILE (written with the Write tool) or a heredoc (`python3 <<'PY' ... PY`). NEVER inline `python3 -c "..."` — finding prose contains apostrophes, quotes, and em-dashes that break shell quoting and crash the call.
+
 **When using `/tmp/` directly** (no PR number detected), append a timestamp to avoid collisions: `{reviewer}-review-{YYYYMMDD-HHMMSS}.json` and `.md`.
+
+**Count reconciliation:** `builder.save()` prints the RECORDED COUNTS / RECORDED ISSUES / VERDICT of what was actually saved. Copy the `COUNTS:` in your return signal from that echo — not from memory of what you intended to file. If the echo differs from your intent (an issue you added is missing, a severity changed), investigate and fix BEFORE declaring FINISHED.
 
 **Return signal format:**
 ```
