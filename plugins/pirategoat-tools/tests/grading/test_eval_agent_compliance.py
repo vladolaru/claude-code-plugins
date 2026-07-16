@@ -38,12 +38,18 @@ def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
     builder.save(str(output_dir))
 
 
-def _run_eval(*args: str) -> subprocess.CompletedProcess:
+def _run_eval(*args: str, cwd: Path) -> subprocess.CompletedProcess:
+    """Invoke the runner from an isolated cwd.
+
+    Per TESTING.md, subprocess tests run outside the real repo. The runner
+    resolves everything from __file__, so an unrelated cwd also proves it
+    does not depend on the caller's location.
+    """
     return subprocess.run(
         [sys.executable, str(EVAL_SCRIPT), *args],
         capture_output=True,
         text=True,
-        cwd=str(PLUGIN_ROOT),
+        cwd=str(cwd),
     )
 
 
@@ -54,7 +60,7 @@ class TestGradeOnlyMode:
     def test_grades_a_passing_review_pair(self, tmp_path):
         _write_review_pair(tmp_path)
 
-        result = _run_eval("--grade-only", str(tmp_path))
+        result = _run_eval("--grade-only", str(tmp_path), cwd=tmp_path)
 
         assert "Traceback" not in result.stderr, result.stderr
         assert result.returncode == 0, result.stderr
@@ -68,19 +74,19 @@ class TestGradeOnlyMode:
         del data["verdict"]  # required top-level field
         bad.write_text(json.dumps(data))
 
-        result = _run_eval("--grade-only", str(tmp_path))
+        result = _run_eval("--grade-only", str(tmp_path), cwd=tmp_path)
 
         assert "Traceback" not in result.stderr, result.stderr
         assert "security" in result.stdout
 
     def test_missing_directory_is_reported_not_crashed(self, tmp_path):
-        result = _run_eval("--grade-only", str(tmp_path / "does-not-exist"))
+        result = _run_eval("--grade-only", str(tmp_path / "does-not-exist"), cwd=tmp_path)
 
         assert "Traceback" not in result.stderr, result.stderr
         assert "ERROR" in result.stdout
 
-    def test_no_args_prints_help(self):
-        result = _run_eval()
+    def test_no_args_prints_help(self, tmp_path):
+        result = _run_eval(cwd=tmp_path)
 
         assert "Traceback" not in result.stderr, result.stderr
         assert "--grade-only" in result.stdout
