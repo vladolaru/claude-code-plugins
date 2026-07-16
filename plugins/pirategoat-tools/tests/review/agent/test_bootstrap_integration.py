@@ -73,9 +73,9 @@ class TestCategoryRepresentatives:
     it holds for all agents in that category (same code path).
     """
 
-    def test_standard_agent(self):
+    def test_standard_agent(self, tmp_path):
         """Standard conditional agent with no special flags (performance-reviewer)."""
-        result = run_bootstrap("--agent", "performance-reviewer", "--output-dir", "/tmp/test-cat")
+        result = run_bootstrap("--agent", "performance-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
 
@@ -89,8 +89,8 @@ class TestCategoryRepresentatives:
 
         # Personalization
         assert "REVIEWER_NAME: performance" in stdout
-        assert "/tmp/test-cat/performance-review.json" in stdout
-        assert "/tmp/test-cat/performance-review.md" in stdout
+        assert f"{tmp_path}/performance-review.json" in stdout
+        assert f"{tmp_path}/performance-review.md" in stdout
         assert 'reviewer="performance"' in stdout
 
         # Budget present with hard ceiling
@@ -107,9 +107,9 @@ class TestCategoryRepresentatives:
         # REVIEW SCOPE header not duplicated
         assert stdout.count("=== REVIEW SCOPE ===") <= 1
 
-    def test_test_agent(self):
+    def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
-        result = run_bootstrap("--agent", "php-tests-reviewer", "--output-dir", "/tmp/test-cat")
+        result = run_bootstrap("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
 
@@ -120,15 +120,15 @@ class TestCategoryRepresentatives:
         assert "=== REVIEW RULES ===" in stdout
         assert "=== REVIEW BUDGET ===" in stdout
         assert "REVIEWER_NAME: php-tests" in stdout
-        assert "/tmp/test-cat/php-tests-review.json" in stdout
+        assert f"{tmp_path}/php-tests-review.json" in stdout
         assert 'reviewer="php-tests"' in stdout
 
         # Other conditional sections absent
         assert "=== EXPLORATION SCOPE ===" not in stdout
 
-    def test_exploration_agent(self):
+    def test_exploration_agent(self, tmp_path):
         """patterns-reviewer gets EXPLORATION SCOPE + no_semantic_filter (patterns-reviewer)."""
-        result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", "/tmp/test-cat")
+        result = run_bootstrap("--agent", "patterns-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
 
@@ -142,9 +142,9 @@ class TestCategoryRepresentatives:
         # Not a test agent — no DOMAIN RULES
         assert "=== DOMAIN RULES ===" not in stdout
 
-    def test_null_domain_agent(self):
+    def test_null_domain_agent(self, tmp_path):
         """Null-domain agent skips scope discovery (tests-mutation-reviewer)."""
-        result = run_bootstrap("--agent", "tests-mutation-reviewer", "--output-dir", "/tmp/test-cat")
+        result = run_bootstrap("--agent", "tests-mutation-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
 
@@ -158,7 +158,7 @@ class TestCategoryRepresentatives:
         assert "REVIEWER_NAME: tests-mutation" in stdout
         assert 'reviewer="tests-mutation"' in stdout
 
-    def test_secondary_domains_agent(self):
+    def test_secondary_domains_agent(self, tmp_path):
         """Agent with secondary_domains gets SECONDARY SCOPE (security-reviewer).
 
         Uses php-with-ci-config fixture which has both security-domain files
@@ -166,7 +166,7 @@ class TestCategoryRepresentatives:
         branch is exercised.
         """
         result = run_bootstrap(
-            "--agent", "security-reviewer", "--output-dir", "/tmp/test-cat",
+            "--agent", "security-reviewer", "--output-dir", str(tmp_path),
             fixture="php-with-ci-config.diff",
         )
         stdout = result.stdout
@@ -179,9 +179,9 @@ class TestCategoryRepresentatives:
         assert "=== REVIEW RULES ===" in stdout
         assert "REVIEWER_NAME: security" in stdout
 
-    def test_history_and_budget_override_agent(self):
+    def test_history_and_budget_override_agent(self, tmp_path):
         """history-insights-reviewer gets FILE HISTORY + budget override."""
-        result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", "/tmp/test-cat")
+        result = run_bootstrap("--agent", "history-insights-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
 
@@ -194,9 +194,9 @@ class TestCategoryRepresentatives:
         # Personalization
         assert "REVIEWER_NAME: history-insights" in stdout
 
-    def test_file_history_without_budget_override(self):
+    def test_file_history_without_budget_override(self, tmp_path):
         """api-contract-reviewer gets FILE HISTORY but uses scope-computed budget."""
-        result = run_bootstrap("--agent", "api-contract-reviewer", "--output-dir", "/tmp/test-cat")
+        result = run_bootstrap("--agent", "api-contract-reviewer", "--output-dir", str(tmp_path))
         stdout = result.stdout
         assert result.returncode == 0
 
@@ -234,7 +234,7 @@ class TestArchitecturalInvariants:
                 end = pos
         return text[start:end].strip()
 
-    def test_review_rules_identical_across_categories(self):
+    def test_review_rules_identical_across_categories(self, tmp_path):
         """REVIEW RULES (shared protocol) must be identical for all agent categories.
 
         The protocol extraction uses the same file + same skip-list for every agent.
@@ -243,7 +243,7 @@ class TestArchitecturalInvariants:
         """
         rules = {}
         for agent in self._REPRESENTATIVE_AGENTS:
-            result = run_bootstrap("--agent", agent, "--output-dir", "/tmp/test-inv")
+            result = run_bootstrap("--agent", agent, "--output-dir", str(tmp_path))
             rules[agent] = self._extract_section(
                 result.stdout, "=== REVIEW RULES ===",
                 "=== DOMAIN RULES ===", "=== REVIEW BUDGET ===", "--- Section 2:",
@@ -288,7 +288,7 @@ class TestArchitecturalInvariants:
 
         assert section in prompt
 
-    def test_domain_rules_identical_across_test_agents(self):
+    def test_domain_rules_identical_across_test_agents(self, tmp_path):
         """DOMAIN RULES (tests-reviewer protocol) must be identical for all test agents.
 
         All 4 test agents (php, js, e2e, go) must produce the same DOMAIN RULES.
@@ -297,7 +297,7 @@ class TestArchitecturalInvariants:
         agents = ["php-tests-reviewer", "js-tests-reviewer", "e2e-tests-reviewer", "go-tests-reviewer"]
         rules = {}
         for agent in agents:
-            result = run_bootstrap("--agent", agent, "--output-dir", "/tmp/test-inv")
+            result = run_bootstrap("--agent", agent, "--output-dir", str(tmp_path))
             rules[agent] = self._extract_section(
                 result.stdout, "=== DOMAIN RULES ===",
                 "=== REVIEW BUDGET ===", "--- Section 2:",
@@ -314,7 +314,7 @@ class TestArchitecturalInvariants:
 class TestNotApplicableCompletionContract:
     """The shared protocol is the sole executable abstention recipe."""
 
-    def test_bootstrap_includes_shared_not_applicable_sequence(self):
+    def test_bootstrap_includes_shared_not_applicable_sequence(self, tmp_path):
         protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
         review_rules = _mod.extract_protocol_sections(
             protocol,
@@ -328,7 +328,7 @@ class TestNotApplicableCompletionContract:
             domain_rules=None,
             scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
-            output_dir="/tmp/test-not-applicable-contract",
+            output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="woo-regression",
         )
@@ -337,7 +337,7 @@ class TestNotApplicableCompletionContract:
         assert "builder.save(OUTPUT_DIR)" in prompt
         assert "STATUS: FINISHED" in prompt
 
-    def test_output_instructions_require_script_invocation_and_count_reconciliation(self):
+    def test_output_instructions_require_script_invocation_and_count_reconciliation(self, tmp_path):
         """Bug 2 regression guard: agents must not drive the builder via
         inline `python3 -c` (finding prose breaks shell quoting), and must
         copy COUNTS from save()'s RECORDED echo instead of self-reporting
@@ -350,7 +350,7 @@ class TestNotApplicableCompletionContract:
             domain_rules=None,
             scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
             exploration_scope=None,
-            output_dir="/tmp/test-invocation-contract",
+            output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="security",
         )
@@ -458,8 +458,8 @@ class TestSmokeAllAgents:
     """
 
     @pytest.mark.parametrize("agent_name", ALL_AGENTS)
-    def test_exits_0(self, agent_name):
-        result = run_bootstrap("--agent", agent_name, "--output-dir", "/tmp/test-smoke")
+    def test_exits_0(self, agent_name, tmp_path):
+        result = run_bootstrap("--agent", agent_name, "--output-dir", str(tmp_path))
         assert result.returncode == 0, (
             f"{agent_name} exited with {result.returncode}: {result.stderr}"
         )
@@ -468,14 +468,14 @@ class TestSmokeAllAgents:
 class TestErrorCases:
     """Error paths: unknown agent, malformed input."""
 
-    def test_unknown_agent_exits_1(self):
-        result = run_bootstrap("--agent", "nonexistent-reviewer", "--output-dir", "/tmp/test-err")
+    def test_unknown_agent_exits_1(self, tmp_path):
+        result = run_bootstrap("--agent", "nonexistent-reviewer", "--output-dir", str(tmp_path))
         assert result.returncode == 1
         assert "STATUS: ERROR" in result.stdout
         assert "Unknown agent" in result.stdout
 
-    def test_unknown_agent_structured_error(self):
-        result = run_bootstrap("--agent", "fake", "--output-dir", "/tmp/test-err")
+    def test_unknown_agent_structured_error(self, tmp_path):
+        result = run_bootstrap("--agent", "fake", "--output-dir", str(tmp_path))
         assert "=== BOOTSTRAP: fake ===" in result.stdout
         assert "ACTION: Report this error" in result.stdout
 
@@ -483,7 +483,7 @@ class TestErrorCases:
 class TestReviewOutputBuilderAPIExample:
     """Bootstrap Section 3 must include a complete ReviewOutputBuilder usage example."""
 
-    def _build(self):
+    def _build(self, output_dir):
         return build_output(
             agent_name="security-reviewer",
             plugin_root="/fake/root",
@@ -492,14 +492,14 @@ class TestReviewOutputBuilderAPIExample:
             domain_rules=None,
             scope_output="scope",
             exploration_scope=None,
-            output_dir="/tmp/pr-review-42",
+            output_dir=str(output_dir),
             pr_number="42",
             reviewer_name="security",
         )
 
-    def test_output_contains_add_issue_example(self):
+    def test_output_contains_add_issue_example(self, tmp_path):
         """The usage example must show add_issue() with named parameters."""
-        output = self._build()
+        output = self._build(tmp_path)
         assert "add_issue(" in output
         assert "severity=" in output
         assert "title=" in output
@@ -507,30 +507,30 @@ class TestReviewOutputBuilderAPIExample:
         assert "description=" in output
         assert "recommendation=" in output
 
-    def test_output_contains_add_positive_example(self):
+    def test_output_contains_add_positive_example(self, tmp_path):
         """The usage example must show add_positive()."""
-        output = self._build()
+        output = self._build(tmp_path)
         assert "add_positive(" in output
 
-    def test_output_contains_save_example(self):
-        """The usage example must show save() with output_dir."""
-        output = self._build()
+    def test_output_contains_save_example(self, tmp_path):
+        """The usage example must show save() with the resolved output_dir."""
+        output = self._build(tmp_path)
         assert "save(" in output
-        assert "output_dir" in output.lower() or "/tmp/pr-review-42" in output
+        assert str(tmp_path) in output
 
-    def test_output_contains_set_files_reviewed(self):
+    def test_output_contains_set_files_reviewed(self, tmp_path):
         """The usage example must show set_files_reviewed()."""
-        output = self._build()
+        output = self._build(tmp_path)
         assert "set_files_reviewed(" in output
 
-    def test_output_contains_set_confidence(self):
+    def test_output_contains_set_confidence(self, tmp_path):
         """The usage example must show set_confidence()."""
-        output = self._build()
+        output = self._build(tmp_path)
         assert "set_confidence(" in output
 
-    def test_output_contains_no_verify_instruction(self):
+    def test_output_contains_no_verify_instruction(self, tmp_path):
         """The usage example must tell agents not to verify save() output."""
-        output = self._build()
+        output = self._build(tmp_path)
         lower = output.lower()
         # The instruction must convey "proceed directly after save()" — either
         # via "do not read/verify" or "proceed directly to the status signal".
@@ -561,7 +561,7 @@ class TestBootstrapOutputSizeCap:
             reviewer_name="security",
         )
 
-    def test_small_scope_included_inline(self):
+    def test_small_scope_included_inline(self, tmp_path):
         """Scope under threshold is included inline (no change from current behavior)."""
         small_scope = "diff content here\n" * 100  # ~2KB
         output = build_output(
@@ -572,7 +572,7 @@ class TestBootstrapOutputSizeCap:
             domain_rules=None,
             scope_output=small_scope,
             exploration_scope=None,
-            output_dir="/tmp/pr-review-42",
+            output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
         )
@@ -632,7 +632,7 @@ class TestBootstrapOutputSizeCap:
 class TestDynamicDispatchRisk:
     """Bootstrap injects DYNAMIC_DISPATCH_RISK for dead-code-reviewer."""
 
-    def test_dead_code_reviewer_gets_dispatch_risk(self):
+    def test_dead_code_reviewer_gets_dispatch_risk(self, tmp_path):
         """dead-code-reviewer output includes DYNAMIC_DISPATCH_RISK."""
         scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
         output = build_output(
@@ -643,13 +643,13 @@ class TestDynamicDispatchRisk:
             domain_rules=None,
             scope_output=scope_with_php,
             exploration_scope=None,
-            output_dir="/tmp/pr-review-42",
+            output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
         )
         assert "DYNAMIC_DISPATCH_RISK:" in output
 
-    def test_dispatch_risk_high_with_php_files(self):
+    def test_dispatch_risk_high_with_php_files(self, tmp_path):
         """DYNAMIC_DISPATCH_RISK is 'high' when PHP files are in scope."""
         scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
         output = build_output(
@@ -660,7 +660,7 @@ class TestDynamicDispatchRisk:
             domain_rules=None,
             scope_output=scope_with_php,
             exploration_scope=None,
-            output_dir="/tmp/pr-review-42",
+            output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
         )
@@ -668,7 +668,7 @@ class TestDynamicDispatchRisk:
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
         assert "high" in risk_line[0].lower()
 
-    def test_dispatch_risk_low_without_php_files(self):
+    def test_dispatch_risk_low_without_php_files(self, tmp_path):
         """DYNAMIC_DISPATCH_RISK is 'low' when no PHP files are in scope."""
         scope_no_php = "=== FILES ===\nsrc/utils.ts  (+3 -1)\nsrc/component.tsx  (+20 -5)\n=== DIFFS ==="
         output = build_output(
@@ -679,7 +679,7 @@ class TestDynamicDispatchRisk:
             domain_rules=None,
             scope_output=scope_no_php,
             exploration_scope=None,
-            output_dir="/tmp/pr-review-42",
+            output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
         )
@@ -687,7 +687,7 @@ class TestDynamicDispatchRisk:
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
         assert "low" in risk_line[0].lower()
 
-    def test_other_agents_no_dispatch_risk(self):
+    def test_other_agents_no_dispatch_risk(self, tmp_path):
         """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK."""
         output = build_output(
             agent_name="security-reviewer",
@@ -697,7 +697,7 @@ class TestDynamicDispatchRisk:
             domain_rules=None,
             scope_output="scope",
             exploration_scope=None,
-            output_dir="/tmp/pr-review-42",
+            output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
         )
@@ -719,7 +719,7 @@ class TestOutputFilenameConsistency:
         assert os.path.isfile(result["json"])
         assert os.path.isfile(result["markdown"])
 
-    def test_bootstrap_output_matches_save_filenames(self):
+    def test_bootstrap_output_matches_save_filenames(self, tmp_path):
         """Bootstrap OUTPUT_FILES paths match what save() actually creates."""
         output = build_output(
             agent_name="dead-code-reviewer",
@@ -729,12 +729,12 @@ class TestOutputFilenameConsistency:
             domain_rules=None,
             scope_output="scope",
             exploration_scope=None,
-            output_dir="/tmp/pr-review-42",
+            output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
         )
-        assert "/tmp/pr-review-42/dead-code-review.json" in output
-        assert "/tmp/pr-review-42/dead-code-review.md" in output
+        assert f"{tmp_path}/dead-code-review.json" in output
+        assert f"{tmp_path}/dead-code-review.md" in output
 
 
 def test_ecosystem_integration_reviewer_registered():

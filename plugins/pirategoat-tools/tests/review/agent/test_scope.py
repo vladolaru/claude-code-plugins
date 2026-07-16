@@ -754,7 +754,7 @@ class TestSemanticFiltering:
 class TestSemanticFilterIntegration:
     """Semantic filtering integrated into build_scope diff pipeline."""
 
-    def test_build_scope_calls_semantic_filter(self):
+    def test_build_scope_calls_semantic_filter(self, tmp_path):
         """build_scope applies semantic filter to diffs by default."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x), \
@@ -763,14 +763,14 @@ class TestSemanticFilterIntegration:
             mock_run.side_effect = self._mock_git_commands
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=False,
             )
             scope = review_scope.build_scope(args)
             # Semantic filter should have been called for each diff
             assert mock_filter.call_count > 0
 
-    def test_build_scope_skips_filter_when_disabled(self):
+    def test_build_scope_skips_filter_when_disabled(self, tmp_path):
         """build_scope skips semantic filter when --no-semantic-filter is set."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x), \
@@ -778,7 +778,7 @@ class TestSemanticFilterIntegration:
             mock_run.side_effect = self._mock_git_commands
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
@@ -860,7 +860,7 @@ class TestBudgetSortOrder:
         assert sorted_files[0] == "large.php", "Largest file should be first"
         assert sorted_files[-1] == "small.php", "Smallest file should be last"
 
-    def test_budget_includes_large_file_over_small(self):
+    def test_budget_includes_large_file_over_small(self, tmp_path):
         """When budget is tight, large files should be included, small files excluded."""
         # With descending sort and 600-line budget:
         #   large(500) fits → 500 used
@@ -875,7 +875,7 @@ class TestBudgetSortOrder:
             mock_run.side_effect = _mock_git_for_budget_test
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=600,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
@@ -924,14 +924,14 @@ def _mock_git_for_list_only_test(cmd, check=True, capture_stderr=True):
 class TestListOnly:
     """Tests for list_only domain feature — lock files rescued from noise, diffstat included, diff skipped."""
 
-    def test_lock_files_rescued_from_noise_for_toolchain(self):
+    def test_lock_files_rescued_from_noise_for_toolchain(self, tmp_path):
         """Lock files normally caught by NOISE_PATTERNS should survive when domain has list_only."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
@@ -942,14 +942,14 @@ class TestListOnly:
             assert "pnpm-lock.yaml" not in scope["skipped_files"]["noise"]
             assert "composer.lock" not in scope["skipped_files"]["noise"]
 
-    def test_lock_files_have_diffstat_but_no_diff(self):
+    def test_lock_files_have_diffstat_but_no_diff(self, tmp_path):
         """List-only files appear in diffstat but not in diffs dict."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
@@ -960,14 +960,14 @@ class TestListOnly:
             assert "pnpm-lock.yaml" not in scope["diffs"]
             assert "composer.lock" not in scope["diffs"]
 
-    def test_config_files_still_get_full_diffs(self):
+    def test_config_files_still_get_full_diffs(self, tmp_path):
         """Non-list-only files in the same domain still get their full diffs."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
@@ -976,41 +976,41 @@ class TestListOnly:
             assert ".npmrc" in scope["files"]
             assert "package.json" in scope["files"]
 
-    def test_lock_files_not_in_files_key(self):
+    def test_lock_files_not_in_files_key(self, tmp_path):
         """In regular mode, files key only contains files with diffs."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
             assert "pnpm-lock.yaml" not in scope["files"]
             assert "composer.lock" not in scope["files"]
 
-    def test_list_only_in_skipped_files(self):
+    def test_list_only_in_skipped_files(self, tmp_path):
         """List-only files should also appear in skipped_files.list_only."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
             assert scope["skipped_files"]["list_only"] == scope["list_only_files"]
 
-    def test_non_toolchain_domain_still_filters_lock_files_as_noise(self):
+    def test_non_toolchain_domain_still_filters_lock_files_as_noise(self, tmp_path):
         """Lock files should remain noise for domains without list_only."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="code", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
@@ -1018,14 +1018,14 @@ class TestListOnly:
             assert "pnpm-lock.yaml" in scope["skipped_files"]["noise"]
             assert "composer.lock" in scope["skipped_files"]["noise"]
 
-    def test_list_only_text_output_section(self):
+    def test_list_only_text_output_section(self, tmp_path):
         """Text output should include a CHANGED section for list-only files."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=2000,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
@@ -1035,14 +1035,14 @@ class TestListOnly:
             assert "composer.lock" in text
             assert "LIST_ONLY_FILES: 2" in text
 
-    def test_lock_files_dont_eat_diff_budget(self):
+    def test_lock_files_dont_eat_diff_budget(self, tmp_path):
         """List-only files should not consume any of the diff line budget."""
         with patch.object(review_scope, 'run_cmd') as mock_run, \
              patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
             mock_run.side_effect = _mock_git_for_list_only_test
             args = argparse.Namespace(
                 domain="toolchain", range="abc123..HEAD", max_lines=50,
-                base_ref_only=False, summary=False, output_dir="/tmp/test",
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
                 no_merge_base=True, no_semantic_filter=True,
             )
             scope = review_scope.build_scope(args)
