@@ -38,7 +38,7 @@ from helpers.graders import (
 )
 
 # Import agent config
-import importlib
+import importlib.util
 
 _spec = importlib.util.spec_from_file_location("bootstrap_reviewer", str(BOOTSTRAP_SCRIPT))
 _mod = importlib.util.module_from_spec(_spec)
