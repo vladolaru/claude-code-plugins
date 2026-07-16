@@ -5,6 +5,18 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.106.0] - 2026-07-16
+
+Fixes silent reviewer-finding loss discovered by root-cause-analyzing 1,825 reviewer subagent transcripts from the last 60 days: 8 agents / 11 findings — including HIGHs in real WooCommerce and WPCOM PR reviews — were silently demoted from verdict-counting issues to informational observations because `add_issue()` redirected any `line=None` finding to `add_observation()` with no signal.
+
+### Fixed
+
+- **Line-less findings are now first-class, verdict-counting issues.** `ReviewOutputBuilder.add_issue(line=None)` records a file-scoped issue (`line: null`, `scope: "file"`) that counts toward `by_severity` and the verdict and renders under its severity section in Markdown, instead of silently demoting to a non-counting observation that the reconciliation stage never sees. Finding classes that are line-less by nature — missing test coverage, missing assertions, git-history precedent, cross-file architecture — now survive the pipeline. The path is loud: a stderr NOTE names the recorded title and severity so accidental `line=` omission for point defects stays visible. Invalid lines (0, negative, non-int) still raise, and the diff-anchored norm still requires `line=` for findings that have one (protocol, bootstrap output instructions, and reconciliator guidance updated accordingly; `schemas/review-output.ts` documents the additive `scope` field).
+
+### Consumer audit
+
+- All `issues[]`/`line` readers verified tolerant of `line: null` before the schema change: reconciliation context builder (keeps line-less issues conservatively, renders file-only locations, skips snippet gathering), agents status, telemetry, critic context, compliance graders (`line` not required), and pirategoat-bot (checks only file existence of `*-review.json`; parses no issue contents — no bot change needed).
+
 ## [1.105.1] - 2026-07-15
 
 ### Fixed

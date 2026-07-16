@@ -169,13 +169,13 @@ class TestAddIssue:
         assert issue["vulnerability_type"] == "xss"
         assert issue["cwe_id"] == "CWE-79"
 
-    def test_line_default_none_redirects_to_observation(self):
-        """Default line=None redirects to observation (soft enforcement)."""
+    def test_line_default_none_records_file_scoped_issue(self):
+        """Default line=None records a first-class file-scoped issue."""
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         issue_id = b.add_issue("medium", "Title", "f.py", "desc", "rec")
-        assert len(b.issues) == 0
-        assert len(b.observations) == 1
-        assert issue_id is None
+        assert len(b.issues) == 1
+        assert len(b.observations) == 0
+        assert isinstance(issue_id, str) and len(issue_id) == 8
 
 
 # =============================================================================
@@ -409,26 +409,90 @@ class TestSave:
 
 
 # =============================================================================
+# TestFileScopedIssues
+# =============================================================================
+
+
+class TestFileScopedIssues:
+    """line=None records a first-class file-scoped issue (no silent demotion).
+
+    Some finding classes are line-less BY NATURE — missing test coverage,
+    missing assertions, git-history precedent, cross-file architecture. These
+    must count toward the verdict, not vanish into observations. Point defects
+    still require line= (invalid line values raise; the file-scoped path warns
+    on stderr so lazy line omission stays loud).
+    """
+
+    def test_line_none_records_issue_with_null_line_and_file_scope(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=None)
+        assert isinstance(issue_id, str) and len(issue_id) == 8
+        assert len(b.issues) == 1
+        assert len(b.observations) == 0
+        issue = b.issues[0]
+        assert issue["line"] is None
+        assert issue["scope"] == "file"
+        assert issue["id"] == issue_id
+
+    def test_reproduction_lineless_high_counts_toward_severity_and_verdict(self):
+        """The RCA reproduction: a line-less HIGH must not silently drop."""
+        b = ReviewOutputBuilder(pr_id="0", reviewer="js-tests")
+        b.add_issue(
+            severity="high",
+            title="whole-file has no test",
+            file="src/foo.ts",
+            description="...",
+            recommendation="...",
+            category="missing-coverage",
+        )
+        d = b.to_dict()
+        assert d["summary"]["by_severity"]["high"] == 1
+        assert d["summary"]["total_issues"] == 1
+        assert len(d["issues"]) == 1
+        assert d["verdict"] == "request_changes"
+
+    def test_line_none_prints_stderr_note(self, capsys):
+        """The file-scoped path is loud — names the title and severity."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue("high", "Missing coverage", "f.py", "desc", "rec", line=None)
+        err = capsys.readouterr().err
+        assert "file-scoped" in err.lower()
+        assert "Missing coverage" in err
+        assert "high" in err.lower()
+
+    def test_line_anchored_issue_has_no_scope_field(self):
+        """Schema stays additive — line-anchored issues are unchanged."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue("high", "Title", "f.py", "desc", "rec", line=42)
+        assert "scope" not in b.issues[0]
+        assert b.issues[0]["line"] == 42
+
+    def test_file_scoped_issue_renders_under_severity_section(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="js-tests")
+        b.add_issue(
+            "high", "whole-file has no test", "src/foo.ts", "desc", "rec",
+            category="missing-coverage",
+        )
+        md = b.to_markdown()
+        assert "## High Issues" in md
+        assert "whole-file has no test" in md
+        assert "`src/foo.ts` (file-scoped)" in md
+
+    def test_file_scoped_issue_json_roundtrip(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue("medium", "Title", "f.py", "desc", "rec", line=None)
+        parsed = json.loads(b.to_json())
+        assert parsed["issues"][0]["line"] is None
+        assert parsed["issues"][0]["scope"] == "file"
+
+
+# =============================================================================
 # TestLineRequired
 # =============================================================================
 
 
 class TestLineRequired:
-    """add_issue requires line parameter (protocol enforcement)."""
-
-    def test_line_none_redirects_to_observation(self):
-        """Line=None auto-redirects to add_observation() instead of crashing."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        issue_id = b.add_issue("high", "Title", "f.py", "desc", "rec", line=None)
-        # No issue added
-        assert len(b.issues) == 0
-        # Redirected to observation
-        assert len(b.observations) == 1
-        assert b.observations[0]["file"] == "f.py"
-        assert "Title" in b.observations[0]["note"]
-        assert "desc" in b.observations[0]["note"]
-        # Returns None to signal it was not added as an issue
-        assert issue_id is None
+    """Invalid line values still raise (protocol enforcement for point defects)."""
 
     def test_line_zero_raises(self):
         """Line 0 is invalid (lines are 1-indexed)."""

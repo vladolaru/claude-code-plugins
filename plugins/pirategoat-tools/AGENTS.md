@@ -174,6 +174,8 @@ Each reviewer agent produces two files in `OUTPUT_DIR`:
 from review.agent.output import ReviewOutputBuilder
 builder = ReviewOutputBuilder(reviewer="security-reviewer", pr_id="123")
 builder.add_issue(severity="high", category="xss", title="...", description="...", file="...", line=42, recommendation="...")
+# line=None records a verdict-counting FILE-SCOPED issue (line: null, scope: "file") —
+# only for findings that are line-less by nature (missing coverage, precedent, cross-file architecture)
 builder.add_positive("Good input validation on...")
 builder.add_recommendation("immediate", "Fix the XSS vulnerability")
 output = builder.build()  # Returns dict with verdict, summary, issues, etc.

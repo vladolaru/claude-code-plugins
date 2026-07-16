@@ -94,8 +94,15 @@ class ReviewOutputBuilder:
     ) -> Optional[str]:
         """Add an issue. Returns issue ID.
 
-        Line is required — the reviewer protocol mandates diff-anchored findings.
-        Use add_observation() for file-level notes without a specific line.
+        Line is required for point defects — the reviewer protocol mandates
+        diff-anchored findings for anything that has a line. Findings that are
+        line-less BY NATURE (missing test coverage, missing assertions,
+        git-history precedent, cross-file architecture) may pass line=None:
+        they are recorded as first-class FILE-SCOPED issues (line: null,
+        scope: "file") that count toward the verdict, with a stderr NOTE so
+        accidental line omission stays visible.
+        Use add_observation() only for genuinely informational notes that
+        should NOT count toward the verdict.
         When severity_floor is provided, lower severities are promoted to it.
         """
         # Validate severity and enforce an optional minimum.
@@ -132,19 +139,21 @@ class ReviewOutputBuilder:
                     f"Must be one of {valid_evidence}."
                 )
 
-        # Validate line — soft enforcement for None (redirect to observation),
-        # hard enforcement for invalid values (0, negative, non-int)
-        if line is None:
-            # Soft redirect: convert to observation instead of crashing.
-            # This preserves the agent's other findings while still
-            # enforcing the protocol's line requirement.
-            self.add_observation(
-                file=file,
-                note=f"[{severity_value.upper()}] {title}: {description}",
-                category=category,
+        # Validate line — None records a first-class file-scoped issue (loud),
+        # hard enforcement for invalid values (0, negative, non-int).
+        file_scoped = line is None
+        if file_scoped:
+            # A legitimately line-less finding (missing coverage, precedent,
+            # cross-file architecture) is a real, verdict-counting issue.
+            # Point defects still need line= — hence the stderr NOTE.
+            print(
+                f"NOTE: recording '{title}' ({severity_value}) as a "
+                f"FILE-SCOPED issue for '{file}' because line=None. "
+                f"It counts toward the verdict. If this finding points at a "
+                f"specific line, re-add it with line=<source line>.",
+                file=sys.stderr,
             )
-            return None
-        if not isinstance(line, int) or line <= 0:
+        elif not isinstance(line, int) or line <= 0:
             raise ValueError(
                 f"line must be a positive integer, got {line}. "
                 "Lines are 1-indexed."
@@ -154,7 +163,7 @@ class ReviewOutputBuilder:
         # When agents read a diff/patch file, the Read tool displays line numbers
         # within the patch (e.g., "227→+class Foo"). Agents sometimes use these
         # patch-file positions instead of the actual source file line numbers.
-        if line > 5000:
+        if not file_scoped and line > 5000:
             print(
                 f"WARNING: line={line} for '{file}' is unusually large. "
                 f"Verify this is a source file line number, not a patch file "
@@ -176,6 +185,8 @@ class ReviewOutputBuilder:
             'confidence': confidence,
             **extra_fields
         }
+        if file_scoped:
+            issue['scope'] = 'file'
         if behavior_evidence is not None:
             issue['behavior_evidence'] = behavior_evidence
         if source_cited is not None:
@@ -330,7 +341,13 @@ class ReviewOutputBuilder:
 
                 for issue in sev_issues:
                     md.append(f"### {issue['title']}\n\n")
-                    md.append(f"**File:** `{issue['file']}`" + (f" line {issue['line']}" if issue['line'] else "") + "\n\n")
+                    if issue['line']:
+                        location = f"**File:** `{issue['file']}` line {issue['line']}"
+                    elif issue.get('scope') == 'file':
+                        location = f"**File:** `{issue['file']}` (file-scoped)"
+                    else:
+                        location = f"**File:** `{issue['file']}`"
+                    md.append(location + "\n\n")
                     md.append(f"{issue['description']}\n\n")
                     if issue.get('severity_floor'):
                         md.append(f"**Severity floor:** {issue['severity_floor']}\n\n")

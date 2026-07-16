@@ -125,6 +125,8 @@ State the file path and line number, then verify:
 
 Both must be YES. Findings on unchanged code are false positives.
 
+**Exception — findings that are line-less BY NATURE.** Some legitimate findings have no line to anchor to: a whole changed file has no test coverage, a git-history precedent applies to the change, a cross-file architectural concern. For these, call `add_issue(..., line=None)` — the builder records a **file-scoped issue** (`line: null`, `scope: "file"`) that counts toward the verdict. Check 1 still applies: the file must be in `CHANGED_FILES`. Never use `line=None` for a point defect that has a line — that weakens verification downstream.
+
 **CRITICAL — use SOURCE FILE line numbers only:**
 
 The Read tool's display numbers (e.g., `227→+class Foo`) are positions *within the patch file*. Use `@@ ... @@` hunk headers for source lines:
@@ -184,8 +186,8 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
 ```
 
 **Core methods:**
-- `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required>, confidence=0.9)` - Add diff-anchored finding (line is required)
-- `builder.add_observation(file, note, category="general")` - Add file-level note (no line, doesn't affect verdict)
+- `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped issue
+- `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
 - `builder.set_files_reviewed(N)` - Track files reviewed
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence

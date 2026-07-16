@@ -70,11 +70,13 @@ For each concern group:
    - `IN_SCOPE:in_hunk` or `IN_SCOPE:near_hunk` — proceed with verification.
    - `OUT_OF_SCOPE:not_in_hunk` — file is changed but this line is far from any changed hunk. Usually pre-existing code, but agent line numbers can be imprecise — check the source snippet before dropping. If the snippet shows the code IS adjacent to changed lines, keep the finding.
    - If no annotation exists for the file:line, check whether the file appears in `changed_files`. If not → OUT OF SCOPE, drop it. If yes → proceed conservatively with verification.
+   - **File-scoped findings** (`line: null`, `scope: "file"` — e.g. "this changed file has no test coverage", git-history precedent, cross-file architecture) legitimately have no line, no scope annotation, and no source snippet. Scope check = the file is in `changed_files`. They count toward the verdict like any other finding — do not demote them for lacking a line.
 
 2. **Fact verification using source snippets:**
    - For in-scope concerns: look up the referenced file in `source_snippets`. The snippet includes ±10 lines of context around each referenced line.
    - **Deleted/rewritten code:** For files with deletion or replacement hunks, `source_snippets` may contain a `[pre-change] <file>` entry alongside the `<file>` entry. The `<file>` key holds the current (post-change) content; the `[pre-change] <file>` key holds the original content before the patch. When a finding references a line that doesn't match the post-change snippet (e.g., the code described in the finding isn't at that line anymore), check the `[pre-change]` entry — the finding may reference old-side line numbers from deleted or rewritten code.
    - Verify the claim against the snippet: Does the issue actually exist as described? Are the line numbers accurate? Does the code do what the finding claims?
+   - **File-scoped concerns** (`line: null`, `scope: "file"`) have no snippet — verify their claim directly: for absence claims ("no test covers this file"), Grep/Glob for the alleged-missing artifact; for precedent claims, check the cited commit/PR evidence in the description. Absence of a snippet is expected here, not a verification failure.
    - **Fallback only:** If the snippet is insufficient (e.g., you need broader context to understand the code flow, or the referenced file is missing from snippets), use the Read tool to read the source file directly. This should be rare — the snippets cover the vast majority of cases. The sanctioned exception is dismissal/mitigation verification (see "Dismissal & Mitigation Discipline" below): establishing who writes a compared value, or which configurations satisfy a guard, usually requires reading upstream producers that no snippet covers — do that tracing rather than accepting a plausible claim.
 
 3. **Mark each concern:**
@@ -143,7 +145,7 @@ builder.add_issue(
     severity="high",
     title="Clear statement of the problem",
     file="path/to/file.php",
-    line=42,
+    line=42,  # Pass line=None for file-scoped concerns (missing coverage, precedent) — recorded with scope: "file"
     description="Unified explanation capturing the essential insight",
     recommendation="Actionable fix guidance",
     category="relevant-category",
