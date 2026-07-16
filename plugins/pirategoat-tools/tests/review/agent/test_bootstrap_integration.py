@@ -360,6 +360,22 @@ class TestNotApplicableCompletionContract:
         assert "heredoc" in prompt
         assert "RECORDED COUNTS" in prompt
 
+    def test_protocol_fallback_output_example_uses_save(self):
+        """The File-Based Output section is skip-listed from bootstrap, so it
+        IS the fallback path. Its example must go through builder.save() —
+        a manual to_json()/to_markdown() write never prints the RECORDED
+        COUNTS echo, leaving fallback agents reporting counts from intent."""
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        start = protocol.index("## File-Based Output")
+        end = protocol.index("\n## ", start + 1)
+        section = protocol[start:end]
+
+        assert "builder.save(" in section
+        assert "RECORDED COUNTS" in section
+        # The old example told agents to write to_json()/to_markdown() by hand,
+        # bypassing the echo entirely.
+        assert "builder.to_json()" not in section
+
     def test_agent_definitions_do_not_duplicate_abstention_calls(self):
         offenders = [
             path.name

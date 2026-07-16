@@ -192,23 +192,25 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive("observation")` - Note good patterns
-- `builder.to_json()` / `builder.to_markdown()` - Generate outputs
+- `builder.save(output_dir)` - Write both output files, print the RECORDED COUNTS echo, return the paths (use this — not manual `to_json()`/`to_markdown()` writes)
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`
 
 ## File-Based Output
 
-Write both outputs, then return signals only:
+Write both outputs via `save()`, then return signals only:
 
 ```python
-json_output = builder.to_json()
-markdown_output = builder.to_markdown()
-# Write to: {output_dir}/{reviewer}-review.json and .md
+result = builder.save(OUTPUT_DIR)
+# Writes {output_dir}/{reviewer}-review.json and .md, prints the RECORDED
+# COUNTS / RECORDED ISSUES / VERDICT echo, and returns {"json": path, "markdown": path}
 ```
+
+Do NOT write `to_json()`/`to_markdown()` output by hand — a manual write skips the RECORDED COUNTS echo, leaving you nothing to reconcile your COUNTS against.
 
 **Invocation rule:** run the builder from a script FILE (written with the Write tool) or a heredoc (`python3 <<'PY' ... PY`). NEVER inline `python3 -c "..."` — finding prose contains apostrophes, quotes, and em-dashes that break shell quoting and crash the call.
 
-**When using `/tmp/` directly** (no PR number detected), append a timestamp to avoid collisions: `{reviewer}-review-{YYYYMMDD-HHMMSS}.json` and `.md`.
+**When using `/tmp/` directly** (no PR number detected), save into a timestamped subdirectory to avoid collisions: `builder.save(f"/tmp/{reviewer}-review-{YYYYMMDD-HHMMSS}")`.
 
 **Count reconciliation:** `builder.save()` prints the RECORDED COUNTS / RECORDED ISSUES / VERDICT of what was actually saved. Copy the `COUNTS:` in your return signal from that echo — not from memory of what you intended to file. If the echo differs from your intent (an issue you added is missing, a severity changed), investigate and fix BEFORE declaring FINISHED.
 
