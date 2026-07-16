@@ -407,6 +407,31 @@ class TestSave:
             assert result["json"] == os.path.join(d, "arch-review.json")
             assert result["markdown"] == os.path.join(d, "arch-review.md")
 
+    def test_prints_recorded_counts_to_stdout(self, capsys):
+        """save() echoes the SAVED state so agents can reconcile their
+        self-reported COUNTS against what was actually recorded (an agent
+        reporting from intent masked the line=None demotion for 60 days)."""
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.add_issue("high", "A", "a.py", "d", "r", line=1)
+            b.add_issue("medium", "B", "b.py", "d", "r", line=2)
+            b.add_observation("c.py", "FYI note")
+            b.save(d)
+            out = capsys.readouterr().out
+            assert "RECORDED COUNTS: critical: 0, high: 1, medium: 1, low: 0, info: 0" in out
+            assert "RECORDED ISSUES: 2" in out
+            assert "OBSERVATIONS: 1" in out
+            assert "VERDICT: request_changes" in out
+
+    def test_prints_zero_counts_when_empty(self, capsys):
+        """An empty save is echoed too — '0 issues recorded' must be visible."""
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.save(d)
+            out = capsys.readouterr().out
+            assert "RECORDED ISSUES: 0" in out
+            assert "VERDICT: approve" in out
+
 
 # =============================================================================
 # TestFileScopedIssues

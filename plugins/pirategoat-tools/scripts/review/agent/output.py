@@ -384,6 +384,19 @@ class ReviewOutputBuilder:
         # Use full agent name (reviewer + "-reviewer") to match the
         # agent_start event and .started file written by bootstrap.py.
         output = self.to_dict()
+
+        # Echo the RECORDED state so the calling agent reconciles its
+        # self-reported COUNTS against what was actually saved, not its
+        # intent — a mismatch here means a finding was dropped or mangled
+        # before serialization.
+        by_sev = output['summary']['by_severity']
+        counts_str = ", ".join(f"{sev}: {by_sev[sev]}" for sev in _VALID_SEVERITIES)
+        print(f"RECORDED COUNTS: {counts_str}")
+        print(
+            f"RECORDED ISSUES: {output['summary']['total_issues']} | "
+            f"OBSERVATIONS: {len(self.observations)} | "
+            f"VERDICT: {output['verdict']}"
+        )
         _log_agent_complete_telemetry(
             output_dir,
             f"{self.reviewer}-reviewer",
