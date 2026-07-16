@@ -332,8 +332,9 @@ class ReviewOutputBuilder:
             md.append(f"- High: {counts['high']}\n")
             md.append(f"- Medium: {counts['medium']}\n\n")
 
-        # Issues
-        for sev in ['critical', 'high', 'medium', 'low']:
+        # Issues — every severity that counts toward total_issues must render,
+        # or the Markdown claims findings it doesn't show.
+        for sev in ['critical', 'high', 'medium', 'low', 'info']:
             sev_issues = [i for i in data['issues'] if i['severity'] == sev]
 
             if sev_issues:

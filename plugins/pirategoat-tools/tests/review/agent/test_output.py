@@ -374,6 +374,25 @@ class TestToMarkdown:
         assert "## Positive Observations" in md
         assert "Well-structured code" in md
 
+    def test_info_issues_render_in_markdown(self):
+        """Info issues count toward total_issues, so Markdown must show them —
+        omitting them reports 'Total Issues: 1' with no visible finding."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        b.add_issue("info", "Anchored info finding", "a.py", "desc", "rec", line=3)
+        md = b.to_markdown()
+        assert "## Info Issues" in md
+        assert "Anchored info finding" in md
+
+    def test_file_scoped_info_issue_renders_in_markdown(self):
+        """A line-less info finding used to at least appear under Observations
+        (via the old demotion); as a first-class issue it must not vanish."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        b.add_issue("info", "File-scoped info finding", "a.py", "desc", "rec", line=None)
+        md = b.to_markdown()
+        assert "## Info Issues" in md
+        assert "File-scoped info finding" in md
+        assert "`a.py` (file-scoped)" in md
+
 
 # =============================================================================
 # TestSave
