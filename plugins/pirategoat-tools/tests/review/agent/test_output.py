@@ -417,7 +417,16 @@ class TestSave:
             b.save(d)
             with open(os.path.join(d, "security-review.json")) as f:
                 saved = json.load(f)
-            assert saved == b.to_dict()
+            live = b.to_dict()
+
+            # review_duration_ms is recomputed from the clock on every
+            # to_dict() call, so it differs whenever save() and this
+            # assertion straddle a millisecond. Assert it independently
+            # and compare the rest exactly.
+            assert isinstance(saved["meta"]["review_duration_ms"], int)
+            saved["meta"].pop("review_duration_ms")
+            live["meta"].pop("review_duration_ms")
+            assert saved == live
 
     def test_return_value_has_correct_paths(self):
         with tempfile.TemporaryDirectory() as d:
