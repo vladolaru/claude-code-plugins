@@ -13,16 +13,14 @@ This suite closes that loop:
    `triage_criteria` bullet has at least one probe — the smallest realistic
    diff satisfying that criterion — that MUST dispatch through the real
    pipeline (`decide_agent_dispatch` + real registry), i.e. through domain
-   gating, evidence gates, and the small-diff polarity.
+   gating, evidence gates, and conservative fallback routing.
 2. **Completeness is enforced.** A meta-test asserts the probed criterion
    strings exactly match the registry's — adding or rewording a criterion
    without a probe fails CI instead of failing in review three weeks later.
 
-Probes default to SMALL diffs (a handful of lines) on purpose: sub-threshold
-changes are exactly where the small-diff evidence requirement bites, so a
-criterion that can't dispatch a small probe is a criterion with no mechanical
-backing. Size-based criteria (large PRs, substantial additions) size their
-probes accordingly.
+Probes default to a handful of lines so they describe one criterion with as
+little incidental signal as possible. Size-based criteria (large PRs,
+substantial additions) size their probes accordingly.
 
 When a probe fails: either give the agent a backing signal (keyword /
 triage check — prefer structural checks for structural criteria) or reword
@@ -77,9 +75,8 @@ def probe(
 ):
     """Build a probe: the smallest realistic change satisfying `criterion`.
 
-    stats: {file: (added, removed)} — defaults to (5, 2) per file, keeping
-    the probe under SMALL_DIFF_THRESHOLD so it must dispatch on evidence,
-    not on the large-diff default.
+    stats: {file: (added, removed)} — defaults to (5, 2) per file so the
+    probe stays minimal and criterion-specific.
     """
     if stats is None:
         stats = {f: (5, 2) for f in files}
@@ -1409,8 +1406,7 @@ class TestDetectorSilenceConservatism:
         assert status == "DISPATCH", reason
 
     def test_keyword_required_gate_holds_for_uncovered_languages(self):
-        """An explicit membership gate remains separate from semantic
-        small-diff inference and still requires its configured keyword."""
+        """An explicit membership gate still requires its configured keyword."""
         config = {
             "dispatch_class": "conditional",
             "domain": "security",

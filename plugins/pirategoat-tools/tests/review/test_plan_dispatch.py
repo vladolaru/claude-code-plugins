@@ -193,12 +193,15 @@ class TestCountFilesInDomain:
             "views/cart.ejs",
             "templates/page.liquid",
             "views/page.njk",
+            "views/page.nunjucks",
             "templates/page.jinja",
             "templates/page.jinja2",
+            "templates/page.j2",
             "views/index.jsp",
             "views/index.jspx",
             "Views/Cart.cshtml",
             "Views/Cart.vbhtml",
+            "Components/NavMenu.razor",
             "templates/email.tmpl",
             "templates/email.tpl",
             "views/page.gsp",
@@ -1314,9 +1317,8 @@ class TestTriageInDispatchPlan:
                     },
                 },
                 commit_messages="rename local variable",
-                # Sized above SMALL_DIFF_THRESHOLD so the small-diff triage
-                # skip doesn't fire first — this test pins quick-mode
-                # relabeling of the Layer-6 default dispatch.
+                # This test pins quick-mode relabeling of the conservative
+                # Layer-6 default dispatch.
                 diffstat={
                     "added": 60,
                     "removed": 10,
@@ -2115,22 +2117,6 @@ class TestDetectorPolarity:
         assert set(_mod._CHECK_RUNNERS) == set(_mod._CHECK_SPECS)
         assert all(callable(r) for r in _mod._CHECK_RUNNERS.values())
 
-    def test_exhaustive_contract_requires_boolean(self):
-        config = self._config()
-        config["small_diff_triage_exhaustive"] = "yes"
-        with pytest.raises(
-            ValueError,
-            match="small_diff_triage_exhaustive.*must be a boolean",
-        ):
-            triage_conditional_agent(
-                "reliability-reviewer",
-                config,
-                ["internal/sync/notes.go"],
-                "tidy comments",
-                self._small("internal/sync/notes.go"),
-                diff_text="",
-            )
-
     @pytest.mark.parametrize("family", sorted(HTTP_CLIENT_PROOF_FORMS))
     def test_http_client_form_is_evidence(self, family):
         line = HTTP_CLIENT_PROOF_FORMS[family]
@@ -2171,9 +2157,17 @@ class TestTemplateExtensionsAreInherentUI:
         )
         assert status == "SKIPPED_TRIAGE"
 
-    def test_blade_template_dispatches_as_inherent_ui(self, registry):
+    @pytest.mark.parametrize(
+        "filepath",
+        [
+            "resources/views/cart.blade.php",
+            "Components/NavMenu.razor",
+            "views/cart.nunjucks",
+            "views/cart.j2",
+        ],
+    )
+    def test_template_alias_dispatches_as_inherent_ui(self, registry, filepath):
         cfg = registry["agents"]["a11y-reviewer"]
-        filepath = "resources/views/cart.blade.php"
         status, reason = triage_conditional_agent(
             "a11y-reviewer",
             cfg,
@@ -2184,7 +2178,7 @@ class TestTemplateExtensionsAreInherentUI:
                 "removed": 0,
                 "file_stats": {filepath: {"added": 3, "removed": 0}},
             },
-            diff_text="+{{ $slot }}",
+            diff_text="+{{ view_model }}",
         )
         assert status == "DISPATCH"
         assert "template file changes" in reason
@@ -2304,6 +2298,7 @@ class TestA11yMarkupGatedDispatch:
             "wp_page_menu( $args );",
             "dynamic_sidebar( 'primary' );",
             "the_widget( WC_Widget_Cart::class );",
+            "<?= build_custom_navigation( $args ); ?>",
             "$view->display( $context );",
         ],
     )
@@ -2418,7 +2413,7 @@ class TestA11yMarkupGatedDispatch:
     def test_one_line_css_outline_removal_dispatches(self, registry):
         """'+ outline: none;' is a one-line focus-indicator regression — an
         explicit a11y criterion. Style files are inherent visual-a11y surface
-        (has_style_files), so the small-diff rule must not skip them."""
+        (has_style_files), so this carries positive evidence."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["src/styles/buttons.scss"],
@@ -2433,8 +2428,7 @@ class TestA11yMarkupGatedDispatch:
         assert status == "DISPATCH"
 
     def test_small_ts_speak_change_dispatches(self, registry):
-        """A small speak() announcement change is markup evidence — the
-        small-diff rule must not skip it."""
+        """A small speak() announcement change is markup evidence."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["src/store/notices.ts"],
@@ -2560,9 +2554,11 @@ class TestHasMarkupChanges:
 
 
 class TestSmallDiffPolarity:
-    """Small diffs skip on detector silence only when the agent explicitly
-    certifies exhaustive coverage of its complete criteria. Partial semantic
-    detectors remain positive-evidence accelerators, never absence proofs."""
+    """Diff size cannot turn detector silence into negative evidence.
+
+    Partial semantic detectors remain positive-evidence accelerators, never
+    absence proofs. There is no declarative escape hatch for that rule.
+    """
 
     def _make_config(self, **overrides):
         base = {"dispatch_class": "conditional", "domain": "concurrency"}
@@ -2579,22 +2575,7 @@ class TestSmallDiffPolarity:
             "file_stats": {filepath: {"added": added, "removed": removed}},
         }
 
-    def test_small_diff_without_signal_skips(self):
-        config = self._make_config(
-            triage_keywords=["async", "lock"],
-            small_diff_triage_exhaustive=True,
-        )
-        status, reason = triage_conditional_agent(
-            "concurrency-reviewer", config,
-            ["includes/class-renderer.php"],
-            "fix settings radio markup",
-            self._small_diffstat(),
-            diff_text="",  # successful scan, nothing found
-        )
-        assert status == "SKIPPED_TRIAGE"
-        assert "small change" in reason
-
-    def test_small_diff_without_exhaustive_contract_dispatches(self):
+    def test_small_diff_without_signal_dispatches(self):
         config = self._make_config(triage_keywords=["async", "lock"])
         status, reason = triage_conditional_agent(
             "concurrency-reviewer", config,
@@ -2730,13 +2711,8 @@ class TestSmallDiffPolarity:
         )
         assert status == "DISPATCH"
 
-    def test_sizing_counts_only_in_scope_non_test_lines(self):
-        """A big test-file change must not lift a small production change
-        over the threshold."""
-        config = self._make_config(
-            triage_keywords=["async"],
-            small_diff_triage_exhaustive=True,
-        )
+    def test_test_file_size_does_not_change_conservative_dispatch(self):
+        config = self._make_config(triage_keywords=["async"])
         diffstat = {
             "added": 300, "removed": 10,
             "deleted_files": [], "renamed_files": [], "added_files": [],
@@ -2752,8 +2728,8 @@ class TestSmallDiffPolarity:
             diffstat,
             diff_text="",  # successful scan, nothing found
         )
-        assert status == "SKIPPED_TRIAGE"
-        assert "small change" in reason
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
 
 class TestScenario55669:
@@ -2957,13 +2933,12 @@ class TestDiffFetchFailureConservatism:
         assert status == "DISPATCH"
         assert "unavailable" in reason
 
-    def test_small_diff_gate_still_skips_on_successful_empty_scan(self):
+    def test_successful_empty_scan_still_dispatches(self):
         config = {
             "domain": "code",
             "dispatch_class": "conditional",
             "triage_criteria": ["x"],
             "triage_keywords": ["transaction"],
-            "small_diff_triage_exhaustive": True,
         }
         diffstat = {
             "added": 4, "removed": 1,
@@ -2973,7 +2948,7 @@ class TestDiffFetchFailureConservatism:
             "concurrency-reviewer", config,
             ["src/orders.php"], "", diffstat, diff_text="",
         )
-        assert status == "SKIPPED_TRIAGE"
+        assert status == "DISPATCH"
 
     def test_fetch_failure_reaches_gates_through_decide_agent_dispatch(self):
         """END-TO-END: the None sentinel must survive the production path.
@@ -3021,12 +2996,11 @@ class TestDiffFetchFailureConservatism:
 
     def test_agent_needing_no_diff_scan_is_unaffected_by_none(self):
         """No keywords, no diff-based checks: None just means 'never
-        needed' — the small-diff gate still applies."""
+        needed'; detector silence still cannot authorize a skip."""
         config = {
             "domain": "code",
             "dispatch_class": "conditional",
             "triage_criteria": ["x"],
-            "small_diff_triage_exhaustive": True,
         }
         diffstat = {
             "added": 4, "removed": 1,
@@ -3036,7 +3010,7 @@ class TestDiffFetchFailureConservatism:
             "some-reviewer", config,
             ["src/orders.php"], "", diffstat, diff_text=None,
         )
-        assert status == "SKIPPED_TRIAGE"
+        assert status == "DISPATCH"
 
 
 class TestKeywordNormalization:

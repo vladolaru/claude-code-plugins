@@ -678,15 +678,6 @@ def _count_in_scope_non_test_additions(domain_files: List[str], diffstat: Dict) 
     return sum(_get_file_added_lines(diffstat, filepath) for filepath in non_test_files)
 
 
-# Below this many changed lines (added + removed, in-scope non-test files),
-# conditional agents need positive triage evidence to dispatch — the
-# domain-relevance prior that justifies dispatch-by-default is weak on tiny
-# diffs. (A real 6-line markup change dispatched 8 agents on the bare
-# Layer-6 default; a human pruned them all.) At or above the threshold,
-# dispatch-by-default stands.
-SMALL_DIFF_THRESHOLD = 50
-
-
 def _count_in_scope_non_test_changed_lines(domain_files: List[str], diffstat: Dict) -> Optional[int]:
     """Count changed lines (added + removed) in non-test domain files.
 
@@ -744,9 +735,9 @@ def _get_new_abstraction_files(domain_files: List[str], diffstat: Dict) -> List[
 # Keywords and checks are POSITIVE-evidence detectors: a match can prove that
 # a reviewer is relevant, but silence proves only that the configured
 # vocabulary did not match. Representative syntax tables therefore document
-# recognition, never completeness. The small-diff gate may make a negative
-# inference only when an agent explicitly certifies its COMPLETE criteria as
-# exhaustively detected via `small_diff_triage_exhaustive`.
+# recognition, never completeness. No declarative setting may promote that
+# silence into negative evidence; a future optimization would need an
+# executable completeness proof, not a configuration assertion.
 #
 # ONE record per check — every other registry is a view over this dict.
 # `reads_diff` controls patch fetching and the failed-fetch guard. Nothing in
@@ -1363,8 +1354,8 @@ def _has_public_api_changes(diff_text: str) -> bool:
 
 
 # Markup-emission detection for the has_markup_changes triage check.
-# The token patterns live in scope.py (MARKUP_TOKEN_PATTERNS) because
-# scope's a11y budget priority uses the same definition — one source, two
+# The categorized token patterns and comment/string handling live in scope.py
+# because its a11y budget priority uses the same classifier — one source, two
 # consumers. Matched against BOTH added and removed patch lines — removing
 # markup is exactly when its blast radius (label associations, CSS hooks,
 # AT semantics) needs review.
@@ -1506,11 +1497,6 @@ def _validate_triage_checks(agent_name: str, config: dict) -> None:
     for check in config.get("triage_checks", []):
         if check not in _SUPPORTED_TRIAGE_CHECKS:
             raise ValueError(f"Unsupported triage check for {agent_name}: {check}")
-    exhaustive = config.get("small_diff_triage_exhaustive")
-    if exhaustive is not None and not isinstance(exhaustive, bool):
-        raise ValueError(
-            f"small_diff_triage_exhaustive for {agent_name} must be a boolean"
-        )
 
 
 def triage_conditional_agent(
@@ -1537,8 +1523,6 @@ def triage_conditional_agent(
        neither keywords nor checks fired → SKIPPED_TRIAGE
     5.6. Scoped evidence gate: configured mixed-language file classes skip
        when neither keywords nor checks fired → SKIPPED_TRIAGE
-    5.75. Exhaustive small-diff gate: explicitly certified agents may skip
-       a small change after every configured signal remains silent
     6. Default: DISPATCH (conservative — when in doubt, dispatch)
 
     Args:
@@ -1660,18 +1644,6 @@ def triage_conditional_agent(
             return "SKIPPED_TRIAGE", (
                 f"all domain files are evidence-gated types ({', '.join(sorted(exts))}); "
                 "no keyword or check matched"
-            )
-
-    # Layer 5.75: Small-diff polarity. Detector silence is absence of known
-    # vocabulary, not proof that an agent's semantic criteria are irrelevant.
-    # Only an explicit full-criteria exhaustiveness certification may turn a
-    # small successful scan into a skip. No current agent claims this.
-    if config.get("small_diff_triage_exhaustive"):
-        changed_lines = _count_in_scope_non_test_changed_lines(domain_files, diffstat)
-        if changed_lines is not None and changed_lines < SMALL_DIFF_THRESHOLD:
-            return "SKIPPED_TRIAGE", (
-                f"small change ({changed_lines} lines in scope), "
-                "exhaustive triage found no positive signal"
             )
 
     # Layer 6: Default — DISPATCH when no triage signal skips the agent.

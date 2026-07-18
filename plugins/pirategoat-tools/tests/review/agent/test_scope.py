@@ -904,6 +904,7 @@ _PRIORITY_FILE_DIFFS = {
         "+<?php // submit ?>"
     ),
     "resources/views/card.blade.php": "+{{ $slot }}",
+    "Components/NavMenu.razor": "+@foreach ( var item in Items ) { @item.Name }",
     "src/styles/focus.scss": "+.wc-input:focus-visible {\n+  outline: 2px solid;",
 }
 
@@ -987,6 +988,10 @@ class TestMarkupEvidenceBudgetPriority:
         ["includes/backend.php", "resources/views/card.blade.php"],
         {"includes/backend.php": 2100, "resources/views/card.blade.php": 1},
     )
+    _RAZOR_TEMPLATE_CASE = (
+        ["includes/backend.php", "Components/NavMenu.razor"],
+        {"includes/backend.php": 2100, "Components/NavMenu.razor": 1},
+    )
 
     def test_a11y_budget_includes_markup_file_before_large_backend_file(self, tmp_path):
         scope, _ = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
@@ -1003,6 +1008,11 @@ class TestMarkupEvidenceBudgetPriority:
     def test_a11y_budget_includes_token_free_template_before_backend(self, tmp_path):
         scope, _ = self._build(tmp_path, "a11y", *self._TOKEN_FREE_TEMPLATE_CASE)
         assert "resources/views/card.blade.php" in scope["diffs"]
+        assert "includes/backend.php" in scope["skipped_files"]["budget"]
+
+    def test_a11y_budget_includes_razor_before_backend(self, tmp_path):
+        scope, _ = self._build(tmp_path, "a11y", *self._RAZOR_TEMPLATE_CASE)
+        assert "Components/NavMenu.razor" in scope["diffs"]
         assert "includes/backend.php" in scope["skipped_files"]["budget"]
 
     def test_backend_role_assignment_is_not_evidence(self, tmp_path):
@@ -1115,8 +1125,11 @@ class TestMarkupTokenEdgeCases:
             "+ dynamic_sidebar( 'primary' );",
             "+ the_widget( WC_Widget_Cart::class );",
             "+ echo build_custom_navigation( $args );",
+            "+ <?= build_custom_navigation( $args ); ?>",
             "+ echo $renderer->render( $context );",
             "+ $view->display( $context );",
+            "+ $view->output( $context );",
+            "+ $renderer->emit( $context );",
         ],
     )
     def test_php_render_surfaces_are_markup(self, line):
@@ -1148,6 +1161,12 @@ class TestMarkupTokenEdgeCases:
             "+    $button_count = 3;",
             "+    process_dropdown_choice( $value );",
             '+    const copy = "echo this value";',
+            '+    const docs = "wp_nav_menu() renders navigation";',
+            "+    // Example: echo build_custom_navigation();",
+            "+    // wp_nav_menu() renders navigation.",
+            "+    /* <button>Example</button> */",
+            "+    $events->emit( 'order.created', $order );",
+            "+    $stream->output( $bytes );",
         ):
             assert not review_scope.patch_has_markup_tokens(line), line
 
@@ -1187,12 +1206,15 @@ class TestTemplateFileClassification:
             "views/cart.ejs",
             "templates/page.liquid",
             "views/page.njk",
+            "views/page.nunjucks",
             "templates/page.jinja",
             "templates/page.jinja2",
+            "templates/page.j2",
             "views/index.jsp",
             "views/index.jspx",
             "Views/Cart.cshtml",
             "Views/Cart.vbhtml",
+            "Components/NavMenu.razor",
             "templates/email.tmpl",
             "templates/email.tpl",
             "views/page.gsp",

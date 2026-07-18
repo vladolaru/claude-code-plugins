@@ -1,5 +1,7 @@
 # Conservative Reviewer Routing Implementation Plan
 
+> **Final-review correction (2026-07-18 22:18):** Steps that add `small_diff_triage_exhaustive` are superseded. Independent review showed the boolean could reintroduce the false-negative class without an executable completeness proof, so the final implementation removes the gate and its tests entirely. The remaining steps and historical sequence are preserved below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use $subagent-driven-development (recommended) or $executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prevent silent reviewer-routing false negatives by making negative inference explicitly exhaustive, broadening server-rendered accessibility evidence, and centralizing template identity.

@@ -661,8 +661,7 @@ class TestQuickModeDispatch:
             registry=registry,
             quick=True,
             commit_messages="fix button alignment in modal",
-            # Sized above SMALL_DIFF_THRESHOLD so the small-diff triage skip
-            # doesn't fire first — this test pins quick-mode relabeling.
+            # This test pins quick-mode relabeling of conservative dispatch.
             diffstat={
                 "added": 200,
                 "removed": 40,

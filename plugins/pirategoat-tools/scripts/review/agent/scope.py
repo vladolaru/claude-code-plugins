@@ -67,7 +67,7 @@ def apply_semantic_filter(diff_text: str) -> str:
 # focus management, speak() announcements, screen-reader classes.
 # =============================================================================
 
-MARKUP_TOKEN_PATTERNS = (
+MARKUP_CONTENT_TOKEN_PATTERNS = (
     # Semantic/interactive elements only — div/span/p stay OUT (presentational
     # containers would gate-lift every template tweak, and tag-shape matching
     # would misread TS generics like Promise<number> as tags).
@@ -85,8 +85,37 @@ MARKUP_TOKEN_PATTERNS = (
         # canvas/svg alternatives are core accessibility concerns.
         r"video|audio|iframe|embed|object|canvas|svg|track|source|picture)\b"
     ),
-    re.compile(r"\bspeak\s*\("),
     re.compile(r"\baria-[a-z]+"),
+    # Attribute assignments need attribute CONTEXT: `(?<![\w$])` rejects PHP
+    # variables ('$role = ...' emits no markup and would otherwise let a big
+    # backend diff outrank genuine template evidence in budget priority),
+    # and the value must open like an attribute value — quote, JSX brace,
+    # or (tabindex) a number.
+    re.compile(
+        r"(?<![\w$])role\s*=\s*(?:[\"'{]|"
+        # Unquoted attribute values are valid HTML; accept the known ARIA
+        # role vocabulary so `<div role=button>` counts while a JS variable
+        # assignment `role = getRole()` does not.
+        r"(?:button|link|dialog|alertdialog|alert|menuitem|menubar|menu|"
+        r"tabpanel|tablist|tab|tooltip|navigation|banner|main|region|search|"
+        r"form|listitem|listbox|list|grid|gridcell|row|cell|checkbox|radio|"
+        r"switch|slider|spinbutton|progressbar|status|img|presentation|none|"
+        r"group|heading|separator|toolbar|treeitem|tree|combobox|option)\b)"
+    ),
+    re.compile(r"(?<![\w$])tabindex\b(?!\s*=\s*\$)"),
+    re.compile(r"(?<![\w$])alt\s*=\s*[\"'{]"),
+    re.compile(r"(?<![\w$])(html)?for\s*=\s*[\"'{]"),
+    re.compile(r"\bautofocus\b"),
+    re.compile(r"\bon(click|key(down|up|press)|focus|blur)\b"),
+    re.compile(r"focusable|screen-reader|sr-only|visually-hidden"),
+)
+
+# Call-shaped evidence must be found in executable/template syntax, not inside
+# quoted prose. _line_has_markup_token() masks quoted content before applying
+# these patterns while leaving literal markup patterns above able to recognize
+# HTML assembled in strings.
+MARKUP_CODE_TOKEN_PATTERNS = (
+    re.compile(r"\bspeak\s*\("),
     # WordPress/WooCommerce form-helper calls emit controls with no
     # literal tag in the diff — helper-generated markup is still markup
     # (a submit_button() change alters rendered UI as surely as <button>).
@@ -122,38 +151,22 @@ MARKUP_TOKEN_PATTERNS = (
     # is project-specific. Require an expression-shaped operand so prose that
     # merely mentions "echo" does not count.
     re.compile(
+        r"<\?=|"
         r"\b(echo|print)\s*(?:\(|\$|['\"]|[a-z_\\][a-z0-9_\\]*\s*\()|"
         r"\b(printf|vprintf)\s*\("
     ),
     # Conventional renderer methods emit UI without a literal tag or output
-    # keyword at the call site. Require method/static-call syntax so a plain
-    # data helper such as render_totals() remains outside this vocabulary.
-    re.compile(r"(?:->|::)(render|display|output|emit)(?:_?[a-z0-9]+)*\s*\("),
-    # Attribute assignments need attribute CONTEXT: `(?<![\w$])` rejects PHP
-    # variables ('$role = ...' emits no markup and would otherwise let a big
-    # backend diff outrank genuine template evidence in budget priority),
-    # and the value must open like an attribute value — quote, JSX brace,
-    # or (tabindex) a number.
+    # keyword at the call site. render/display are conventional enough to use
+    # directly; ambiguous output/emit calls require a view-like receiver so
+    # event emitters and byte streams do not masquerade as rendered UI.
+    re.compile(r"(?:->|::)(render|display)(?:_?[a-z0-9]+)*\s*\("),
     re.compile(
-        r"(?<![\w$])role\s*=\s*(?:[\"'{]|"
-        # Unquoted attribute values are valid HTML; accept the known ARIA
-        # role vocabulary so `<div role=button>` counts while a JS variable
-        # assignment `role = getRole()` does not.
-        r"(?:button|link|dialog|alertdialog|alert|menuitem|menubar|menu|"
-        r"tabpanel|tablist|tab|tooltip|navigation|banner|main|region|search|"
-        r"form|listitem|listbox|list|grid|gridcell|row|cell|checkbox|radio|"
-        r"switch|slider|spinbutton|progressbar|status|img|presentation|none|"
-        r"group|heading|separator|toolbar|treeitem|tree|combobox|option)\b)"
+        r"(?:\$[a-z0-9_]*(?:view|renderer|template|component)[a-z0-9_]*|"
+        r"[a-z_\\][a-z0-9_\\]*(?:view|renderer|template|component)[a-z0-9_\\]*)"
+        r"\s*(?:->|::)(output|emit)(?:_?[a-z0-9]+)*\s*\("
     ),
-    re.compile(r"(?<![\w$])tabindex\b(?!\s*=\s*\$)"),
-    re.compile(r"(?<![\w$])alt\s*=\s*[\"'{]"),
-    re.compile(r"(?<![\w$])(html)?for\s*=\s*[\"'{]"),
-    re.compile(r"\bautofocus\b"),
-    re.compile(r"\bon(click|key(down|up|press)|focus|blur)\b"),
-    re.compile(r"\.focus\(|focusable"),
-    re.compile(r"screen-reader|sr-only|visually-hidden"),
+    re.compile(r"\.focus\("),
 )
-
 
 # Real file markers: '+++ b/…', '--- a/…', C-quoted variants, '/dev/null'.
 # Shape-tested rather than prefix-blacklisted: a changed line whose CONTENT
@@ -167,17 +180,75 @@ def _is_file_marker(line: str) -> bool:
     return bool(_FILE_MARKER_RE.match(line))
 
 
+def _strip_inline_comment(text: str) -> str:
+    """Strip common line/block-comment starts while respecting quotes."""
+    quote = None
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"', "`"}:
+            quote = char
+            index += 1
+            continue
+        if text.startswith(("//", "/*", "<!--"), index):
+            return text[:index]
+        if char == "#" and (index == 0 or text[index - 1].isspace()):
+            return text[:index]
+        index += 1
+    return text
+
+
+def _mask_quoted_content(text: str) -> str:
+    """Mask quoted contents while preserving delimiters and code shape."""
+    masked = list(text)
+    quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if quote is None:
+            if char in {"'", '"', "`"}:
+                quote = char
+            continue
+        if escaped:
+            masked[index] = " "
+            escaped = False
+        elif char == "\\":
+            masked[index] = " "
+            escaped = True
+        elif char == quote:
+            quote = None
+        else:
+            masked[index] = " "
+    return "".join(masked)
+
+
 def _line_has_markup_token(patch_line: str) -> bool:
     """True when a patch line's content matches any markup token pattern.
 
-    Strips the +/- diff marker, normalizes, and tests the shared
-    MARKUP_TOKEN_PATTERNS — ONE definition for both the has_markup_changes
-    triage check (patch_has_markup_tokens) and the a11y budget-priority
-    evidence scan (classify_markup_evidence), so the two can never drift on
-    what counts as markup.
+    Strips the +/- diff marker, normalizes, and tests the shared content and
+    code token vocabularies. Both the has_markup_changes triage check
+    (patch_has_markup_tokens) and the a11y budget-priority evidence scan
+    (classify_markup_evidence) call this function, so they cannot drift.
     """
     lowered = patch_line[1:].strip().lower()
-    return any(pattern.search(lowered) for pattern in MARKUP_TOKEN_PATTERNS)
+    if lowered.startswith(("//", "#", "/*", "*", "<!--")):
+        return False
+    uncommented = _strip_inline_comment(lowered).strip()
+    if not uncommented:
+        return False
+    if any(pattern.search(uncommented) for pattern in MARKUP_CONTENT_TOKEN_PATTERNS):
+        return True
+    code_only = _mask_quoted_content(uncommented)
+    return any(pattern.search(code_only) for pattern in MARKUP_CODE_TOKEN_PATTERNS)
 
 
 def patch_has_markup_tokens(diff_text: str) -> bool:
@@ -343,8 +414,9 @@ _MIXED_MARKUP_LANGS = ["php", "phtml"]
 # _TEMPLATE_SUFFIXES; is_template_file() is the shared classifier.
 _TEMPLATE_LANGS = [
     "html", "htm", "xhtml", "twig", "mustache", "hbs", "erb",
-    "ejs", "liquid", "njk", "jinja", "jinja2", "jsp", "jspx",
-    "cshtml", "vbhtml", "tmpl", "tpl", "gsp", "ftl", "vm", "haml", "slim",
+    "ejs", "liquid", "njk", "nunjucks", "jinja", "jinja2", "j2",
+    "jsp", "jspx", "cshtml", "vbhtml", "razor", "tmpl", "tpl",
+    "gsp", "ftl", "vm", "haml", "slim",
 ]
 _TEMPLATE_SUFFIXES = ("blade.php",)
 _TEMPLATE_EXTENSIONS = frozenset(_TEMPLATE_LANGS)

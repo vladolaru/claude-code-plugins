@@ -132,7 +132,6 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | `triage_keywords` | optional | Change-local keywords matched against commits, changed paths, PR metadata, and scoped patch text. Word-start-anchored, separator-tolerant prefix match (`move` ≠ `remove`; `screen reader` matches `screen-reader`); repo-structural directory segments (`plugins/`, `src/`, …) are excluded from path matching. Never use language-structural terms (`function`, `class`, `remove`, …) — a registry test bans them; use `triage_checks` for structural signals. |
 | `require_triage_keyword_match` | optional | Blanket evidence gate: skip unless a keyword OR a `triage_checks` entry fired (checks run before the gate). Used by woo-regression-reviewer (WC-signal requirement). |
 | `evidence_gated_extensions` | optional | Scoped evidence gate: require a keyword/check hit only when EVERY domain file has one of the listed extensions. Lets a domain include a broad mixed-purpose file class without gating its original classes — a11y-reviewer gates PHP/PHTML while frontend and pure-template files keep normal dispatch. |
-| `small_diff_triage_exhaustive` | optional | **Negative-inference contract.** Triage checks and keywords are positive-evidence detectors; their silence never proves a criterion absent unless this is `true`, certifying that the agent's complete `triage_criteria` are exhaustively detected across every file type in its domain. Representative form tables prove positive recognition only. The default is conservative dispatch; no current agent claims exhaustiveness. |
 | `triage_repository_keywords` | optional | Ambient repository-identity keywords matched against all fetch remote URLs plus the checkout basename. Opt in only when repository membership is itself sufficient for applicability. |
 | `secondary_domains` | optional | Additional scope domains to include (e.g., `["config-ops"]`). |
 | `extra_scope` | optional | Additional scope invocations (e.g., `["--base-ref-only"]` for patterns-reviewer). |
@@ -145,7 +144,7 @@ The prompt bootstrap builds uses deliberate section ordering. Preserve this orde
 | Class | Behavior |
 |-------|----------|
 | `always` | Auto-dispatched on every review |
-| `conditional` | Dispatched when triage criteria match the diff. Dispatch-by-default when the domain has files and no skip signal fires — EXCEPT on small diffs (< `SMALL_DIFF_THRESHOLD` in-scope non-test changed lines), where positive evidence (keyword or triage-check hit) is required. Skips remain visible in `agent_signals` for orchestrator override. |
+| `conditional` | Dispatched when triage criteria match the diff. Dispatch-by-default when the domain has files and no explicit evidence gate fires; detector silence and diff size never prove irrelevance. Skips remain visible in `agent_signals` for orchestrator override. |
 | `manual` | Only on explicit user request |
 | `special` | Orchestration/synthesis agents, not dispatched by triage |
 

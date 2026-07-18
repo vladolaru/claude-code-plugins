@@ -1,4 +1,4 @@
-Last updated: 2026-07-18 22:08
+Last updated: 2026-07-18 22:22
 
 > **Prompt:** "Fix them by going at the root cause and fix entire classes of issues. Commit then done"
 >
@@ -58,7 +58,7 @@ The implementation boundary was tightened after approval: obsolete language/chec
 
 ## Implementation outcome
 
-- Small-diff detector silence is conservative by default. Only the explicit boolean `small_diff_triage_exhaustive` contract can authorize a negative skip, and the registry currently makes no such claim.
+- Small-diff detector silence is always conservative. An initially implemented boolean exhaustiveness assertion was removed after independent review showed that a declaration cannot prove criterion completeness; there is no negative-inference escape hatch.
 - The obsolete competence model and its language unions were deleted, along with the now-unused per-agent `small_diff_exempt` escape hatch.
 - Accessibility routing now separates mixed executable-markup languages from inherently UI-emitting templates. Centralized language and compound-suffix definitions feed domain scope, `is_template_file()` dispatch, and budget priority without a second planner vocabulary.
 - PHP accessibility evidence now recognizes expression-shaped output constructs, conventional renderer method/static calls, and core WordPress navigation, form, comment, archive, widget, and related renderers. Plain prose and ordinary helper names remain negative controls.
@@ -66,7 +66,16 @@ The implementation boundary was tightened after approval: obsolete language/chec
 
 ## Verification
 
-- Affected routing/scope suites: `1026 passed, 24 skipped`.
-- Complete pirategoat-tools suite: `2643 passed, 24 skipped in 32.84s`.
+- Affected routing/scope suites after independent-review fixes: `1036 passed, 24 skipped`.
+- Complete pirategoat-tools suite: `2658 passed, 24 skipped in 34.15s`.
 - The full suite ran with bytecode generation disabled and pytest's cache provider disabled.
 - Obsolete competence, claimed-language, opt-out, and abandoned generic-include symbols are absent from the plugin.
+
+## Independent review follow-up
+
+The completion review found four remaining abstraction gaps and all were addressed before handoff:
+
+- Removed the unprovable exhaustiveness assertion and its locked-in skip tests.
+- Added PHP short-echo evidence (`<?= ... ?>`).
+- Split literal markup from call-shaped evidence, stripping comments and masking quoted prose before call matching; ambiguous `emit`/`output` methods now require view-like receivers.
+- Added native Razor plus common Nunjucks and Jinja aliases to the centralized template inventory.

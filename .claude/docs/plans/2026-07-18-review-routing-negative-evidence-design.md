@@ -1,6 +1,8 @@
 # Conservative Negative Evidence for Reviewer Routing
 
-Last updated: 2026-07-18 21:50
+Last updated: 2026-07-18 22:18
+
+> **Superseded implementation detail:** The explicit exhaustiveness declaration below was removed during final review because a configuration assertion cannot prove semantic completeness. The shipped design permits no small-diff negative inference; detector silence always dispatches unless a separate explicit evidence gate applies. The original approved reasoning remains below as decision history.
 
 ## Problem
 
