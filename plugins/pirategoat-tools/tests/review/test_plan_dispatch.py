@@ -670,9 +670,9 @@ class TestNonCohortAgents:
 class TestConditionalAgentsDomainGating:
     """Conditional agents skip when their domain has no files."""
 
-    def test_a11y_reviewer_triage_skips_backend_php_without_markup(self, registry):
-        """PHP is in the a11y domain now, but backend-only PHP with no markup
-        emission and no a11y keywords must skip via triage, not domain gating."""
+    def test_a11y_reviewer_dispatches_backend_php_conservatively(self, registry):
+        """PHP is in the a11y domain because arbitrary composition code can
+        emit UI even when the finite markup detector remains silent."""
         plan = build_dispatch_plan(
             mode="full",
             git_range="main..HEAD",
@@ -682,7 +682,7 @@ class TestConditionalAgentsDomainGating:
             commit_messages="refactor csv export batching",
         )
         dispatch_map = {d["name"]: d for d in plan["agents"]}
-        assert dispatch_map["a11y-reviewer"]["status"] == "SKIPPED_TRIAGE"
+        assert dispatch_map["a11y-reviewer"]["status"] == "DISPATCH"
 
     def test_security_reviewer_dispatches_for_config_ops(self, registry):
         """security-reviewer has config-ops as secondary domain."""
@@ -2125,10 +2125,10 @@ class TestDetectorPolarity:
 
 class TestTemplateExtensionsAreInherentUI:
     """Pure-template extensions (.twig/.hbs/.erb/.html) ARE the UI — they
-    are no longer evidence-gated, so a template-only diff dispatches a11y
-    on its extension alone (round-15 P1: a 120-line include-only Twig
-    change was skipped because the gate precedes the size fallback). Only
-    php/phtml — which mix backend logic — still require markup evidence."""
+    dispatch a11y on extension alone (round-15 P1: a 120-line include-only
+    Twig change was skipped because the old gate preceded the fallback).
+    PHP/PHTML mix executable logic and markup, so their finite positive
+    detectors cannot prove that a token-silent change emits no UI."""
 
     def _config(self, registry_agents):
         return registry_agents["a11y-reviewer"]
@@ -2145,17 +2145,18 @@ class TestTemplateExtensionsAreInherentUI:
         )
         assert status == "DISPATCH", reason
 
-    def test_backend_php_only_diff_still_requires_evidence(self, registry):
+    def test_backend_php_only_diff_dispatches_conservatively(self, registry):
         cfg = registry["agents"]["a11y-reviewer"]
         f = "includes/class-wc-order-store.php"
-        status, _ = triage_conditional_agent(
+        status, reason = triage_conditional_agent(
             "a11y-reviewer", cfg, [f],
             "tune order lookups",
             {"added": 3, "removed": 0,
              "file_stats": {f: {"added": 3, "removed": 0}}},
             diff_text="+ $orders = $this->store->load( $ids );",
         )
-        assert status == "SKIPPED_TRIAGE"
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
     @pytest.mark.parametrize(
         "filepath",
@@ -2239,10 +2240,12 @@ class TestDashPrefixedContentLines:
         assert _mod._has_modified_signatures(raw_patch)
 
 
-class TestA11yMarkupGatedDispatch:
-    """a11y-reviewer covers server-rendered markup: PHP/templates are in its
-    domain, but dispatch requires positive evidence — markup emission in the
-    diff or an a11y keyword — so backend PHP doesn't drag it into every review.
+class TestA11yMixedMarkupDispatch:
+    """a11y-reviewer covers server-rendered markup, including PHP/PHTML.
+
+    Known markup and renderer signals provide specific positive reasons, but
+    detector silence falls through to conservative dispatch because arbitrary
+    composition code can emit UI without matching the finite vocabulary.
 
     Regression tests for the 2026-07-16 false negative: a PHP-only diff that
     removed a <label for> and added a screen-reader <legend> was skipped with
@@ -2315,10 +2318,32 @@ class TestA11yMarkupGatedDispatch:
         assert status == "DISPATCH"
         assert "markup emission" in reason
 
-    def test_skips_backend_php_without_markup_or_keywords(self, registry):
-        """No markup emission, no keywords → SKIPPED_TRIAGE (not SKIPPED) —
-        even on a large diff. The evidence gate holds for server-rendered
-        file types regardless of size."""
+    @pytest.mark.parametrize(
+        "filepath, render_call",
+        [
+            ("theme/header.php", "get_header();"),
+            ("theme/footer.php", "get_footer();"),
+            ("theme/comments.php", "comments_template();"),
+            ("views/shell.phtml", "my_plugin_render_shell();"),
+        ],
+    )
+    def test_dispatches_when_mixed_markup_detector_is_silent(
+        self, registry, filepath, render_call,
+    ):
+        status, reason = triage_conditional_agent(
+            "a11y-reviewer",
+            self._a11y_config(registry),
+            [filepath],
+            "compose rendered page",
+            self._large_diffstat(filepath),
+            diff_text=f"+ {render_call}",
+        )
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
+
+    def test_backend_php_dispatches_when_markup_detector_is_silent(self, registry):
+        """Backend-looking PHP may still call project-specific render paths;
+        detector silence is not proof of accessibility irrelevance."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["includes/class-wc-query.php"],
@@ -2330,10 +2355,11 @@ class TestA11yMarkupGatedDispatch:
             },
             diff_text="+ $results = $wpdb->get_results( $sql );",
         )
-        assert status == "SKIPPED_TRIAGE"
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
-    def test_loop_keyword_for_does_not_count_as_markup(self, registry):
-        """PHP for-loops and array syntax must not read as markup emission."""
+    def test_php_loop_dispatches_without_false_markup_evidence(self, registry):
+        """A PHP loop remains token-silent but dispatches conservatively."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["includes/class-wc-query.php"],
@@ -2341,7 +2367,8 @@ class TestA11yMarkupGatedDispatch:
             {},
             diff_text="+ for ( $i = 0; $i < $count; $i++ ) { $formats[] = '%s'; }",
         )
-        assert status == "SKIPPED_TRIAGE"
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
     def test_jsx_with_interactive_markup_dispatches(self, registry):
         status, reason = triage_conditional_agent(
@@ -2353,10 +2380,7 @@ class TestA11yMarkupGatedDispatch:
         )
         assert status == "DISPATCH"
 
-    # --- The evidence gate must NOT reach frontend/style files ---
-    # (regression guard for the post-1.107.0 review: the gate initially
-    # applied to ALL a11y-domain files, silently skipping change classes
-    # a11y's own triage_criteria explicitly cover)
+    # --- Frontend/style files retain their specific positive signals ---
 
     def _large_diffstat(self, filepath):
         return {
@@ -2391,9 +2415,8 @@ class TestA11yMarkupGatedDispatch:
         )
         assert status == "DISPATCH"
 
-    def test_mixed_php_and_css_diff_is_not_gated(self, registry):
-        """A style file in the domain set means a frontend surface changed —
-        the server-rendered gate must not apply to the mixed diff."""
+    def test_mixed_php_and_css_diff_dispatches_on_style_evidence(self, registry):
+        """A style file supplies specific positive accessibility evidence."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["includes/class-renderer.php", "src/styles/admin.scss"],
@@ -2442,10 +2465,9 @@ class TestA11yMarkupGatedDispatch:
         )
         assert status == "DISPATCH"
 
-    def test_unrelated_test_file_does_not_disable_markup_gate(self, registry):
-        """A JS/TS test alongside a backend PHP change must not lift the
-        server-rendered evidence gate — the gate's extension set is built
-        from non-test domain files."""
+    def test_unrelated_test_file_does_not_change_conservative_dispatch(self, registry):
+        """An unrelated test cannot manufacture or suppress routing evidence
+        for the production PHP change."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["includes/class-wc-query.php", "tests/js/query.test.ts"],
@@ -2460,14 +2482,14 @@ class TestA11yMarkupGatedDispatch:
             },
             diff_text="+ $results = $wpdb->get_results( $sql );",
         )
-        assert status == "SKIPPED_TRIAGE"
-        assert "evidence-gated" in reason
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
     def test_small_pure_logic_ts_change_dispatches_without_exhaustive_contract(
         self, registry,
     ):
-        """Frontend files are not evidence-gated, and the a11y detector
-        vocabulary is not exhaustive enough to turn silence into absence."""
+        """The a11y detector vocabulary is not exhaustive enough to turn
+        silence into absence in any mixed-purpose UI language."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["src/utils/currency.ts"],
@@ -2855,6 +2877,15 @@ class TestDiffFetchFailureConservatism:
             stderr = "fatal: bad revision"
         return R()
 
+    def _blanket_config(self):
+        return {
+            "domain": "code",
+            "dispatch_class": "conditional",
+            "triage_criteria": ["x"],
+            "triage_keywords": ["woocommerce"],
+            "require_triage_keyword_match": True,
+        }
+
     def test_get_diff_text_returns_none_on_nonzero_exit(self):
         with patch.object(_mod.subprocess, "run", side_effect=self._fail_run):
             assert _mod.get_diff_text("main..HEAD", ["a.php"]) is None
@@ -2874,42 +2905,9 @@ class TestDiffFetchFailureConservatism:
         with patch.object(_mod.subprocess, "run", side_effect=ok_run):
             assert _mod.get_diff_text("main..HEAD", ["a.php"]) == ""
 
-    def _gated_config(self, **overrides):
-        config = {
-            "domain": "a11y",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["aria"],
-            "evidence_gated_extensions": ["php"],
-        }
-        config.update(overrides)
-        return config
-
-    def test_evidence_gate_dispatches_when_scan_failed(self):
-        status, reason = triage_conditional_agent(
-            "a11y-reviewer", self._gated_config(),
-            ["includes/class-admin.php"], "", {}, diff_text=None,
-        )
-        assert status == "DISPATCH"
-        assert "unavailable" in reason
-
-    def test_evidence_gate_still_skips_on_successful_empty_scan(self):
-        status, _ = triage_conditional_agent(
-            "a11y-reviewer", self._gated_config(),
-            ["includes/class-admin.php"], "", {}, diff_text="",
-        )
-        assert status == "SKIPPED_TRIAGE"
-
     def test_blanket_gate_dispatches_when_scan_failed(self):
-        config = {
-            "domain": "code",
-            "dispatch_class": "conditional",
-            "triage_criteria": ["x"],
-            "triage_keywords": ["woocommerce"],
-            "require_triage_keyword_match": True,
-        }
         status, reason = triage_conditional_agent(
-            "woo-regression-reviewer", config,
+            "woo-regression-reviewer", self._blanket_config(),
             ["includes/class-wc-order.php"], "", {}, diff_text=None,
         )
         assert status == "DISPATCH"
@@ -2956,15 +2954,15 @@ class TestDiffFetchFailureConservatism:
         into a successful empty scan, defeating the guard exactly where it
         matters (round-9 finding: unit tests called triage_conditional_agent
         directly and never exercised this)."""
-        config = self._gated_config()
+        config = self._blanket_config()
         diffstat = {
             "added": 4, "removed": 1,
             "file_stats": {"includes/class-admin.php": {"added": 4, "removed": 1}},
         }
         with patch.object(_mod, "get_diff_text", return_value=None):
             status, reason = _mod.decide_agent_dispatch(
-                "a11y-reviewer", config,
-                {"a11y": 1},
+                "woo-regression-reviewer", config,
+                {"code": 1},
                 clean_files=["includes/class-admin.php"],
                 commit_messages="",
                 diffstat=diffstat,
@@ -2974,7 +2972,7 @@ class TestDiffFetchFailureConservatism:
         assert "unavailable" in reason
 
     def test_fetch_failure_survives_the_diff_text_cache(self):
-        config = self._gated_config()
+        config = self._blanket_config()
         diffstat = {
             "added": 4, "removed": 1,
             "file_stats": {"includes/class-admin.php": {"added": 4, "removed": 1}},
@@ -2982,8 +2980,8 @@ class TestDiffFetchFailureConservatism:
         cache = {}
         with patch.object(_mod, "get_diff_text", return_value=None):
             status, reason = _mod.decide_agent_dispatch(
-                "a11y-reviewer", config,
-                {"a11y": 1},
+                "woo-regression-reviewer", config,
+                {"code": 1},
                 clean_files=["includes/class-admin.php"],
                 commit_messages="",
                 diffstat=diffstat,

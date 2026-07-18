@@ -1,6 +1,8 @@
-Last updated: 2026-07-19 00:12
+Last updated: 2026-07-19 00:21
 
 > **Prompt:** "Fix them by going at the root cause and fix entire classes of issues. Commit when done"
+>
+> **Follow-up:** "Make sure no leftovers remain in the codebase."
 
 # PHP renderer routing-gate investigation
 
@@ -34,3 +36,13 @@ Recommendation: option 2. It is the only current design whose negative decisions
 ## Decision
 
 The user approved option 2. The validated design is recorded in `.claude/docs/plans/2026-07-19-php-renderer-routing-polarity-design.md`.
+
+The implementation boundary includes removal of the generic `evidence_gated_extensions` configuration surface, runtime branch, gate-specific synthetic tests, and stale documentation. Leaving the field dormant would preserve an attractive path back to the same invalid negative-inference class.
+
+## Execution and verification
+
+- RED: the focused mixed-markup routing class produced seven expected failures. `get_header()`, `get_footer()`, `comments_template()`, a project-specific PHTML renderer, backend PHP, a PHP loop, and PHP plus an unrelated test all returned `SKIPPED_TRIAGE` through the scoped gate.
+- GREEN: after deleting the generic gate and its registry field, the focused class passed all 27 tests.
+- Targeted planner and executable-criteria suites: 687 passed, 24 skipped.
+- Full pirategoat-tools suite: 2,660 passed, 24 skipped in 39.20 seconds.
+- Residue audit found and removed additional gate assumptions in dispatch integration tests, scope tests, comments, architecture documentation, registry focus, and release notes. Remaining evidence-gate references describe separate active policies only.

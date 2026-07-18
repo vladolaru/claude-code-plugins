@@ -383,9 +383,9 @@ _E2E_TEST_INCLUDE = (
 _PROG_LANGS = [
     # Web / dynamic / scripting. phtml is executable PHP in a template
     # costume — it belongs to BOTH the code domains (logic changes need
-    # code/security review) and _MARKUP_LANGS (a11y's evidence-gated
-    # class); listing it only in the markup group left pure-logic .phtml
-    # diffs with no code reviewer at all.
+    # code/security review) and _MARKUP_LANGS (a11y's mixed-markup class);
+    # listing it only in the markup group left pure-logic .phtml diffs with
+    # no code reviewer at all.
     "php", "phtml", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb",
     # Systems / compiled / managed
     "go", "rs", "java", "kt", "kts", "scala", "cs",
@@ -405,7 +405,8 @@ _PROG_LANGS = [
 _FRONTEND_LANGS = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte"]
 
 # Mixed executable-markup languages contain both backend logic and rendered
-# UI, so accessibility dispatch evidence-gates them in plan_dispatch.py.
+# UI. Accessibility routing includes them conservatively: finite positive
+# detectors cannot prove that arbitrary composition code emits no UI.
 _MIXED_MARKUP_LANGS = ["php", "phtml"]
 
 # Pure template formats are inherent UI surfaces: a changed template is
@@ -427,8 +428,8 @@ _TEMPLATE_EXTENSIONS = frozenset(_TEMPLATE_LANGS)
 # (History: a11y was _FRONTEND_LANGS-only, so a PHP-only diff that removed a
 # dangling <label for> was skipped with NO_DOMAIN_FILES before its triage
 # keywords were ever consulted — ~30 admin-UI PHP runs went unreviewed over
-# 3 months. Dispatch is evidence-gated in plan_dispatch.py so this inclusion
-# does not drag a11y into every backend PHP review.)
+# 3 months. PHP/PHTML therefore stay in scope and dispatch conservatively
+# when their finite positive detectors are silent.)
 _MARKUP_LANGS = [*_MIXED_MARKUP_LANGS, *_TEMPLATE_LANGS]
 
 # Stylesheet languages.

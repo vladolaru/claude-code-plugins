@@ -416,10 +416,6 @@
       ],
       "scope_flags": [],
       "dispatch_class": "conditional",
-      "evidence_gated_extensions": [
-        "php",
-        "phtml"
-      ],
       "triage_criteria": [
         "Markup emission added or removed in ANY language that renders UI — JSX/TSX components, PHP echoing HTML, template files (labels, fieldsets, ARIA attributes, interactive elements)",
         "ARIA attributes or focus management code",
@@ -445,7 +441,7 @@
         "has_style_files",
         "has_template_files"
       ],
-      "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA — in any UI-emitting language (JSX/TSX, CSS/SCSS, server-rendered PHP/HTML, templates). Frontend/style files dispatch normally; server-rendered-only diffs need markup emission or a11y keywords as evidence.",
+      "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA — in any UI-emitting language (JSX/TSX, CSS/SCSS, server-rendered PHP/HTML, templates). Mixed PHP/PHTML dispatches conservatively because finite markup detectors cannot prove that arbitrary composition code emits no UI.",
       "model_tier": "opus"
     },
     "reliability-reviewer": {

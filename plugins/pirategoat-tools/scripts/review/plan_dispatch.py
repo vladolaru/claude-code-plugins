@@ -1521,8 +1521,6 @@ def triage_conditional_agent(
     5. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
     5.5. Evidence gate: require_triage_keyword_match agents skip here when
        neither keywords nor checks fired → SKIPPED_TRIAGE
-    5.6. Scoped evidence gate: configured mixed-language file classes skip
-       when neither keywords nor checks fired → SKIPPED_TRIAGE
     6. Default: DISPATCH (conservative — when in doubt, dispatch)
 
     Args:
@@ -1609,11 +1607,12 @@ def triage_conditional_agent(
         if reason:
             return "DISPATCH", reason
 
-    # Unknown is not negative — I/O edition. Every gate below infers signal
-    # ABSENCE from patch text. When this agent's triage reads patch text and
-    # the fetch failed (diff_text is None; "" is a successful empty scan),
-    # the detectors never saw the patch — dispatch conservatively instead of
-    # letting a git timeout masquerade as a clean negative scan.
+    # Unknown is not negative — I/O edition. The explicit applicability gate
+    # below infers signal ABSENCE from patch text. When this agent's triage
+    # reads patch text and the fetch failed (diff_text is None; "" is a
+    # successful empty scan), the detectors never saw the patch — dispatch
+    # conservatively instead of letting a git timeout masquerade as a clean
+    # negative scan.
     if diff_text is None and _needs_diff_scan(config):
         return "DISPATCH", (
             "patch text unavailable (diff fetch failed); cannot verify "
@@ -1626,25 +1625,6 @@ def triage_conditional_agent(
     # them, so a check-carrying agent could never dispatch on checks alone.
     if config.get("require_triage_keyword_match"):
         return "SKIPPED_TRIAGE", "requires positive triage signal; no keyword or check matched"
-
-    # Scoped evidence gate: require a positive signal only when EVERY domain
-    # file has one of the listed extensions. Lets a domain include a broad
-    # file class (a11y's server-rendered markup languages) without gating the
-    # domain's original file classes — a CSS focus-indicator change or a TS
-    # speak() call keeps its pre-existing dispatch behavior, while a diff
-    # made up ONLY of gated types (backend PHP) needs keyword/check evidence.
-    # The extension set is built from NON-TEST domain files: an unrelated
-    # JS/TS test riding along with a backend PHP change must not lift the
-    # gate (test-only diffs never reach here — Layer 1 skips them).
-    gated_exts = config.get("evidence_gated_extensions")
-    non_test_domain_files = [f for f in domain_files if not is_test_file(f)]
-    if gated_exts and non_test_domain_files:
-        exts = {_ext_of(f) for f in non_test_domain_files}
-        if exts <= set(gated_exts):
-            return "SKIPPED_TRIAGE", (
-                f"all domain files are evidence-gated types ({', '.join(sorted(exts))}); "
-                "no keyword or check matched"
-            )
 
     # Layer 6: Default — DISPATCH when no triage signal skips the agent.
     # Keywords and triage checks provide positive evidence, but conditional
@@ -1744,7 +1724,7 @@ def decide_agent_dispatch(
         # diff_text passes through UNCHANGED: None is the failed-fetch
         # sentinel the conservative guard keys on — an `or ""` here would
         # convert the failure into a successful empty scan and let the
-        # evidence gates skip agents from a scan that never ran.
+        # applicability gate skip an agent from a scan that never ran.
         return triage_conditional_agent(
             agent_name, config, domain_files,
             commit_messages, diffstat or {},

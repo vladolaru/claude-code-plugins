@@ -1082,7 +1082,7 @@ class TestMarkupTokenEdgeCases:
         """WP/WC helpers emit controls with no literal tag in the diff —
         helper-generated markup is still markup (round-13 miss: a
         submit_button()/woocommerce_form_field() admin change skipped
-        a11y at any size via the evidence gate)."""
+        a11y before mixed-markup routing became conservative)."""
         for line in (
             "+\t\tsubmit_button( __( 'Save changes', 'woocommerce' ) );",
             "+\t\techo get_submit_button( $text, 'secondary' );",
@@ -1186,8 +1186,7 @@ class TestPhtmlIsExecutableCode:
     """.phtml is executable PHP in a template costume — it must sit in the
     general code domains, not only in a11y's markup class (round-12 P1: a
     pure-logic .phtml diff got NO code/security reviewer and no
-    unrecognized-source warning, because a11y's evidence-gated domain was
-    the only one that saw it)."""
+    unrecognized-source warning because only the a11y domain saw it)."""
 
     def test_phtml_in_prog_langs(self):
         assert "phtml" in review_scope._PROG_LANGS

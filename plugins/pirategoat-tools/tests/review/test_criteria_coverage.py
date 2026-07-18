@@ -13,7 +13,7 @@ This suite closes that loop:
    `triage_criteria` bullet has at least one probe — the smallest realistic
    diff satisfying that criterion — that MUST dispatch through the real
    pipeline (`decide_agent_dispatch` + real registry), i.e. through domain
-   gating, evidence gates, and conservative fallback routing.
+   gating, explicit applicability gates, and conservative fallback routing.
 2. **Completeness is enforced.** A meta-test asserts the probed criterion
    strings exactly match the registry's — adding or rewording a criterion
    without a probe fails CI instead of failing in review three weeks later.
