@@ -1,4 +1,4 @@
-Last updated: 2026-07-18 21:53
+Last updated: 2026-07-18 22:08
 
 > **Prompt:** "Fix them by going at the root cause and fix entire classes of issues. Commit then done"
 >
@@ -55,3 +55,18 @@ Recommendation: option 2. It fixes the polarity error at the abstraction boundar
 The user approved option 2. The validated design is recorded in `.claude/docs/plans/2026-07-18-review-routing-negative-evidence-design.md`.
 
 The implementation boundary was tightened after approval: obsolete language/check competence tables will be removed rather than left dormant. They exist only to authorize the unsound small-diff negative inference. Positive detector proof tables remain where they verify dispatch evidence, but claimed-language unions and negative-competence bindings will be deleted.
+
+## Implementation outcome
+
+- Small-diff detector silence is conservative by default. Only the explicit boolean `small_diff_triage_exhaustive` contract can authorize a negative skip, and the registry currently makes no such claim.
+- The obsolete competence model and its language unions were deleted, along with the now-unused per-agent `small_diff_exempt` escape hatch.
+- Accessibility routing now separates mixed executable-markup languages from inherently UI-emitting templates. Centralized language and compound-suffix definitions feed domain scope, `is_template_file()` dispatch, and budget priority without a second planner vocabulary.
+- PHP accessibility evidence now recognizes expression-shaped output constructs, conventional renderer method/static calls, and core WordPress navigation, form, comment, archive, widget, and related renderers. Plain prose and ordinary helper names remain negative controls.
+- Regression coverage exercises unrecognized small Go and JavaScript forms, every supported template family (including `*.blade.php`), WordPress render surfaces, generic output, and false-positive controls.
+
+## Verification
+
+- Affected routing/scope suites: `1026 passed, 24 skipped`.
+- Complete pirategoat-tools suite: `2643 passed, 24 skipped in 32.84s`.
+- The full suite ran with bytecode generation disabled and pytest's cache provider disabled.
+- Obsolete competence, claimed-language, opt-out, and abandoned generic-include symbols are absent from the plugin.
