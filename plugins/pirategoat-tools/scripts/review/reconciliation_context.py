@@ -987,6 +987,39 @@ def to_markdown(context: Dict[str, Any]) -> str:
                                 parts.append(f"- [{priority}] {escaped}")
                     parts.append("")
 
+            # Clearances — structured absence claims ("nothing depends on
+            # this") recorded via add_clearance() WITH their verification
+            # method. Unlike positives, these are deliberately included:
+            # a clearance that contradicts another agent's finding is a
+            # conflict the reconciliator must see and resolve by verifying
+            # (never by counting), and the stated method is what lets it
+            # judge the claim's coverage. (The 2026-07-16 run's three wrong
+            # clears were invisible here — they lived in excluded positives.)
+            clearances = data.get("clearances")
+            if clearances and isinstance(clearances, list):
+                parts.append(
+                    "**Clearances (absence claims — judge by their method, "
+                    "see Verification-Method Weighting):**"
+                )
+                for clearance in clearances:
+                    if not isinstance(clearance, dict):
+                        continue
+                    claim = _escape_block_syntax(
+                        _escape_backtick_runs(str(clearance.get("claim", "")))
+                    ).replace("\n", "\n  ")
+                    method = _escape_block_syntax(
+                        _escape_backtick_runs(str(clearance.get("method", "")))
+                    ).replace("\n", "\n  ")
+                    parts.append(f"- {claim}")
+                    parts.append(f"  - Method: {method}")
+                    evidence = clearance.get("evidence")
+                    if evidence:
+                        ev = _escape_block_syntax(
+                            _escape_backtick_runs(str(evidence))
+                        ).replace("\n", "\n  ")
+                        parts.append(f"  - Evidence: {ev}")
+                parts.append("")
+
             # NOTE: Positive observations are intentionally excluded from
             # the Markdown context.  Like observations, they bypass
             # extract_references(), check_scope(), and read_source_snippets()

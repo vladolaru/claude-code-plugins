@@ -156,6 +156,21 @@ When uncertain, read the actual source file to confirm.
 
 **Preexisting-code agents** (patterns-reviewer, history-insights-reviewer): search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes.
 
+## Absence Claims (Clearing Blast Radius)
+
+A negative search result proves only that the **searched pattern is absent** — never that the dependency is. "I grepped for X and found nothing" is evidence about X, not about what depends on the changed code.
+
+<example type="FAILURE — this shipped a regression">
+A change removed a `<label>` from a `<th class="titledesc">`. Three reviewers each grepped `.titledesc label`, found nothing, and declared "no blast radius." The load-bearing CSS selectors were `th label` — a pattern their search string could not match. The regression was real, verified, and visible on three core settings pages.
+</example>
+
+Rules for any "nothing depends on this" / "no blast radius" / "no consumers" claim:
+
+1. **Search the dependent side, in its own vocabulary.** Enumerate what COULD depend on the changed code, and search each dependent artifact for the terms *it* would use — not the literal string you saw in the diff. For removed markup: CSS selectors that could match it (element names, ancestor/sibling combinators, ancestor classes — not just its own class), JS/DOM queries, test locators, AT semantics. For removed functions: callers, hook registrations, string-built call sites, subclasses. For removed config: readers, defaults, migrations.
+2. **Reading beats searching.** When the dependent artifact is identifiable (the stylesheet, the consumer module, the test file), enumerate ALL occurrences of the dependency's tokens across the whole artifact and read each site — do not conclude from a single grep or a single windowed read.
+3. **State your method or the claim doesn't count.** Record every clearance via `builder.add_clearance(claim=..., method=..., evidence=...)` — never as a free-text positive. The `method` field must state the exact search commands/terms used and files read, so downstream stages can judge coverage: "grepped `.titledesc label` across plugins/ — no hits" is auditable (and its gap is findable); "no blast radius found" is not. Clearances flow into reconciliation where conflicts with other agents' findings are resolved by verification; positives do not.
+4. **A negative search cannot ground an approval alone.** It may support one alongside dependent-side verification. If you cannot search the dependent side (out-of-tree consumers, unresolvable hosts), say so explicitly instead of clearing.
+
 ## Output Directory
 
 **If Output Directory was provided:** use it (`mkdir -p` if needed).
@@ -188,6 +203,7 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
 **Core methods:**
 - `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped issue
 - `builder.add_observation(file, note, category="general")` - Add informational file-level note (doesn't affect verdict — do NOT use for real findings)
+- `builder.add_clearance(claim, method, evidence=None)` - Record an absence claim ("nothing depends on the removed X") with the exact searches/reads that ground it. Required for any blast-radius clear — see "Absence Claims" section
 - `builder.set_files_reviewed(N)` - Track files reviewed
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence

@@ -1,6 +1,6 @@
 ---
 name: woo-regression-reviewer
-description: WooCommerce regression-invariant review — Action Scheduler traps, meta equality and sync-on-read loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP coercion, migration legacy state, heuristic proxy predicates vs. store-configuration variance, and interface/hook contract breaks with out-of-tree blast radius. Applies only to WooCommerce core and WooCommerce extensions.
+description: WooCommerce regression-invariant review — Action Scheduler traps, meta equality and sync-on-read loops, template/theme overrides, broken-until-JS defaults, filter return-type variance, PHP coercion, migration legacy state, heuristic proxy predicates vs. store-configuration variance, removed-markup selector contracts, and interface/hook contract breaks with out-of-tree blast radius. Applies only to WooCommerce core and WooCommerce extensions.
 model: opus
 effort: high
 color: purple
@@ -66,6 +66,7 @@ HUNK <N> — <path>:<line> — <one-sentence summary>
 - Migrations — legacy state assumptions: ...
 - Interfaces/abstract classes (Internal namespace NOT exempt): ...
 - Heuristics — proxy predicate vs. configuration variance: APPLIES if this hunk adds a conditional that infers intent from persisted state shape (zero line items of a type ⇒ "order never needed X", meta key absent ⇒ "feature unused", field equality ⇒ "value is a derived copy") | DOES_NOT_APPLY | UNCERTAIN <note>
+- Markup — removed/renamed selector surface: APPLIES if this hunk removes, renames, or restructures rendered markup (elements, classes, wrapper nesting) that CSS/JS/tests may key on | DOES_NOT_APPLY | UNCERTAIN <note>
 ```
 
 If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN` row must be chased with Grep/Read verification (callers, consumers, related files) before it becomes a finding or a dismissal. Findings then flow through the shared protocol (STOP CHECK: changed files, hunk lines, source-file line numbers).
@@ -125,6 +126,11 @@ If an invariant does not apply, say so explicitly. Every `APPLIES` or `UNCERTAIN
 - "Coincidental" co-occurrence claims must be verified at the producers: if a framework copies value A into value B under configuration C (e.g., Store API checkout copies billing into shipping whenever `WC_Cart::needs_shipping()` is false), then A == B is systematic under C, not coincidental. Read the producer before dismissing the overlap.
 - Shipped example: woocommerce/woocommerce#66488 suppressed the admin shipping summary for Store API orders with no shipping line and shipping == billing, intending "virtual orders" — on shipping-disabled physical-goods stores all three gates are guaranteed, hiding the address for every order (follow-up issue #66613).
 
+### 12. Rendered markup is a contract
+- Markup emitted by PHP renderers (admin settings tables, meta boxes, templates) is a selector surface: stylesheets position elements through structural selectors (element type, ancestor/descendant/sibling combinators — `th label + .woocommerce-help-tip`), JS queries it, e2e tests locate through it, and out-of-tree CSS/JS targets it invisibly. Removing, renaming, or unwrapping an element breaks every consumer keyed on the old structure — **even when the removed markup was invalid** (a dangling `label[for]` pointing at a nonexistent id is still a load-bearing CSS hook).
+- Verify removals from the **dependent side, in the dependent artifact's own vocabulary**: search the stylesheets/JS/tests for selectors that could match the removed node — its element name, its ancestors' element types and classes, sibling combinators — not just the literal class string visible in the diff. Enumerate every occurrence in the artifact (a 5,900-line stylesheet can hold a third rule far from the two you found), then read each site. Out-of-tree CSS/JS remains invisible to grep — treat in-repo absence accordingly.
+- Corpus example: the fix for woocommerce/woocommerce#55669 removed a dangling `<label>` from the radio settings header cell. Three reviewers cleared it by grepping the markup's own class (`.titledesc label` — no hits); the load-bearing selectors were `th label` (admin.scss:5354, :5367, and a mobile rule at :5567), and losing the wrapper broke help-tip positioning on the Shipping, Tax, and Logging settings screens. Caught pre-merge, 2026-07-16.
+
 ## Severity Calibration
 
 - **critical**: payment/data/security impact on a common path, destructive data loss, auth bypass, fatal breakage of core checkout/order flows.
@@ -167,4 +173,4 @@ Score 0–100 before reporting: 80–100 report; 60–79 report noting uncertain
 
 Use ReviewOutputBuilder per shared protocol. Write to `{output_dir}/woo-regression-review.json` and `.md`.
 
-**Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `proxy-predicate`, `other`
+**Categories:** `scheduled-action`, `hook-contract`, `meta-equality`, `template-override`, `progressive-enhancement`, `php-coercion`, `migration-state`, `interface-break`, `shape-validation`, `session-identity`, `proxy-predicate`, `markup-contract`, `other`

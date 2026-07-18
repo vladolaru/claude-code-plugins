@@ -107,6 +107,18 @@ export interface PatternIssue extends Issue {
 }
 
 /**
+ * Auditable absence claim: "nothing depends on this" with the exact
+ * verification method stated so downstream stages can judge coverage.
+ * A negative search proves only that the searched pattern is absent —
+ * the method field is what makes that limit visible.
+ */
+export interface Clearance {
+    claim: string; // The absence being asserted
+    method: string; // Exact searches run / files read (required)
+    evidence?: string | null; // Hit counts, file:line list (optional)
+}
+
+/**
  * Common review output structure for all agents
  */
 export interface ReviewOutput {
@@ -142,6 +154,12 @@ export interface ReviewOutput {
 
     // Positive observations (optional)
     positive_observations?: string[];
+
+    // Clearances (optional) — auditable absence claims ("nothing depends on
+    // the removed X") carrying the verification method. Unlike positives,
+    // these flow into the reconciliation context so clearance-vs-finding
+    // conflicts are visible downstream.
+    clearances?: Clearance[];
 
     // Metadata
     meta: {

@@ -410,6 +410,23 @@ class TestNotApplicableCompletionContract:
         # Findings can carry the dedicated category.
         assert "`proxy-predicate`" in prompt
 
+    def test_woo_reviewer_audits_markup_selector_contracts(self):
+        """Invariant 12 (regression guard for the 2026-07-16 catch on the
+        woocommerce/woocommerce#55669 fix): rendered markup is a selector
+        surface — removing an element breaks the CSS/JS/tests that key on it,
+        and the dependency must be verified from the dependent side."""
+        prompt = (PLUGIN_ROOT / "agents/woo-regression-reviewer.md").read_text()
+
+        # Per-hunk audit row exists.
+        assert "Markup — removed/renamed selector surface" in prompt
+        # Invariant section with the dependent-side verification rule.
+        assert "Rendered markup is a contract" in prompt
+        assert "dependent side" in prompt
+        # The corpus example.
+        assert "55669" in prompt
+        # Findings can carry the dedicated category.
+        assert "`markup-contract`" in prompt
+
     def test_downstream_prompts_preserve_explicit_floor_contract(self):
         reconciliator = (
             PLUGIN_ROOT / "agents/review-reconciliator.md"
@@ -447,6 +464,80 @@ class TestDismissalDisciplineContract:
         text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
         assert "not a disposal path for findings" in text
         assert "`add_issue()` at Low or Medium" in text
+
+
+class TestVerificationMethodContract:
+    """Verification-method rules ported from ai-regression-review's triage.md
+    (the half the 2026-07-15 dismissal port did not cover).
+
+    Regression guard for the 2026-07-16 run: three agents 'cleared' the blast
+    radius of a removed <label> with the same wrong grep ('.titledesc label'
+    when the load-bearing selectors were 'th label'), the raw signal read as
+    3-clear-vs-1-found, and the reconciliator then repeated the failure one
+    level up by verifying from a 37-line window of a 5,900-line stylesheet,
+    missing a third dependent rule.
+    """
+
+    def test_reconciliator_has_verification_method_weighting(self):
+        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
+        assert "## Verification-Method Weighting" in text
+        # Correlated-signal rule: same method = one probe, not N confirmations
+        assert "one probe" in text
+        # Anti-vote-counting: counts alone never move a verdict or severity
+        assert "counts alone" in text
+        # Negative-evidence rule: a negative search proves pattern absence only
+        assert "searched pattern is absent" in text
+        # Whole-artifact rule: enumerate all occurrences before concluding
+        assert "every occurrence" in text
+
+    def test_reconciliator_convergence_is_method_aware(self):
+        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
+        assert "distinct verification methods" in text
+        assert "More agents = higher confidence" not in text
+
+    def test_reconciliator_treats_clearance_conflicts_as_verification_targets(self):
+        text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
+        assert "Clearance vs. finding" in text
+        assert "never a vote" in text
+
+    def test_protocol_requires_add_clearance_for_absence_claims(self):
+        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        assert "add_clearance" in text
+
+    def test_protocol_has_absence_claim_rules(self):
+        text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        assert "## Absence Claims" in text
+        # Directionality: search the dependent side's vocabulary
+        assert "dependent side" in text
+        # Negative-evidence limit
+        assert "searched pattern is absent" in text
+        # Auditability: state the method used
+        assert "state the exact search" in text
+
+    def test_absence_claim_rules_reach_agent_prompts(self, tmp_path):
+        """The new protocol section must flow through bootstrap's skip-list
+        extraction into generated agent prompts (in-process build against the
+        repo's protocol file — the subprocess path resolves the installed
+        plugin cache, not this checkout)."""
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        review_rules = _mod.extract_protocol_sections(
+            protocol,
+            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
+        )
+        prompt = build_output(
+            agent_name="code-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules=review_rules,
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number=None,
+            reviewer_name="code",
+        )
+        assert "## Absence Claims" in prompt
+        assert "searched pattern is absent" in prompt
 
 
 class TestSmokeAllAgents:

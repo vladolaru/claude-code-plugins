@@ -65,7 +65,7 @@ ALL_DOMAINS = [
 # ---------------------------------------------------------------------------
 ROUTING_MATRIX = {
     "php-source.diff": {
-        "a11y": "NO_DOMAIN_FILES",
+        "a11y": "OK",  # PHP renders server-side markup — a11y domain includes it
         "code": "OK",
         "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",
@@ -97,7 +97,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "php-test-only.diff": {
-        "a11y": "NO_DOMAIN_FILES",
+        "a11y": "OK",  # .php matches the a11y markup-language group (no test exclude)
         "code": "OK",
         "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "NO_DOMAIN_FILES",
@@ -193,7 +193,7 @@ ROUTING_MATRIX = {
         "patterns": "OK",
     },
     "wp-hooks-and-i18n.diff": {
-        "a11y": "NO_DOMAIN_FILES",
+        "a11y": "OK",  # PHP renders server-side markup — a11y domain includes it
         "code": "OK",
         "config-ops": "NO_DOMAIN_FILES",
         "dead-code": "OK",

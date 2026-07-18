@@ -70,6 +70,7 @@ class ReviewOutputBuilder:
         self.observations = []
         self.recommendations = {'immediate': [], 'important': [], 'suggestions': []}
         self.positive_observations = []
+        self.clearances = []
         self.files_reviewed = 0
         self.review_start = datetime.now()
         self.tool_results_used = []
@@ -219,6 +220,37 @@ class ReviewOutputBuilder:
         """Add positive observation."""
         self.positive_observations.append(observation)
 
+    def add_clearance(self, claim: str, method: str, evidence: Optional[str] = None):
+        """Record an auditable absence claim ("nothing depends on this").
+
+        Use for blast-radius clears: "no CSS selects the removed element",
+        "no caller uses the deleted parameter", "no test targets this row".
+        Unlike positive observations (which reconciliation excludes),
+        clearances flow into the reconciliation context WITH their method,
+        so conflicts with other agents' findings are visible and search
+        coverage can be judged downstream.
+
+        Args:
+            claim: The absence being asserted.
+            method: The exact searches run / files read that ground the claim
+                (e.g. "grep -rn 'th label' client/legacy/css/; read each hit").
+                Required — an absence claim without its method is unauditable.
+            evidence: Optional supporting detail (hit counts, file:line list).
+        """
+        if not claim or not claim.strip():
+            raise ValueError("add_clearance requires a non-empty claim.")
+        if not method or not method.strip():
+            raise ValueError(
+                "add_clearance requires a non-empty method — state the exact "
+                "searches/reads that ground the claim so downstream stages "
+                "can judge their coverage."
+            )
+        self.clearances.append({
+            "claim": claim.strip(),
+            "method": method.strip(),
+            "evidence": evidence.strip() if evidence and evidence.strip() else None,
+        })
+
     def set_files_reviewed(self, count: int):
         """Set number of files reviewed."""
         self.files_reviewed = count
@@ -301,6 +333,7 @@ class ReviewOutputBuilder:
             'observations': self.observations if self.observations else None,
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,
+            'clearances': self.clearances if self.clearances else None,
             'meta': {
                 'files_reviewed': self.files_reviewed,
                 'review_duration_ms': review_duration,
@@ -353,6 +386,16 @@ class ReviewOutputBuilder:
                     if issue.get('severity_floor'):
                         md.append(f"**Severity floor:** {issue['severity_floor']}\n\n")
                     md.append(f"**Fix:** {issue['recommendation']}\n\n")
+
+        # Clearances — absence claims with their verification method
+        if data.get('clearances'):
+            md.append("## Clearances (verified absences)\n\n")
+            for c in data['clearances']:
+                md.append(f"- **{c['claim']}**\n")
+                md.append(f"  - Method: {c['method']}\n")
+                if c.get('evidence'):
+                    md.append(f"  - Evidence: {c['evidence']}\n")
+            md.append("\n")
 
         # Positive
         if data['positive_observations']:

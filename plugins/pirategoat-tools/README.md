@@ -31,7 +31,7 @@ These run in parallel by default — total review time equals the slowest agent,
 | **dead-code-reviewer** | Unused functions, unreachable paths, orphaned imports | sonnet |
 | **history-insights-reviewer** | Mines git history for relevant prior fixes and lessons learned | sonnet |
 | **tests-mutation-reviewer** | Fault injection to verify tests catch real bugs (runs solo) | sonnet |
-| **a11y-reviewer** | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA | opus |
+| **a11y-reviewer** | ARIA correctness, keyboard access, focus management, WCAG 2.2 AA — any UI-emitting language (JSX, server-rendered PHP/HTML, templates) | opus |
 | **reliability-reviewer** | Logging, error handling, rollback safety, feature flags, failure-mode resilience | sonnet |
 | **api-contract-reviewer** | API contract stability — backwards-incompatible changes, response shape drift, missing deprecation | sonnet |
 | **data-flow-privacy-reviewer** | PII in logs, data leakage in API responses, GDPR erasure gaps, payment data handling | sonnet |

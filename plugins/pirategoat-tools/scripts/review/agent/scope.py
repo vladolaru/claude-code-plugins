@@ -60,6 +60,213 @@ def apply_semantic_filter(diff_text: str) -> str:
     return filtered
 
 # =============================================================================
+# Markup-emission detection — SINGLE SOURCE, shared with plan_dispatch.py's
+# has_markup_changes triage check and the a11y domain's budget priority.
+# Interactive/semantic elements (opening AND closing tags — a moved </label>
+# changes associations too), a11y attributes (whitespace-tolerant around =),
+# focus management, speak() announcements, screen-reader classes.
+# =============================================================================
+
+MARKUP_TOKEN_PATTERNS = (
+    # Semantic/interactive elements only — div/span/p stay OUT (presentational
+    # containers would gate-lift every template tweak, and tag-shape matching
+    # would misread TS generics like Promise<number> as tags).
+    re.compile(
+        r"</?(button|input|select|textarea|form|label|fieldset|legend|dialog|"
+        r"summary|details|nav|main|img|a|h[1-6]|"
+        # Table semantics — captions and scoped headers are how screen
+        # readers navigate tabular data.
+        r"table|caption|thead|tbody|tfoot|tr|th|td|colgroup|"
+        # Figures, lists, description lists, landmarks, output/status
+        # elements — screen-reader-visible document structure.
+        r"figure|figcaption|ul|ol|li|dl|dt|dd|optgroup|datalist|output|"
+        r"progress|meter|article|section|aside|header|footer|blockquote|menu|"
+        # Media/embedded elements — captions, autoplay, iframe titles, and
+        # canvas/svg alternatives are core accessibility concerns.
+        r"video|audio|iframe|embed|object|canvas|svg|track|source|picture)\b"
+    ),
+    re.compile(r"\bspeak\s*\("),
+    re.compile(r"\baria-[a-z]+"),
+    # WordPress/WooCommerce form-helper calls emit controls with no
+    # literal tag in the diff — helper-generated markup is still markup
+    # (a submit_button() change alters rendered UI as surely as <button>).
+    re.compile(
+        r"\b(get_)?submit_button\s*\(|\bwoocommerce_form_field\s*\(|"
+        r"\bwc_help_tip\s*\(|\bwp_dropdown_\w+\s*\(|\bwp_nonce_field\s*\(|"
+        r"\bwp_editor\s*\(|\bwp_list_categories\s*\(|\bpaginate_links\s*\(|"
+        # The whole woocommerce_wp_* admin-field family (text_input,
+        # select, checkbox, radio, textarea, hidden_input, note, ...):
+        r"\bwoocommerce_wp_\w+\s*\(|"
+        # Template rendering emits an entire markup file's worth of UI:
+        r"\bwc_get_template(_part|_html)?\s*\(|\bget_template_part\s*\("
+    ),
+    # Template COMPOSITION — includes/partials/renders pull whole
+    # interactive UIs into the page with no literal tag on the line:
+    # Twig {% include/embed/extends %}, Handlebars/Mustache {{> partial}},
+    # ERB <%= render %>, Blade @include/@component, Go {{template}}.
+    # PHP `include 'file.php'` stays out (code inclusion, not markup).
+    re.compile(
+        r"\{%-?\s*(include|embed|extends|use|block)\b|"
+        r"\{\{>\s*[\w./-]|"
+        r"<%=?\s*render\b|"
+        r"@(include|component|extends|each)\s*\(|"
+        r"\{\{\s*template\b"
+    ),
+    # Attribute assignments need attribute CONTEXT: `(?<![\w$])` rejects PHP
+    # variables ('$role = ...' emits no markup and would otherwise let a big
+    # backend diff outrank genuine template evidence in budget priority),
+    # and the value must open like an attribute value — quote, JSX brace,
+    # or (tabindex) a number.
+    re.compile(
+        r"(?<![\w$])role\s*=\s*(?:[\"'{]|"
+        # Unquoted attribute values are valid HTML; accept the known ARIA
+        # role vocabulary so `<div role=button>` counts while a JS variable
+        # assignment `role = getRole()` does not.
+        r"(?:button|link|dialog|alertdialog|alert|menuitem|menubar|menu|"
+        r"tabpanel|tablist|tab|tooltip|navigation|banner|main|region|search|"
+        r"form|listitem|listbox|list|grid|gridcell|row|cell|checkbox|radio|"
+        r"switch|slider|spinbutton|progressbar|status|img|presentation|none|"
+        r"group|heading|separator|toolbar|treeitem|tree|combobox|option)\b)"
+    ),
+    re.compile(r"(?<![\w$])tabindex\b(?!\s*=\s*\$)"),
+    re.compile(r"(?<![\w$])alt\s*=\s*[\"'{]"),
+    re.compile(r"(?<![\w$])(html)?for\s*=\s*[\"'{]"),
+    re.compile(r"\bautofocus\b"),
+    re.compile(r"\bon(click|key(down|up|press)|focus|blur)\b"),
+    re.compile(r"\.focus\(|focusable"),
+    re.compile(r"screen-reader|sr-only|visually-hidden"),
+)
+
+
+# Real file markers: '+++ b/…', '--- a/…', C-quoted variants, '/dev/null'.
+# Shape-tested rather than prefix-blacklisted: a changed line whose CONTENT
+# starts with '--' (an SQL comment) or '++' (a C increment) renders as
+# '---…'/'+++…' in the patch — those are content, not metadata, and a bare
+# startswith(('+++', '---')) blacklist silently drops them.
+_FILE_MARKER_RE = re.compile(r'^(\+\+\+|---) ("?[ab]/|/dev/null)')
+
+
+def _is_file_marker(line: str) -> bool:
+    return bool(_FILE_MARKER_RE.match(line))
+
+
+def _line_has_markup_token(patch_line: str) -> bool:
+    """True when a patch line's content matches any markup token pattern.
+
+    Strips the +/- diff marker, normalizes, and tests the shared
+    MARKUP_TOKEN_PATTERNS — ONE definition for both the has_markup_changes
+    triage check (patch_has_markup_tokens) and the a11y budget-priority
+    evidence scan (classify_markup_evidence), so the two can never drift on
+    what counts as markup.
+    """
+    lowered = patch_line[1:].strip().lower()
+    return any(pattern.search(lowered) for pattern in MARKUP_TOKEN_PATTERNS)
+
+
+def patch_has_markup_tokens(diff_text: str) -> bool:
+    """True when added or removed patch lines emit or touch UI markup."""
+    for line in (diff_text or "").splitlines():
+        if not line.startswith(("+", "-")):
+            continue
+        if _is_file_marker(line):
+            continue
+        if _line_has_markup_token(line):
+            return True
+    return False
+
+
+def _unquote_git_path(path: str) -> str:
+    """Decode git's C-style path quoting (backslash octal escapes, UTF-8)."""
+    try:
+        return (
+            path.encode("latin-1")
+            .decode("unicode_escape")
+            .encode("latin-1")
+            .decode("utf-8")
+        )
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return path
+
+
+def _parse_marker_path(line: str) -> Optional[str]:
+    """Extract the path from a `+++ b/...` / `--- a/...` file marker.
+
+    Marker lines carry ONE path, so a path containing ordinary spaces —
+    which git does NOT quote — is unambiguous here, unlike the two-path
+    `diff --git a/X b/X` line where any split point is a guess for a path
+    containing " b/". Handles C-quoted markers (`+++ "b/\303\274.php"` —
+    emitted for non-ASCII/control-character paths despite
+    core.quotepath=false, which only covers the common cases). Returns
+    None for `/dev/null` (the absent side of an add/delete) and for
+    anything unparseable — the file then lands in the non-evidence tier
+    (degraded ordering, never dropped).
+    """
+    body = line[4:]
+    if body == "/dev/null":
+        return None
+    if body.startswith('"') and body.endswith('"') and len(body) > 1:
+        body = _unquote_git_path(body[1:-1])
+    if body.startswith(("a/", "b/")):
+        return body[2:]
+    return None
+
+
+def classify_markup_evidence(range_spec: str, filepaths: List[str]) -> set:
+    """Return the subset of `filepaths` whose changed lines carry markup tokens.
+
+    ONE combined `git diff` for all files, scanned line-by-line while
+    tracking the current file header — no per-file subprocess fan-out and no
+    retained patch bodies (a large PR would otherwise mean hundreds of git
+    calls and every full diff held in memory before budgeting). The scan
+    runs on the raw (unfiltered) diff; that's a superset of the semantically
+    filtered text, which is fine for ORDERING evidence.
+    """
+    if not filepaths:
+        return set()
+    git = ["git", "-c", "core.quotepath=false"]
+    if range_spec == "--cached":
+        cmd = [*git, "diff", "--cached", "--", *filepaths]
+    elif range_spec == "":
+        cmd = [*git, "diff", "--", *filepaths]
+    else:
+        cmd = [*git, "diff", range_spec, "--", *filepaths]
+    try:
+        output = run_cmd(cmd, check=True)
+    except RuntimeError:
+        return set()
+
+    # Hunk-aware scan: paths come from the single-path '+++'/'---' markers
+    # (the two-path 'diff --git' line is ambiguous for paths with spaces),
+    # and markers are only read BETWEEN files — inside a hunk a removed
+    # '-- comment' line renders as '---…' and must count as content.
+    evidence = set()
+    current = None
+    old_path = None
+    in_hunk = False
+    for line in output.splitlines():
+        if line.startswith("diff --git "):
+            current = None
+            old_path = None
+            in_hunk = False
+            continue
+        if not in_hunk:
+            if line.startswith("@@"):
+                in_hunk = True
+            elif line.startswith("--- "):
+                old_path = _parse_marker_path(line)
+            elif line.startswith("+++ "):
+                current = _parse_marker_path(line) or old_path
+            continue
+        if current is None or current in evidence:
+            continue
+        if not line.startswith(("+", "-")):
+            continue
+        if _line_has_markup_token(line):
+            evidence.add(current)
+    return evidence
+
+
+# =============================================================================
 # Domain Catalog — single source of truth for file filtering
 # =============================================================================
 
@@ -86,8 +293,12 @@ _E2E_TEST_INCLUDE = (
 
 # General-purpose programming languages (production source, any ecosystem).
 _PROG_LANGS = [
-    # Web / dynamic / scripting
-    "php", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb",
+    # Web / dynamic / scripting. phtml is executable PHP in a template
+    # costume — it belongs to BOTH the code domains (logic changes need
+    # code/security review) and _MARKUP_LANGS (a11y's evidence-gated
+    # class); listing it only in the markup group left pure-logic .phtml
+    # diffs with no code reviewer at all.
+    "php", "phtml", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb",
     # Systems / compiled / managed
     "go", "rs", "java", "kt", "kts", "scala", "cs",
     "c", "h", "cc", "cpp", "cxx", "hpp", "hh",
@@ -104,6 +315,17 @@ _PROG_LANGS = [
 
 # Frontend-only languages — for domains that review UI/markup, not backends (a11y).
 _FRONTEND_LANGS = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte"]
+
+# Server-rendered markup languages — languages whose files emit HTML the
+# browser receives (PHP renderers, template engines, raw HTML). The a11y
+# domain includes these: accessibility semantics (<label>, ARIA, fieldset/
+# legend) live in the emitted markup regardless of which language prints it.
+# (History: a11y was _FRONTEND_LANGS-only, so a PHP-only diff that removed a
+# dangling <label for> was skipped with NO_DOMAIN_FILES before its triage
+# keywords were ever consulted — ~30 admin-UI PHP runs went unreviewed over
+# 3 months. Dispatch is evidence-gated in plan_dispatch.py so this inclusion
+# does not drag a11y into every backend PHP review.)
+_MARKUP_LANGS = ["php", "phtml", "html", "htm", "twig", "mustache", "hbs", "erb"]
 
 # Stylesheet languages.
 _STYLE_LANGS = ["css", "scss", "sass", "less"]
@@ -200,9 +422,14 @@ DOMAIN_CATALOG = {
         "exclude": None,
     },
     "a11y": {
-        "description": "Frontend files for accessibility review (JS/TS/JSX/TSX/CSS)",
-        "include": _ext_re(_FRONTEND_LANGS, _STYLE_LANGS),
+        "description": "UI-emitting files for accessibility review (JS/TS/JSX/TSX/CSS + server-rendered markup: PHP/HTML/templates)",
+        "include": _ext_re(_FRONTEND_LANGS, _STYLE_LANGS, _MARKUP_LANGS),
         "exclude": None,
+        # Budget markup-evidence-bearing files FIRST: the broad markup-language
+        # match can pull a huge non-UI PHP diff into scope alongside the tiny
+        # template change that actually triggered dispatch — largest-first
+        # budgeting would starve the evidence file out of the diff budget.
+        "budget_priority": "markup_evidence",
     },
     "reliability": {
         "description": "Production code for operational resilience review",
@@ -777,6 +1004,36 @@ def build_scope(args: argparse.Namespace) -> dict:
     use_semantic_filter = not getattr(args, "no_semantic_filter", False)
 
     if not args.base_ref_only and not args.summary:
+        # Markup-evidence budget priority (a11y): the broad markup-language
+        # match can put a huge non-UI file ahead of the tiny template or
+        # stylesheet change that actually carries the review evidence —
+        # largest-first budgeting would then hand the reviewer everything
+        # EXCEPT the file that triggered dispatch. Evidence = markup tokens
+        # in the file's changed lines (classified in ONE combined git-diff
+        # scan — see classify_markup_evidence) OR a stylesheet extension
+        # (style files are inherent visual-a11y surface, mirroring the
+        # has_style_files dispatch signal). Evidence-bearing files budget
+        # first, largest-first within each tier.
+        if domain_spec.get("budget_priority") == "markup_evidence":
+            style_ext_re = re.compile(_ext_re(_STYLE_LANGS))
+            scan_candidates = [
+                f for f in domain_matched_sorted
+                if not (list_only_re and list_only_re.search(f))
+                and not style_ext_re.search(f)  # style files: evidence by extension
+            ]
+            token_files = classify_markup_evidence(range_spec, scan_candidates)
+
+            def _is_evidence(f):
+                return f in token_files or bool(style_ext_re.search(f))
+
+            domain_matched_sorted = sorted(
+                domain_matched_sorted,
+                key=lambda f: (
+                    not _is_evidence(f),            # evidence first
+                    -sum(diffstat.get(f, (0, 0))),  # then largest first
+                ),
+            )
+
         for filepath in domain_matched_sorted:
             # List-only files: appear in file list + diffstat, but no diff content.
             # These are files rescued from noise (e.g., lock files for toolchain domain)
@@ -788,6 +1045,18 @@ def build_scope(args: argparse.Namespace) -> dict:
             if total_lines >= max_lines:
                 budget_exceeded_files.append(filepath)
                 continue
+
+            # Pre-skip without fetching when the RAW diffstat estimate alone
+            # exceeds the whole budget — but ONLY when semantic filtering is
+            # off. With filtering enabled, raw size proves nothing: a
+            # 2,050-line patch that is 2,040 docblock lines filters to 10
+            # reviewable lines and fits comfortably; the budget contract is
+            # on FILTERED lines, so the file must be measured, not guessed.
+            if not use_semantic_filter:
+                est_lines = sum(diffstat.get(filepath, (0, 0)))
+                if est_lines >= max_lines and diffs:
+                    budget_exceeded_files.append(filepath)
+                    continue
 
             diff_text = get_diff_for_file(range_spec, filepath)
 

@@ -1692,6 +1692,45 @@ class TestToMarkdown:
         assert "Good input validation on all endpoints" not in md
         assert "Positives" not in md
 
+    def test_clearances_included_with_method(self, mod):
+        """Structured clearances DO reach the reconciliator — unlike free-text
+        positives — so clearance-vs-finding conflicts are visible and the
+        stated method can be judged (the 2026-07-16 3-clear-vs-1-found signal
+        was invisible because clears lived in excluded positives)."""
+        findings = {
+            "a11y-review": _make_review_json(
+                reviewer="a11y",
+                verdict="approve",
+                issues=[],
+            ),
+        }
+        findings["a11y-review"]["clearances"] = [
+            {
+                "claim": "No CSS or JS selects the removed label",
+                "method": "grep '.titledesc label' plugins/ — no hits",
+                "evidence": None,
+            },
+        ]
+        ctx = _make_context_with_findings(findings)
+        md = mod.to_markdown(ctx)
+        assert "Clearances" in md
+        assert "No CSS or JS selects the removed label" in md
+        assert "grep '.titledesc label' plugins/ — no hits" in md
+
+    def test_clearance_evidence_rendered_when_present(self, mod):
+        findings = {
+            "code-review": _make_review_json(reviewer="code", verdict="approve", issues=[]),
+        }
+        findings["code-review"]["clearances"] = [
+            {
+                "claim": "No E2E test targets the radio row",
+                "method": "grep 'radio' e2e/",
+                "evidence": "0 hits across 214 spec files",
+            },
+        ]
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "0 hits across 214 spec files" in md
+
     def test_multiple_agents_ordered(self, mod):
         """Agents are rendered in alphabetical order."""
         findings = {

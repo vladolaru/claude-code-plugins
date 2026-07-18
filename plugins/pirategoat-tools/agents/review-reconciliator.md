@@ -29,7 +29,7 @@ The Markdown document has these sections:
 
 1. **Metadata** — git range, PR ID, output directory, output builder path, changed files, dispatched agents
 2. **Change Purpose** — what the change *claims* to accomplish (author-stated, distilled from the PR description, commits, and linked issues). Use to calibrate severity — a finding about missing validation is higher severity on a payment endpoint than on a debug utility. But treat it as claims to verify, not context to adopt: a discriminator or assumption asserted here (e.g. "condition X identifies population Y") is exactly the kind of claim findings exist to test, and a finding is not wrong for contradicting it. May be "(not provided)" for non-PR reviews.
-3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, optional severity floor, file:line, description, recommendation, category, and confidence. May also include **Recommendations** (prioritized as immediate/important/suggestions). Agents are sorted alphabetically.
+3. **Agent Findings** — one subsection (`### agent-name`) per agent, each showing verdict, issue count, and individual issues with severity, optional severity floor, file:line, description, recommendation, category, and confidence. May also include **Recommendations** (prioritized as immediate/important/suggestions) and **Clearances** — structured absence claims ("nothing depends on the removed X") with the verification method the agent used. Agents are sorted alphabetically.
 4. **Source Snippets** — pre-read source code around every referenced file:line in fenced code blocks, with ±10 lines of context. Format: `<line_num> | <code>` per line. May include `[pre-change]` entries for files with deletion hunks and `[deleted]` prefixed content for removed files.
 5. **Scope Annotations** — table mapping `file:line` to scope status. Structurally certain out-of-scope entries (`file_not_in_diff`, `metadata_only`) are pre-filtered along with their findings — you will not see them:
    - `IN_SCOPE:in_hunk` — line inside a changed hunk
@@ -52,7 +52,7 @@ Read `reconciliation-context.md`. Agent findings are in the "## Agent Findings" 
    - Different files but same logical issue (e.g., the same pattern repeated) → separate concerns (one per location)
    - Same file, nearby lines, but genuinely different issues → separate concerns
 
-3. **When multiple agents flag the same concern**, note this as a confidence signal. More agents = higher confidence the issue is real. But a single agent's finding with strong evidence is still valid.
+3. **When multiple agents flag the same concern**, note convergence — but weigh it by method, not by head-count. Agreement counts only across **distinct verification methods** (one read the file, another traced callers, a third ran the code); N agents who reached the same conclusion via the same method (the same grep, the same snippet window) are **one probe**, not N confirmations. A single agent's finding with strong evidence outweighs any number of method-correlated opinions. See "Verification-Method Weighting & Conflicts" below.
 
 4. **Track agents with no findings.** If an agent key exists in `agent_findings` but has an empty `issues` list (or no issues at all), note it as an agent that reviewed but found nothing.
 
@@ -109,12 +109,23 @@ These rules are not limited to floored findings or regression categories. They a
 2. **"Coincidental" co-occurrence must be verified at the producers.** When a concern's reachability depends on two values matching, a field being absent, or a guard being satisfied, read the code that *writes* those values before calling the overlap coincidental. If a framework copies value A into value B under configuration C, then A == B is systematic under C — an entire population, not a corner. Trace producers with Read/Grep even when they live upstream of the diff; unreviewed code is a legitimate verification target even though it can never be a finding target.
 3. **Mitigation claims must be verified at file:line for the cited input shape.** "Guarded elsewhere", "the later check handles it", "the data is still visible elsewhere", "the framework re-fetches before consumers see it" are claims, not facts, until you quote the file:line that enforces them — including the edge cases of the mitigation itself. An unverified mitigation cannot dismiss or downgrade a verified concern.
 
+## Verification-Method Weighting & Conflicts
+
+How a claim was verified determines how much it weighs. These rules apply to every confidence, severity, and drop/keep judgment you make:
+
+1. **Correlated signals are one signal.** Findings, approvals, or clearances that share a verification method — the same search string, the same snippet window, the same untested assumption — are **one probe** regardless of how many agents repeated it. Convergence raises confidence only across *distinct* methods. The raw signal "3 agents cleared it, 1 flagged it" is worthless when the 3 shared one search: that is one (possibly wrong) probe vs. one read of the artifact.
+2. **Never decide on counts alone.** No verdict, severity, or drop moves because N agents agree and M disagree. Movement requires evidence verified by reading code or running a directed tool. When agents conflict, resolve by verifying the underlying claim yourself — the side with a file:line citation from reading the artifact outweighs any number of pattern-search negatives.
+3. **A negative search proves only that the searched pattern is absent.** It can fail to refute a finding; it can never clear one, and it can never ground dismissing or downgrading a concern that positive evidence supports. Absence of the dependency must be established from the dependent side: enumerate what could depend on the changed code and search each dependent artifact in its own vocabulary (a removed element's CSS dependencies live in selectors that may name the element or its ancestors, not the class string the diff shows).
+4. **Clearance vs. finding = a conflict to verify, never a vote.** When any agent's finding asserts a dependency or impact that another agent's clearance denies, do not let the clearance (or several) neutralize the finding. Judge the clearance by its stated `Method`: does the search vocabulary actually cover the dependency the finding names? A clearance whose method could not have found the dependency (wrong search string, wrong artifact, wrong side) is void — and multiple clearances sharing that method are one void probe. Resolve the conflict by verifying the finding's claim yourself against the source.
+5. **Verify pattern dependencies against the whole artifact.** When a concern hinges on what else in a large file references a pattern (selectors, hook names, symbols), first enumerate **every occurrence** of the dependency's tokens across the entire artifact (`grep -n` the whole file), then read each site. A windowed read around one known occurrence is how a 5,900-line stylesheet hides its third `th label` rule. Never conclude "these are all the dependent rules" from a window you didn't bound by enumeration.
+
 ## Phase 3: Judge & Output
 
 For each verified concern:
 
 1. **Determine severity** based on evidence from all agent perspectives:
-   - Multi-agent convergence on the same concern → higher confidence in the severity
+   - Convergence across distinct verification methods → higher confidence in the severity; convergence via a shared method is one signal, however many agents repeat it
+   - Never move a severity or the verdict on counts alone — movement requires evidence you verified by reading code or running a directed tool
    - A single agent's critical finding with strong code evidence → still critical
    - Conflicting severities across agents → use the evidence to judge, don't just average
    - If `change_purpose` was provided, weight severity by relevance to the change's goal (e.g., validation issues on the code path the change specifically modifies are higher severity than issues on tangentially touched code)

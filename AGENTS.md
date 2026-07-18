@@ -202,7 +202,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/review/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
 | `scripts/review/pipeline.py` (orchestration, subprocess) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py -v` |
 | `scripts/review/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py -v` |
-| `scripts/review/plan_dispatch.py` | `pytest plugins/pirategoat-tools/tests/review/test_plan_dispatch.py -v` |
+| `scripts/review/plan_dispatch.py` | `pytest plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_criteria_coverage.py -v` |
+| `scripts/review/agent_registry.json` (triage criteria/keywords/checks) | `pytest plugins/pirategoat-tools/tests/review/test_criteria_coverage.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py -v` (every criterion bullet needs a dispatching probe) |
 | `scripts/review/context.py` | `pytest plugins/pirategoat-tools/tests/review/test_context.py -v` |
 | `scripts/review/reconciliation_context.py` | `pytest plugins/pirategoat-tools/tests/review/test_reconciliation_context.py plugins/pirategoat-tools/tests/review/test_critic_context.py -v` |
 | `scripts/review/agents_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py -v` |

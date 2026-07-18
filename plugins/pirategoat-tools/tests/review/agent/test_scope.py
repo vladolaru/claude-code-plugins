@@ -13,6 +13,7 @@ a merge-base exists and the range contains "..".
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -883,6 +884,432 @@ class TestBudgetSortOrder:
             assert "large.php" in scope["files"], (
                 "Large file should be included when budget prioritizes largest first"
             )
+
+
+# =============================================================================
+# Markup-evidence budget priority — a11y domain
+# =============================================================================
+
+
+# Per-file diff bodies for the evidence-priority scenarios. The backend file
+# is large, emits no markup, but DOES contain '$role = ...' assignments —
+# the false positive that must not outrank genuine template evidence.
+_PRIORITY_FILE_DIFFS = {
+    "includes/backend.php": "\n".join(
+        ["+$role = get_option( 'default_role' );"]
+        + [f"+$x{i} = compute_{i}( $data );" for i in range(2099)]
+    ),
+    "templates/button.php": (
+        '+<button type="submit"><?php echo esc_html( $label ); ?></button>\n'
+        "+<?php // submit ?>"
+    ),
+    "src/styles/focus.scss": "+.wc-input:focus-visible {\n+  outline: 2px solid;",
+}
+
+
+def _combined_patch(files):
+    return "\n".join(
+        f"diff --git a/{f} b/{f}\n--- a/{f}\n+++ b/{f}\n"
+        f"@@ -1,0 +1,{len(_PRIORITY_FILE_DIFFS[f].splitlines())} @@\n"
+        f"{_PRIORITY_FILE_DIFFS[f]}"
+        for f in files
+    )
+
+
+def _make_mock_git_for_priority(files, sizes):
+    """Shared run_cmd stand-in for the evidence-priority tests.
+
+    Routes by command shape, mirroring build_scope's real git traffic:
+    rev-parse/merge-base/rev-list get inert values; --name-only and
+    --numstat are synthesized from `files`/`sizes`; a MULTI-file `--`
+    diff (the single combined evidence scan) returns _combined_patch
+    (full headers + hunk markers — the strict in-hunk scanner ignores
+    structurally invalid patches); a SINGLE-file `--` diff (the budget
+    loop's per-file fetch) returns that file's body from
+    _PRIORITY_FILE_DIFFS. Tests asserting call counts or ordering rely
+    on this multi-vs-single discrimination."""
+    def _mock(cmd, check=True, capture_stderr=True):
+        cmd_str = " ".join(cmd)
+        if "rev-parse --git-dir" in cmd_str:
+            return ".git"
+        if "rev-parse" in cmd_str:
+            return "abc123"
+        if "--name-only" in cmd_str:
+            return "\n".join(files)
+        if "--numstat" in cmd_str:
+            return "\n".join(f"{sizes[f]}\t0\t{f}" for f in files)
+        if "merge-base" in cmd_str:
+            return "abc123"
+        if "rev-list --count" in cmd_str:
+            return "0"
+        if "diff" in cmd_str and "--" in cmd:
+            requested = cmd[cmd.index("--") + 1:]
+            if len(requested) > 1:
+                return _combined_patch(requested)
+            if len(requested) == 1:
+                return _PRIORITY_FILE_DIFFS[requested[0]]
+        return ""
+    return _mock
+
+
+class TestMarkupEvidenceBudgetPriority:
+    """The a11y domain budgets evidence-bearing files FIRST.
+
+    Largest-first budgeting starved the file that actually carried the
+    dispatch evidence: a 2,100-line backend PHP diff consumed the whole
+    2,000-line budget while the tiny template/stylesheet change — the
+    reason a11y dispatched at all — landed in NOT DIFFED. Evidence =
+    markup tokens in the diff OR a stylesheet extension (style files are
+    inherent visual-a11y surface, mirroring the has_style_files dispatch
+    signal). And '$role = ...' backend assignments must not fake evidence."""
+
+    def _build(self, tmp_path, domain, files, sizes, max_lines=2000):
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _make_mock_git_for_priority(files, sizes)
+            args = argparse.Namespace(
+                domain=domain, range="abc123..HEAD", max_lines=max_lines,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            return review_scope.build_scope(args), mock_run
+
+    _TEMPLATE_CASE = (
+        ["includes/backend.php", "templates/button.php"],
+        {"includes/backend.php": 2100, "templates/button.php": 2},
+    )
+    _STYLESHEET_CASE = (
+        ["includes/backend.php", "src/styles/focus.scss"],
+        {"includes/backend.php": 2100, "src/styles/focus.scss": 2},
+    )
+
+    def test_a11y_budget_includes_markup_file_before_large_backend_file(self, tmp_path):
+        scope, _ = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
+        assert "templates/button.php" in scope["diffs"]
+        assert "includes/backend.php" in scope["skipped_files"]["budget"]
+
+    def test_a11y_budget_includes_stylesheet_before_large_backend_file(self, tmp_path):
+        """A stylesheet-only a11y change (dispatched via has_style_files)
+        must receive budget — markup tokens are not the only evidence."""
+        scope, _ = self._build(tmp_path, "a11y", *self._STYLESHEET_CASE)
+        assert "src/styles/focus.scss" in scope["diffs"]
+        assert "includes/backend.php" in scope["skipped_files"]["budget"]
+
+    def test_backend_role_assignment_is_not_evidence(self, tmp_path):
+        """backend.php contains '$role = ...' — it must land in the
+        non-evidence tier despite the attribute-looking token."""
+        scope, _ = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
+        assert "includes/backend.php" not in scope["diffs"]
+
+    def test_evidence_scan_is_a_single_git_call(self, tmp_path):
+        """Classification must not launch one git diff per matched file —
+        one combined call for the scan, then per-file fetches only for
+        files actually receiving budget."""
+        _, mock_run = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
+        multi_file_diffs = [
+            c for c in mock_run.call_args_list
+            if "diff" in c.args[0] and "--" in c.args[0]
+            and len(c.args[0][c.args[0].index("--") + 1:]) > 1
+        ]
+        single_file_diffs = [
+            c for c in mock_run.call_args_list
+            if "diff" in c.args[0] and "--" in c.args[0]
+            and len(c.args[0][c.args[0].index("--") + 1:]) == 1
+        ]
+        assert len(multi_file_diffs) == 1, "expected exactly one combined evidence scan"
+        # Only the budgeted file gets an individual fetch; the budget-excluded
+        # backend file must NOT be fetched (it was never going to be included).
+        fetched = {c.args[0][-1] for c in single_file_diffs}
+        assert fetched == {"templates/button.php"}
+
+    def test_non_priority_domains_keep_largest_first(self, tmp_path):
+        """Domains without markup priority keep the largest-first order —
+        the code domain still budgets the backend file."""
+        scope, _ = self._build(tmp_path, "code", *self._TEMPLATE_CASE)
+        assert "includes/backend.php" in scope["files"]
+
+
+# =============================================================================
+# Markup token edge cases + evidence-scan path handling
+# =============================================================================
+
+
+class TestMarkupTokenEdgeCases:
+    def test_unquoted_role_attribute_is_markup(self):
+        """<div role=button> is valid HTML — unquoted known ARIA roles count,
+        while the backend-assignment guard stays intact."""
+        assert review_scope.patch_has_markup_tokens("+ <div role=button>")
+        assert review_scope.patch_has_markup_tokens("+ <li role=menuitem>")
+        assert not review_scope.patch_has_markup_tokens("+ $role = $user->role;")
+        assert not review_scope.patch_has_markup_tokens("+ role = resolve_role(user)")
+
+    def test_semantic_structure_elements_are_markup(self):
+        """Table semantics, figures, lists, description lists, landmarks —
+        all screen-reader-visible structure (round-9 miss: removing a
+        <caption> in TSX skipped a11y)."""
+        for line in (
+            "-      <caption>Order history</caption>",
+            "+      <th scope=\"col\">Total</th>",
+            "+ <figure><figcaption>Sales chart</figcaption></figure>",
+            "+ <?php echo '<dl><dt>Status</dt><dd>' . $status . '</dd></dl>'; ?>",
+            "+ <ol><li>Step one</li></ol>",
+            "+ <progress max=\"100\" value=\"70\"></progress>",
+            "+ <section></section>",
+        ):
+            assert review_scope.patch_has_markup_tokens(line), line
+
+    def test_wp_form_helper_calls_are_markup(self):
+        """WP/WC helpers emit controls with no literal tag in the diff —
+        helper-generated markup is still markup (round-13 miss: a
+        submit_button()/woocommerce_form_field() admin change skipped
+        a11y at any size via the evidence gate)."""
+        for line in (
+            "+\t\tsubmit_button( __( 'Save changes', 'woocommerce' ) );",
+            "+\t\techo get_submit_button( $text, 'secondary' );",
+            "+\t\twoocommerce_form_field( 'wc_locale', $args, $value );",
+            "+\t\twp_dropdown_pages( array( 'name' => 'page_id' ) );",
+            "+\t\twp_nonce_field( 'wc_save', '_wc_nonce' );",
+            "+\t\techo wc_help_tip( $tip_text );",
+        ):
+            assert review_scope.patch_has_markup_tokens(line), line
+
+    def test_woocommerce_wp_field_helpers_are_markup(self):
+        """The woocommerce_wp_* field family (text_input, select, checkbox,
+        radio, textarea, ...) emits labels and controls — and template
+        rendering calls emit whole markup files (round-14 P1)."""
+        for line in (
+            "+\t\twoocommerce_wp_text_input( array( 'id' => '_sku' ) );",
+            "+\t\twoocommerce_wp_select( array( 'id' => '_tax_status' ) );",
+            "+\t\twoocommerce_wp_checkbox( $field );",
+            "+\t\twoocommerce_wp_radio( $field );",
+            "+\t\twc_get_template( 'checkout/form-login.php', $args );",
+            "+\t\twc_get_template_html( 'emails/order-details.php', $args );",
+            "+\t\tget_template_part( 'template-parts/order', 'row' );",
+        ):
+            assert review_scope.patch_has_markup_tokens(line), line
+
+    def test_template_composition_is_markup(self):
+        """Includes/partials/renders pull an entire interactive UI into the
+        page — composition IS markup emission even with no literal tag on
+        the changed line (round-15 P1)."""
+        for line in (
+            '+{% include "checkout/payment-methods.twig" with { gateways: gateways } %}',
+            "+{{> order-summary }}",
+            "+<%= render partial: 'orders/row', collection: @orders %>",
+            "+\t@include('orders.table', ['orders' => $orders])",
+            '+{{ template "order-row" . }}',
+        ):
+            assert review_scope.patch_has_markup_tokens(line), line
+
+    def test_composition_lookalikes_are_not_markup(self):
+        for line in (
+            "+    include 'class-wc-order.php';",
+            "+    $data = render_totals( $order );",
+        ):
+            assert not review_scope.patch_has_markup_tokens(line), line
+
+    def test_helper_lookalikes_are_not_markup(self):
+        for line in (
+            "+    submit_form_data( $payload );",
+            "+    $button_count = 3;",
+            "+    process_dropdown_choice( $value );",
+        ):
+            assert not review_scope.patch_has_markup_tokens(line), line
+
+    def test_presentational_containers_and_generics_are_not_markup(self):
+        """div/span/p stay outside the vocabulary (presentational
+        containers), and TS generics must not read as tags."""
+        for line in (
+            "+ <div className=\"wrap\">",
+            "+ <span>total</span>",
+            "+ const rows: Promise<number> = load();",
+            "+ const opts: Map<string, Order> = new Map();",
+        ):
+            assert not review_scope.patch_has_markup_tokens(line), line
+
+
+class TestPhtmlIsExecutableCode:
+    """.phtml is executable PHP in a template costume — it must sit in the
+    general code domains, not only in a11y's markup class (round-12 P1: a
+    pure-logic .phtml diff got NO code/security reviewer and no
+    unrecognized-source warning, because a11y's evidence-gated domain was
+    the only one that saw it)."""
+
+    def test_phtml_in_prog_langs(self):
+        assert "phtml" in review_scope._PROG_LANGS
+        assert "phtml" in review_scope._MARKUP_LANGS  # both roles
+
+    @pytest.mark.parametrize("domain", ["code", "security", "performance"])
+    def test_phtml_matches_code_domains(self, domain):
+        include = review_scope.DOMAIN_CATALOG[domain]["include"]
+        assert re.search(include, "templates/order-row.phtml"), domain
+
+
+class TestEvidenceScanPathHandling:
+    def test_git_quoted_header_paths_are_decoded(self):
+        """Git C-quotes non-ASCII paths ('diff --git "a/x" "b/x"' with
+        literal backslash-octal escapes) — the evidence scan must still
+        attribute tokens to the right file."""
+        q = "templates/" + "\\303\\274" + "bersicht.php"  # literal \303\274 escapes
+        raw = "templates/\u00fcbersicht.php"
+        patch_text = (
+            f'diff --git "a/{q}" "b/{q}"\n'
+            f'--- "a/{q}"\n'
+            f'+++ "b/{q}"\n'
+            "@@ -1,0 +1,1 @@\n"
+            "+<button>OK</button>"
+        )
+        with patch.object(review_scope, "run_cmd", return_value=patch_text):
+            evidence = review_scope.classify_markup_evidence("abc..HEAD", [raw])
+        assert evidence == {raw}
+
+    def test_unparseable_header_degrades_to_non_evidence(self):
+        """A header we cannot parse must never crash or misattribute —
+        the file just lands in the non-evidence tier."""
+        patch_text = "diff --git gibberish header\n+<button>OK</button>"
+        with patch.object(review_scope, "run_cmd", return_value=patch_text):
+            evidence = review_scope.classify_markup_evidence("abc..HEAD", ["a.php"])
+        assert evidence == set()
+
+    def test_space_containing_path_attributes_correctly(self):
+        """Git does NOT quote ordinary spaces, so the two-path 'diff --git'
+        line is ambiguous for a path containing ' b/' — the single-path
+        '+++ b/...' marker is the reliable source."""
+        raw = "foo b/form.php"
+        patch_text = (
+            f"diff --git a/{raw} b/{raw}\n"
+            f"--- a/{raw}\n"
+            f"+++ b/{raw}\n"
+            "@@ -1,0 +1,1 @@\n"
+            "+<button>OK</button>"
+        )
+        with patch.object(review_scope, "run_cmd", return_value=patch_text):
+            evidence = review_scope.classify_markup_evidence("abc..HEAD", [raw])
+        assert evidence == {raw}
+
+    def test_deleted_file_attributes_via_old_side_marker(self):
+        """A deletion has '+++ /dev/null'; its removed markup lines must
+        attribute to the '--- a/...' path."""
+        patch_text = (
+            "diff --git a/templates/form.php b/templates/form.php\n"
+            "deleted file mode 100644\n"
+            "--- a/templates/form.php\n"
+            "+++ /dev/null\n"
+            "@@ -1,1 +0,0 @@\n"
+            "-<label for=\"email\">Email</label>"
+        )
+        with patch.object(review_scope, "run_cmd", return_value=patch_text):
+            evidence = review_scope.classify_markup_evidence(
+                "abc..HEAD", ["templates/form.php"]
+            )
+        assert evidence == {"templates/form.php"}
+
+    def test_dash_dash_content_line_is_not_a_file_marker(self):
+        """A removed line whose content starts with '--' renders as '---...'
+        — inside a hunk that is content, not a marker, and markup in it is
+        evidence for the current file."""
+        patch_text = (
+            "diff --git a/templates/list.php b/templates/list.php\n"
+            "--- a/templates/list.php\n"
+            "+++ b/templates/list.php\n"
+            "@@ -1,2 +1,1 @@\n"
+            "--- <button>Remove</button> rendered per row\n"
+            " <?php endforeach; ?>"
+        )
+        with patch.object(review_scope, "run_cmd", return_value=patch_text):
+            evidence = review_scope.classify_markup_evidence(
+                "abc..HEAD", ["templates/list.php"]
+            )
+        assert evidence == {"templates/list.php"}
+
+    def test_evidence_scan_disables_git_path_quoting(self):
+        """The scan command itself must ask git for raw paths."""
+        captured = {}
+        def fake_run(cmd, check=True, capture_stderr=True):
+            captured["cmd"] = cmd
+            return ""
+        with patch.object(review_scope, "run_cmd", side_effect=fake_run):
+            review_scope.classify_markup_evidence("abc..HEAD", ["a.php"])
+        assert "core.quotepath=false" in " ".join(captured["cmd"])
+
+
+# =============================================================================
+# Raw-size pre-skip vs semantic filtering
+# =============================================================================
+
+
+def _docblock_heavy_diff(path, doc_lines, code_lines):
+    body = (
+        ["+/**"]
+        + [f"+ * Documentation line {i}." for i in range(doc_lines - 2)]
+        + ["+ */"]
+        + [f"+$code_{i} = {i};" for i in range(code_lines)]
+    )
+    return (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1,0 +1,{doc_lines + code_lines} @@\n" + "\n".join(body)
+    )
+
+
+_PRESKIP_FILES = {
+    # Both raw sizes exceed the 2,000-line budget; both filter down to code.
+    "includes/class-alpha.php": (2100, _docblock_heavy_diff("includes/class-alpha.php", 2050, 50)),
+    "includes/class-beta.php": (2050, _docblock_heavy_diff("includes/class-beta.php", 2040, 10)),
+}
+
+
+def _mock_git_for_preskip(cmd, check=True, capture_stderr=True):
+    cmd_str = " ".join(cmd)
+    if "rev-parse --git-dir" in cmd_str:
+        return ".git"
+    if "rev-parse" in cmd_str:
+        return "abc123"
+    if "--name-only" in cmd_str:
+        return "\n".join(_PRESKIP_FILES)
+    if "--numstat" in cmd_str:
+        return "\n".join(f"{raw}\t0\t{f}" for f, (raw, _) in _PRESKIP_FILES.items())
+    if "merge-base" in cmd_str:
+        return "abc123"
+    if "rev-list --count" in cmd_str:
+        return "0"
+    if "diff" in cmd_str and "--" in cmd:
+        requested = cmd[cmd.index("--") + 1:]
+        if len(requested) == 1 and requested[0] in _PRESKIP_FILES:
+            return _PRESKIP_FILES[requested[0]][1]
+        return "\n".join(_PRESKIP_FILES[f][1] for f in requested if f in _PRESKIP_FILES)
+    return ""
+
+
+class TestRawSizePreSkip:
+    """Raw diffstat size only proves un-fittability when semantic filtering
+    is OFF. A 2,050-line patch that is 2,040 docblock lines filters to 10
+    reviewable lines — rejecting it unfetched would silently omit code that
+    fits comfortably."""
+
+    def _build(self, tmp_path, no_semantic_filter):
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock_git_for_preskip
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=no_semantic_filter,
+            )
+            return review_scope.build_scope(args)
+
+    def test_filtering_enabled_measures_before_rejecting(self, tmp_path):
+        scope = self._build(tmp_path, no_semantic_filter=False)
+        # alpha filters to ~50 lines, beta to ~10 — both fit the 2,000 budget.
+        assert "includes/class-alpha.php" in scope["diffs"]
+        assert "includes/class-beta.php" in scope["diffs"]
+        assert scope["skipped_files"]["budget"] == []
+
+    def test_filtering_disabled_keeps_the_cheap_pre_skip(self, tmp_path):
+        scope = self._build(tmp_path, no_semantic_filter=True)
+        # Raw == effective size here: alpha (2,100) is included as the first
+        # file; beta's raw 2,050 >= the whole budget with diffs present —
+        # rejected without a fetch.
+        assert "includes/class-beta.php" in scope["skipped_files"]["budget"]
 
 
 # =============================================================================

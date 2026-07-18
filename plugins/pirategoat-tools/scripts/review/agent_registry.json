@@ -1,5 +1,5 @@
 {
-  "$schema": "Agent registry \u2014 single source of truth for all reviewer agent configuration.",
+  "$schema": "Agent registry — single source of truth for all reviewer agent configuration.",
   "agents": {
     "code-reviewer": {
       "domain": "code",
@@ -13,6 +13,7 @@
     },
     "security-reviewer": {
       "domain": "security",
+      "small_diff_exempt": true,
       "secondary_domains": [
         "config-ops"
       ],
@@ -64,8 +65,11 @@
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
-        "Database queries, API calls, data fetching hooks",
-        "Lists, tables, pagination, bulk operations",
+        "Database query construction or ORM usage",
+        "HTTP/API client calls",
+        "Data fetching hooks and loaders",
+        "Pagination and bulk operations",
+        "Unbounded list rendering and collection iteration",
         "Asset loading, lazy loading, code splitting",
         "Caching logic (transients, object cache, memoization)",
         "Commits mentioning performance, optimize, cache, query, load time"
@@ -76,12 +80,34 @@
         "cache",
         "db query",
         "sql query",
+        "sql",
         "load time",
         "slow",
         "n+1",
         "lazy load",
         "pagination",
-        "bulk"
+        "bulk",
+        "wpdb",
+        "fetch",
+        "enqueue",
+        "query(",
+        "request",
+        "per_page",
+        "posts_per_page",
+        "lazy",
+        "memo",
+        ".map(",
+        "v-for",
+        "{#each",
+        "ng for",
+        "where(",
+        "objects.",
+        "find many"
+      ],
+      "triage_checks": [
+        "has_sql_queries",
+        "has_http_client_calls",
+        "has_collection_iteration"
       ],
       "focus": "Database query efficiency, caching, asset loading, N+1 detection, scalability",
       "model_tier": "sonnet"
@@ -113,7 +139,10 @@
         "package"
       ],
       "triage_checks": [
-        "large_pr"
+        "large_pr",
+        "has_new_types",
+        "has_new_source_files",
+        "spans_architectural_layers"
       ],
       "focus": "SOLID principles, design patterns, coupling, cohesion, architectural decisions",
       "model_tier": "sonnet"
@@ -127,7 +156,8 @@
       "no_semantic_filter": true,
       "dispatch_class": "conditional",
       "triage_criteria": [
-        "PHP files using WordPress APIs (hooks, filters, options, transients, REST)",
+        "PHP registering or consuming hooks and filters",
+        "WordPress options, transients, or REST API usage",
         "WooCommerce-specific files",
         "Admin menus, settings pages, or custom post types",
         "Commits mentioning hooks, filters, backwards compatibility, deprecation, i18n",
@@ -141,7 +171,19 @@
         "i18n",
         "wordpress",
         "woocommerce",
-        "wp_"
+        " wc ",
+        "wp_",
+        "register_post_type",
+        "add_menu_page",
+        "add_submenu_page",
+        "add_options_page",
+        "add_management_page",
+        "add_theme_page",
+        "get_option",
+        "update_option",
+        "transient",
+        "register_rest",
+        "add_settings"
       ],
       "focus": "WordPress hooks, coding standards, extensibility, backwards compatibility",
       "model_tier": "sonnet"
@@ -181,9 +223,15 @@
     },
     "ecosystem-integration-reviewer": {
       "domain": "wp-architecture",
-      "protocols": ["reviewer"],
+      "protocols": [
+        "reviewer"
+      ],
       "scope_flags": [],
       "dispatch_class": "conditional",
+      "triage_checks": [
+        "has_new_functions",
+        "has_modified_signatures"
+      ],
       "focus": "filter/action callback signatures, class override correctness, abstract implementations, final-method conflicts, REST route schemas, behavioral assumption alignment (state, timing, return-value semantics, ordering) against upstream source",
       "model_tier": "sonnet",
       "triage_criteria": [
@@ -312,6 +360,7 @@
       "max_history_commits": 5,
       "budget_override": 45,
       "dispatch_class": "conditional",
+      "small_diff_exempt": true,
       "triage_criteria": [
         "PR modifies existing code that has meaningful git history (prior fixes, enhancements, refactors)",
         "Changed files touch areas with known past issues or multiple prior contributors",
@@ -345,8 +394,6 @@
         "New files replacing or superseding existing ones"
       ],
       "triage_keywords": [
-        "remove",
-        "delete",
         "refactor",
         "extract",
         "move",
@@ -357,7 +404,9 @@
       ],
       "triage_checks": [
         "file_deletions",
-        "net_removal"
+        "net_removal",
+        "has_new_source_files",
+        "has_import_changes"
       ],
       "focus": "Unused functions, orphaned imports, unreachable paths, code obsoleted by refactors — low value for PRs that only add net-new code without modifying or removing existing code",
       "model_tier": "sonnet"
@@ -369,8 +418,12 @@
       ],
       "scope_flags": [],
       "dispatch_class": "conditional",
+      "evidence_gated_extensions": [
+        "php",
+        "phtml"
+      ],
       "triage_criteria": [
-        "JSX/TSX with interactive elements (buttons, forms, modals, dropdowns)",
+        "Markup emission added or removed in ANY language that renders UI — JSX/TSX components, PHP echoing HTML, template files (labels, fieldsets, ARIA attributes, interactive elements)",
         "ARIA attributes or focus management code",
         "New UI components or significant visual changes",
         "CSS/SCSS affecting visibility, focus indicators, or contrast",
@@ -389,7 +442,12 @@
         "focusable",
         "wcag"
       ],
-      "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA",
+      "triage_checks": [
+        "has_markup_changes",
+        "has_style_files",
+        "has_template_files"
+      ],
+      "focus": "ARIA correctness, keyboard operability, focus management, screen reader support, WCAG 2.2 AA — in any UI-emitting language (JSX/TSX, CSS/SCSS, server-rendered PHP/HTML, templates). Frontend/style files dispatch normally; server-rendered-only diffs need markup emission or a11y keywords as evidence.",
       "model_tier": "opus"
     },
     "reliability-reviewer": {
@@ -418,10 +476,20 @@
         "error handling",
         "feature flag",
         "kill-switch",
+        "is enabled",
+        "toggle",
+        "rollout",
         "deploy",
         "background",
         "queue",
-        "caching"
+        "cach",
+        "wp_remote",
+        "catch",
+        "terraform",
+        "infra"
+      ],
+      "triage_checks": [
+        "has_http_client_calls"
       ],
       "focus": "Logging, error handling, rollback safety, feature flags, failure-mode resilience",
       "model_tier": "sonnet"
@@ -433,6 +501,10 @@
       ],
       "scope_flags": [],
       "dispatch_class": "conditional",
+      "triage_checks": [
+        "has_modified_signatures",
+        "has_public_api_changes"
+      ],
       "triage_criteria": [
         "REST API endpoint additions or modifications",
         "Hook/filter argument or return type changes",
@@ -452,7 +524,9 @@
         "breaking",
         "deprecat",
         "backward",
-        "hook signature"
+        "hook signature",
+        "migration",
+        "schema"
       ],
       "focus": "API contract stability, backwards-incompatible changes, response shape drift, hook/filter contract breaks, missing deprecation — high value when modifying existing endpoints or public interfaces; lower for purely new additions",
       "model_tier": "sonnet",
@@ -467,9 +541,9 @@
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
-        "Code handling user data (names, emails, addresses, IPs)",
+        "Code handling personal identifiers (emails, addresses, IPs, usernames)",
         "Logging or monitoring additions (error_log, WC_Logger, Sentry, New Relic)",
-        "API response construction or serialization",
+        "API responses or serialization carrying user-identifiable data",
         "Database schema additions storing personal data",
         "Payment or financial data processing",
         "Data export, import, or migration handlers",
@@ -488,10 +562,20 @@
         "merchant",
         "card_number",
         "card_detail",
+        "process payment",
+        "charge",
+        "payout",
+        "refund",
         "address",
         "erasure",
         "consent",
-        "data_export"
+        "data_export",
+        "logger",
+        "remote_addr",
+        "ip address",
+        "username",
+        "sentry",
+        "new relic"
       ],
       "focus": "PII in logs, data leakage in API responses, GDPR erasure gaps, payment data handling, cross-boundary data flow",
       "model_tier": "sonnet"
@@ -509,7 +593,7 @@
         "Background job or queue handler code",
         "WordPress cron or scheduled event handlers",
         "Cache read-write sequences (transients, object cache)",
-        "Order or payment processing flows",
+        "Order or payment processing flows (idempotency, duplicate suppression, capture races)",
         "Commits mentioning async, concurrent, race, transaction, lock, queue"
       ],
       "triage_keywords": [
@@ -527,7 +611,15 @@
         "race condition",
         "atomic",
         "idempoten",
-        "duplicate"
+        "duplicate",
+        "process payment",
+        "capture",
+        "refund",
+        "transaction",
+        "schedul",
+        "transient",
+        "cache",
+        "wpdb"
       ],
       "focus": "Race conditions, TOCTOU, missing transactions, cache stampede, idempotency, concurrent state corruption",
       "model_tier": "sonnet"
@@ -548,7 +640,7 @@
       "scope_flags": [],
       "dispatch_class": "conditional",
       "triage_criteria": [
-        "New or modified functions, methods, or classes",
+        "New functions, methods, or classes, or modifications to signatures and docblocks",
         "Renamed symbols (functions, classes, variables)",
         "Modified or added docblocks, JSDoc, or PHPDoc comments",
         "New files introducing public API surface",
@@ -556,12 +648,6 @@
         "Inline comments added or modified in changed code"
       ],
       "triage_keywords": [
-        "function",
-        "class",
-        "method",
-        "interface",
-        "enum",
-        "const ",
         "rename",
         "@param",
         "@return",
@@ -574,6 +660,8 @@
       "triage_checks": [
         "has_new_functions",
         "has_modified_signatures",
+        "has_renamed_symbols",
+        "has_public_api_changes",
         "has_docblock_changes"
       ],
       "focus": "Naming accuracy, documentation correctness, name-behavior mismatches, stale docblocks, semantic consistency",
@@ -589,27 +677,27 @@
       "triage_criteria": [
         "New, renamed, or removed public functions, classes, or endpoints",
         "Configuration option additions or removals",
-        "Feature additions, removals, or behavioral changes",
+        "Behavioral changes flagged in commits (deprecations, renames, migrations, restructuring)",
         "File renames or directory restructuring",
         "Hook signature changes or new hooks added"
       ],
       "triage_keywords": [
         "rename",
-        "remove",
-        "delete",
         "deprecat",
         "endpoint",
-        "config",
-        "option",
-        "feature",
-        "api",
         "hook",
         "restructur",
-        "migrate"
+        "migrate",
+        "add_option",
+        "register_setting",
+        "config"
       ],
       "triage_checks": [
         "has_documentation_files",
-        "has_public_api_changes"
+        "has_public_api_changes",
+        "has_modified_signatures",
+        "has_new_functions",
+        "file_deletions"
       ],
       "focus": "Documentation drift — stale README, CLAUDE.md, AGENTS.md, API docs, guides after code changes",
       "model_tier": "sonnet"
@@ -664,7 +752,9 @@
         "allowBuilds",
         "composer",
         "renovate",
-        "dependabot"
+        "dependabot",
+        "nx",
+        "stylelint"
       ],
       "focus": "Package manager configs, build tools, linting configs, version constraints, CI pipelines, supply chain settings — proactively searches changelogs for deprecations and behavior changes",
       "model_tier": "sonnet"
@@ -691,6 +781,7 @@
         "extension",
         "registry",
         "wporg",
+        "compat",
         "plugins_url",
         "enqueue",
         "asset",
@@ -704,7 +795,11 @@
         "payment",
         "gateway",
         "provider",
-        "suggestion"
+        "suggestion",
+        "http",
+        "::class",
+        "currency",
+        "country"
       ],
       "focus": "Reference resolution — verifies plugin slugs exist on declared registries, asset files exist at declared paths, URLs resolve, and config references point to real targets",
       "model_tier": "sonnet"
@@ -737,7 +832,7 @@
         "woocommerce",
         "automatewoo"
       ],
-      "focus": "WooCommerce regression invariants derived from a shipped-regression corpus — Action Scheduler traps, meta equality/sync-on-read loops, template overrides, broken-until-JS defaults, filter return-type variance, PHP 8.4 coercion, heuristic proxy predicates vs. store-configuration variance, and interface/hook contract breaks with out-of-tree blast radius. Only dispatches for WooCommerce core/extension changes.",
+      "focus": "WooCommerce regression invariants derived from a shipped-regression corpus — Action Scheduler traps, meta equality/sync-on-read loops, template overrides, broken-until-JS defaults, filter return-type variance, PHP 8.4 coercion, heuristic proxy predicates vs. store-configuration variance, removed-markup selector contracts, and interface/hook contract breaks with out-of-tree blast radius. Only dispatches for WooCommerce core/extension changes.",
       "model_tier": "opus",
       "budget_override": 120
     }

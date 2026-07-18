@@ -5,6 +5,29 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.107.0] - 2026-07-16
+
+Makes review decisions evidence-driven end to end. The motivating full-code-review exposed three related gaps: server-rendered markup could miss accessibility review, small changes could dispatch broad reviewer cohorts without a concrete signal, and several agents repeating the same incomplete search could look like independent confirmation. This release turns those lessons into explicit dispatch, verification, and regression-review contracts.
+
+### Added
+
+- **Executable triage contracts.** Every conditional review criterion now has a minimal probe that must dispatch through the real planner with neutral commit and PR text. Completeness and neutrality checks keep registry prose, keywords, structural checks, evidence gates, and runtime behavior aligned. Language matrices and per-check competence declarations prove where detectors can make negative inferences; unproven languages fall back to conservative dispatch.
+- **Auditable clearance claims.** Reviewers can record blast-radius clearances with `add_clearance(claim, method, evidence)`. Clearances carry agent attribution and exact verification methods through the reconciliation context, making clearance-versus-finding conflicts visible and preventing unauditable "nothing depends on this" conclusions from quietly supporting approval.
+- **Rendered markup as a review contract.** Accessibility scope now includes server-rendered markup and template languages, prioritizes evidence-bearing files within the diff budget, and recognizes markup emitted through common framework and WordPress/WooCommerce helpers. The WooCommerce regression corpus adds a `markup-contract` invariant for CSS, JavaScript, tests, and other consumers that depend on rendered structure.
+
+### Changed
+
+- **Small diffs require positive evidence.** Conditional reviewers dispatch below the 50-line threshold only when a relevant keyword or triage check fires; larger or unsized diffs retain dispatch-by-default behavior. Security stays exempt because single-line regressions are normal for the domain, while accessibility uses structural style, template, announcement, and markup evidence. Skips remain visible for orchestrator override.
+- **Verification strength follows method, not head count.** Correlated agent conclusions count as one probe, verdicts and severities cannot move on vote totals alone, and a negative search proves only that its exact pattern was absent. Reviewers must search dependency surfaces in their own vocabulary, enumerate relevant occurrences across whole artifacts, and report the methods behind absence claims.
+- **Triage checks have one data-driven execution model.** Check metadata, diff requirements, detector competence, and runner coverage are bound by guarded registries instead of parallel condition ladders. Shared helpers now own extension handling, markup classification, iteration coverage, and other repeated derivations; pure keyword and diff normalizations are cached for the lifetime of the planner process.
+
+### Fixed
+
+- **Keyword and patch matching now follow code and git structure.** Keywords respect identifier and camel-case boundaries, tolerate code separators, ignore repository-scaffolding path segments, and inspect changed lines rather than headers or unchanged context. Diff parsing handles spaces, non-ASCII paths, deletions, dash-prefixed content, and function context without confusing patch markers with source.
+- **Detector silence is no longer mistaken for absence.** Failed diff fetches remain an explicit unknown and dispatch conservatively. Structural checks gate only language and syntax forms covered by proof tables, including multiline declarations and imports, type bodies, public API changes, route registrations, SQL and HTTP-client calls, collection iteration, template composition, raw markup, and framework-generated UI.
+- **Accessibility evidence survives broad backend diffs.** Pure template and stylesheet changes are inherent UI evidence, mixed backend/frontend diffs are not over-gated, and markup-bearing files are budgeted before large unrelated backend files. The same markup vocabulary drives dispatch and scope priority so those paths cannot drift.
+- **Generic structural words no longer masquerade as domain evidence.** Terms such as `function`, `class`, `remove`, and `config` were removed from reviewer keyword lists where structural checks can establish the signal directly, reducing accidental specialist dispatch without weakening documented criteria.
+
 ## [1.106.0] - 2026-07-16
 
 Fixes silent reviewer-finding loss discovered by root-cause-analyzing 1,825 reviewer subagent transcripts from the last 60 days: 8 agents / 11 findings — including HIGHs in real WooCommerce and WPCOM PR reviews — were silently demoted from verdict-counting issues to informational observations because `add_issue()` redirected any `line=None` finding to `add_observation()` with no signal.

@@ -661,6 +661,15 @@ class TestQuickModeDispatch:
             registry=registry,
             quick=True,
             commit_messages="fix button alignment in modal",
+            # Sized above SMALL_DIFF_THRESHOLD so the small-diff triage skip
+            # doesn't fire first — this test pins quick-mode relabeling.
+            diffstat={
+                "added": 200,
+                "removed": 40,
+                "deleted_files": [],
+                "renamed_files": [],
+                "file_stats": {f: {"added": 50, "removed": 10} for f in neutral_files},
+            },
         )
         dispatch_map = {d["name"]: d for d in plan["agents"]}
         for agent_name in _QUICK_MODE_BLOCKED_AGENTS:

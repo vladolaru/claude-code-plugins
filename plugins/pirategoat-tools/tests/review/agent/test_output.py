@@ -179,6 +179,63 @@ class TestAddIssue:
 
 
 # =============================================================================
+# TestAddClearance
+# =============================================================================
+
+
+class TestAddClearance:
+    """add_clearance records auditable 'nothing depends on this' claims.
+
+    Clearances exist so blast-radius clears carry their verification method
+    downstream — the 2026-07-16 run had three agents clear a regression via
+    the same wrong grep, invisible to reconciliation because clears lived in
+    free-text positives."""
+
+    def test_stores_claim_method_evidence(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        b.add_clearance(
+            claim="No CSS or JS depends on the removed label element",
+            method="grep -rn 'th label' client/legacy/css/; read each hit",
+            evidence="3 occurrences read: admin.scss:5354, :5367, :5567",
+        )
+        d = b.to_dict()
+        assert d["clearances"] == [{
+            "claim": "No CSS or JS depends on the removed label element",
+            "method": "grep -rn 'th label' client/legacy/css/; read each hit",
+            "evidence": "3 occurrences read: admin.scss:5354, :5367, :5567",
+        }]
+
+    def test_evidence_optional(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        b.add_clearance(claim="No E2E test targets the radio row", method="grep 'radio' e2e/")
+        assert b.to_dict()["clearances"][0]["evidence"] is None
+
+    def test_no_clearances_serializes_none(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        assert b.to_dict()["clearances"] is None
+
+    def test_empty_claim_raises(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        with pytest.raises(ValueError):
+            b.add_clearance(claim="  ", method="grep foo")
+
+    def test_empty_method_raises(self):
+        """A clearance without its method is exactly the unauditable claim
+        this API exists to prevent."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        with pytest.raises(ValueError):
+            b.add_clearance(claim="No blast radius", method="")
+
+    def test_renders_in_markdown_with_method(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="a11y")
+        b.add_clearance(claim="No CSS depends on the label", method="grep 'th label' admin.scss")
+        md = b.to_markdown()
+        assert "## Clearances" in md
+        assert "No CSS depends on the label" in md
+        assert "grep 'th label' admin.scss" in md
+
+
+# =============================================================================
 # TestAddRecommendation
 # =============================================================================
 
@@ -311,7 +368,7 @@ class TestToDict:
         expected_keys = {
             "pr_id", "reviewer", "timestamp", "version", "verdict",
             "summary", "issues", "observations", "recommendations",
-            "positive_observations", "meta",
+            "positive_observations", "clearances", "meta",
         }
         assert expected_keys == set(d.keys())
 
