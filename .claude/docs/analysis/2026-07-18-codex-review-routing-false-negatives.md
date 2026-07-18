@@ -1,6 +1,10 @@
-Last updated: 2026-07-18 21:50
+Last updated: 2026-07-18 21:53
 
 > **Prompt:** "Fix them by going at the root cause and fix entire classes of issues. Commit then done"
+>
+> **Follow-up:** "proceed. Make sure we don't leave any garbage behind"
+>
+> **Follow-up:** "Garbage also means code that is not longer needed"
 
 # Review routing false negatives
 
@@ -49,3 +53,5 @@ Recommendation: option 2. It fixes the polarity error at the abstraction boundar
 ## Decision
 
 The user approved option 2. The validated design is recorded in `.claude/docs/plans/2026-07-18-review-routing-negative-evidence-design.md`.
+
+The implementation boundary was tightened after approval: obsolete language/check competence tables will be removed rather than left dormant. They exist only to authorize the unsound small-diff negative inference. Positive detector proof tables remain where they verify dispatch evidence, but claimed-language unions and negative-competence bindings will be deleted.
