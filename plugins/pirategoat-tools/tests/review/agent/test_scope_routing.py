@@ -438,6 +438,30 @@ def _setup_stale_branch_repo(behind_count: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Server-template routing tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "filepath",
+    [
+        "views/cart.ejs",
+        "templates/page.liquid",
+        "views/page.njk",
+        "templates/page.jinja2",
+        "views/index.jsp",
+        "Views/Cart.cshtml",
+        "templates/email.tmpl",
+        "resources/views/cart.blade.php",
+    ],
+)
+def test_common_server_templates_route_to_a11y(filepath):
+    matched, excluded = _review_scope.filter_domain([filepath], "a11y")
+    assert matched == [filepath]
+    assert excluded == []
+
+
+# ---------------------------------------------------------------------------
 # Branch Freshness tests
 # ---------------------------------------------------------------------------
 class TestBranchFreshness:

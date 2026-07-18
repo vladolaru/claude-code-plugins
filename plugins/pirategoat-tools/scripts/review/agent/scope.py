@@ -94,6 +94,11 @@ MARKUP_TOKEN_PATTERNS = (
         r"\b(get_)?submit_button\s*\(|\bwoocommerce_form_field\s*\(|"
         r"\bwc_help_tip\s*\(|\bwp_dropdown_\w+\s*\(|\bwp_nonce_field\s*\(|"
         r"\bwp_editor\s*\(|\bwp_list_categories\s*\(|\bpaginate_links\s*\(|"
+        # WordPress core renderers that emit navigation, forms, comment
+        # lists, archives, widgets, or other page structure by default:
+        r"\b(wp_nav_menu|wp_login_form|get_search_form|comment_form|"
+        r"wp_list_comments|wp_page_menu|wp_link_pages|wp_loginout|wp_register|"
+        r"wp_meta|wp_get_archives|wp_tag_cloud|dynamic_sidebar|the_widget)\s*\(|"
         # The whole woocommerce_wp_* admin-field family (text_input,
         # select, checkbox, radio, textarea, hidden_input, note, ...):
         r"\bwoocommerce_wp_\w+\s*\(|"
@@ -112,6 +117,18 @@ MARKUP_TOKEN_PATTERNS = (
         r"@(include|component|extends|each)\s*\(|"
         r"\{\{\s*template\b"
     ),
+    # Explicit PHP output constructs can emit arbitrary custom-helper results;
+    # silence here must not gate accessibility merely because the callee name
+    # is project-specific. Require an expression-shaped operand so prose that
+    # merely mentions "echo" does not count.
+    re.compile(
+        r"\b(echo|print)\s*(?:\(|\$|['\"]|[a-z_\\][a-z0-9_\\]*\s*\()|"
+        r"\b(printf|vprintf)\s*\("
+    ),
+    # Conventional renderer methods emit UI without a literal tag or output
+    # keyword at the call site. Require method/static-call syntax so a plain
+    # data helper such as render_totals() remains outside this vocabulary.
+    re.compile(r"(?:->|::)(render|display|output|emit)(?:_?[a-z0-9]+)*\s*\("),
     # Attribute assignments need attribute CONTEXT: `(?<![\w$])` rejects PHP
     # variables ('$role = ...' emits no markup and would otherwise let a big
     # backend diff outrank genuine template evidence in budget priority),
@@ -316,16 +333,31 @@ _PROG_LANGS = [
 # Frontend-only languages — for domains that review UI/markup, not backends (a11y).
 _FRONTEND_LANGS = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte"]
 
-# Server-rendered markup languages — languages whose files emit HTML the
-# browser receives (PHP renderers, template engines, raw HTML). The a11y
-# domain includes these: accessibility semantics (<label>, ARIA, fieldset/
-# legend) live in the emitted markup regardless of which language prints it.
+# Mixed executable-markup languages contain both backend logic and rendered
+# UI, so accessibility dispatch evidence-gates them in plan_dispatch.py.
+_MIXED_MARKUP_LANGS = ["php", "phtml"]
+
+# Pure template formats are inherent UI surfaces: a changed template is
+# accessibility-relevant even when the hunk contains only data binding or
+# composition syntax. Keep simple extensions here and compound suffixes in
+# _TEMPLATE_SUFFIXES; is_template_file() is the shared classifier.
+_TEMPLATE_LANGS = [
+    "html", "htm", "xhtml", "twig", "mustache", "hbs", "erb",
+    "ejs", "liquid", "njk", "jinja", "jinja2", "jsp", "jspx",
+    "cshtml", "vbhtml", "tmpl", "tpl", "gsp", "ftl", "vm", "haml", "slim",
+]
+_TEMPLATE_SUFFIXES = ("blade.php",)
+_TEMPLATE_EXTENSIONS = frozenset(_TEMPLATE_LANGS)
+
+# Server-rendered markup languages — mixed renderers, template engines, and
+# raw HTML. The a11y domain includes these: accessibility semantics (<label>,
+# ARIA, fieldset/legend) live in emitted markup regardless of host language.
 # (History: a11y was _FRONTEND_LANGS-only, so a PHP-only diff that removed a
 # dangling <label for> was skipped with NO_DOMAIN_FILES before its triage
 # keywords were ever consulted — ~30 admin-UI PHP runs went unreviewed over
 # 3 months. Dispatch is evidence-gated in plan_dispatch.py so this inclusion
 # does not drag a11y into every backend PHP review.)
-_MARKUP_LANGS = ["php", "phtml", "html", "htm", "twig", "mustache", "hbs", "erb"]
+_MARKUP_LANGS = [*_MIXED_MARKUP_LANGS, *_TEMPLATE_LANGS]
 
 # Stylesheet languages.
 _STYLE_LANGS = ["css", "scss", "sass", "less"]
@@ -348,6 +380,15 @@ def _ext_re(*groups) -> str:
     """
     exts = [ext for group in groups for ext in group]
     return r"\.(" + "|".join(exts) + r")$"
+
+
+def is_template_file(path: str) -> bool:
+    """Return whether path is an inherently UI-emitting template file."""
+    lowered = path.lower()
+    extension = lowered.rpartition(".")[2]
+    return extension in _TEMPLATE_EXTENSIONS or any(
+        lowered.endswith(f".{suffix}") for suffix in _TEMPLATE_SUFFIXES
+    )
 
 
 DOMAIN_CATALOG = {
@@ -1010,9 +1051,9 @@ def build_scope(args: argparse.Namespace) -> dict:
         # largest-first budgeting would then hand the reviewer everything
         # EXCEPT the file that triggered dispatch. Evidence = markup tokens
         # in the file's changed lines (classified in ONE combined git-diff
-        # scan — see classify_markup_evidence) OR a stylesheet extension
-        # (style files are inherent visual-a11y surface, mirroring the
-        # has_style_files dispatch signal). Evidence-bearing files budget
+        # scan — see classify_markup_evidence), a stylesheet, OR an
+        # inherently UI template. This mirrors the has_style_files and
+        # has_template_files dispatch signals. Evidence-bearing files budget
         # first, largest-first within each tier.
         if domain_spec.get("budget_priority") == "markup_evidence":
             style_ext_re = re.compile(_ext_re(_STYLE_LANGS))
@@ -1020,11 +1061,16 @@ def build_scope(args: argparse.Namespace) -> dict:
                 f for f in domain_matched_sorted
                 if not (list_only_re and list_only_re.search(f))
                 and not style_ext_re.search(f)  # style files: evidence by extension
+                and not is_template_file(f)  # pure templates: inherent UI
             ]
             token_files = classify_markup_evidence(range_spec, scan_candidates)
 
             def _is_evidence(f):
-                return f in token_files or bool(style_ext_re.search(f))
+                return (
+                    f in token_files
+                    or bool(style_ext_re.search(f))
+                    or is_template_file(f)
+                )
 
             domain_matched_sorted = sorted(
                 domain_matched_sorted,

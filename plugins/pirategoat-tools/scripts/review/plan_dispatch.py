@@ -787,12 +787,6 @@ _DIFF_BASED_CHECKS = frozenset(
 # tokens the hunk contains, so token-matching can't cover this class.
 _STYLE_EXTENSIONS = frozenset(_scope_mod._STYLE_LANGS)
 
-# Pure-template extensions (from scope.py's markup group, minus the mixed
-# server languages) — for the has_template_files check: a changed template
-# IS the UI, the same way a changed stylesheet is inherently a visual
-# surface; no token in the hunk can prove otherwise.
-_TEMPLATE_EXTENSIONS = frozenset(_scope_mod._MARKUP_LANGS) - {"php", "phtml"}
-
 def _needs_diff_scan(config: dict) -> bool:
     """True when the agent's triage reads patch text — keywords or any
     diff-based structural check. Shared by the fetch decision and the
@@ -1462,7 +1456,10 @@ def _check_has_style_files(domain_files, diffstat, diff_text, in_scope_added, mi
 
 
 def _check_has_template_files(domain_files, diffstat, diff_text, in_scope_added, min_lines):
-    template_files = _non_test_files_with_ext(domain_files, _TEMPLATE_EXTENSIONS)
+    template_files = [
+        f for f in domain_files
+        if not is_test_file(f) and _scope_mod.is_template_file(f)
+    ]
     if template_files:
         return f"template file changes (UI surface): {', '.join(template_files[:3])}"
     return None

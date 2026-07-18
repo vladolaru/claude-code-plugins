@@ -903,6 +903,7 @@ _PRIORITY_FILE_DIFFS = {
         '+<button type="submit"><?php echo esc_html( $label ); ?></button>\n'
         "+<?php // submit ?>"
     ),
+    "resources/views/card.blade.php": "+{{ $slot }}",
     "src/styles/focus.scss": "+.wc-input:focus-visible {\n+  outline: 2px solid;",
 }
 
@@ -982,6 +983,10 @@ class TestMarkupEvidenceBudgetPriority:
         ["includes/backend.php", "src/styles/focus.scss"],
         {"includes/backend.php": 2100, "src/styles/focus.scss": 2},
     )
+    _TOKEN_FREE_TEMPLATE_CASE = (
+        ["includes/backend.php", "resources/views/card.blade.php"],
+        {"includes/backend.php": 2100, "resources/views/card.blade.php": 1},
+    )
 
     def test_a11y_budget_includes_markup_file_before_large_backend_file(self, tmp_path):
         scope, _ = self._build(tmp_path, "a11y", *self._TEMPLATE_CASE)
@@ -993,6 +998,11 @@ class TestMarkupEvidenceBudgetPriority:
         must receive budget — markup tokens are not the only evidence."""
         scope, _ = self._build(tmp_path, "a11y", *self._STYLESHEET_CASE)
         assert "src/styles/focus.scss" in scope["diffs"]
+        assert "includes/backend.php" in scope["skipped_files"]["budget"]
+
+    def test_a11y_budget_includes_token_free_template_before_backend(self, tmp_path):
+        scope, _ = self._build(tmp_path, "a11y", *self._TOKEN_FREE_TEMPLATE_CASE)
+        assert "resources/views/card.blade.php" in scope["diffs"]
         assert "includes/backend.php" in scope["skipped_files"]["budget"]
 
     def test_backend_role_assignment_is_not_evidence(self, tmp_path):
@@ -1088,6 +1098,30 @@ class TestMarkupTokenEdgeCases:
         ):
             assert review_scope.patch_has_markup_tokens(line), line
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "+ wp_nav_menu( $args );",
+            "+ wp_login_form( $args );",
+            "+ get_search_form();",
+            "+ comment_form( $args );",
+            "+ wp_list_comments( $args );",
+            "+ wp_page_menu( $args );",
+            "+ wp_link_pages( $args );",
+            "+ wp_loginout();",
+            "+ wp_register();",
+            "+ wp_get_archives( $args );",
+            "+ wp_tag_cloud( $args );",
+            "+ dynamic_sidebar( 'primary' );",
+            "+ the_widget( WC_Widget_Cart::class );",
+            "+ echo build_custom_navigation( $args );",
+            "+ echo $renderer->render( $context );",
+            "+ $view->display( $context );",
+        ],
+    )
+    def test_php_render_surfaces_are_markup(self, line):
+        assert review_scope.patch_has_markup_tokens(line)
+
     def test_template_composition_is_markup(self):
         """Includes/partials/renders pull an entire interactive UI into the
         page — composition IS markup emission even with no literal tag on
@@ -1113,6 +1147,7 @@ class TestMarkupTokenEdgeCases:
             "+    submit_form_data( $payload );",
             "+    $button_count = 3;",
             "+    process_dropdown_choice( $value );",
+            '+    const copy = "echo this value";',
         ):
             assert not review_scope.patch_has_markup_tokens(line), line
 
@@ -1143,6 +1178,35 @@ class TestPhtmlIsExecutableCode:
     def test_phtml_matches_code_domains(self, domain):
         include = review_scope.DOMAIN_CATALOG[domain]["include"]
         assert re.search(include, "templates/order-row.phtml"), domain
+
+
+class TestTemplateFileClassification:
+    @pytest.mark.parametrize(
+        "filepath",
+        [
+            "views/cart.ejs",
+            "templates/page.liquid",
+            "views/page.njk",
+            "templates/page.jinja",
+            "templates/page.jinja2",
+            "views/index.jsp",
+            "views/index.jspx",
+            "Views/Cart.cshtml",
+            "Views/Cart.vbhtml",
+            "templates/email.tmpl",
+            "templates/email.tpl",
+            "views/page.gsp",
+            "views/page.ftl",
+            "views/page.vm",
+            "views/page.haml",
+            "views/page.slim",
+            "resources/views/cart.blade.php",
+        ],
+    )
+    def test_common_server_template_is_inherent_ui(self, filepath):
+        assert review_scope.is_template_file(filepath)
+        matched, _ = review_scope.filter_domain([filepath], "a11y")
+        assert matched == [filepath]
 
 
 class TestEvidenceScanPathHandling:

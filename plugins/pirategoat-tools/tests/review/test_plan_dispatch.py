@@ -187,6 +187,31 @@ class TestCountFilesInDomain:
         ]
         assert count_files_in_domain(files, "a11y") == 4
 
+    @pytest.mark.parametrize(
+        "filepath",
+        [
+            "views/cart.ejs",
+            "templates/page.liquid",
+            "views/page.njk",
+            "templates/page.jinja",
+            "templates/page.jinja2",
+            "views/index.jsp",
+            "views/index.jspx",
+            "Views/Cart.cshtml",
+            "Views/Cart.vbhtml",
+            "templates/email.tmpl",
+            "templates/email.tpl",
+            "views/page.gsp",
+            "views/page.ftl",
+            "views/page.vm",
+            "views/page.haml",
+            "views/page.slim",
+            "resources/views/cart.blade.php",
+        ],
+    )
+    def test_a11y_domain_matches_common_server_templates(self, filepath):
+        assert count_files_in_domain([filepath], "a11y") == 1
+
     def test_a11y_domain_still_excludes_non_markup_languages(self):
         """Backend-only languages (Go, Rust, SQL) stay outside the a11y domain."""
         files = ["src/auth.go", "src/lib.rs", "db/migrations/001.sql"]
@@ -2146,6 +2171,24 @@ class TestTemplateExtensionsAreInherentUI:
         )
         assert status == "SKIPPED_TRIAGE"
 
+    def test_blade_template_dispatches_as_inherent_ui(self, registry):
+        cfg = registry["agents"]["a11y-reviewer"]
+        filepath = "resources/views/cart.blade.php"
+        status, reason = triage_conditional_agent(
+            "a11y-reviewer",
+            cfg,
+            [filepath],
+            "pass cart data to view",
+            {
+                "added": 3,
+                "removed": 0,
+                "file_stats": {filepath: {"added": 3, "removed": 0}},
+            },
+            diff_text="+{{ $slot }}",
+        )
+        assert status == "DISPATCH"
+        assert "template file changes" in reason
+
 
 class TestDashPrefixedContentLines:
     """Changed lines whose CONTENT starts with '--'/'++' render as '---'/'+++'
@@ -2249,6 +2292,33 @@ class TestA11yMarkupGatedDispatch:
         )
         assert status == "DISPATCH"
         assert "keyword" in reason
+
+    @pytest.mark.parametrize(
+        "render_call",
+        [
+            "wp_nav_menu( $args );",
+            "wp_login_form( $args );",
+            "get_search_form();",
+            "comment_form( $args );",
+            "wp_list_comments( $args );",
+            "wp_page_menu( $args );",
+            "dynamic_sidebar( 'primary' );",
+            "the_widget( WC_Widget_Cart::class );",
+            "$view->display( $context );",
+        ],
+    )
+    def test_dispatches_on_php_render_surface(self, registry, render_call):
+        filepath = "includes/class-renderer.php"
+        status, reason = triage_conditional_agent(
+            "a11y-reviewer",
+            self._a11y_config(registry),
+            [filepath],
+            "adjust rendered output",
+            self._large_diffstat(filepath),
+            diff_text=f"+ {render_call}",
+        )
+        assert status == "DISPATCH"
+        assert "markup emission" in reason
 
     def test_skips_backend_php_without_markup_or_keywords(self, registry):
         """No markup emission, no keywords → SKIPPED_TRIAGE (not SKIPPED) —
