@@ -53,33 +53,27 @@ def registry():
     return load_registry()
 
 
-# Family form -> extensions vouched for; claimed set must equal the
-# union (mirrors the http-client proof table). Module-level so tests
-# can parametrize over families for per-family failure IDs.
+# Representative positive forms. They prove recognition only; they do not
+# claim that every iteration or client form in a language is detectable.
 ITERATION_PROOF_FORMS = {
-    "js/ts for-of": ("+  for (const order of orders) {",
-                     {"js", "mjs", "cjs", "jsx", "ts", "tsx"}),
-    "js/ts forEach": ("+  orders.forEach(renderRow);", set()),
-    "php foreach": ("+\tforeach ( $orders as $order ) {", {"php", "phtml"}),
-    "python for-in": ("+    for order in orders:", {"py"}),
-    "ruby each": ("+    orders.each do |order|", {"rb"}),
-    "go range": ("+\tfor _, order := range orders {", {"go"}),
-    "rust/swift for-in": ("+    for order in orders {", {"rs", "swift"}),
-    "java enhanced for": ("+        for (Order order : orders) {", {"java", "cs"}),
-    "kotlin for-in": ("+        for (order in orders) {", {"kt", "kts"}),
-    "scala comprehension": ("+    for (order <- orders) render(order)", {"scala"}),
-    "ruby scala foreach": ("+    orders.foreach(render)", set()),
+    "js/ts for-of": "+  for (const order of orders) {",
+    "js/ts forEach": "+  orders.forEach(renderRow);",
+    "php foreach": "+\tforeach ( $orders as $order ) {",
+    "python for-in": "+    for order in orders:",
+    "ruby each": "+    orders.each do |order|",
+    "go range": "+\tfor _, order := range orders {",
+    "rust/swift for-in": "+    for order in orders {",
+    "java enhanced for": "+        for (Order order : orders) {",
+    "kotlin for-in": "+        for (order in orders) {",
+    "scala comprehension": "+    for (order <- orders) render(order)",
+    "ruby scala foreach": "+    orders.foreach(render)",
 }
 
-# The claimed set may contain exactly the union of these — a claim
-# without a matching proof form (or a proof without a claim) fails the
-# claim-equals-union test.
 HTTP_CLIENT_PROOF_FORMS = {
-    "go": ("+\tresp, err := http.Get(url)", {"go"}),
-    "js/ts": ("+  const r = await fetch(url);",
-              {"js", "mjs", "cjs", "jsx", "ts", "tsx"}),
-    "python": ("+    resp = requests.get(api_url, timeout=10)", {"py"}),
-    "php": ("+    $ch = curl_init( $endpoint );", {"php", "phtml"}),
+    "go": "+\tresp, err := http.Get(url)",
+    "js/ts": "+  const r = await fetch(url);",
+    "python": "+    resp = requests.get(api_url, timeout=10)",
+    "php": "+    $ch = curl_init( $endpoint );",
 }
 
 
@@ -1959,24 +1953,26 @@ class TestHasNewSourceFiles:
         assert status == "DISPATCH"
         assert "new source file" in reason
 
-    def test_new_test_file_is_not_evidence(self):
+    def test_new_test_file_does_not_fire_source_check(self):
         files = ["tests/util/test_parsing.py", "scripts/util/existing.py"]
-        status, _ = triage_conditional_agent(
+        status, reason = triage_conditional_agent(
             "architecture-reviewer", self._config(), files,
             "cover parsing helpers",
             self._diffstat(["tests/util/test_parsing.py"], files),
             diff_text="+assert parse('x')",
         )
-        assert status == "SKIPPED_TRIAGE"
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
-    def test_new_non_source_file_is_not_evidence(self):
+    def test_new_non_source_file_does_not_fire_source_check(self):
         files = ["docs/parsing.md", "scripts/util/existing.py"]
-        status, _ = triage_conditional_agent(
+        status, reason = triage_conditional_agent(
             "architecture-reviewer", self._config(), files,
             "document parsing", self._diffstat(["docs/parsing.md"], files),
             diff_text="+How parsing works.",
         )
-        assert status == "SKIPPED_TRIAGE"
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
 
 class TestHasRenamedSymbols:
@@ -2036,14 +2032,10 @@ class TestHasRenamedSymbols:
         assert not _mod._has_renamed_symbols(diff)
 
 
-class TestPerCheckCompetence:
-    """The small-diff gate may only infer 'no signal' when every check the
-    agent carries can READ the diff's languages. The global covered-langs
-    floor proves the matrix's structural forms; ecosystem-vocabulary
-    checks (has_http_client_calls) are narrower — for a language outside
-    a check's claimed set, silence is absence of vocabulary and the gate
-    must dispatch conservatively (round-14 P1: java client.send(...)
-    skipped reliability while java sat in the global covered set)."""
+class TestDetectorPolarity:
+    """Positive form coverage never proves that detector silence is negative
+    evidence. Small-diff skipping requires an explicit complete-criteria
+    contract, not extension membership or representative proof forms."""
 
     def _config(self):
         return {
@@ -2070,34 +2062,23 @@ class TestPerCheckCompetence:
         )
         assert status == "DISPATCH"
 
-    def test_claimed_language_still_skips_without_signal(self):
+    def test_claimed_language_dispatches_when_detector_is_partial(self):
         f = "internal/sync/notes.go"
         status, _ = triage_conditional_agent(
             "reliability-reviewer", self._config(), [f],
             "tidy comments", self._small(f),
             diff_text="+\t// clarify rounding behavior",
         )
-        assert status == "SKIPPED_TRIAGE"
-
-    def test_every_supported_check_declares_competence(self):
-        assert set(_mod._CHECK_COMPETENCE) == set(_mod._SUPPORTED_TRIAGE_CHECKS)
+        assert status == "DISPATCH"
 
     def test_check_registries_derive_from_single_specs_record(self):
-        """_SUPPORTED_TRIAGE_CHECKS / _DIFF_BASED_CHECKS / _CHECK_COMPETENCE
-        are all views over _CHECK_SPECS — a check cannot be added to one
-        and omitted from another (a check missing from _DIFF_BASED_CHECKS
-        would never have its patch fetched and would silently report 'no
-        evidence' forever — the exact silent-skip class this branch
-        eliminates)."""
+        """Supported and diff-based check views derive from one record."""
         specs = _mod._CHECK_SPECS
         for name, spec in specs.items():
-            assert set(spec) == {"reads_diff", "competence"}, name
+            assert set(spec) == {"reads_diff"}, name
         assert set(_mod._SUPPORTED_TRIAGE_CHECKS) == set(specs)
         assert set(_mod._DIFF_BASED_CHECKS) == {
             n for n, s in specs.items() if s["reads_diff"]
-        }
-        assert _mod._CHECK_COMPETENCE == {
-            n: s["competence"] for n, s in specs.items()
         }
 
     def test_check_runners_cover_specs(self):
@@ -2109,16 +2090,26 @@ class TestPerCheckCompetence:
         assert set(_mod._CHECK_RUNNERS) == set(_mod._CHECK_SPECS)
         assert all(callable(r) for r in _mod._CHECK_RUNNERS.values())
 
+    def test_exhaustive_contract_requires_boolean(self):
+        config = self._config()
+        config["small_diff_triage_exhaustive"] = "yes"
+        with pytest.raises(
+            ValueError,
+            match="small_diff_triage_exhaustive.*must be a boolean",
+        ):
+            triage_conditional_agent(
+                "reliability-reviewer",
+                config,
+                ["internal/sync/notes.go"],
+                "tidy comments",
+                self._small("internal/sync/notes.go"),
+                diff_text="",
+            )
+
     @pytest.mark.parametrize("family", sorted(HTTP_CLIENT_PROOF_FORMS))
     def test_http_client_form_is_evidence(self, family):
-        line, _ = HTTP_CLIENT_PROOF_FORMS[family]
+        line = HTTP_CLIENT_PROOF_FORMS[family]
         assert _mod._has_http_client_calls(line)
-
-    def test_http_client_claim_equals_proof_union(self):
-        claimed = set()
-        for line, exts in HTTP_CLIENT_PROOF_FORMS.values():
-            claimed |= exts
-        assert claimed == set(_mod._HTTP_CLIENT_CLAIMED_LANGS)
 
 
 class TestTemplateExtensionsAreInherentUI:
@@ -2408,9 +2399,11 @@ class TestA11yMarkupGatedDispatch:
         assert status == "SKIPPED_TRIAGE"
         assert "evidence-gated" in reason
 
-    def test_small_pure_logic_ts_change_skips_via_small_diff_rule(self, registry):
-        """Frontend files aren't evidence-gated, but they still obey the
-        small-diff polarity like every other conditional agent."""
+    def test_small_pure_logic_ts_change_dispatches_without_exhaustive_contract(
+        self, registry,
+    ):
+        """Frontend files are not evidence-gated, and the a11y detector
+        vocabulary is not exhaustive enough to turn silence into absence."""
         status, reason = triage_conditional_agent(
             "a11y-reviewer", self._a11y_config(registry),
             ["src/utils/currency.ts"],
@@ -2422,8 +2415,8 @@ class TestA11yMarkupGatedDispatch:
             },
             diff_text="+ return Math.round(value * 100) / 100;",
         )
-        assert status == "SKIPPED_TRIAGE"
-        assert "small change" in reason
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
 
 
 class TestHasMarkupChanges:
@@ -2497,10 +2490,9 @@ class TestHasMarkupChanges:
 
 
 class TestSmallDiffPolarity:
-    """Small diffs require positive triage evidence to dispatch conditional
-    agents; large diffs keep dispatch-by-default. The 2026-07-16 run
-    dispatched 19 agents (8 on the bare Layer-6 default) for a 6-line
-    markup change."""
+    """Small diffs skip on detector silence only when the agent explicitly
+    certifies exhaustive coverage of its complete criteria. Partial semantic
+    detectors remain positive-evidence accelerators, never absence proofs."""
 
     def _make_config(self, **overrides):
         base = {"dispatch_class": "conditional", "domain": "concurrency"}
@@ -2518,7 +2510,10 @@ class TestSmallDiffPolarity:
         }
 
     def test_small_diff_without_signal_skips(self):
-        config = self._make_config(triage_keywords=["async", "lock"])
+        config = self._make_config(
+            triage_keywords=["async", "lock"],
+            small_diff_triage_exhaustive=True,
+        )
         status, reason = triage_conditional_agent(
             "concurrency-reviewer", config,
             ["includes/class-renderer.php"],
@@ -2528,6 +2523,52 @@ class TestSmallDiffPolarity:
         )
         assert status == "SKIPPED_TRIAGE"
         assert "small change" in reason
+
+    def test_small_diff_without_exhaustive_contract_dispatches(self):
+        config = self._make_config(triage_keywords=["async", "lock"])
+        status, reason = triage_conditional_agent(
+            "concurrency-reviewer", config,
+            ["includes/class-renderer.php"],
+            "fix settings radio markup",
+            self._small_diffstat(),
+            diff_text="",
+        )
+        assert status == "DISPATCH"
+        assert "no triage signal to skip" in reason
+
+    @pytest.mark.parametrize(
+        "agent_name",
+        ["performance-reviewer", "reliability-reviewer"],
+    )
+    def test_go_client_do_dispatches_when_partial_detector_is_silent(
+        self, agents, agent_name,
+    ):
+        filepath = "internal/client.go"
+        status, _ = triage_conditional_agent(
+            agent_name,
+            agents[agent_name],
+            [filepath],
+            "tidy client code",
+            self._small_diffstat(filepath),
+            diff_text="+ response, err := client.Do(req)",
+        )
+        assert status == "DISPATCH"
+
+    def test_indexed_javascript_loop_dispatches_when_partial_detector_is_silent(
+        self, agents,
+    ):
+        filepath = "src/items.js"
+        status, _ = triage_conditional_agent(
+            "performance-reviewer",
+            agents["performance-reviewer"],
+            [filepath],
+            "tidy item processing",
+            self._small_diffstat(filepath),
+            diff_text=(
+                "+ for (let i = 0; i < items.length; i++) { consume(items[i]); }"
+            ),
+        )
+        assert status == "DISPATCH"
 
     def test_large_diff_without_signal_still_dispatches_by_default(self):
         config = self._make_config(triage_keywords=["async", "lock"])
@@ -2578,29 +2619,6 @@ class TestSmallDiffPolarity:
         )
         assert status == "DISPATCH"
 
-    def test_small_diff_exempt_agent_dispatches(self):
-        """Agents whose value doesn't scale with diff size (history mining)
-        can opt out via small_diff_exempt."""
-        config = self._make_config(small_diff_exempt=True)
-        status, reason = triage_conditional_agent(
-            "history-insights-reviewer", config,
-            ["includes/class-renderer.php"],
-            "fix settings radio markup",
-            self._small_diffstat(),
-        )
-        assert status == "DISPATCH"
-
-    def test_history_insights_registry_is_small_diff_exempt(self, agents):
-        """history-insights mines git history — its value comes from the
-        touched file's past, not the diff's size."""
-        assert agents["history-insights-reviewer"].get("small_diff_exempt") is True
-
-    def test_security_registry_is_small_diff_exempt(self, agents):
-        """Security regressions are routinely one-liners ('echo $_GET[...]')
-        and no keyword list can enumerate sinks — the risk asymmetry means
-        the small-diff evidence requirement must not gate this agent."""
-        assert agents["security-reviewer"].get("small_diff_exempt") is True
-
     def test_api_contract_registry_has_signature_checks(self, agents):
         """'Public function signature changes' is an explicit api-contract
         criterion — structural checks must back it so small signature
@@ -2645,7 +2663,10 @@ class TestSmallDiffPolarity:
     def test_sizing_counts_only_in_scope_non_test_lines(self):
         """A big test-file change must not lift a small production change
         over the threshold."""
-        config = self._make_config(triage_keywords=["async"])
+        config = self._make_config(
+            triage_keywords=["async"],
+            small_diff_triage_exhaustive=True,
+        )
         diffstat = {
             "added": 300, "removed": 10,
             "deleted_files": [], "renamed_files": [], "added_files": [],
@@ -2722,34 +2743,25 @@ class TestScenario55669:
         for this change and was skipped on 'no files in a11y domain'."""
         assert self._status(plan, "a11y-reviewer") == "DISPATCH"
 
-    def test_default_polarity_agents_skip(self, plan):
-        """The 8 agents that dispatched on the bare Layer-6 default (and were
-        all hand-pruned) now skip on the small-diff evidence requirement."""
+    def test_detector_silence_agents_dispatch_conservatively(self, plan):
+        """Partial detector silence cannot remove a reviewer from the cohort."""
         for name in (
             "api-contract-reviewer",
             "architecture-reviewer",
+            "code-clarity-reviewer",
             "concurrency-reviewer",
             "data-flow-privacy-reviewer",
+            "dead-code-reviewer",
+            "docs-drift-reviewer",
             "performance-reviewer",
+            "reference-integrity-reviewer",
             "reliability-reviewer",
         ):
-            assert self._status(plan, name) == "SKIPPED_TRIAGE", name
-
-    def test_keyword_false_positive_agents_skip(self, plan):
-        """reference-integrity ('plugin' from plugins/), dead-code ('move'
-        inside 'remove'), clarity ('class' from the filename), docs-drift
-        ('remove'/'option') were all keyword false positives."""
-        for name in (
-            "reference-integrity-reviewer",
-            "dead-code-reviewer",
-            "code-clarity-reviewer",
-            "docs-drift-reviewer",
-        ):
-            assert self._status(plan, name) == "SKIPPED_TRIAGE", name
+            assert self._status(plan, name) == "DISPATCH", name
 
     def test_evidence_backed_agents_still_dispatch(self, plan):
         """Agents with genuine signals keep dispatching: always-on agents,
-        keyword-matched specialists, and the exempt history miner."""
+        keyword-matched specialists, and the history miner."""
         for name in (
             "code-reviewer",
             "patterns-reviewer",
@@ -2759,13 +2771,6 @@ class TestScenario55669:
             "history-insights-reviewer",
         ):
             assert self._status(plan, name) == "DISPATCH", name
-
-    def test_dispatch_count_is_proportionate(self, plan):
-        """The planner dispatched 19 of 26 agents on this diff; with
-        evidence-based dispatch the cohort should be in single digits."""
-        dispatched = [d for d in plan["agents"] if d["status"] == "DISPATCH"]
-        assert len(dispatched) <= 9, [d["name"] for d in dispatched]
-
 
 class TestDiffFetchFlags:
     """Triage patch text is fetched with function context and raw paths.
@@ -2888,6 +2893,7 @@ class TestDiffFetchFailureConservatism:
             "dispatch_class": "conditional",
             "triage_criteria": ["x"],
             "triage_keywords": ["transaction"],
+            "small_diff_triage_exhaustive": True,
         }
         diffstat = {
             "added": 4, "removed": 1,
@@ -2950,6 +2956,7 @@ class TestDiffFetchFailureConservatism:
             "domain": "code",
             "dispatch_class": "conditional",
             "triage_criteria": ["x"],
+            "small_diff_triage_exhaustive": True,
         }
         diffstat = {
             "added": 4, "removed": 1,
@@ -3254,15 +3261,9 @@ class TestStructuralChecks:
     def test_collection_iteration_form_is_evidence(self, family):
         """Loops over collections back performance's iteration criterion
         (round-15 miss: a TSX for-of skipped despite the criterion).
-        Syntax-unique per-family shapes keep the claim proof-backed."""
-        line, _ = ITERATION_PROOF_FORMS[family]
+        These forms prove positive recognition, not exhaustive coverage."""
+        line = ITERATION_PROOF_FORMS[family]
         assert _mod._has_collection_iteration(line)
-
-    def test_collection_iteration_claim_equals_proof_union(self):
-        claimed = set()
-        for line, exts in ITERATION_PROOF_FORMS.values():
-            claimed |= exts
-        assert claimed == set(_mod._ITERATION_CLAIMED_LANGS)
 
     def test_prose_and_comments_are_not_iteration_evidence(self):
         for line in (

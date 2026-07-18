@@ -735,157 +735,52 @@ def _get_new_abstraction_files(domain_files: List[str], diffstat: Dict) -> List[
     ]
 
 
-# _SUPPORTED_TRIAGE_CHECKS is derived from _CHECK_SPECS (see the detector
-# competence section) — one record per check, no parallel registries.
+# _SUPPORTED_TRIAGE_CHECKS is derived from _CHECK_SPECS below — one record
+# per check, no parallel registries.
 
 # =============================================================================
-# Detector competence model
+# Triage detector polarity
 #
-# Every negative inference ("no evidence fired, therefore skip") is only as
-# sound as the detectors it rests on. Triage has three signal families with
-# different competence boundaries:
+# Keywords and checks are POSITIVE-evidence detectors: a match can prove that
+# a reviewer is relevant, but silence proves only that the configured
+# vocabulary did not match. Representative syntax tables therefore document
+# recognition, never completeness. The small-diff gate may make a negative
+# inference only when an agent explicitly certifies its COMPLETE criteria as
+# exhaustively detected via `small_diff_triage_exhaustive`.
 #
-#   1. KEYWORDS — language-agnostic. They match identifiers, commit prose,
-#      paths, and PR text; keyword absence is competent evidence in any
-#      language. Gates resting on keywords alone (the blanket
-#      `require_triage_keyword_match`, e.g. woo-regression's WC-membership
-#      requirement) need NO coverage guard.
-#   2. MARKUP DETECTOR (scope.MARKUP_TOKEN_PATTERNS) — competent over
-#      emitted HTML in ANY host language. a11y's `evidence_gated_extensions`
-#      gate rests on it (plus keywords) and its gated set is exactly the
-#      markup-emitting languages, so it is competent by construction.
-#   3. STRUCTURAL CHECKS (_DIFF_BASED_CHECKS: signatures, types, imports,
-#      docblocks) — competent ONLY for the syntaxes they parse. Their
-#      coverage is _DETECTOR_COVERED_LANGS below, defined as EXACTLY what
-#      the criteria suite's language matrix proves
-#      (tests/review/test_criteria_coverage.py binds the two).
-#
-# The small-diff gate infers from the UNION of all families, with the
-# structural family doing the load-bearing work for code semantics — so it
-# consults `_has_uncovered_source_files()` first: for a scoped language
-# outside the covered set (C, C++, Obj-C, ...), a negative structural scan
-# is absence of VOCABULARY, not absence of evidence, and dispatch-by-default
-# stands — the same "unknown is not negative" rule as unsized diffstats.
-# Any FUTURE gate that skips based on structural-check silence must consult
-# the same helper.
-# =============================================================================
-
-_DETECTOR_COVERED_LANGS = frozenset({
-    "php", "phtml",
-    "js", "mjs", "cjs", "jsx", "ts", "tsx",
-    "py", "rb",
-    "go", "rs",
-    "java", "kt", "kts", "cs",
-    "swift", "scala",
-})
-
-
-def _has_uncovered_source_files(domain_files: List[str]) -> bool:
-    """True when any non-test domain file is a programming language the
-    structural detectors cannot read (in `_SOURCE_EXTENSIONS` but outside
-    `_DETECTOR_COVERED_LANGS`).
-
-    One uncovered file voids a whole negative inference — the detectors may
-    have missed the evidence in the file they cannot parse. Non-programming
-    files (styles, markup, config, docs) are judged by the language-agnostic
-    families and never trip this.
-    """
-    for f in domain_files:
-        if is_test_file(f):
-            continue
-        ext = _ext_of(f)
-        if ext in _SOURCE_EXTENSIONS and ext not in _DETECTOR_COVERED_LANGS:
-            return True
-    return False
-
-
-# Per-CHECK competence — the second competence layer. The global
-# `_DETECTOR_COVERED_LANGS` floor proves the matrix's structural forms
-# (signatures, types, imports, public API), but ecosystem-VOCABULARY
-# checks are narrower: has_http_client_calls knows go/js/py/php client
-# idioms and nothing about java.net.http, so for a Java diff its silence
-# is absence of vocabulary, not absence of evidence. The small-diff gate
-# consults this map and dispatches conservatively when any configured
-# check cannot read the diff's languages — erring on over-dispatch.
-#
-#   UNIVERSAL  — reads a language-agnostic surface (string contents,
-#                diffstat, paths, token skeletons); competent everywhere.
-#   STRUCTURAL — proven by the criteria suite's language matrix; competent
-#                exactly for _DETECTOR_COVERED_LANGS (already enforced by
-#                the global floor).
-#   frozenset  — an explicit claimed-extension set for ecosystem
-#                vocabulary; must shrink to what the check's unit-test
-#                form table actually proves.
-_UNIVERSAL = "universal"
-_STRUCTURAL = "structural"
-
-_HTTP_CLIENT_CLAIMED_LANGS = frozenset({
-    "go", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "php", "phtml",
-})
-
-# Deliberately the full covered set — every covered language has a
-# syntax-unique loop form in the proof table, and aliasing (rather than
-# duplicating the literal) makes matrix growth FORCE a new iteration
-# form: adding a language family without one fails the proof-table test.
-_ITERATION_CLAIMED_LANGS = _DETECTOR_COVERED_LANGS
-
 # ONE record per check — every other registry is a view over this dict.
-# `reads_diff`: the check scans patch text, so decide_agent_dispatch must
-# fetch it (a check marked False here never sees diff_text) and the
-# failed-fetch guard applies. `competence`: see the tiers above. A check
-# missing either field fails the registry meta-test at import/test time.
+# `reads_diff` controls patch fetching and the failed-fetch guard. Nothing in
+# this record authorizes a negative inference.
+# =============================================================================
+
 _CHECK_SPECS = {
-    "has_new_functions": {"reads_diff": True, "competence": _STRUCTURAL},
-    "has_modified_signatures": {"reads_diff": True, "competence": _STRUCTURAL},
-    "has_new_types": {"reads_diff": True, "competence": _STRUCTURAL},
-    "has_import_changes": {"reads_diff": True, "competence": _STRUCTURAL},
-    "has_public_api_changes": {"reads_diff": True, "competence": _STRUCTURAL},
-    "has_docblock_changes": {"reads_diff": True, "competence": _STRUCTURAL},
-    "has_markup_changes": {"reads_diff": True, "competence": _UNIVERSAL},
-    "has_renamed_symbols": {"reads_diff": True, "competence": _UNIVERSAL},
-    "has_sql_queries": {"reads_diff": True, "competence": _UNIVERSAL},
-    "has_http_client_calls": {"reads_diff": True, "competence": _HTTP_CLIENT_CLAIMED_LANGS},
-    "has_collection_iteration": {"reads_diff": True, "competence": _ITERATION_CLAIMED_LANGS},
-    "has_new_source_files": {"reads_diff": False, "competence": _UNIVERSAL},
-    "has_documentation_files": {"reads_diff": False, "competence": _UNIVERSAL},
-    "has_style_files": {"reads_diff": False, "competence": _UNIVERSAL},
-    "has_template_files": {"reads_diff": False, "competence": _UNIVERSAL},
-    "file_deletions": {"reads_diff": False, "competence": _UNIVERSAL},
-    "net_removal": {"reads_diff": False, "competence": _UNIVERSAL},
-    "large_pr": {"reads_diff": False, "competence": _UNIVERSAL},
-    "new_abstraction_files": {"reads_diff": False, "competence": _UNIVERSAL},
-    "substantial_non_test_additions": {"reads_diff": False, "competence": _UNIVERSAL},
-    "spans_architectural_layers": {"reads_diff": False, "competence": _UNIVERSAL},
+    "has_new_functions": {"reads_diff": True},
+    "has_modified_signatures": {"reads_diff": True},
+    "has_new_types": {"reads_diff": True},
+    "has_import_changes": {"reads_diff": True},
+    "has_public_api_changes": {"reads_diff": True},
+    "has_docblock_changes": {"reads_diff": True},
+    "has_markup_changes": {"reads_diff": True},
+    "has_renamed_symbols": {"reads_diff": True},
+    "has_sql_queries": {"reads_diff": True},
+    "has_http_client_calls": {"reads_diff": True},
+    "has_collection_iteration": {"reads_diff": True},
+    "has_new_source_files": {"reads_diff": False},
+    "has_documentation_files": {"reads_diff": False},
+    "has_style_files": {"reads_diff": False},
+    "has_template_files": {"reads_diff": False},
+    "file_deletions": {"reads_diff": False},
+    "net_removal": {"reads_diff": False},
+    "large_pr": {"reads_diff": False},
+    "new_abstraction_files": {"reads_diff": False},
+    "substantial_non_test_additions": {"reads_diff": False},
+    "spans_architectural_layers": {"reads_diff": False},
 }
 
 _SUPPORTED_TRIAGE_CHECKS = frozenset(_CHECK_SPECS)
 _DIFF_BASED_CHECKS = frozenset(
     name for name, spec in _CHECK_SPECS.items() if spec["reads_diff"]
 )
-_CHECK_COMPETENCE = {
-    name: spec["competence"] for name, spec in _CHECK_SPECS.items()
-}
-
-
-def _agent_checks_competent(config: dict, domain_files: List[str]) -> bool:
-    """True when every check this agent carries can read every non-test
-    source language in the diff. Keywords are language-agnostic and need
-    no entry; the STRUCTURAL floor is enforced separately by
-    _has_uncovered_source_files()."""
-    exts = {
-        _ext_of(f)
-        for f in domain_files
-        if not is_test_file(f)
-    }
-    exts &= _SOURCE_EXTENSIONS
-    for check in config.get("triage_checks", []):
-        competence = _CHECK_COMPETENCE[check]
-        if competence is _UNIVERSAL or competence is _STRUCTURAL:
-            continue
-        if exts - competence:
-            return False
-    return True
-
 # Stylesheet extensions (from scope.py's language groups) — for the
 # has_style_files check: a changed stylesheet is inherently a visual
 # surface (visibility, focus indicators, contrast) regardless of which
@@ -1614,6 +1509,11 @@ def _validate_triage_checks(agent_name: str, config: dict) -> None:
     for check in config.get("triage_checks", []):
         if check not in _SUPPORTED_TRIAGE_CHECKS:
             raise ValueError(f"Unsupported triage check for {agent_name}: {check}")
+    exhaustive = config.get("small_diff_triage_exhaustive")
+    if exhaustive is not None and not isinstance(exhaustive, bool):
+        raise ValueError(
+            f"small_diff_triage_exhaustive for {agent_name} must be a boolean"
+        )
 
 
 def triage_conditional_agent(
@@ -1638,6 +1538,10 @@ def triage_conditional_agent(
     5. Agent-specific checks (dead-code: deletions, net removal, structural signals) → DISPATCH
     5.5. Evidence gate: require_triage_keyword_match agents skip here when
        neither keywords nor checks fired → SKIPPED_TRIAGE
+    5.6. Scoped evidence gate: configured mixed-language file classes skip
+       when neither keywords nor checks fired → SKIPPED_TRIAGE
+    5.75. Exhaustive small-diff gate: explicitly certified agents may skip
+       a small change after every configured signal remains silent
     6. Default: DISPATCH (conservative — when in doubt, dispatch)
 
     Args:
@@ -1761,23 +1665,17 @@ def triage_conditional_agent(
                 "no keyword or check matched"
             )
 
-    # Layer 5.75: Small-diff polarity — on tiny diffs, reaching this point
-    # means every evidence source (keywords, checks) got a fair chance and
-    # none fired; require evidence rather than dispatching by default.
-    # Unsized diffstats keep the default (unknown size is not "small"), and
-    # agents whose value doesn't scale with diff size opt out via
-    # small_diff_exempt. Skips stay visible in agent_signals for override.
-    # The gate also only judges languages the structural detectors provably
-    # read — see the "Detector competence model" section.
-    if not config.get("small_diff_exempt"):
-        if not _has_uncovered_source_files(domain_files) and _agent_checks_competent(
-            config, domain_files
-        ):
-            changed_lines = _count_in_scope_non_test_changed_lines(domain_files, diffstat)
-            if changed_lines is not None and changed_lines < SMALL_DIFF_THRESHOLD:
-                return "SKIPPED_TRIAGE", (
-                    f"small change ({changed_lines} lines in scope), no positive triage signal"
-                )
+    # Layer 5.75: Small-diff polarity. Detector silence is absence of known
+    # vocabulary, not proof that an agent's semantic criteria are irrelevant.
+    # Only an explicit full-criteria exhaustiveness certification may turn a
+    # small successful scan into a skip. No current agent claims this.
+    if config.get("small_diff_triage_exhaustive"):
+        changed_lines = _count_in_scope_non_test_changed_lines(domain_files, diffstat)
+        if changed_lines is not None and changed_lines < SMALL_DIFF_THRESHOLD:
+            return "SKIPPED_TRIAGE", (
+                f"small change ({changed_lines} lines in scope), "
+                "exhaustive triage found no positive signal"
+            )
 
     # Layer 6: Default — DISPATCH when no triage signal skips the agent.
     # Keywords and triage checks provide positive evidence, but conditional

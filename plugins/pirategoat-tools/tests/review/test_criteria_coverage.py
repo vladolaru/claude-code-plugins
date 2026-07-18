@@ -607,8 +607,8 @@ CRITERIA_PROBES = {
         ),
     ],
     "history-insights-reviewer": [
-        # small_diff_exempt — its value comes from the touched file's git
-        # history, so any in-domain modification dispatches.
+        # Its value comes from the touched file's git history, so every
+        # in-domain modification is relevant under conservative dispatch.
         probe(
             "PR modifies existing code that has meaningful git history (prior fixes, enhancements, refactors)",
             ["includes/class-wc-cart.php"],
@@ -848,8 +848,8 @@ CRITERIA_PROBES = {
         ),
     ],
     "security-reviewer": [
-        # small_diff_exempt — one-line regressions are this domain's norm;
-        # every in-domain probe must dispatch regardless of content.
+        # One-line regressions are this domain's norm; every in-domain probe
+        # must dispatch regardless of deterministic vocabulary.
         probe(
             "New or modified endpoints accepting external input",
             ["includes/rest/class-orders-controller.php"],
@@ -1127,12 +1127,9 @@ class TestProbeNeutrality:
 # a detector that only knows PHP fails here for every other language.
 # ---------------------------------------------------------------------------
 
-# Family → the file extensions that family's probes vouch for. The union of
-# these is what plan_dispatch._DETECTOR_COVERED_LANGS may claim: the
-# small-diff evidence gate only judges languages the matrix PROVES the
-# detectors can read; scoped-but-uncovered languages (C, C++, Obj-C, ...)
-# dispatch by default instead of being silently gated by detectors that
-# cannot parse them.
+# Family → file extensions with representative positive probes. These tables
+# document recognition; they do not claim that detector silence exhaustively
+# excludes every criterion-relevant form in a language.
 _MATRIX_FAMILY_EXTENSIONS = {
     "php": ["php", "phtml"],
     "typescript": ["js", "mjs", "cjs", "jsx", "ts", "tsx"],
@@ -1244,9 +1241,8 @@ _IMPORT_CHANGES = {
 # REST/route registration surfaces per ecosystem. api-contract's "REST API
 # endpoint additions or modifications" criterion is language-generic, but
 # its detector rested on register_rest_route alone — a FastAPI decorator or
-# an Express route carried no signal (round-10 miss: _DETECTOR_COVERED_LANGS
-# authorized small-diff skips on generic-form proof while this semantic
-# criterion had one-language coverage).
+# an Express route carried no signal (round-10 miss: representative generic
+# forms were incorrectly treated as exhaustive semantic coverage).
 _ENDPOINT_REGISTRATIONS = {
     "php": [
         ("includes/rest/class-orders-controller.php",
@@ -1342,14 +1338,8 @@ class TestLanguageMatrix:
         )
 
 
-class TestUncoveredLanguageGuard:
-    """Scoped languages WITHOUT detector coverage must not be gated.
-
-    The evidence gate can only judge absence where detectors can read the
-    syntax. For a C/C++/Obj-C diff (in _PROG_LANGS but not detector-covered),
-    a negative structural scan is absence of vocabulary, not absence of
-    evidence — the small-diff gate must fall back to dispatch-by-default,
-    the same 'unknown is not negative' rule that unsized diffstats follow."""
+class TestDetectorSilenceConservatism:
+    """Partial detector silence never gates a scoped programming language."""
 
     def _small(self, filepath):
         return {
@@ -1384,9 +1374,7 @@ class TestUncoveredLanguageGuard:
         )
         assert status == "DISPATCH", reason
 
-    def test_covered_language_still_gated(self, agents):
-        """A detector-covered language with genuinely no evidence keeps the
-        small-diff skip — the guard is for uncovered languages only."""
+    def test_representative_language_coverage_does_not_authorize_skip(self, agents):
         status, reason = decide_agent_dispatch(
             "concurrency-reviewer", agents["concurrency-reviewer"],
             build_domain_counts(["src/utils/format.py"]),
@@ -1397,12 +1385,9 @@ class TestUncoveredLanguageGuard:
             diff_text="+ return value.strip()",
             repository_text="",
         )
-        assert status == "SKIPPED_TRIAGE", reason
+        assert status == "DISPATCH", reason
 
-    def test_mixed_covered_and_uncovered_files_bypass_the_gate(self, agents):
-        """One uncovered-language file in the set voids the whole negative
-        inference — the detectors may have missed the evidence in the file
-        they cannot read."""
+    def test_mixed_language_files_dispatch_conservatively(self, agents):
         files = ["src/utils/format.py", "src/native/parser.c"]
         status, reason = decide_agent_dispatch(
             "concurrency-reviewer", agents["concurrency-reviewer"],
@@ -1424,10 +1409,8 @@ class TestUncoveredLanguageGuard:
         assert status == "DISPATCH", reason
 
     def test_keyword_required_gate_holds_for_uncovered_languages(self):
-        """The blanket require_triage_keyword_match gate rests on KEYWORDS,
-        which are language-agnostic (identifiers, commits, paths) — keyword
-        absence is competent evidence in any language, so the coverage guard
-        must NOT bypass that gate."""
+        """An explicit membership gate remains separate from semantic
+        small-diff inference and still requires its configured keyword."""
         config = {
             "dispatch_class": "conditional",
             "domain": "security",
@@ -1447,18 +1430,8 @@ class TestUncoveredLanguageGuard:
         )
         assert status == "SKIPPED_TRIAGE", reason
 
-    def test_covered_set_matches_matrix_exactly(self, agents):
-        """_DETECTOR_COVERED_LANGS may claim exactly what the matrix proves —
-        adding an extension to the covered set without matrix probes (or
-        removing probes while keeping the claim) fails here."""
-        matrix_exts = {
-            ext for exts in _MATRIX_FAMILY_EXTENSIONS.values() for ext in exts
-        }
-        assert set(_mod._DETECTOR_COVERED_LANGS) == matrix_exts
-
     def test_every_matrix_family_probes_every_table(self):
-        """Each family in the extensions map has signature, type, and import
-        probes — a family can't vouch for extensions with partial proof."""
+        """Each family has representative positive probes in every table."""
         for tbl_name, tbl in (
             ("signatures", _SIGNATURE_CHANGES),
             ("types", _TYPE_DECLARATIONS),

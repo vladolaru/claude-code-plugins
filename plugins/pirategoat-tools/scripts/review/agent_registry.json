@@ -13,7 +13,6 @@
     },
     "security-reviewer": {
       "domain": "security",
-      "small_diff_exempt": true,
       "secondary_domains": [
         "config-ops"
       ],
@@ -360,7 +359,6 @@
       "max_history_commits": 5,
       "budget_override": 45,
       "dispatch_class": "conditional",
-      "small_diff_exempt": true,
       "triage_criteria": [
         "PR modifies existing code that has meaningful git history (prior fixes, enhancements, refactors)",
         "Changed files touch areas with known past issues or multiple prior contributors",
