@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Tests
+
+- Removed `tests/__init__.py` as part of the repo-wide fix for multi-plugin pytest collection collisions (all plugin suites were importable as the same package `tests`); the root `pytest.ini` now pins `--import-mode=importlib`. No runtime change.
+
 ## [1.5.3] - 2026-03-02
 
 ### Fixed

@@ -5,6 +5,12 @@ All notable changes to the yoloing-safe plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Tests
+
+- Removed `tests/__init__.py` as part of the repo-wide fix for multi-plugin pytest collection collisions (all plugin suites were importable as the same package `tests`, and conftests collided as `tests.conftest`); the root `pytest.ini` now pins `--import-mode=importlib`. No runtime change.
+
 ## [1.13.1] - 2026-04-24
 
 ### Fixed

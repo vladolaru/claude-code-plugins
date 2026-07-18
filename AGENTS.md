@@ -236,6 +236,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 
 **Run all tests:** `pytest plugins/pirategoat-tools/tests/ -v 2>&1 | tail -30`
 
+**Run every plugin's tests in one session:** `pytest plugins/ 2>&1 | tail -5` — this works because the root `pytest.ini` pins `--import-mode=importlib` and test trees carry no `__init__.py` (guarded by `plugins/pirategoat-tools/tests/test_pytest_layout.py`; see it before adding an `__init__.py` under any `tests/` tree).
+
 **Test principles:**
 - Code-based graders only (fast, deterministic, no model calls)
 - Grade outcomes not paths

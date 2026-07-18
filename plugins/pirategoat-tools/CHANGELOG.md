@@ -28,6 +28,10 @@ Makes review decisions evidence-driven end to end. The motivating full-code-revi
 - **Accessibility evidence survives broad backend diffs.** Pure template and stylesheet changes are inherent UI evidence, mixed backend/frontend diffs are not over-gated, and markup-bearing files are budgeted before large unrelated backend files. The same markup vocabulary drives dispatch and scope priority so those paths cannot drift.
 - **Generic structural words no longer masquerade as domain evidence.** Terms such as `function`, `class`, `remove`, and `config` were removed from reviewer keyword lists where structural checks can establish the signal directly, reducing accidental specialist dispatch without weakening documented criteria.
 
+### Tests
+
+- **All plugin suites can run in one pytest session.** Test trees no longer declare a shared top-level `tests` package, and the root configuration pins importlib mode so plugin conftests and same-named modules cannot collide. A repository guard prevents package markers from being reintroduced; `pytest plugins/` now collects all 3,460 tests together.
+
 ## [1.106.0] - 2026-07-16
 
 Fixes silent reviewer-finding loss discovered by root-cause-analyzing 1,825 reviewer subagent transcripts from the last 60 days: 8 agents / 11 findings — including HIGHs in real WooCommerce and WPCOM PR reviews — were silently demoted from verdict-counting issues to informational observations because `add_issue()` redirected any `line=None` finding to `add_observation()` with no signal.
