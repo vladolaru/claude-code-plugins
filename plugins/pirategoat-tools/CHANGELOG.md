@@ -5,7 +5,7 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.107.0] - 2026-07-16
+## [1.107.0] - 2026-07-19
 
 Makes review decisions evidence-driven end to end. The motivating full-code-review exposed three related gaps: server-rendered markup could miss accessibility review, small changes could dispatch broad reviewer cohorts without a concrete signal, and several agents repeating the same incomplete search could look like independent confirmation. This release turns those lessons into explicit dispatch, verification, and regression-review contracts.
 
@@ -30,7 +30,7 @@ Makes review decisions evidence-driven end to end. The motivating full-code-revi
 
 ### Tests
 
-- **All plugin suites can run in one pytest session.** Test trees no longer declare a shared top-level `tests` package, and the root configuration pins importlib mode so plugin conftests and same-named modules cannot collide. A repository guard prevents package markers from being reintroduced; `pytest plugins/` now collects all 3,460 tests together.
+- **All plugin suites can run in one pytest session.** Test trees no longer declare a shared top-level `tests` package, and the root configuration pins importlib mode so plugin conftests and same-named modules cannot collide. A repository guard prevents package markers from being reintroduced; current release verification passes 3,518 tests together, with 24 skipped.
 
 ## [1.106.0] - 2026-07-16
 
