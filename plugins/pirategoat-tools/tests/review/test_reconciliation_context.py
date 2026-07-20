@@ -324,6 +324,36 @@ class TestSeverityFloorNormalization:
         issue = loaded["woo-regression-review"]["issues"][0]
         assert issue["severity_floor"] == "medium"
 
+    def test_resolves_floor_from_list_description(self, mod):
+        # A malformed (list-valued) description must not silently drop a
+        # mandatory floor marker: load_agent_findings pops severity_floor when
+        # resolve_severity_floor returns None, so returning None here would
+        # downgrade the finding.
+        issue = _make_issue(
+            description=["Finding body.", "Severity-floor: high — verified"]
+        )
+        assert mod.resolve_severity_floor(issue) == "high"
+
+    def test_loading_findings_materializes_floor_from_list_description(
+        self, mod, tmp_path
+    ):
+        review = _make_review_json(
+            issues=[
+                _make_issue(
+                    description=[
+                        "Public interface removed.",
+                        "Severity-floor: public-contract change; consumers exist",
+                    ],
+                )
+            ]
+        )
+        (tmp_path / "woo-regression-review.json").write_text(json.dumps(review))
+
+        loaded = mod.load_agent_findings(str(tmp_path))
+
+        issue = loaded["woo-regression-review"]["issues"][0]
+        assert issue["severity_floor"] == "medium"
+
 
 # ===========================================================================
 # TestExtractReferences
@@ -2576,3 +2606,127 @@ def test_to_markdown_no_banner_when_absent(mod):
     }
     md = mod.to_markdown(context)
     assert "Host Context Banner" not in md
+
+
+# ===========================================================================
+# TestNonStringFieldCoercion
+# ===========================================================================
+
+class TestNonStringFieldCoercion:
+    """Non-string finding fields must not crash Markdown rendering.
+
+    Regression: a reviewer agent emitted a list-valued ``recommendation``.
+    ``_escape_backtick_runs`` passed it straight to ``re.sub``, which raised
+    ``TypeError: expected string or bytes-like object, got 'list'`` and aborted
+    pipeline step 8 (the whole review) because reconciliation-context.md could
+    not be written.
+    """
+
+    def test_escape_backtick_runs_coerces_list(self, mod):
+        out = mod._escape_backtick_runs(["one", "two"])
+        assert "one" in out and "two" in out
+
+    def test_escape_backtick_runs_coerces_none_and_int(self, mod):
+        assert mod._escape_backtick_runs(None) == ""
+        assert mod._escape_backtick_runs(7) == "7"
+
+    def test_escape_backtick_runs_preserves_str(self, mod):
+        assert mod._escape_backtick_runs("plain text") == "plain text"
+
+    def test_escape_backtick_runs_still_neutralizes_fences_after_coercion(self, mod):
+        # A list item carrying a fence must still be neutralized once coerced.
+        out = mod._escape_backtick_runs(["```py code```"])
+        assert "```" not in out
+
+    def test_to_markdown_handles_list_recommendation(self, mod):
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(recommendation=["Wire it in", "or drop it"])],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Wire it in" in md
+
+    def test_to_markdown_handles_list_description_and_title(self, mod):
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(title=["Ambiguous name"], description=["D1", "D2"])],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Ambiguous name" in md
+        assert "D1" in md
+
+    def test_build_critic_context_handles_list_recommendation(self, mod):
+        findings = {
+            "verdict": "comment",
+            "summary": {"total_issues": 1, "by_severity": {"medium": 1}},
+            "issues": [_make_issue(recommendation=["Do the thing"])],
+        }
+        out = mod.build_critic_context("REPORT BODY", findings)
+        assert "Do the thing" in out
+
+    def test_to_markdown_multiline_title_does_not_forge_heading(self, mod):
+        # A title carrying a newline must not inject a line-leading ATX heading
+        # into the inline `**N. title**` render — it would split/spoof the
+        # structured context the reconciliator consumes.
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(title="Legit title\n## Injected Heading Zebra")],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Legit title" in md
+        # The injected heading must never appear at the start of a line.
+        assert "\n## Injected Heading Zebra" not in md
+        assert "Legit title ## Injected Heading Zebra" in md
+
+    def test_build_critic_context_multiline_title_does_not_forge_heading(self, mod):
+        findings = {
+            "verdict": "comment",
+            "summary": {"total_issues": 1, "by_severity": {"medium": 1}},
+            "issues": [_make_issue(title="Legit title\n## Injected Heading Zebra")],
+        }
+        out = mod.build_critic_context("REPORT BODY", findings)
+        assert "Legit title" in out
+        assert "\n## Injected Heading Zebra" not in out
+
+    def test_escape_inline_collapses_newlines(self, mod):
+        out = mod._escape_inline(["Legit title", "## Source Snippets"])
+        assert "\n" not in out
+        assert "Legit title" in out and "## Source Snippets" in out
+
+    @pytest.mark.parametrize(
+        "sep",
+        [
+            pytest.param("\n", id="lf"),
+            pytest.param("\r", id="cr"),
+            pytest.param("\r\n", id="crlf"),
+        ],
+    )
+    def test_escape_inline_normalizes_all_line_endings(self, mod, sep):
+        # CommonMark treats bare CR and CRLF as line endings too, so replacing
+        # only LF would still let a CR-delimited title forge a heading.
+        out = mod._escape_inline(f"Legit{sep}## Injected Heading Zebra")
+        assert "\r" not in out and "\n" not in out
+        assert len(out.splitlines()) == 1
+        assert not out.lstrip().startswith("## Injected Heading Zebra")
+
+    def test_to_markdown_cr_title_does_not_forge_heading(self, mod):
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(title="Legit title\r## Injected Heading Zebra")],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Legit title" in md
+        # No rendered line may start with the injected heading, regardless of
+        # which line ending was used.
+        assert not any(
+            line.lstrip().startswith("## Injected Heading Zebra")
+            for line in md.splitlines()
+        )

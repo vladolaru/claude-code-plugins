@@ -259,6 +259,72 @@ class TestAddRecommendation:
         assert "urgent" not in b.recommendations
         assert all(len(v) == 0 for v in b.recommendations.values())
 
+    def test_non_string_text_coerced(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        b.add_recommendation("immediate", ["Do A", "Do B"])
+        stored = b.recommendations["immediate"][0]
+        assert isinstance(stored, str)
+        assert "Do A" in stored and "Do B" in stored
+
+
+# =============================================================================
+# TestNonStringFieldCoercion
+# =============================================================================
+
+
+class TestNonStringFieldCoercion:
+    """add_issue coerces free-form text fields to strings.
+
+    Regression: a reviewer emitted a list-valued ``recommendation`` that reached
+    the reconciliation Markdown renderer and crashed the whole pipeline. The
+    producer must never write a non-string title/description/recommendation.
+    """
+
+    def test_list_recommendation_coerced_to_string(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue(
+            "high", "Title", "f.py", "desc",
+            ["Wire it in", "or drop it"], line=1,
+        )
+        rec = b.issues[0]["recommendation"]
+        assert isinstance(rec, str)
+        assert "Wire it in" in rec and "or drop it" in rec
+
+    def test_list_description_and_title_coerced(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue(
+            "high", ["Ambiguous name"], "f.py", ["D1", "D2"], "rec", line=1,
+        )
+        assert isinstance(b.issues[0]["title"], str)
+        assert isinstance(b.issues[0]["description"], str)
+        assert "Ambiguous name" in b.issues[0]["title"]
+        assert "D1" in b.issues[0]["description"]
+
+    def test_none_fields_coerced_to_empty_string(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue("high", "Title", "f.py", None, None, line=1)
+        assert b.issues[0]["description"] == ""
+        assert b.issues[0]["recommendation"] == ""
+
+    def test_multiline_title_collapsed_to_single_line(self):
+        # Titles render inline downstream (**N. title**, ### F1: title) without
+        # block-syntax escaping, so a coerced newline could forge a heading.
+        # The producer must keep the title single-line.
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue(
+            "high", ["Legit title", "## Source Snippets"], "f.py",
+            "desc", "rec", line=1,
+        )
+        title = b.issues[0]["title"]
+        assert "\n" not in title
+        assert "Legit title" in title and "## Source Snippets" in title
+
+    def test_string_fields_unchanged(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_issue("high", "T", "f.py", "plain desc", "plain rec", line=1)
+        assert b.issues[0]["description"] == "plain desc"
+        assert b.issues[0]["recommendation"] == "plain rec"
+
 
 # =============================================================================
 # TestSetConfidence

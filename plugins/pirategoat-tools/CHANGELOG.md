@@ -5,6 +5,18 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.107.1] - 2026-07-20
+
+Hardens the reconciliation renderer against malformed reviewer output. A full-code-review aborted at the reconciliation step when a reviewer agent emitted a list-valued `recommendation`: the field flowed unchecked into `re.sub`, raising `TypeError: expected string or bytes-like object, got 'list'` and taking down the entire review. Reviewer JSON is model-authored, so a schema-string field can arrive as a list, number, or null — the pipeline must render it, not crash on it.
+
+### Fixed
+
+- **Non-string finding fields no longer crash the review.** `_escape_backtick_runs` and `_strip_critic_severity_floor_markers` — the two regex chokepoints every free-form finding field passes through — now coerce any value to a string first (lists join on newlines, `None` becomes empty), crash-proofing both `to_markdown` (reconciliation context, step 8) and `build_critic_context` (critic context, step 10) against malformed reviewer output.
+- **Coerced titles can't inject Markdown structure.** Titles render inline (`**N. …**`, `### F1: …`) without block-syntax escaping, so a coerced multiline title could otherwise forge a heading or thematic break and split the structured context. Titles are now collapsed to a single line — at the producer and defensively at both render sites — collapsing every line ending (LF, bare CR, and CRLF, all of which CommonMark treats as line breaks), not just LF.
+- **Legacy severity floors survive malformed descriptions.** `resolve_severity_floor` now coerces the description before scanning for a `Severity-floor:` marker, so a list-valued description no longer hits the non-string guard and returns `None` — which `load_agent_findings` would treat as "no floor" and drop, silently downgrading a mandatory floor during reconciliation.
+- **Producer-side validation stops malformed findings at the source.** `ReviewOutputBuilder.add_issue` and `add_recommendation` coerce `title` (single-line), `description`, `recommendation`, and recommendation text to strings at write time, so a non-string value never reaches disk. Defense in depth alongside the renderer guard.
+- **Reconciliation failures surface their root cause.** `reconciliation_context.py` now prints the full traceback to stderr on failure instead of only a terse message, so a future malformed-field abort names the offending field and finding instead of just "got 'list'".
+
 ## [1.107.0] - 2026-07-19
 
 Makes review decisions evidence-driven end to end. The motivating full-code-review exposed three related gaps: server-rendered markup could miss accessibility review, small changes could dispatch broad reviewer cohorts without a concrete signal, and several agents repeating the same incomplete search could look like independent confirmation. This release turns those lessons into explicit dispatch, verification, and regression-review contracts.
