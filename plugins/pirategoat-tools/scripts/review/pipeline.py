@@ -1167,6 +1167,24 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
         actions.append("")
 
+    # Inline coverage gaps — computed deterministically at reconciliation and
+    # loaded into state by _orchestrate_step. A starved review must not
+    # present as a clean one, regardless of reconciliator diligence.
+    gaps = state.get("inline_coverage_gaps") or {}
+    if gaps:
+        actions.append("")
+        actions.append(
+            f"**⚠ Review coverage:** {len(gaps)} changed file(s) were skipped "
+            "by every matching agent's diff budget — no reviewer saw their "
+            "diff inline. Include a 'Review coverage' section in "
+            "`review-report.md` listing them; the verdict must acknowledge "
+            "this gap:"
+        )
+        for f_path, agents in sorted(gaps.items()):
+            agents_list = agents if isinstance(agents, list) else [str(agents)]
+            actions.append(f"- `{f_path}` (skipped by: {', '.join(agents_list)})")
+        actions.append("")
+
     handoff = [
         f"Verify `{od}/review-report.md` exists before proceeding.",
     ]
@@ -1831,6 +1849,25 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 "reconciliation without a valid context file. "
                 f"Check stderr above. Expected: {recon_ctx_path}"
             )
+
+    if step == 9:
+        # Load inline coverage gaps computed at reconciliation so the report
+        # briefing can surface files no reviewer saw inline — deterministic,
+        # not dependent on the reconciliator having carried them forward.
+        recon_json_path = os.path.join(output_dir, "reconciliation-context.json")
+        gaps = {}
+        if os.path.isfile(recon_json_path):
+            try:
+                with open(recon_json_path) as f:
+                    recon = json.load(f)
+                coverage = recon.get("inline_coverage") or {}
+                if isinstance(coverage, dict):
+                    raw_gaps = coverage.get("files_never_inline") or {}
+                    if isinstance(raw_gaps, dict):
+                        gaps = raw_gaps
+            except (json.JSONDecodeError, OSError):
+                gaps = {}
+        state["inline_coverage_gaps"] = gaps
 
     if step == 10:
         # Read reconciliation verdict for quick-mode critic skip decision

@@ -425,6 +425,46 @@ class TestStep8Orchestration:
         assert any("code-review.json" in f for f in review_files)
 
 
+class TestStep9Orchestration:
+    """Step 9 main() loads inline coverage gaps from reconciliation context."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_step_9_loads_inline_coverage_gaps(self, tmp_path):
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        recon = {
+            "inline_coverage": {
+                "agents_reporting": 2,
+                "files_inline": {"src/a.php": ["code-reviewer"]},
+                "files_never_inline": {
+                    "src/starved.php": ["code-reviewer", "security-reviewer"],
+                },
+            },
+        }
+        (tmp_path / "reconciliation-context.json").write_text(json.dumps(recon))
+        r = self._run("--step", "9", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state.get("inline_coverage_gaps") == {
+            "src/starved.php": ["code-reviewer", "security-reviewer"],
+        }
+        # The briefing itself must carry the warning.
+        assert "src/starved.php" in r.stdout
+
+    def test_step_9_tolerates_missing_reconciliation_context(self, tmp_path):
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        r = self._run("--step", "9", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state.get("inline_coverage_gaps") == {}
+
+
 class TestStep11Orchestration:
     """Step 11 main() reads review-verdict.json and writes pipeline-result.json."""
 
