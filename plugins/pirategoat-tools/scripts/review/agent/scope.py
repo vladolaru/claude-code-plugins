@@ -1111,6 +1111,7 @@ def build_scope(args: argparse.Namespace) -> dict:
     max_lines = args.max_lines
     diffs = {}
     total_lines = 0
+    ordinary_budget_lines = 0
     budget_exceeded_files = []
     list_only_files = []
 
@@ -1161,19 +1162,20 @@ def build_scope(args: argparse.Namespace) -> dict:
                 list_only_files.append(filepath)
                 continue
 
-            if total_lines >= max_lines:
+            if diffs and ordinary_budget_lines >= max_lines:
                 budget_exceeded_files.append(filepath)
                 continue
 
             # Pre-skip without fetching when the RAW diffstat estimate alone
-            # exceeds the whole budget — but ONLY when semantic filtering is
-            # off. With filtering enabled, raw size proves nothing: a
+            # exceeds the remaining ordinary budget — but ONLY when semantic
+            # filtering is off. With filtering enabled, raw size proves nothing: a
             # 2,050-line patch that is 2,040 docblock lines filters to 10
             # reviewable lines and fits comfortably; the budget contract is
             # on FILTERED lines, so the file must be measured, not guessed.
             if not use_semantic_filter:
                 est_lines = sum(diffstat.get(filepath, (0, 0)))
-                if est_lines >= max_lines and diffs:
+                remaining_ordinary_lines = max_lines - ordinary_budget_lines
+                if diffs and est_lines > remaining_ordinary_lines:
                     budget_exceeded_files.append(filepath)
                     continue
 
@@ -1184,14 +1186,21 @@ def build_scope(args: argparse.Namespace) -> dict:
                 diff_text = apply_semantic_filter(diff_text)
 
             diff_lines = count_diff_lines(diff_text)
+            is_protected_oversized_diff = not diffs and diff_lines > max_lines
 
-            if total_lines + diff_lines > max_lines and diffs:
-                # Would exceed budget and we already have some diffs
+            if (
+                not is_protected_oversized_diff
+                and ordinary_budget_lines + diff_lines > max_lines
+            ):
+                # Would exceed the ordinary pool. Keep scanning so a later,
+                # smaller diff may still fit.
                 budget_exceeded_files.append(filepath)
                 continue
 
             diffs[filepath] = diff_text
             total_lines += diff_lines
+            if not is_protected_oversized_diff:
+                ordinary_budget_lines += diff_lines
 
     # Step 7: Detect output directory (skip network calls when --output-dir provided)
     if args.output_dir:
