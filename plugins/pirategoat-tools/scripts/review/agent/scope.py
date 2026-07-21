@@ -1433,6 +1433,33 @@ def format_json_output(scope: dict) -> str:
 
 
 
+def write_scope_summary(scope: dict, path: str) -> None:
+    """Persist a compact machine-readable scope summary for run-level
+    coverage aggregation (reconciliation_context.aggregate_inline_coverage).
+
+    Fail-open: a summary-write failure must never break scope output.
+    """
+    summary = {
+        "schema": 1,
+        "domain": scope.get("domain"),
+        "range": scope.get("range"),
+        "status": scope.get("status"),
+        "files_with_diffs": sorted(scope.get("diffs", {}) or {}),
+        "budget_exceeded_files": list(scope.get("budget_exceeded_files", []) or []),
+        "list_only_files": list(scope.get("list_only_files", []) or []),
+        "total_diff_lines": scope.get("total_diff_lines", 0),
+        "budget_max": scope.get("budget_max"),
+    }
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+    except OSError as e:
+        print(f"WARNING: could not write scope summary to {path}: {e}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Review Scope — efficient diff scoping for review agents.",
@@ -1490,6 +1517,11 @@ def main():
         action="store_true",
         help="Disable semantic noise filtering on diffs (keep docblocks, comments, formatting).",
     )
+    parser.add_argument(
+        "--summary-json-out",
+        default=None,
+        help="Write a machine-readable scope summary JSON (admitted/skipped files) to this path. Fail-open.",
+    )
 
     args = parser.parse_args()
 
@@ -1508,6 +1540,9 @@ def main():
 
     try:
         scope = build_scope(args)
+
+        if args.summary_json_out:
+            write_scope_summary(scope, args.summary_json_out)
 
         if args.format == "json":
             print(format_json_output(scope))

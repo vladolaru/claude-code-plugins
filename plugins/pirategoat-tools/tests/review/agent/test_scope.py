@@ -1048,6 +1048,50 @@ class TestProductionFirstBudget:
         assert "src/util.php" in scope["diffs"]
 
 
+class TestScopeSummaryJson:
+    """--summary-json-out persists a machine-readable scope summary."""
+
+    def test_write_scope_summary_contents(self, tmp_path):
+        scope = {
+            "status": "OK",
+            "domain": "security",
+            "range": "abc123..HEAD",
+            "diffs": {"src/b.php": "+x", "src/a.php": "+y"},
+            "budget_exceeded_files": ["tests/test_big.php"],
+            "list_only_files": [],
+            "total_diff_lines": 42,
+            "budget_max": 2000,
+        }
+        path = tmp_path / "security-reviewer-scope-summary.json"
+        review_scope.write_scope_summary(scope, str(path))
+
+        data = json.loads(path.read_text())
+        assert data["schema"] == 1
+        assert data["domain"] == "security"
+        assert data["status"] == "OK"
+        assert data["files_with_diffs"] == ["src/a.php", "src/b.php"]
+        assert data["budget_exceeded_files"] == ["tests/test_big.php"]
+        assert data["total_diff_lines"] == 42
+        assert data["budget_max"] == 2000
+
+    def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
+        # NO_DOMAIN_FILES scopes lack diffs/budget keys — must not raise.
+        path = tmp_path / "sub" / "summary.json"
+        review_scope.write_scope_summary({"status": "NO_DOMAIN_FILES"}, str(path))
+        data = json.loads(path.read_text())
+        assert data["files_with_diffs"] == []
+        assert data["budget_exceeded_files"] == []
+
+    def test_write_scope_summary_fails_open(self, tmp_path, capsys):
+        # Unwritable path: warn on stderr, do not raise.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("")
+        review_scope.write_scope_summary(
+            {"status": "OK"}, str(blocker / "impossible" / "summary.json")
+        )
+        assert "could not write scope summary" in capsys.readouterr().err
+
+
 # =============================================================================
 # Markup-evidence budget priority — a11y domain
 # =============================================================================
