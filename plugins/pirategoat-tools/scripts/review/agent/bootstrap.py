@@ -98,7 +98,19 @@ def run_cmd(cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
 
 def find_plugin_root() -> Optional[str]:
     """Find the pirategoat-tools plugin root directory."""
-    # Method 1: cached value from hook
+    # Method 1: derive from own location. This MUST outrank the hook cache:
+    # bootstrap invokes sibling scripts (scope.py) whose CLI contract matches
+    # its own version. A cache file pointing at a different install (e.g. the
+    # plugin cache while running the repo checkout, or a stale version dir)
+    # silently mixes script versions — bootstrap then drives a scope.py that
+    # may not understand its flags.
+    # __file__ is in scripts/review/agent/, so go up 3 levels to plugin root
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # agent/ -> review/ -> scripts/ -> plugin root
+    if os.path.isfile(os.path.join(candidate, "scripts", "review", "agent", "scope.py")):
+        return candidate
+
+    # Method 2: cached value from hook
     cache_file = "/tmp/.pirategoat-tools-root"
     if os.path.isfile(cache_file):
         try:
@@ -108,13 +120,6 @@ def find_plugin_root() -> Optional[str]:
                 return root
         except OSError:
             pass
-
-    # Method 2: derive from own location (most reliable when running from plugin)
-    # __file__ is in scripts/review/agent/, so go up 3 levels to plugin root
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    candidate = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # agent/ -> review/ -> scripts/ -> plugin root
-    if os.path.isfile(os.path.join(candidate, "scripts", "review", "agent", "scope.py")):
-        return candidate
 
     # Method 3: find command fallback
     rc, stdout, _ = run_cmd([
