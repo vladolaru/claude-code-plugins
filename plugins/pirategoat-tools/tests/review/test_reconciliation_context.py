@@ -1348,6 +1348,7 @@ class TestFullScript:
             "output_dir",
             "output_builder_path",
             "host_context_banner",
+            "inline_coverage",
         }
         assert set(ctx.keys()) == expected_keys
 
@@ -2730,3 +2731,98 @@ class TestNonStringFieldCoercion:
             line.lstrip().startswith("## Injected Heading Zebra")
             for line in md.splitlines()
         )
+
+
+# ===========================================================================
+# Inline coverage aggregation — scope summary sidecars
+# ===========================================================================
+
+class TestAggregateInlineCoverage:
+    """aggregate_inline_coverage() reads *-scope-summary*.json sidecars."""
+
+    def _write_summary(self, output_dir, name, files_with_diffs, budget_exceeded):
+        path = os.path.join(output_dir, name)
+        with open(path, "w") as f:
+            json.dump({
+                "schema": 1,
+                "domain": "x",
+                "status": "OK",
+                "files_with_diffs": files_with_diffs,
+                "budget_exceeded_files": budget_exceeded,
+                "list_only_files": [],
+            }, f)
+
+    def test_returns_none_without_summaries(self, mod, tmp_path):
+        assert mod.aggregate_inline_coverage(str(tmp_path)) is None
+
+    def test_returns_none_for_missing_dir(self, mod, tmp_path):
+        assert mod.aggregate_inline_coverage(str(tmp_path / "nope")) is None
+
+    def test_files_never_inline(self, mod, tmp_path):
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            ["src/a.php"], ["src/starved.php", "src/b.php"],
+        )
+        self._write_summary(
+            str(tmp_path), "code-reviewer-scope-summary.json",
+            ["src/b.php"], ["src/starved.php"],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["agents_reporting"] == 2
+        # b.php was inline for code-reviewer — covered, not a gap.
+        assert "src/b.php" not in cov["files_never_inline"]
+        # starved.php was skipped by every agent that matched it.
+        assert cov["files_never_inline"]["src/starved.php"] == [
+            "code-reviewer", "security-reviewer",
+        ]
+
+    def test_malformed_summary_skipped(self, mod, tmp_path):
+        (tmp_path / "broken-scope-summary.json").write_text("{not json")
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["agents_reporting"] == 1
+
+    def test_secondary_summaries_attribute_to_agent(self, mod, tmp_path):
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary-config-ops.json",
+            [], ["ci.yml"],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["files_never_inline"]["ci.yml"] == ["security-reviewer"]
+
+
+class TestInlineCoverageMarkdown:
+    """to_markdown() surfaces inline coverage gaps prominently."""
+
+    def test_gaps_render_loudly(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 3,
+            "files_inline": {"src/a.php": ["code-reviewer"]},
+            "files_never_inline": {
+                "src/starved.php": ["code-reviewer", "security-reviewer"],
+            },
+        }
+        md = mod.to_markdown(ctx)
+        assert "## Inline Diff Coverage Gaps" in md
+        assert "src/starved.php" in md
+        assert "NO reviewer received" in md
+        # Prepended — must appear before the findings sections.
+        assert md.index("Inline Diff Coverage Gaps") < md.index("## Metadata")
+
+    def test_no_section_without_gaps(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 3,
+            "files_inline": {"src/a.php": ["code-reviewer"]},
+            "files_never_inline": {},
+        }
+        md = mod.to_markdown(ctx)
+        assert "Inline Diff Coverage Gaps" not in md
+
+    def test_no_section_without_coverage_data(self, mod):
+        md = mod.to_markdown(_make_context_with_findings({}))
+        assert "Inline Diff Coverage Gaps" not in md

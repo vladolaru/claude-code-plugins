@@ -154,6 +154,56 @@ def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
     return host_context.get("banner")
 
 
+def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
+    """Aggregate per-agent scope summaries into run-level inline coverage.
+
+    Reads ``*-scope-summary*.json`` sidecars written by bootstrap/scope.py.
+    A file is a coverage gap when at least one agent skipped it for budget
+    and NO agent received its diff inline — those files were never reviewed
+    against their actual changes by anyone.
+
+    Returns None when no summaries exist (pre-sidecar runs) so callers can
+    distinguish "no data" from "no gaps".
+    """
+    inline: Dict[str, set] = {}
+    skipped: Dict[str, set] = {}
+    agents_reporting = 0
+    try:
+        entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
+    except OSError:
+        return None
+    for entry in entries:
+        name = entry.name
+        if "-scope-summary" not in name or not name.endswith(".json"):
+            continue
+        agent = name.split("-scope-summary")[0]
+        try:
+            with open(entry.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        agents_reporting += 1
+        for f_path in data.get("files_with_diffs") or []:
+            if isinstance(f_path, str):
+                inline.setdefault(f_path, set()).add(agent)
+        for f_path in data.get("budget_exceeded_files") or []:
+            if isinstance(f_path, str):
+                skipped.setdefault(f_path, set()).add(agent)
+    if not agents_reporting:
+        return None
+    return {
+        # Counts summary FILES aggregated (primary + secondary domains),
+        # not unique agents.
+        "agents_reporting": agents_reporting,
+        "files_inline": {f: sorted(a) for f, a in sorted(inline.items())},
+        "files_never_inline": {
+            f: sorted(a) for f, a in sorted(skipped.items()) if f not in inline
+        },
+    }
+
+
 def load_agent_findings(
     output_dir: str,
     dispatched_agents: Optional[List[str]] = None,
@@ -879,6 +929,23 @@ def to_markdown(context: Dict[str, Any]) -> str:
             f"{fence}\n"
         )
 
+    # --- Inline Diff Coverage Gaps (prepended — must not be buried) ---
+    inline_coverage = context.get("inline_coverage")
+    if isinstance(inline_coverage, dict) and inline_coverage.get("files_never_inline"):
+        gaps = inline_coverage["files_never_inline"]
+        parts.append("## Inline Diff Coverage Gaps\n")
+        parts.append(
+            f"**⚠ {len(gaps)} changed file(s) matched reviewer domains but "
+            "NO reviewer received their diff inline** (every matching agent "
+            "skipped them for budget). Findings cannot exist for code no "
+            "agent saw — treat agent verdicts as NOT covering these files, "
+            "and carry this list into `review-findings.md` as a coverage "
+            "warning.\n"
+        )
+        for f_path, agents in gaps.items():
+            parts.append(f"- `{f_path}` (skipped by: {', '.join(agents)})")
+        parts.append("")
+
     # --- Title ---
     parts.append("# Reconciliation Context\n")
 
@@ -1383,6 +1450,9 @@ def main() -> int:
             "output_builder_path": output_builder_path,
             # Host context banner — surfaced for reviewer agents to calibrate findings.
             "host_context_banner": extract_host_banner(output_dir),
+            # Run-level inline coverage from per-agent scope summaries —
+            # None on pre-sidecar runs.
+            "inline_coverage": aggregate_inline_coverage(output_dir),
         }
         # Include dispatched agents, normalized to match agent_findings keys
         # (e.g., "security-reviewer" → "security-review") so the
