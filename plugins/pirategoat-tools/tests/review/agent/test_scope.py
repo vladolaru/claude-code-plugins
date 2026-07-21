@@ -990,6 +990,64 @@ class TestBudgetSortOrder:
         assert scope["total_diff_lines"] <= 700 + max_lines
 
 
+_PRODUCTION_FIRST_FILE_LINES = {
+    "tests/test_helpers.php": 900,   # largest — would win under pure largest-first
+    "src/service.php": 500,
+    "src/util.php": 300,
+    "tests/test_util.php": 250,
+}
+
+
+class TestProductionFirstBudget:
+    """Mixed domains must budget production files before test files."""
+
+    def _build(self, domain, max_lines, tmp_path):
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+            mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
+                _PRODUCTION_FIRST_FILE_LINES
+            )
+            args = argparse.Namespace(
+                domain=domain, range="abc123..HEAD", max_lines=max_lines,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=False,
+            )
+            return review_scope.build_scope(args)
+
+    def test_security_budgets_production_before_tests(self, tmp_path):
+        scope = self._build("security", max_lines=600, tmp_path=tmp_path)
+        # Production files fill the ordinary pool first, largest-first.
+        assert "src/service.php" in scope["diffs"]
+        assert list(scope["diffs"])[0] == "src/service.php"
+        # The giant test file no longer evicts production code.
+        assert "tests/test_helpers.php" in scope["skipped_files"]["budget"]
+
+    def test_production_first_is_largest_first_within_tier(self, tmp_path):
+        scope = self._build("security", max_lines=2000, tmp_path=tmp_path)
+        assert list(scope["diffs"]) == [
+            "src/service.php",
+            "src/util.php",
+            "tests/test_helpers.php",
+            "tests/test_util.php",
+        ]
+
+    def test_php_tests_domain_keeps_largest_first(self, tmp_path):
+        # Test domains: test files are the evidence — no production tier.
+        scope = self._build("php-tests", max_lines=2000, tmp_path=tmp_path)
+        assert list(scope["diffs"]) == [
+            "tests/test_helpers.php",
+            "tests/test_util.php",
+        ]
+
+    def test_oversized_leading_production_file_still_protected(self, tmp_path):
+        # When the largest PRODUCTION file alone exceeds the budget, it is
+        # the protected oversized diff and later files still get the
+        # ordinary pool (the two budget behaviors compose).
+        scope = self._build("security", max_lines=400, tmp_path=tmp_path)
+        assert list(scope["diffs"])[0] == "src/service.php"
+        assert "src/util.php" in scope["diffs"]
+
+
 # =============================================================================
 # Markup-evidence budget priority — a11y domain
 # =============================================================================

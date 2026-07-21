@@ -469,16 +469,22 @@ DOMAIN_CATALOG = {
         "description": "All code files (code-reviewer)",
         "include": _ext_re(_PROG_LANGS, _STYLE_LANGS, _QUERY_LANGS),
         "exclude": None,
+        # Matches production AND test files. Budget production first — on a
+        # test-heavy branch, pure largest-first hands the reviewer test
+        # files and starves the code under review (2026-07-21 incident).
+        "budget_priority": "production_first",
     },
     "security": {
         "description": "Security-relevant code files",
         "include": _ext_re(_PROG_LANGS),
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "performance": {
         "description": "Performance-relevant code files (incl. SQL)",
         "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "dead-code": {
         "description": "Production code only, excluding tests (dead-code-reviewer)",
@@ -494,6 +500,7 @@ DOMAIN_CATALOG = {
         "description": "WordPress PHP/JS/TS files",
         "include": r"\.(php|js|ts|jsx|tsx)$",
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "php-tests": {
         "description": "PHP test files only",
@@ -534,6 +541,7 @@ DOMAIN_CATALOG = {
         "description": "All code files for pattern analysis",
         "include": _ext_re(_PROG_LANGS, _STYLE_LANGS),
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "a11y": {
         "description": "UI-emitting files for accessibility review (JS/TS/JSX/TSX/CSS + server-rendered markup: PHP/HTML/templates)",
@@ -1151,6 +1159,22 @@ def build_scope(args: argparse.Namespace) -> dict:
                 key=lambda f: (
                     not _is_evidence(f),            # evidence first
                     -sum(diffstat.get(f, (0, 0))),  # then largest first
+                ),
+            )
+
+        # Production-first budget priority: domains that match both
+        # production and test files would otherwise let a test-heavy branch
+        # spend the whole budget on test files, starving the code under
+        # review. Non-test files (per the shared _TEST_EXCLUDE classifier)
+        # budget first, largest-first within each tier. Test-only domains
+        # keep pure largest-first — test files ARE their evidence.
+        elif domain_spec.get("budget_priority") == "production_first":
+            production_first_test_re = re.compile(_TEST_EXCLUDE)
+            domain_matched_sorted = sorted(
+                domain_matched_sorted,
+                key=lambda f: (
+                    bool(production_first_test_re.search(f)),  # production first
+                    -sum(diffstat.get(f, (0, 0))),             # then largest first
                 ),
             )
 
