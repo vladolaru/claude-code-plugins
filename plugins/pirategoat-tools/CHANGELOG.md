@@ -5,7 +5,7 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.107.1] - 2026-07-20
+## [1.107.1] - 2026-07-21
 
 Hardens the reconciliation renderer against malformed reviewer output. A full-code-review aborted at the reconciliation step when a reviewer agent emitted a list-valued `recommendation`: the field flowed unchecked into `re.sub`, raising `TypeError: expected string or bytes-like object, got 'list'` and taking down the entire review. Reviewer JSON is model-authored, so a schema-string field can arrive as a list, number, or null — the pipeline must render it, not crash on it.
 
