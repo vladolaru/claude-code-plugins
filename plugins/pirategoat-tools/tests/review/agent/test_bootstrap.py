@@ -523,6 +523,37 @@ class TestExtractScopeMultipleBlocks:
         assert files == ["foo.php"]
         assert extract_scope_line_count(single) == 8
 
+    def test_line_count_includes_not_diffed_workload(self):
+        """NOT DIFFED files are deferred in-scope work: their lines must size
+        the budget, or the largest reviews get the smallest targets."""
+        scope = (
+            "=== FILES ===\n"
+            "src/inline.py  (+400 -100)\n"
+            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
+            "These files ARE IN YOUR SCOPE — their diffs were withheld only to fit\n"
+            "the context budget.\n"
+            "  src/deferred-large.py  (+700 -100)\n"
+            "  src/deferred-small.py  (+80 -20)\n"
+            "=== DIFFS ===\n"
+            "diff content\n"
+        )
+        # 500 inline + 800 + 100 deferred = 1400
+        assert extract_scope_line_count(scope) == 1400
+        # Deferred lines must not enter the FILES-only file list.
+        assert extract_scope_files(scope) == ["src/inline.py"]
+
+    def test_line_count_excludes_lock_and_generated_stats(self):
+        """CHANGED (no diff) lock/generated files stay out of budget sizing."""
+        scope = (
+            "=== FILES ===\n"
+            "src/app.py  (+50 -10)\n"
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "These files changed but diffs are skipped (too large/noisy for inline review).\n"
+            "  package-lock.json  (+9000 -9000)\n"
+            "=== DIFFS ===\n"
+        )
+        assert extract_scope_line_count(scope) == 60
+
 
 class TestLoadAdditionalInstructions:
     """load_additional_instructions() reads from run-config.json."""

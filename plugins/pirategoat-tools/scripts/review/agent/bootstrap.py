@@ -345,14 +345,17 @@ def extract_scope_files(scope_output: str) -> List[str]:
 
 
 def extract_scope_line_count(scope_output: str) -> int:
-    """Extract total changed lines from all === FILES === sections.
+    """Extract total in-scope changed lines for budget sizing.
 
-    Parses (+N -M) stats per file and sums additions + deletions.
+    Sums (+N -M) stats from all === FILES === sections AND all
+    === NOT DIFFED === sections: NOT DIFFED files are in-scope work the
+    reviewer must still inspect — their diffs were withheld only to fit
+    the context budget, not removed from the workload.
     """
     total = 0
     in_files = False
     for line in scope_output.splitlines():
-        if line.startswith("=== FILES ==="):
+        if line.startswith("=== FILES ===") or line.startswith("=== NOT DIFFED"):
             in_files = True
             continue
         if in_files and line.startswith("==="):
