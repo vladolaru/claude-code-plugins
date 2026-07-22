@@ -1185,6 +1185,7 @@ class TestRunManifest:
     def test_manifest_merges_non_empty_resolved_context_git_identity(
         self, telemetry, output_dir
     ):
+        resolved_head = "b" * 40
         telemetry.start(
             run_id="run-1",
             git_range="initial-base..initial-head",
@@ -1195,7 +1196,7 @@ class TestRunManifest:
             "git": {
                 "git_range": "resolved-base..resolved-head",
                 "merge_base": "",
-                "head_sha": "resolved-head",
+                "head_sha": resolved_head,
             },
         }))
 
@@ -1204,7 +1205,37 @@ class TestRunManifest:
         assert _read_manifest(telemetry)["run"]["git"] == {
             "requested_range": "resolved-base..resolved-head",
             "base_sha": "initial-base",
-            "head_sha": "resolved-head",
+            "head_sha": resolved_head,
+        }
+
+    def test_manifest_refresh_keeps_resolved_shas_over_symbolic_context_refs(
+        self, telemetry, output_dir
+    ):
+        """An explicit symbolic range stores "main" as context merge_base;
+        the refresh must not replace the resolved durable identity with a
+        movable ref."""
+        resolved_base = "a" * 40
+        resolved_head = "b" * 40
+        telemetry.start(
+            run_id="run-1",
+            git_range="main..HEAD",
+            base_sha=resolved_base,
+            head_sha=resolved_head,
+        )
+        (output_dir / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": "main..HEAD",
+                "merge_base": "main",
+                "head_sha": "HEAD",
+            },
+        }))
+
+        telemetry.log_step(step=3, phase="AWARENESS", title="Gather Context")
+
+        assert _read_manifest(telemetry)["run"]["git"] == {
+            "requested_range": "main..HEAD",
+            "base_sha": resolved_base,
+            "head_sha": resolved_head,
         }
 
     def test_manifest_compares_planner_and_orchestrator_dispatches(

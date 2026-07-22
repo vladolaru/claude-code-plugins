@@ -42,6 +42,9 @@ except ImportError:
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
 EVENT_SCHEMA_VERSION = 1
+# Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
+# pipeline's _FULL_SHA_RE contract for durable git identity.
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 _STEP_MANIFEST_FIELDS = (
     "schema_version",
     "run_id",
@@ -1041,13 +1044,19 @@ class ReviewTelemetry:
         context = self._read_json_file("review-context.json")
         resolved_git = context.get("git", {}) if isinstance(context, dict) else {}
         if isinstance(resolved_git, dict):
+            value = resolved_git.get("git_range")
+            if value:
+                git["requested_range"] = value
+            # SHA endpoints may only be replaced by full object names: with an
+            # explicit symbolic range ("main..HEAD") the context merge_base is
+            # the literal branch name, and overwriting the pipeline_start
+            # resolution with it would make the durable identity movable.
             for manifest_name, context_name in (
-                ("requested_range", "git_range"),
                 ("base_sha", "merge_base"),
                 ("head_sha", "head_sha"),
             ):
                 value = resolved_git.get(context_name)
-                if value:
+                if isinstance(value, str) and _FULL_SHA_RE.fullmatch(value):
                     git[manifest_name] = value
 
         steps = [
