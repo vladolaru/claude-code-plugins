@@ -139,7 +139,7 @@ Code review orchestration with 34 agents (28 domain reviewers, 2 pipeline, 2 cro
 | `skills/` | 21 shared reference skills |
 | `codex-skills/` | 7 generated Codex command adapters |
 | `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
-| `scripts/` | Domain packages: `review/` (pipeline, plan_dispatch, context, telemetry, agents_status, critic, workspace_setup, agent_registry.json + `agent/` bootstrap, scope, output, diff_noise_filter), `hosts/` (host_context CLI, repo-signaled advisory chain for upstream runtime-hosts/library-deps, standalone resolver helpers, ensure_installed CLI for per-repo lockfile-hashed install caching, ecosystem_cache CLI for machine-wide WordPress/WooCommerce source cache management), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
+| `scripts/` | Domain packages: `review/` (pipeline, plan_dispatch, `review/dispatch_status.py`, context, telemetry, agents_status, critic, workspace_setup, agent_registry.json + `agent/` bootstrap, scope, output, diff_noise_filter), `hosts/` (host_context CLI, repo-signaled advisory chain for upstream runtime-hosts/library-deps, standalone resolver helpers, ensure_installed CLI for per-repo lockfile-hashed install caching, ecosystem_cache CLI for machine-wide WordPress/WooCommerce source cache management), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (supported review-run/cohort metrics, privacy-preserving transcript enrichment, session analyzer, general metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
 | `schemas/` | TypeScript type definitions for structured review output |
 | `tests/` | Deterministic eval suite — see [Testing](#pirategoat-tools-1) section |
 | `AGENTS.md` | Full development instructions, architecture, agent registry reference |
@@ -249,6 +249,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/review/pipeline.py` (routing, state, CLI) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |
 | `scripts/review/pipeline.py` (orchestration, subprocess) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline_integration.py -v` |
 | `scripts/review/pipeline.py` (briefing text) | `pytest plugins/pirategoat-tools/tests/review/test_pipeline.py -v` |
+| `scripts/review/dispatch_status.py` | `pytest plugins/pirategoat-tools/tests/review/test_agents_status.py plugins/pirategoat-tools/tests/review/test_pipeline.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py plugins/pirategoat-tools/tests/review/test_pipeline_integration.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_telemetry.py plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` |
 | `scripts/review/plan_dispatch.py` | `pytest plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_criteria_coverage.py -v` |
 | `scripts/review/agent_registry.json` (triage criteria/keywords/checks) | `pytest plugins/pirategoat-tools/tests/review/test_criteria_coverage.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py -v` (every criterion bullet needs a dispatching probe) |
 | `scripts/review/context.py` | `pytest plugins/pirategoat-tools/tests/review/test_context.py -v` |
@@ -272,6 +273,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/iterative_review/*.py` (other / multiple) | `pytest plugins/pirategoat-tools/tests/iterative_review/ -v` |
 | `scripts/analysis/session_metrics.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_metrics.py -v` |
 | `scripts/analysis/session_analyzer.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_analyzer.py -v` |
+| `scripts/analysis/review_transcript.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_transcript.py -v` |
+| `scripts/analysis/review_run_metrics.py` or `scripts/analysis/review_metrics/*.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` |
 | `tests/helpers/graders.py` | `pytest plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
 | `tests/grading/eval_agent_compliance.py` | `pytest plugins/pirategoat-tools/tests/grading/test_eval_agent_compliance.py -v` |
 | Any reviewer agent `.md` | `pytest plugins/pirategoat-tools/tests/review/agent/test_bootstrap_integration.py -v` (verifies agent config still works) |

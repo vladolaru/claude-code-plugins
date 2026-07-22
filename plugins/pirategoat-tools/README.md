@@ -121,20 +121,28 @@ canonical source.
 
 ### Pipeline Analytics
 
-`scripts/analysis/session_metrics.py` — extracts operational metrics from Claude Code session transcripts to measure agent performance and triage effectiveness.
+`scripts/analysis/review_run_metrics.py` is the supported interface for measuring review pipeline runs and recent cohorts. It treats pipeline telemetry and its durable manifest as authoritative, then optionally enriches an exact run from its Claude session and correlated subagent transcripts.
 
 ```bash
-# Agent metrics: runtime, tokens, findings, hit rates
-python3 scripts/analysis/session_metrics.py --limit 50
+# Recent review-run cohort
+python3 scripts/analysis/review_run_metrics.py --last 30
 
-# Filter to specific agents
-python3 scripts/analysis/session_metrics.py --agents security-reviewer,code-reviewer
+# Stable JSON for longitudinal analysis
+python3 scripts/analysis/review_run_metrics.py --last 30 --format json --output "$TMPDIR/review-runs.json"
 
-# Triage effectiveness: dispatch/skip accuracy for adaptive dispatch (Step 3.6)
-python3 scripts/analysis/session_metrics.py --triage --limit 30
+# One pipeline-native run without transcript correlation
+python3 scripts/analysis/review_run_metrics.py --run-id <run-id> --no-transcripts
 ```
 
-Outputs markdown and JSON reports. Auto-detects the Claude Code sessions directory from the current git repo. See `--help` for all options.
+Important: the stable JSON report is local operational output, not an anonymized or share-safe export. It intentionally retains `repo_path`, `output_dir`, `session_id`, Git range/SHA identifiers, and free-form main-orchestrator adjustment reasons because they are measurement evidence. Transcript privacy reduction excludes raw prompt bodies, source and finding prose, commands, and tool-result bodies; it does not make the report path-free or identifier-free. Sanitize or redact generated JSON before sharing it outside the local trusted context.
+
+The stable JSON report uses schema v2. It keeps `complete`, `partial`, `missing`, and `disabled` availability distinct from a measured zero. Generated-scope coverage describes what the pipeline assigned; it does not prove what a model read. Transcript-derived observed reads use a strict v2 payload and are explicitly non-exhaustive: reviewer reads form the `all`/`in_scope`/`out_of_scope` partition, while exact `review-reconciliator`, `decision-reviewer`, and `critic` reads are reported separately as non-scope-comparable synthesis activity. Those two actor families have independent completeness, availability, and cohort denominators; the combined `observed_reads` availability is only the conservative conjunction. Every retained read is a canonical repository-relative path. Legacy or mismatched payload versions and any absolute, traversal, non-canonical, backslash-separated, or control-character path fail closed as unavailable rather than being zero-filled.
+
+Lifecycle `agents.incomplete` is a sorted multiset: an agent name repeats once for every start execution not matched by a completion. Run and cohort summaries report `incomplete_count` as the unmatched execution total, `incomplete_identities` as unique sorted names, and `incomplete_by_agent` as deterministic per-agent execution counts. Complete manifests validate this multiset exactly and remain authoritative. Running manifests remain partial observations; ingestion can retain newer append-only agent events from the same run only after proving the sidecar lifecycle is an exact causal prefix, and reduces that suffix without copying raw prose or scope paths. Invalid sibling logs make lifecycle unavailable without discarding other sidecar metric families.
+
+There are no human overrides in this flow. Deterministic planning runs first; the main orchestrator may then add or skip agents and supplies the adjustment reasons. Dispatch aggregates retain `adjustment_rate` as the share of changed agents across the full compared-agent union, including unchanged skips, and expose `planner_removal_rate` separately as removed agents divided by planner-dispatched candidates in comparable runs. When two valid plans contain different agent identity sets, adjustment comparison is unavailable, but sorted identity-to-status projections let ingestion rederive and validate each plan's dispatch count before those partial totals enter a cohort. Malformed, contradictory, or out-of-mode projections fail closed for the dispatch family without exposing plan prose. Wall durations above one year are treated as implausible missing data before cohort statistics are calculated.
+
+`scripts/analysis/session_metrics.py` remains the lower-level, general-purpose transcript metrics tool for ad hoc agent-performance and triage investigations. See each script's `--help` for all options.
 
 ## Installation
 
@@ -187,6 +195,7 @@ pirategoat-tools/
 │   └── software-architecture/patterns/   # 87KB design pattern library
 ├── scripts/          # Helper scripts organized by domain
 │   ├── review/             # Review pipeline, dispatch, context, telemetry
+│   │   ├── dispatch_status.py  # Canonical dispatch vocabulary + plan validation
 │   │   └── agent/          # Agent bootstrap, scope filtering, output builder
 │   ├── hosts/              # Upstream host discovery (host_context CLI, chain, resolvers, ensure_installed, ecosystem_cache)
 │   │   ├── install/        # Internal install submodule (lockfile, cache, runner, overrides)

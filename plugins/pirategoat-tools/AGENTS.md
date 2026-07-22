@@ -14,6 +14,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. When a primary domain matches nothing but a secondary domain does, `resolve_overall_status` flips the status to a scoped `OK` and injects a `COVERAGE NOTE` so the agent reviews the secondary files with an honestly-scoped verdict instead of silently masking the gap. |
 | `scripts/review/agent/scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. **Language recognition lives in one place:** the `_PROG_LANGS`/`_STYLE_LANGS`/`_QUERY_LANGS`/`_DOC_LANGS`/`_DATA_LANGS`/`_FRONTEND_LANGS` groups, plus `_MIXED_MARKUP_LANGS`, `_TEMPLATE_LANGS`, and `_TEMPLATE_SUFFIXES` for rendered UI. Domains compose extensions via `_ext_re(...)`; `is_template_file()` distinguishes pure and compound templates for a11y dispatch and budget priority. Add formats to these sources once — never edit per-domain regexes. Budget priority tiers (`production_first`, `markup_evidence`) order files before largest-first budgeting; one oversized leading diff is protected outside the ordinary pool, and `--summary-json-out` persists per-agent scope summaries for run-level coverage accounting. |
 | `scripts/review/plan_dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review/pipeline.py. Also runs the unrecognized-source safety net (`detect_unrecognized_source`) that emits a `warnings[]` entry when a changed source language no domain covers — so coverage gaps fail loudly instead of producing a clean review. |
+| `scripts/review/dispatch_status.py` | Canonical producer/consumer dispatch-status vocabulary and dispatch-plan agent validator. Consumers classify dispatched and skipped states only through its explicit sets; hand-edited invalid statuses fail with the offending agent and value. |
 | `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. |
 | `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, verdict calculation, JSON/Markdown serialization. |
 | `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8. |
@@ -138,6 +139,10 @@ Skip-list (sections bootstrap replaces with concrete values):
 - `## Output Directory` (bootstrap resolved to concrete path)
 - `## ReviewOutputBuilder API` (bootstrap provides pre-filled snippet)
 - `## File-Based Output` (bootstrap provides concrete file paths)
+
+**RULE: Never put behavioral policy in a skipped section.** These sections are stripped before any reviewer sees them, so text added there is inert — it will pass review, ship, and appear in the changelog while reaching zero agents. 1.108.0 made NOT DIFFED handling mandatory by writing the rule into `## Scope Discovery`; no reviewer ever received it.
+
+The skip-list is for *mechanics bootstrap performs* (running scope.py, resolving paths). Policy about what the agent must do with the result belongs in `build_output()`, which also knows the concrete budget and file paths. `TestNotDiffedContractIsDelivered` in `tests/review/agent/test_bootstrap_integration.py` guards this for the NOT DIFFED contract — extend it when you add a comparable contract.
 
 **tests-reviewer-protocol.md** is appended for agents with `"tests-reviewer"` in their `protocols` list. It adds test quality principles (RULE 0: tests verify behavior, not implementation) and common anti-patterns.
 
@@ -296,6 +301,66 @@ The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugi
 Use the analysis scripts when you need to understand reviewer-agent behavior from raw Claude Code session logs.
 
 **Path convention:** Paths in this section are relative to `plugins/pirategoat-tools/`. If your shell CWD is the repository root, prefix them with `plugins/pirategoat-tools/`.
+
+#### `scripts/analysis/review_run_metrics.py`
+
+The supported review-pipeline run/cohort interface. It prefers durable `*.manifest.json` telemetry sidecars, falls back to privacy-reduced legacy JSONL records, and can enrich an exact run from Claude transcripts without weakening the pipeline-native measurements when transcripts are unavailable.
+
+This path is a thin CLI entry point; the implementation lives in the `scripts/analysis/review_metrics/` package. Imports flow one way only — edit within this layering, never against it:
+
+```text
+contracts -> sanitize -> usage -> load -> {measure, cohort} -> render -> cli
+```
+
+| Module | Owns |
+|---|---|
+| `contracts.py` | External contract loading (telemetry, dispatch_status), shared constants, `_parse_time` |
+| `sanitize.py` | Field-level sanitizers and strict validators |
+| `usage.py` | Token-usage accumulation primitives |
+| `load.py` | Manifest/JSONL discovery, lifecycle overlay, `load_runs` |
+| `measure.py` | Per-run measurement and transcript enrichment |
+| `cohort.py` | Cross-run aggregation |
+| `render.py` | Table and JSON rendering |
+| `cli.py` | Argument parsing and `main` |
+
+```bash
+python3 scripts/analysis/review_run_metrics.py --last 30
+python3 scripts/analysis/review_run_metrics.py --last 30 --format json --output "$TMPDIR/review-runs.json"
+python3 scripts/analysis/review_run_metrics.py --run-id <run-id> --no-transcripts
+```
+
+**Transcript enrichment is bounded to explicit queries.** Enrichment costs one session discovery plus a full transcript parse *per run*, so an unbounded sweep would pay it across all history. A query without `--last` or `--run-id` reports the transcript family as explicitly `disabled` and prints how to enable it. The cohort itself is never silently truncated — full-history sweeps remain the tool's contract.
+
+**Local-output warning:** The stable JSON report is local operational output, not an anonymized or share-safe export. It intentionally retains `repo_path`, `output_dir`, `session_id`, Git range/SHA identifiers, and free-form main-orchestrator adjustment reasons because they are measurement evidence. Sanitize or redact generated JSON before sharing it outside the local trusted context.
+
+**Measurement contract:**
+
+- Telemetry/manifest fields are authoritative for run identity, deterministic planner versus main-orchestrator adjustments, generated-scope coverage, lifecycle, outcomes, critic verdict, and wall time.
+- There are no human overrides in this flow. Deterministic planning runs first; the main orchestrator may then add or skip agents and supplies the adjustment reasons.
+- Lifecycle `agents.incomplete` is a deterministic sorted multiset with one repeated agent name per unmatched start execution. `incomplete_count` measures executions, `incomplete_identities` contains unique sorted names, and `incomplete_by_agent` preserves per-agent multiplicity. Complete manifests require the exact start-minus-completion multiset and suppress sibling overlays. Running manifests remain partial; the consumer may overlay only a strictly validated same-run JSONL lifecycle suffix after proving the sidecar arrays are exact causal prefixes, and must reduce fresh events without retaining raw prose or scope paths. Malformed, foreign, prefix-inconsistent, or chronologically invalid siblings fail closed for lifecycle only.
+- Dispatch `adjustment_rate` measures changed agents over the full compared-agent union; `planner_removal_rate` measures removed agents over planner-dispatched candidates for comparable runs. Wall durations above one year are treated as implausible missing data.
+- Valid plans with different agent identity sets disable adjustment comparison and carry only sorted identity-to-status projections. Ingestion must rederive both dispatch counts from those projections, require exact mismatch metadata, and fail malformed or unexpected projections closed for the dispatch family without retaining plan prose.
+- Transcript correlation is optional and exact: session ID + output directory + recognized reviewer/reconciler/critic identity.
+- Every metric family distinguishes complete, partial, missing, and disabled data. Missing data is never reported as a measured zero, and partial observations never enter complete denominators.
+- Stable structured reports use schema v2. Transcript-derived observed reads require their exact v2 payload; legacy, missing, boolean, or future versions fail closed instead of being interpreted as empty measurements.
+- Generated scope is descriptive, not proof of model reads. Observed reads are always non-exhaustive. Only regular reviewer reads enter the `all`/`in_scope`/`out_of_scope` partition; exact `review-reconciliator`, `decision-reviewer`, and `critic` identities remain visible in the separate `non_scope_comparable` synthesis bucket. Near-match names are regular reviewers.
+- Reviewer and synthesis read families carry independent completeness, availability, and cohort denominators. The combined `observed_reads` state is conservative and complete only when both families are complete.
+- Every observed-read entry must be one canonical repository-relative path. Absolute, traversal, dot-segment, empty-segment, backslash-separated, drive-prefixed, empty, and control-character paths invalidate the full read payload; normalized Unicode and spaces are preserved.
+- Transcript privacy reduction excludes raw prompt bodies, source/finding prose, commands, and tool-result bodies. It does not make the report path-free or identifier-free.
+
+Run `pytest plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` after changing this interface.
+
+#### `scripts/analysis/review_transcript.py`
+
+Lower-level privacy-preserving transcript enrichment used by `review_run_metrics.py`. It correlates the exact main session and run-specific subagents, measures cache-aware usage, safe tool failure/recovery categories, first pipeline-owned Bash attempts, and emits a versioned observed-read payload with independent regular-reviewer and exact synthesis-identity completeness. Reviewer output evidence paired with `builder_attempted: false` means only that the required Bash path was not observed; it does not identify the alternative output mechanism. It must keep completion-notification usage out of totals and must never expose raw prompts, commands, source, findings, or tool-result bodies.
+
+Run `pytest plugins/pirategoat-tools/tests/analysis/test_review_transcript.py -v` after changing its correlation or parsing contract.
+
+**Two settled design questions.** Both have been raised in review and decided; re-open them only with new evidence.
+
+*Why reconstruct identity from transcripts instead of using `SubagentStop` / `PostToolUse` hooks?* The hooks do emit `agent_id`, `agent_type`, `resolvedModel`, and `totalToolUseCount` directly, which would replace the correlation layer (session discovery, run-window bounding, dispatch-prompt parsing, and its four warning codes). They would **not** replace transcript parsing itself: `observed_reads` still requires reading each subagent transcript, so this is roughly a quarter of the module, not all of it. The deciding tradeoff is that hooks only measure runs after install, while the parser reads history — including the historical cohort the budget-utilisation baseline is built on. Correlation failure is already reported explicitly rather than silently dropping agents from denominators, so the current design degrades honestly.
+
+*Why does this module parse session JSONL when `session_analyzer.py` already does?* Their contracts are deliberately different: `session_analyzer.py` retains prose (prompts, commands, categorized text) for human-facing ad-hoc reports, while this module must never expose those bodies. The genuinely shared surface is one ~15-line JSONL line reader, and the two differ even there — this module reports damaged lines via `parse_gap` and reads binary; `session_analyzer.py` skips bad lines silently. Extracting a shared module for that much would add a file and import plumbing to dedupe 15 lines. Kept separate on purpose.
 
 #### `scripts/analysis/session_analyzer.py`
 
