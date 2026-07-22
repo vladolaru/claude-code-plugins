@@ -31,6 +31,23 @@ try:
 except ImportError:
     _HOSTS_CHAIN = None
 
+# Repo-contributed review-config reader (best-effort, same rationale as the host
+# chain above). Loaded from file so it works whether context.py runs as a script
+# or is imported under a test's import machinery.
+_REVIEW_CONFIG_LOADER = None
+try:
+    import importlib.util as _ilu  # noqa: E402
+
+    _rc_spec = _ilu.spec_from_file_location(
+        "review_config",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "review_config.py"),
+    )
+    _rc_mod = _ilu.module_from_spec(_rc_spec)
+    _rc_spec.loader.exec_module(_rc_mod)
+    _REVIEW_CONFIG_LOADER = _rc_mod.load_review_config
+except Exception:  # noqa: BLE001 — review must continue without repo config
+    _REVIEW_CONFIG_LOADER = None
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -435,6 +452,9 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     # Host context — discover from the repo root when git can identify it.
     _fill_host_context(ctx, repo_root, install_payload=install_payload)
 
+    # Repo-contributed review config (rules + reviewers) from the reviewed repo.
+    _fill_review_config(ctx, repo_root)
+
     return ctx
 
 
@@ -584,6 +604,19 @@ def _fill_host_context(ctx, repo_path, install_payload=None):
         return
     ctx["host_context"] = _HOSTS_CHAIN().run(repo_path).to_dict()
     _merge_install_cache_banner(ctx["host_context"], install_payload or {})
+
+
+def _fill_review_config(ctx, repo_path):
+    """Populate review_config from the reviewed repo's .pirategoat/config.json.
+
+    Overwritten each run (like host_context) so repo-relative rule/reviewer
+    paths resolve against the current checkout. Best-effort: absence or a
+    malformed file yields the neutral empty config, never an error.
+    """
+    if _REVIEW_CONFIG_LOADER is None:
+        ctx["review_config"] = None
+        return
+    ctx["review_config"] = _REVIEW_CONFIG_LOADER(repo_path)
 
 
 # ---------------------------------------------------------------------------
