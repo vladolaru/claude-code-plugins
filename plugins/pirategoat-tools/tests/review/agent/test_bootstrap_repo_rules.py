@@ -90,6 +90,51 @@ class TestRenderRepoReviewRules:
         # explicitly demotes everything between the fences to untrusted text.
         assert "untrusted repository text" in out
 
+class TestAdapterRefMode:
+    """Adapter ref-mode: per-instance naming and the repo-reviewer-prompt handoff."""
+
+    def test_reviewer_name_unique_per_instance(self, mod):
+        # N adapter instances share the registry key repo-reviewer-adapter but
+        # must derive distinct output names from their instance names.
+        a = mod.derive_reviewer_name("repo-runtime-environment-reviewer")
+        b = mod.derive_reviewer_name("repo-reuse-solid-reviewer")
+        assert a == "repo-runtime-environment"
+        assert b == "repo-reuse-solid"
+        assert a != b
+
+    def test_reviewer_name_matches_reconciliation_stem(self, mod):
+        # Load-bearing invariant: the synthetic dispatch name ends in -reviewer,
+        # and reconciliation maps -reviewer -> -review. That mapped stem MUST
+        # equal the adapter's output file stem (<reviewer_name>-review).
+        instance = "repo-renewals-scheduling-reviewer"
+        reviewer_name = mod.derive_reviewer_name(instance)
+        output_stem = f"{reviewer_name}-review"
+        reconciliation_stem = instance.replace("-reviewer", "-review")
+        assert output_stem == reconciliation_stem == "repo-renewals-scheduling-review"
+
+    def test_prompt_section_carries_handoff(self, mod, tmp_path):
+        ref = tmp_path / "r.md"
+        ref.write_text("do the review")
+        out = mod.build_repo_reviewer_prompt_section(
+            ref_path=str(ref), execution="inline", channel="advisory",
+            label="Reuse Expert", reviewer_name="repo-reuse",
+        )
+        assert "REPO REVIEWER PROMPT" in out
+        assert f"REPO_AGENT_REF: {ref}" in out
+        assert "EXECUTION: inline" in out
+        assert "CHANNEL: advisory" in out
+        assert 'channel="advisory"' in out  # instruction to tag findings
+        assert "reviewer_name: repo-reuse" in out
+
+    def test_prompt_section_warns_on_missing_ref(self, mod):
+        out = mod.build_repo_reviewer_prompt_section(
+            ref_path="/nonexistent/ref.md", execution="inline", channel="blocking",
+            label="x", reviewer_name="repo-x",
+        )
+        assert "WARNING" in out and "does not exist" in out
+
+
+class TestBuildOutputRepoRules:
     def test_build_output_includes_repo_rules_after_domain_rules(self, mod):
         out = mod.build_output(
             agent_name="security-reviewer",

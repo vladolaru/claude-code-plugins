@@ -1154,17 +1154,21 @@ def main():
         if not ref_domains:
             ref_domains = ["code"]
         scope_status = "NO_DOMAIN_FILES"
-        for i, dom in enumerate(ref_domains):
+        captured_meta = False
+        for dom in ref_domains:
             if dom not in _REVIEW_DOMAINS:
                 continue
-            rc, dom_output = run_scope_discovery(
+            _, dom_output = run_scope_discovery(
                 plugin_root, dom, [], args.range, output_dir=args.output_dir,
             )
-            if i == 0:
+            # Capture output dir / PR number from the first domain that actually
+            # runs (not the first list position — it may have been skipped).
+            if not captured_meta:
                 parsed_dir = extract_output_dir(dom_output)
                 if parsed_dir and not args.output_dir:
                     output_dir = parsed_dir
                 pr_number = extract_pr_number(dom_output)
+                captured_meta = True
             if extract_status(dom_output) == "OK":
                 if scope_output:
                     scope_output += f"\n\n=== SECONDARY SCOPE: {dom} ===\n{dom_output}"

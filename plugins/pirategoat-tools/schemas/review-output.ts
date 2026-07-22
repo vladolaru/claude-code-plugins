@@ -41,7 +41,7 @@ export interface Issue {
     references?: string[]; // Links to docs, patterns, skills
     behavior_evidence?: 'cited' | 'inferred';
     source_cited?: string; // "<file>:<line>" pointer to upstream evidence
-    channel?: 'blocking' | 'advisory'; // Repo-contributed reviewers only: 'advisory' findings are listed but never gate the verdict
+    channel?: 'blocking' | 'advisory'; // Set only by repo-contributed reviewers (native agents omit it). 'blocking' (the default) gates the verdict normally; 'advisory' findings are listed but never gate.
 }
 
 /**

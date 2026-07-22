@@ -99,6 +99,8 @@ The rules below apply to findings with an explicit floor and, for mitigation ver
 
 When grouping duplicate findings, keep the strongest verified source floor. Every retained verified concern must remain at or above that floor. Pass the strongest verified value through the reconciled `builder.add_issue(..., severity_floor="medium")` call (using the actual verified level; omit the argument only when no floor applies) so the constraint survives in `review-findings.json`.
 
+Preserve a finding's channel the same way. A source finding marked `Channel: advisory` in the context is from a repo-contributed reviewer on the advisory channel (reuse, naming, boundaries): re-emit it with `builder.add_issue(..., channel="advisory")` so it stays listed but never gates the verdict. Blocking findings omit the argument.
+
 Deduplication and scope behavior are unchanged. Findings may still be dropped as FALSE POSITIVE or OUT OF SCOPE when the source evidence supports that classification.
 
 ## Dismissal & Mitigation Discipline (ALL findings)
@@ -162,11 +164,7 @@ builder.add_issue(
     category="relevant-category",
     severity_floor="medium",  # Omit only when no verified floor applies.
     confidence=0.95,
-    # channel="advisory",  # REQUIRED when the source finding was marked
-    # "Channel: advisory" in the context. Advisory findings (repo-contributed
-    # reviewers on the advisory channel — reuse, naming, boundaries) are listed
-    # but MUST NOT gate the verdict; passing channel="advisory" keeps them
-    # non-gating. Omit for blocking findings.
+    # channel="advisory",  # only for findings marked "Channel: advisory" in the context; keeps them non-gating (see channel-preservation rule above)
 )
 
 # Add quality metrics to the JSON output.
