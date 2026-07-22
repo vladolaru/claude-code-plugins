@@ -1,8 +1,11 @@
 """Tests for review/agent/bootstrap.py — integration tests (subprocess runs against all agents)."""
 
+from concurrent.futures import ThreadPoolExecutor
 import importlib
 import importlib.util
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -91,7 +94,7 @@ class TestCategoryRepresentatives:
         assert "REVIEWER_NAME: performance" in stdout
         assert f"{tmp_path}/performance-review.json" in stdout
         assert f"{tmp_path}/performance-review.md" in stdout
-        assert 'reviewer="performance"' in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=performance" in stdout
 
         # Budget present with hard ceiling
         assert "=== REVIEW BUDGET ===" in stdout
@@ -121,7 +124,7 @@ class TestCategoryRepresentatives:
         assert "=== REVIEW BUDGET ===" in stdout
         assert "REVIEWER_NAME: php-tests" in stdout
         assert f"{tmp_path}/php-tests-review.json" in stdout
-        assert 'reviewer="php-tests"' in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=php-tests" in stdout
 
         # Other conditional sections absent
         assert "=== EXPLORATION SCOPE ===" not in stdout
@@ -137,7 +140,7 @@ class TestCategoryRepresentatives:
 
         # Personalization
         assert "REVIEWER_NAME: patterns" in stdout
-        assert 'reviewer="patterns"' in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=patterns" in stdout
 
         # Not a test agent — no DOMAIN RULES
         assert "=== DOMAIN RULES ===" not in stdout
@@ -156,7 +159,7 @@ class TestCategoryRepresentatives:
 
         # Personalization still works
         assert "REVIEWER_NAME: tests-mutation" in stdout
-        assert 'reviewer="tests-mutation"' in stdout
+        assert "PIRATEGOAT_REVIEWER_NAME=tests-mutation" in stdout
 
     def test_secondary_domains_agent(self, tmp_path):
         """Agent with secondary_domains gets SECONDARY SCOPE (security-reviewer).
@@ -311,6 +314,57 @@ class TestArchitecturalInvariants:
             )
 
 
+class TestCanonicalExecutableBuilderSource:
+    """Bootstrap is the sole executable ReviewOutputBuilder command source."""
+
+    def test_protocol_is_reference_only_and_bootstrap_emits_one_builder_command(
+        self, tmp_path
+    ):
+        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
+        review_rules = _mod.extract_protocol_sections(
+            protocol,
+            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
+        )
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules=review_rules,
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+        )
+
+        assert "python3 <<'PY'" not in protocol
+        for shell_variable in (
+            "PIRATEGOAT_PLUGIN_ROOT=",
+            "PIRATEGOAT_OUTPUT_DIR=",
+            "PIRATEGOAT_REVIEWER_NAME=",
+            "PIRATEGOAT_PR_ID=",
+        ):
+            assert shell_variable not in protocol
+        assert prompt.count("python3 <<'PY'") == 1
+        assert f"PIRATEGOAT_PLUGIN_ROOT={PLUGIN_ROOT}" in prompt
+        assert f"PIRATEGOAT_OUTPUT_DIR={tmp_path}" in prompt
+        assert "PIRATEGOAT_REVIEWER_NAME=security" in prompt
+        assert "PIRATEGOAT_PR_ID=42" in prompt
+        assert (
+            "builder = ReviewOutputBuilder(pr_id=pr_id, reviewer=reviewer_name)"
+            in prompt
+        )
+        assert "result = builder.save(output_dir)" in prompt
+        assert "MUST NOT create or write a temporary builder script" in prompt
+        assert "generic filenames collide" in prompt
+        assert "RECORDED COUNTS" in prompt
+        assert "Return signal format:" in prompt
+        assert "STATUS: FINISHED" in prompt
+        assert f"{tmp_path}/security-review.json" in prompt
+        assert f"{tmp_path}/security-review.md" in prompt
+
+
 class TestNotApplicableCompletionContract:
     """The shared protocol is the sole executable abstention recipe."""
 
@@ -337,11 +391,8 @@ class TestNotApplicableCompletionContract:
         assert "builder.save(OUTPUT_DIR)" in prompt
         assert "STATUS: FINISHED" in prompt
 
-    def test_output_instructions_require_script_invocation_and_count_reconciliation(self, tmp_path):
-        """Bug 2 regression guard: agents must not drive the builder via
-        inline `python3 -c` (finding prose breaks shell quoting), and must
-        copy COUNTS from save()'s RECORDED echo instead of self-reporting
-        from intent (which masked the line=None demotion)."""
+    def test_output_instructions_require_collision_safe_builder_invocation(self, tmp_path):
+        """Parallel reviewers must execute the builder without a shared script file."""
         prompt = build_output(
             agent_name="security-reviewer",
             plugin_root=str(PLUGIN_ROOT),
@@ -355,26 +406,143 @@ class TestNotApplicableCompletionContract:
             reviewer_name="security",
         )
 
+        heredoc_body = prompt.split("python3 <<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        compile(heredoc_body, "<bootstrap builder example>", "exec")
+
+        assert "MUST use a one-shot quoted heredoc" in prompt
+        assert "python3 <<'PY'" in prompt
+        assert "MUST NOT create or write a temporary builder script with the Write tool" in prompt
+        assert "parallel reviewers share the parent-session scratch directory" in prompt
+        assert "generic filenames collide" in prompt
+        assert "script FILE (Write tool) or a heredoc" not in prompt
         assert "python3 -c" in prompt  # named so it can be forbidden
         assert "NEVER" in prompt
-        assert "heredoc" in prompt
+
+    def test_output_instructions_require_count_reconciliation(self, tmp_path):
+        """Agents must report the builder's recorded state, not their intent."""
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number=None,
+            reviewer_name="security",
+        )
+
         assert "RECORDED COUNTS" in prompt
 
-    def test_protocol_fallback_output_example_uses_save(self):
-        """The File-Based Output section is skip-listed from bootstrap, so it
-        IS the fallback path. Its example must go through builder.save() —
-        a manual to_json()/to_markdown() write never prints the RECORDED
-        COUNTS echo, leaving fallback agents reporting counts from intent."""
-        protocol = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
-        start = protocol.index("## File-Based Output")
-        end = protocol.index("\n## ", start + 1)
-        section = protocol[start:end]
+    def test_registered_agents_derive_unique_nonempty_reviewer_names(self):
+        """Every shipped agent has a collision-safe output identity."""
+        reviewer_names = [derive_reviewer_name(agent_name) for agent_name in ALL_AGENTS]
 
-        assert "builder.save(" in section
-        assert "RECORDED COUNTS" in section
-        # The old example told agents to write to_json()/to_markdown() by hand,
-        # bypassing the echo entirely.
-        assert "builder.to_json()" not in section
+        assert all(reviewer_names)
+        assert len(reviewer_names) == len(set(reviewer_names))
+
+    def test_bootstrap_heredocs_save_distinct_outputs_for_parallel_reviewers(
+        self, tmp_path
+    ):
+        """Concrete bootstrap commands sharing OUTPUT_DIR cannot collide."""
+        output_dir = tmp_path / "shared reviewer's output folder"
+        invocations = []
+        for agent_name in ("security-reviewer", "performance-reviewer"):
+            reviewer_name = derive_reviewer_name(agent_name)
+            prompt = build_output(
+                agent_name=agent_name,
+                plugin_root=str(PLUGIN_ROOT),
+                status="OK",
+                review_rules="",
+                domain_rules=None,
+                scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+                exploration_scope=None,
+                output_dir=str(output_dir),
+                pr_number="42",
+                reviewer_name=reviewer_name,
+            )
+            start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
+            end = prompt.index("\nPY", start) + len("\nPY")
+            invocations.append(
+                prompt[start:end].replace(
+                    "builder.set_files_reviewed(N)",
+                    "builder.set_files_reviewed(2)",
+                )
+            )
+
+        def run_invocation(invocation):
+            return subprocess.run(
+                ["bash", "-c", invocation],
+                cwd=tmp_path,
+                timeout=30,
+                capture_output=True,
+                text=True,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(run_invocation, invocations))
+
+        assert all(result.returncode == 0 for result in results), [
+            result.stderr for result in results
+        ]
+        assert all("RECORDED COUNTS:" in result.stdout for result in results)
+        assert sorted(path.name for path in output_dir.iterdir()) == [
+            "performance-review.json",
+            "performance-review.md",
+            "security-review.json",
+            "security-review.md",
+        ]
+        for reviewer_name in ("security", "performance"):
+            saved = json.loads(
+                (output_dir / f"{reviewer_name}-review.json").read_text()
+            )
+            assert saved["reviewer"] == reviewer_name
+            assert saved["pr_id"] == "42"
+            assert saved["meta"]["files_reviewed"] == 2
+
+    def test_bootstrap_heredoc_executes_with_shell_sensitive_paths(self, tmp_path):
+        """Bootstrap must hand paths to stdin Python without literal interpolation."""
+        plugin_root = tmp_path / "plugin root's copy"
+        shutil.copytree(PLUGIN_ROOT / "scripts", plugin_root / "scripts")
+        output_dir = tmp_path / "reviewer's output folder"
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(plugin_root),
+            status="OK",
+            review_rules="",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(output_dir),
+            pr_number="42",
+            reviewer_name="security",
+        )
+        start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
+        end = prompt.index("\nPY", start) + len("\nPY")
+        shell_example = prompt[start:end]
+        shell_example = shell_example.replace(
+            "builder.set_files_reviewed(N)",
+            "builder.set_files_reviewed(3)",
+        )
+        python_files_before = set(tmp_path.rglob("*.py"))
+
+        result = subprocess.run(
+            ["bash", "-c", shell_example],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "RECORDED COUNTS:" in result.stdout
+        assert sorted(path.name for path in output_dir.iterdir()) == [
+            "security-review.json",
+            "security-review.md",
+        ]
+        saved = json.loads((output_dir / "security-review.json").read_text())
+        assert saved["meta"]["files_reviewed"] == 3
+        assert set(tmp_path.rglob("*.py")) == python_files_before
 
     def test_agent_definitions_do_not_duplicate_abstention_calls(self):
         offenders = [
@@ -610,9 +778,11 @@ class TestReviewOutputBuilderAPIExample:
         assert str(tmp_path) in output
 
     def test_output_contains_set_files_reviewed(self, tmp_path):
-        """The usage example must show set_files_reviewed()."""
+        """The example must require the actual reviewed-file count."""
         output = self._build(tmp_path)
-        assert "set_files_reviewed(" in output
+        assert "builder.set_files_reviewed(N)" in output
+        assert "REQUIRED: replace N with the actual number of files you reviewed" in output
+        assert "builder.set_files_reviewed(1)" not in output
 
     def test_output_contains_set_confidence(self, tmp_path):
         """The usage example must show set_confidence()."""

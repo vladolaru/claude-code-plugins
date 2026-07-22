@@ -23,6 +23,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -959,35 +960,48 @@ def build_output(
     lines.append(f"  - {output_dir}/{reviewer_name}-review.json")
     lines.append(f"  - {output_dir}/{reviewer_name}-review.md")
     lines.append("")
-    lines.append("ReviewOutputBuilder:")
-    lines.append("  import sys, os")
-    lines.append(f"  sys.path.insert(0, '{plugin_root}/scripts')")
-    lines.append("  from review.agent.output import ReviewOutputBuilder")
     pr_id_str = pr_number if pr_number else "0"
+    lines.append("ReviewOutputBuilder — MUST use a one-shot quoted heredoc in this form:")
     lines.append(
-        f'  builder = ReviewOutputBuilder(pr_id={pr_id_str}, reviewer="{reviewer_name}")'
+        f"PIRATEGOAT_PLUGIN_ROOT={shlex.quote(plugin_root)} "
+        f"PIRATEGOAT_OUTPUT_DIR={shlex.quote(output_dir)} "
+        f"PIRATEGOAT_REVIEWER_NAME={shlex.quote(reviewer_name)} "
+        f"PIRATEGOAT_PR_ID={shlex.quote(str(pr_id_str))} "
+        "python3 <<'PY'"
     )
-    lines.append(f'  builder.add_issue(severity="high", title="Issue title", file="path/to/file.py",')
-    lines.append(f'      description="What is wrong", recommendation="How to fix",')
-    lines.append(f'      category="category-name", line=42, confidence=0.9)')
+    lines.append("import sys, os")
+    lines.append('plugin_root = os.environ["PIRATEGOAT_PLUGIN_ROOT"]')
+    lines.append('output_dir = os.environ["PIRATEGOAT_OUTPUT_DIR"]')
+    lines.append('reviewer_name = os.environ["PIRATEGOAT_REVIEWER_NAME"]')
+    lines.append('pr_id = os.environ["PIRATEGOAT_PR_ID"]')
+    lines.append('sys.path.insert(0, os.path.join(plugin_root, "scripts"))')
+    lines.append("from review.agent.output import ReviewOutputBuilder")
+    lines.append('builder = ReviewOutputBuilder(pr_id=pr_id, reviewer=reviewer_name)')
+    lines.append(f'builder.add_issue(severity="high", title="Issue title", file="path/to/file.py",')
+    lines.append(f'    description="What is wrong", recommendation="How to fix",')
+    lines.append(f'    category="category-name", line=42, confidence=0.9)')
+    lines.append(f'builder.add_positive("Positive observation text")')
+    lines.append(f'builder.add_clearance(claim="Nothing depends on the removed X",')
+    lines.append(f'    method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
+    lines.append(f'    evidence="hit counts, file:line list")     # optional')
+    lines.append(
+        'builder.set_files_reviewed(N)  # REQUIRED: replace N with the actual number of files you reviewed'
+    )
+    lines.append(f'builder.set_confidence(0.85)')
+    lines.append(f'result = builder.save(output_dir)  # returns {{"json": path, "markdown": path}}')
+    lines.append("PY")
     lines.append(f"")
-    lines.append(f"  line= MUST be the SOURCE FILE line number (from @@ hunk headers),")
-    lines.append(f"  not the Read tool's display line numbers (e.g., 227→).")
-    lines.append(f"  For findings that are line-less BY NATURE (whole changed file has no")
-    lines.append(f"  test coverage, git-history precedent, cross-file architecture), pass")
-    lines.append(f"  line=None — recorded as a verdict-counting FILE-SCOPED issue. Never")
-    lines.append(f"  omit line= for a point defect that has one.")
-    lines.append(f'  builder.add_positive("Positive observation text")')
-    lines.append(f'  builder.add_clearance(claim="Nothing depends on the removed X",')
-    lines.append(f'      method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
-    lines.append(f'      evidence="hit counts, file:line list")     # optional')
-    lines.append(f'  builder.set_files_reviewed(N)')
-    lines.append(f'  builder.set_confidence(0.85)')
-    lines.append(f'  result = builder.save("{output_dir}")  # returns {{"json": path, "markdown": path}}')
+    lines.append(f"line= MUST be the SOURCE FILE line number (from @@ hunk headers),")
+    lines.append(f"not the Read tool's display line numbers (e.g., 227→).")
+    lines.append(f"For findings that are line-less BY NATURE (whole changed file has no")
+    lines.append(f"test coverage, git-history precedent, cross-file architecture), pass")
+    lines.append(f"line=None — recorded as a verdict-counting FILE-SCOPED issue. Never")
+    lines.append(f"omit line= for a point defect that has one.")
     lines.append(f"")
-    lines.append(f"  INVOCATION: run the builder from a script FILE (Write tool) or a heredoc")
-    lines.append(f"  (python3 <<'PY' ... PY). NEVER inline `python3 -c \"...\"` — finding prose")
-    lines.append(f"  contains apostrophes/quotes/em-dashes that break shell quoting.")
+    lines.append(f"MUST NOT create or write a temporary builder script with the Write tool:")
+    lines.append(f"parallel reviewers share the parent-session scratch directory, so generic filenames collide.")
+    lines.append(f"NEVER inline `python3 -c \"...\"` — finding prose contains")
+    lines.append(f"apostrophes/quotes/em-dashes that break shell quoting.")
     lines.append(f"")
     lines.append(f"  save() prints the RECORDED COUNTS / RECORDED ISSUES / VERDICT of what was")
     lines.append(f"  actually saved. Copy your COUNTS signal from that echo — NOT from memory of")

@@ -184,9 +184,9 @@ Rules for any "nothing depends on this" / "no blast radius" / "no consumers" cla
 
 **If the script was not available:**
 ```bash
-PR_NUM=$(gh pr view --json number -q .number 2>/dev/null || ghe pr view --json number -q .number 2>/dev/null || echo "")
-if [ -n "$PR_NUM" ]; then
-  OUTPUT_DIR="/tmp/pr-review-${PR_NUM}"
+PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null || ghe pr view --json number -q .number 2>/dev/null || echo "")
+if [ -n "$PR_NUMBER" ]; then
+  OUTPUT_DIR="/tmp/pr-review-${PR_NUMBER}"
 else
   OUTPUT_DIR="/tmp"
 fi
@@ -197,13 +197,7 @@ mkdir -p "$OUTPUT_DIR"
 
 ## ReviewOutputBuilder API
 
-```python
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../scripts'))
-from review.agent.output import ReviewOutputBuilder
-
-builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
-```
+This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** block is the sole canonical executable builder command; if bootstrap fails, stop and report the failure instead of reconstructing a command from this reference.
 
 **Core methods:**
 - `builder.add_issue(severity, title, file, description, recommendation, category="general", line=<required for point defects>, confidence=0.9)` - Add diff-anchored finding. Pass `line=None` ONLY for findings that are line-less by nature (missing test coverage, precedent, cross-file architecture) — recorded as a verdict-counting file-scoped issue
@@ -219,37 +213,7 @@ builder = ReviewOutputBuilder(pr_id=PR_ID, reviewer="REVIEWER_NAME")
 
 ## File-Based Output
 
-Write both outputs via `save()`, then return signals only:
-
-```python
-result = builder.save(OUTPUT_DIR)
-# Writes {output_dir}/{reviewer}-review.json and .md, prints the RECORDED
-# COUNTS / RECORDED ISSUES / VERDICT echo, and returns {"json": path, "markdown": path}
-```
-
-Do NOT write `to_json()`/`to_markdown()` output by hand — a manual write skips the RECORDED COUNTS echo, leaving you nothing to reconcile your COUNTS against.
-
-**Invocation rule:** run the builder from a script FILE (written with the Write tool) or a heredoc (`python3 <<'PY' ... PY`). NEVER inline `python3 -c "..."` — finding prose contains apostrophes, quotes, and em-dashes that break shell quoting and crash the call.
-
-**When using `/tmp/` directly** (no PR number detected), save into a timestamped subdirectory to avoid collisions: `builder.save(f"/tmp/{reviewer}-review-{YYYYMMDD-HHMMSS}")`.
-
-**Count reconciliation:** `builder.save()` prints the RECORDED COUNTS / RECORDED ISSUES / VERDICT of what was actually saved. Copy the `COUNTS:` in your return signal from that echo — not from memory of what you intended to file. If the echo differs from your intent (an issue you added is missing, a severity changed), investigate and fix BEFORE declaring FINISHED.
-
-**Return signal format:**
-```
-STATUS: FINISHED
-OUTPUT_FILES:
-  - {output_dir}/{reviewer}-review.json
-  - {output_dir}/{reviewer}-review.md
-COUNTS:
-  critical: N
-  high: N
-  medium: N
-VERDICT: <verdict>
-SUMMARY: <one sentence>
-```
-
-Do NOT return full review text. The reconciliator reads your files.
+Bootstrap's **OUTPUT INSTRUCTIONS** provide the concrete, collision-safe command, resolved reviewer identity and paths, count-reconciliation rules, and return-signal format. They are the sole executable source for file-based output; do not reconstruct a fallback command from this protocol.
 
 ## Project-Specific Knowledge
 
