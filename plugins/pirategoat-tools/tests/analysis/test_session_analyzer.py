@@ -449,3 +449,34 @@ class TestSurvivalRateInReport:
         report_str = format_quality_json_report([dispatch], None)
         report = json.loads(report_str)
         assert report["survival"] is None
+
+
+class TestUnrelatedWritesInQualityReport:
+    """Quality reports ignore Write payloads that are not review results."""
+
+    @pytest.mark.parametrize(
+        "formatter,path,content",
+        [
+            pytest.param(format_quality_json_report, ".nvmrc", "22\n", id="json-scalar"),
+            pytest.param(
+                format_quality_text_report,
+                "package.json",
+                json.dumps({"name": "example"}),
+                id="unrelated-json-object",
+            ),
+        ],
+    )
+    def test_ignores_non_review_write_payloads(self, formatter, path, content):
+        dispatch = (
+            {"agent_name": "general-purpose"},
+            {
+                "write_outputs": [{"content": content, "path": path}],
+                "files_read": [],
+                "bash_commands": [],
+                "final_texts": [],
+            },
+        )
+
+        report = formatter([dispatch], None)
+
+        assert "unknown" not in report

@@ -471,6 +471,30 @@ def extract_agent_findings(write_output: Any) -> dict[str, Any]:
     }
 
 
+def _parse_review_write_output(write_output: Any) -> dict[str, Any] | None:
+    """Return a validated reviewer result from a captured Write tool call."""
+    if not isinstance(write_output, dict):
+        return None
+
+    path = write_output.get("path")
+    if not isinstance(path, str) or not path.endswith("-review.json"):
+        return None
+
+    try:
+        review_json = json.loads(write_output.get("content", ""))
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(review_json, dict):
+        return None
+    if not isinstance(review_json.get("reviewer"), str):
+        return None
+    if not isinstance(review_json.get("issues"), list):
+        return None
+
+    return review_json
+
+
 def extract_ingest_outcomes(ingest_texts: list[str]) -> dict[str, int]:
     """Parse ingest subagent text output for finding categorization outcomes.
 
@@ -630,13 +654,11 @@ def format_quality_text_report(
 
         # Try to extract findings from Write outputs
         for wo in data.get("write_outputs", []):
-            content = wo.get("content", "")
-            try:
-                review_json = json.loads(content)
-            except (json.JSONDecodeError, TypeError):
+            review_json = _parse_review_write_output(wo)
+            if review_json is None:
                 continue
 
-            reviewer = review_json.get("reviewer", "unknown")
+            reviewer = review_json["reviewer"]
             findings = extract_agent_findings(review_json)
 
             agent_totals[reviewer]["dispatches"] += 1
@@ -717,13 +739,11 @@ def format_quality_json_report(
             continue
 
         for wo in data.get("write_outputs", []):
-            content = wo.get("content", "")
-            try:
-                review_json = json.loads(content)
-            except (json.JSONDecodeError, TypeError):
+            review_json = _parse_review_write_output(wo)
+            if review_json is None:
                 continue
 
-            reviewer = review_json.get("reviewer", "unknown")
+            reviewer = review_json["reviewer"]
             findings = extract_agent_findings(review_json)
 
             if reviewer not in agent_records:
