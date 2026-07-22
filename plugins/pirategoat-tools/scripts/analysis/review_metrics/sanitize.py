@@ -1,0 +1,1061 @@
+"""Field-level sanitizers and strict validators for manifest data."""
+
+from __future__ import annotations
+
+import math
+import unicodedata
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Any, Iterable
+
+from .contracts import (
+    _DISPATCHED_STATUSES,
+    _FIXED_WARNING_CODES,
+    _MAX_WALL_TIME_MS,
+    _PRODUCER_AGENT_NAME_RE,
+    _RETAINED_CRITIC_VALUES,
+    _SAFE_RUN_ID_RE,
+    _SEVERITIES,
+    _SUMMARY_FIELDS,
+    _SUPPORTED_DISPATCH_STATUSES,
+    _SUPPORTED_MANIFEST_SCHEMA_VERSION,
+    _SUPPORTED_MANIFEST_STATUSES,
+    _WINDOWS_DRIVE_RE,
+    _parse_time,
+)
+
+
+def _nonnegative_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if 0 <= value <= 2**63 - 1 else None
+    if (
+        isinstance(value, float)
+        and math.isfinite(value)
+        and value.is_integer()
+        and 0 <= value <= 2**63 - 1
+    ):
+        return int(value)
+    return None
+
+
+def _nonnegative_exact_int(value: object) -> int | None:
+    if type(value) is not int:
+        return None
+    return value if 0 <= value <= 2**63 - 1 else None
+
+
+def _safe_wall_time_ms(value: object) -> int | None:
+    parsed = _nonnegative_int(value)
+    return parsed if parsed is not None and parsed <= _MAX_WALL_TIME_MS else None
+
+
+def _safe_string(value: object) -> str | None:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return None
+    return value if len(value) <= 4096 else None
+
+
+def _safe_run_id(value: object) -> str | None:
+    if not isinstance(value, str) or _SAFE_RUN_ID_RE.fullmatch(value) is None:
+        return None
+    return value
+
+
+def _safe_strings(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if _safe_string(item) is not None]
+
+
+def _strict_safe_strings(value: object) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    if any(_safe_string(item) is None for item in value):
+        return None
+    return list(value)
+
+
+def _safe_repo_read_path(value: object) -> str | None:
+    path = _safe_string(value)
+    if (
+        path is None
+        or path.startswith("/")
+        or "\\" in path
+        or _WINDOWS_DRIVE_RE.match(path)
+        or any(
+            unicodedata.category(character) in {"Cc", "Cf"}
+            for character in path
+        )
+    ):
+        return None
+    segments = path.split("/")
+    if any(segment in {"", ".", ".."} for segment in segments):
+        return None
+    return path
+
+
+def _strict_repo_read_paths(value: object) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    paths = [_safe_repo_read_path(item) for item in value]
+    if any(path is None for path in paths):
+        return None
+    return [path for path in paths if path is not None]
+
+
+def _safe_scalar_map(value: object, names: Iterable[str]) -> dict[str, Any]:
+    """Copy bounded string/null fields; numeric and boolean fields are explicit."""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for name in names:
+        if name not in value:
+            continue
+        item = value.get(name)
+        if item is None or (
+            isinstance(item, str) and "\x00" not in item and len(item) <= 4096
+        ):
+            result[name] = item
+    return result
+
+
+def _sanitize_warnings(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        code = (
+            item
+            if isinstance(item, str)
+            else item.get("code") if isinstance(item, dict) else None
+        )
+        if code in _FIXED_WARNING_CODES and code not in result:
+            result.append(code)
+    return result
+
+
+def _sanitize_run(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result = _safe_scalar_map(
+        value,
+        (
+            "id",
+            "session_id",
+            "plugin_version",
+            "mode",
+            "repo_path",
+            "output_dir",
+            "started_at",
+            "ended_at",
+        ),
+    )
+    git = _safe_scalar_map(
+        value.get("git"), ("requested_range", "base_sha", "head_sha")
+    )
+    result["git"] = git
+    return result
+
+
+def _sanitize_steps(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        step = _safe_scalar_map(
+            item,
+            (
+                "run_id",
+                "event",
+                "timestamp",
+                "phase",
+                "title",
+            ),
+        )
+        for name in ("schema_version", "step", "duration_since_prev_ms"):
+            count = _nonnegative_int(item.get(name)) if isinstance(item, dict) else None
+            if count is not None:
+                step[name] = count
+        if not step:
+            continue
+        raw_args = item.get("args") if isinstance(item, dict) else None
+        args: dict[str, Any] = {}
+        if isinstance(raw_args, dict):
+            if isinstance(raw_args.get("bot_mode"), bool):
+                args["bot_mode"] = raw_args["bot_mode"]
+            thoughts_length = _nonnegative_int(raw_args.get("thoughts_length"))
+            if thoughts_length is not None:
+                args["thoughts_length"] = thoughts_length
+        raw_decisions = item.get("decisions") if isinstance(item, dict) else None
+        decisions: dict[str, bool] = {}
+        if isinstance(raw_decisions, dict) and isinstance(
+            raw_decisions.get("critic_skipped"), bool
+        ):
+            decisions["critic_skipped"] = raw_decisions["critic_skipped"]
+        if args:
+            step["args"] = args
+        if decisions:
+            step["decisions"] = decisions
+        result.append(step)
+    return result
+
+
+def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    fields = (
+        "run_id",
+        "event",
+        "timestamp",
+        "agent",
+        "verdict",
+    ) if completed else (
+        "run_id",
+        "event",
+        "timestamp",
+        "agent",
+        "domain",
+        "model_tier",
+    )
+    result = _safe_scalar_map(value, fields)
+    agent = result.get("agent")
+    if not isinstance(agent, str) or _PRODUCER_AGENT_NAME_RE.fullmatch(agent) is None:
+        result.pop("agent", None)
+    schema_version = _nonnegative_int(value.get("schema_version"))
+    if schema_version is not None:
+        result["schema_version"] = schema_version
+    if completed:
+        for name in ("duration_ms", "issue_count"):
+            count = _nonnegative_int(value.get(name))
+            if count is not None:
+                result[name] = count
+        severities = value.get("severities")
+        if isinstance(severities, dict):
+            safe_severities = {
+                name: count
+                for name in _SEVERITIES
+                if (count := _nonnegative_int(severities.get(name))) is not None
+            }
+            result["severities"] = safe_severities
+    else:
+        budget_target = _nonnegative_int(value.get("budget_target"))
+        if budget_target is not None:
+            result["budget_target"] = budget_target
+        scope = value.get("scope")
+        if isinstance(scope, dict):
+            safe_scope: dict[str, Any] = {}
+            for name in ("files", "lines"):
+                count = _nonnegative_int(scope.get(name))
+                if count is not None:
+                    safe_scope[name] = count
+            safe_scope["paths"] = _safe_strings(scope.get("paths"))
+            result["scope"] = safe_scope
+    return result
+
+
+def _sanitize_agents(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or any(
+        not isinstance(value.get(name), list)
+        for name in ("started", "completed", "incomplete")
+    ):
+        return None
+    started = value.get("started")
+    completed = value.get("completed")
+    return {
+        "started": [
+            event
+            for item in started if (event := _sanitize_agent_event(item, completed=False))
+        ] if isinstance(started, list) else [],
+        "completed": [
+            event
+            for item in completed if (event := _sanitize_agent_event(item, completed=True))
+        ] if isinstance(completed, list) else [],
+        "incomplete": _safe_strings(value.get("incomplete")),
+    }
+
+
+def _bounded_event_string(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and "\x00" not in value
+        and len(value) <= 4096
+    )
+
+
+def _strict_lifecycle_event(
+    value: object, *, completed: bool, run_id: str
+) -> dict[str, Any] | None:
+    expected_event = "agent_complete" if completed else "agent_start"
+    if (
+        not isinstance(value, dict)
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != _SUPPORTED_MANIFEST_SCHEMA_VERSION
+        or value.get("run_id") != run_id
+        or value.get("event") != expected_event
+        or _parse_time(value.get("timestamp")) is None
+        or type(value.get("agent")) is not str
+        or _PRODUCER_AGENT_NAME_RE.fullmatch(value["agent"]) is None
+    ):
+        return None
+
+    if completed:
+        if (
+            "duration_ms" not in value
+            or (
+                value.get("duration_ms") is not None
+                and _nonnegative_exact_int(value.get("duration_ms")) is None
+            )
+            or _nonnegative_exact_int(value.get("issue_count")) is None
+            or not _bounded_event_string(value.get("verdict"))
+            or not isinstance(value.get("severities"), dict)
+        ):
+            return None
+        severities: dict[str, int] = {}
+        for name in _SEVERITIES:
+            if name not in value["severities"]:
+                continue
+            count = _nonnegative_exact_int(value["severities"].get(name))
+            if count is None:
+                return None
+            severities[name] = count
+        if value["issue_count"] != sum(severities.values()):
+            return None
+        return {
+            "schema_version": value["schema_version"],
+            "run_id": value["run_id"],
+            "event": value["event"],
+            "timestamp": value["timestamp"],
+            "agent": value["agent"],
+            "duration_ms": value.get("duration_ms"),
+            "verdict": value["verdict"],
+            "issue_count": value["issue_count"],
+            "severities": severities,
+        }
+
+    scope = value.get("scope")
+    if (
+        not _bounded_event_string(value.get("domain"))
+        or not _bounded_event_string(value.get("model_tier"))
+        or not isinstance(scope, dict)
+        or _nonnegative_exact_int(scope.get("files")) is None
+        or _nonnegative_exact_int(scope.get("lines")) is None
+    ):
+        return None
+    paths = _strict_safe_strings(scope.get("paths", []))
+    if paths is None:
+        return None
+    budget_target = value.get("budget_target")
+    if "budget_target" in value and _nonnegative_exact_int(budget_target) is None:
+        return None
+    result = {
+        "schema_version": value["schema_version"],
+        "run_id": value["run_id"],
+        "event": value["event"],
+        "timestamp": value["timestamp"],
+        "agent": value["agent"],
+        "domain": value["domain"],
+        "model_tier": value["model_tier"],
+        "scope": {
+            "files": scope["files"],
+            "lines": scope["lines"],
+            "paths": paths,
+        },
+    }
+    if "budget_target" in value:
+        result["budget_target"] = budget_target
+    return result
+
+
+def _lifecycle_events_are_causal(
+    started: list[dict[str, Any]], completed: list[dict[str, Any]]
+) -> bool:
+    start_times = [_parse_time(event["timestamp"]) for event in started]
+    completion_times = [_parse_time(event["timestamp"]) for event in completed]
+    if any(time is None for time in (*start_times, *completion_times)):
+        return False
+
+    starts_by_agent: dict[str, list[datetime]] = {}
+    for event, timestamp in zip(started, start_times):
+        assert timestamp is not None
+        agent_starts = starts_by_agent.setdefault(event["agent"], [])
+        if agent_starts and timestamp < agent_starts[-1]:
+            return False
+        agent_starts.append(timestamp)
+    completions_by_agent: dict[str, list[datetime]] = {}
+    for event, timestamp in zip(completed, completion_times):
+        assert timestamp is not None
+        agent_completions = completions_by_agent.setdefault(event["agent"], [])
+        if agent_completions and timestamp < agent_completions[-1]:
+            return False
+        agent_completions.append(timestamp)
+    matched_by_agent: Counter[str] = Counter()
+    for event, timestamp in zip(completed, completion_times):
+        assert timestamp is not None
+        agent = event["agent"]
+        start_index = matched_by_agent[agent]
+        available_starts = starts_by_agent.get(agent, [])
+        if (
+            start_index >= len(available_starts)
+            or available_starts[start_index] > timestamp
+        ):
+            return False
+        matched_by_agent[agent] += 1
+    return True
+
+
+def _strict_lifecycle_agents(
+    value: object, *, run_id: object, status: object
+) -> dict[str, Any] | None:
+    if (
+        not isinstance(value, dict)
+        or _safe_run_id(run_id) is None
+        or any(
+            not isinstance(value.get(name), list)
+            for name in ("started", "completed", "incomplete")
+        )
+    ):
+        return None
+    incomplete = _strict_safe_strings(value["incomplete"])
+    if (
+        incomplete is None
+        or any(
+            type(name) is not str
+            or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+            for name in incomplete
+        )
+    ):
+        return None
+    started: list[dict[str, Any]] = []
+    for event in value["started"]:
+        safe = _strict_lifecycle_event(event, completed=False, run_id=run_id)
+        if safe is None:
+            return None
+        started.append(safe)
+    completed: list[dict[str, Any]] = []
+    for event in value["completed"]:
+        safe = _strict_lifecycle_event(event, completed=True, run_id=run_id)
+        if safe is None:
+            return None
+        completed.append(safe)
+
+    if not _lifecycle_events_are_causal(started, completed):
+        return None
+
+    starts_by_agent = Counter(event["agent"] for event in started)
+    completions_by_agent = Counter(event["agent"] for event in completed)
+    if status == "complete" and Counter(incomplete) != (
+        starts_by_agent - completions_by_agent
+    ):
+        return None
+    return {
+        "started": started,
+        "completed": completed,
+        "incomplete": incomplete,
+    }
+
+
+def _is_dispatched_status(value: object) -> bool:
+    return isinstance(value, str) and value in _DISPATCHED_STATUSES
+
+
+def _producer_declared_unusable_dispatch(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if "plan_projections" in value:
+        return False
+    adjustments = value.get("adjustment_counts")
+    planner_available = value.get("planner_baseline_available")
+    final_available = value.get("final_plan_available")
+    planner_count = value.get("planner_candidate_count")
+    final_count = value.get("final_dispatch_count")
+    if (
+        type(planner_available) is not bool
+        or type(final_available) is not bool
+        or value.get("comparison_available") is not False
+        or type(planner_count) is not int
+        or _nonnegative_int(planner_count) is None
+        or type(final_count) is not int
+        or _nonnegative_int(final_count) is None
+        or not isinstance(adjustments, dict)
+        or set(adjustments) != {"added", "removed", "unchanged"}
+        or any(
+            type(adjustments[name]) is not int or adjustments[name] != 0
+            for name in adjustments
+        )
+        or value.get("agents") != {}
+    ):
+        return False
+
+    duplicate_names = value.get("duplicate_agent_names")
+    if not isinstance(duplicate_names, dict) or not duplicate_names:
+        return False
+    allowed_keys = {"planner_baseline", "final_plan"}
+    if not set(duplicate_names) <= allowed_keys:
+        return False
+    availability_by_name = {
+        "planner_baseline": planner_available,
+        "final_plan": final_available,
+    }
+    if any(not availability_by_name[name] for name in duplicate_names):
+        return False
+    for names in duplicate_names.values():
+        safe_names = _strict_safe_strings(names)
+        if (
+            not safe_names
+            or safe_names != sorted(set(safe_names))
+            or any(
+                _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+                for name in safe_names
+            )
+        ):
+            return False
+
+    reasons = _strict_safe_strings(value.get("invalid_reason_codes"))
+    if reasons is None or len(reasons) != len(set(reasons)):
+        return False
+    expected_reasons = {
+        f"{name}_unavailable"
+        for name, available in availability_by_name.items()
+        if not available
+    }
+    expected_reasons.update(
+        f"{name}_duplicate_agents" for name in duplicate_names
+    )
+    if set(reasons) != expected_reasons:
+        return False
+    if final_available is False and final_count != 0:
+        return False
+    if planner_available is False and planner_count != final_count:
+        return False
+    return True
+
+
+def _dispatch_projection_family_failure(value: object) -> bool:
+    """Recognize raw projection evidence that must fail closed family-locally."""
+    if not isinstance(value, dict):
+        return False
+    if "plan_projections" in value:
+        return True
+    reasons = value.get("invalid_reason_codes")
+    return isinstance(reasons, list) and any(
+        type(reason) is str and reason == "dispatch_agent_set_mismatch"
+        for reason in reasons
+    )
+
+
+def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    availability_fields = (
+        "planner_baseline_available",
+        "final_plan_available",
+        "comparison_available",
+    )
+    if any(type(value.get(name)) is not bool for name in availability_fields):
+        return None
+
+    planner_available = value["planner_baseline_available"]
+    final_available = value["final_plan_available"]
+    comparison_available = value["comparison_available"]
+    invalid_reason_codes = _strict_safe_strings(value.get("invalid_reason_codes"))
+    if invalid_reason_codes is None or any(
+        not code.islower() or not code.replace("_", "").isalnum()
+        for code in invalid_reason_codes
+    ):
+        return None
+    agent_set_mismatch = (
+        planner_available
+        and final_available
+        and comparison_available is False
+        and invalid_reason_codes == ["dispatch_agent_set_mismatch"]
+    )
+    if "plan_projections" in value and not agent_set_mismatch:
+        return None
+    if comparison_available != (planner_available and final_available):
+        if not agent_set_mismatch:
+            return None
+
+    planner_count = _nonnegative_int(value.get("planner_candidate_count"))
+    final_count = _nonnegative_int(value.get("final_dispatch_count"))
+    if planner_available and planner_count is None:
+        return None
+    if final_available and final_count is None:
+        return None
+
+    raw_adjustments = value.get("adjustment_counts")
+    raw_adjustments = raw_adjustments if isinstance(raw_adjustments, dict) else {}
+    adjustment_counts = {
+        name: _nonnegative_int(raw_adjustments.get(name))
+        for name in ("added", "removed", "unchanged")
+    }
+
+    safe_plan_projections: dict[str, dict[str, str]] | None = None
+    if agent_set_mismatch:
+        raw_projections = value.get("plan_projections")
+        projection_names = {"planner_baseline", "final_plan"}
+        if (
+            not isinstance(raw_projections, dict)
+            or set(raw_projections) != projection_names
+            or "duplicate_agent_names" in value
+            or not isinstance(raw_adjustments, dict)
+            or set(raw_adjustments) != {"added", "removed", "unchanged"}
+        ):
+            return None
+        safe_plan_projections = {}
+        for projection_name in ("planner_baseline", "final_plan"):
+            projection = raw_projections.get(projection_name)
+            if not isinstance(projection, dict):
+                return None
+            safe_projection: dict[str, str] = {}
+            for name, status in projection.items():
+                if (
+                    type(name) is not str
+                    or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+                    or type(status) is not str
+                    or status not in _SUPPORTED_DISPATCH_STATUSES
+                ):
+                    return None
+                safe_projection[name] = status
+            safe_plan_projections[projection_name] = {
+                name: safe_projection[name]
+                for name in sorted(safe_projection)
+            }
+        planner_projection = safe_plan_projections["planner_baseline"]
+        final_projection = safe_plan_projections["final_plan"]
+        if (
+            set(planner_projection) == set(final_projection)
+            or planner_count
+            != sum(
+                _is_dispatched_status(status)
+                for status in planner_projection.values()
+            )
+            or final_count
+            != sum(
+                _is_dispatched_status(status)
+                for status in final_projection.values()
+            )
+        ):
+            return None
+
+    if (
+        planner_available
+        and "planner_baseline_unavailable" in invalid_reason_codes
+    ) or (
+        final_available and "final_plan_unavailable" in invalid_reason_codes
+    ):
+        return None
+    if (
+        "dispatch_agent_set_mismatch" in invalid_reason_codes
+        and not agent_set_mismatch
+    ):
+        return None
+    if any(code.endswith("_duplicate_agents") for code in invalid_reason_codes):
+        return None
+
+    safe_duplicate_names: dict[str, list[str]] | None = None
+    duplicate_names = value.get("duplicate_agent_names")
+    if "duplicate_agent_names" in value:
+        if not isinstance(duplicate_names, dict):
+            return None
+        safe_duplicate_names = {}
+        for key in ("planner_baseline", "final_plan"):
+            if key not in duplicate_names:
+                continue
+            names = _strict_safe_strings(duplicate_names.get(key))
+            if names is None or len(names) != len(set(names)):
+                return None
+            safe_duplicate_names[key] = names
+        if any(safe_duplicate_names.values()):
+            return None
+
+    safe_agents: dict[str, dict[str, Any]] = {}
+    agents = value.get("agents")
+    if not isinstance(agents, dict):
+        return None
+    fields = (
+        "domain",
+        "initial_status",
+        "initial_reason",
+        "final_status",
+        "final_reason",
+        "model_tier",
+        "adjustment_reason",
+        "change",
+    )
+    for name, decision in agents.items():
+        if _safe_string(name) is None or not isinstance(decision, dict):
+            return None
+        for status_name in ("initial_status", "final_status"):
+            status = decision.get(status_name)
+            if (
+                status_name not in decision
+                or not isinstance(status, str)
+                or status not in _SUPPORTED_DISPATCH_STATUSES
+            ):
+                return None
+        safe = _safe_scalar_map(decision, fields)
+        safe["planner_signals"] = _safe_strings(decision.get("planner_signals"))
+        safe["configured_planner_checks"] = _safe_strings(
+            decision.get("configured_planner_checks")
+        )
+        safe_agents[name] = safe
+
+    if comparison_available:
+        recomputed_adjustments = Counter()
+        recomputed_planner_count = 0
+        recomputed_final_count = 0
+        for name, decision in agents.items():
+            if not {"initial_status", "final_status"} <= set(decision):
+                return None
+            initially_dispatched = _is_dispatched_status(
+                decision.get("initial_status")
+            )
+            finally_dispatched = _is_dispatched_status(decision.get("final_status"))
+            recomputed_planner_count += initially_dispatched
+            recomputed_final_count += finally_dispatched
+            if initially_dispatched == finally_dispatched:
+                change = "unchanged"
+            elif finally_dispatched:
+                change = "added"
+            else:
+                change = "removed"
+            if decision.get("change") != change:
+                return None
+            recomputed_adjustments[change] += 1
+
+        expected_adjustments = {
+            name: recomputed_adjustments[name]
+            for name in ("added", "removed", "unchanged")
+        }
+        if (
+            planner_count != recomputed_planner_count
+            or final_count != recomputed_final_count
+            or adjustment_counts != expected_adjustments
+            or sum(adjustment_counts.values()) != len(safe_agents)
+            or final_count
+            != planner_count
+            + adjustment_counts["added"]
+            - adjustment_counts["removed"]
+        ):
+            return None
+    else:
+        zero_adjustments = {"added": 0, "removed": 0, "unchanged": 0}
+        if agent_set_mismatch:
+            if (
+                agents
+                or adjustment_counts != zero_adjustments
+                or safe_plan_projections is None
+            ):
+                return None
+        elif planner_available:
+            if (
+                agents
+                or final_count != 0
+                or adjustment_counts != zero_adjustments
+            ):
+                return None
+        elif final_available:
+            dispatched_count = 0
+            for decision in agents.values():
+                if not {"initial_status", "final_status"} <= set(decision):
+                    return None
+                if (
+                    decision.get("initial_status") != decision.get("final_status")
+                    or decision.get("change") != "unchanged"
+                ):
+                    return None
+                dispatched_count += _is_dispatched_status(
+                    decision.get("final_status")
+                )
+            expected_adjustments = {
+                "added": 0,
+                "removed": 0,
+                "unchanged": len(agents),
+            }
+            if (
+                planner_count != dispatched_count
+                or final_count != dispatched_count
+                or adjustment_counts != expected_adjustments
+            ):
+                return None
+        elif (
+            agents
+            or planner_count != 0
+            or final_count != 0
+            or adjustment_counts != zero_adjustments
+        ):
+            return None
+
+    result: dict[str, Any] = {
+        "planner_baseline_available": planner_available,
+        "final_plan_available": final_available,
+        "comparison_available": comparison_available,
+        "planner_candidate_count": planner_count,
+        "final_dispatch_count": final_count,
+        "adjustment_counts": adjustment_counts,
+        "invalid_reason_codes": invalid_reason_codes,
+        "agents": safe_agents,
+    }
+    if safe_duplicate_names is not None:
+        result["duplicate_agent_names"] = safe_duplicate_names
+    if safe_plan_projections is not None:
+        result["plan_projections"] = safe_plan_projections
+    return result
+
+
+def _sanitize_coverage(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    required = {
+        "changed",
+        "reviewable",
+        "by_agent",
+        "assigned",
+        "excluded",
+        "uncovered",
+        "semantics",
+    }
+    if not required <= set(value):
+        return None
+    if value.get("semantics") != "generated_scope_not_proof_of_model_read":
+        return None
+
+    path_lists: dict[str, list[str]] = {}
+    for name in ("changed", "reviewable", "assigned", "uncovered"):
+        paths = _strict_safe_strings(value.get(name))
+        if paths is None or len(paths) != len(set(paths)):
+            return None
+        path_lists[name] = paths
+
+    by_agent = value.get("by_agent")
+    if not isinstance(by_agent, dict):
+        return None
+    safe_by_agent: dict[str, list[str]] = {}
+    for name, raw_paths in by_agent.items():
+        paths = _strict_safe_strings(raw_paths)
+        if (
+            _safe_string(name) is None
+            or paths is None
+            or len(paths) != len(set(paths))
+        ):
+            return None
+        safe_by_agent[name] = paths
+
+    raw_excluded = value.get("excluded")
+    if not isinstance(raw_excluded, list):
+        return None
+    excluded: list[dict[str, str]] = []
+    for item in raw_excluded:
+        if not isinstance(item, dict) or set(item) != {"path", "reason"}:
+            return None
+        path = _safe_string(item.get("path"))
+        if path is None or item.get("reason") != "noise_filtered":
+            return None
+        excluded.append({"path": path, "reason": "noise_filtered"})
+
+    changed = set(path_lists["changed"])
+    reviewable = set(path_lists["reviewable"])
+    assigned = set(path_lists["assigned"])
+    uncovered = set(path_lists["uncovered"])
+    excluded_paths = [item["path"] for item in excluded]
+    if (
+        not reviewable <= changed
+        or not assigned.isdisjoint(uncovered)
+        or assigned | uncovered != reviewable
+        or len(excluded_paths) != len(set(excluded_paths))
+        or set(excluded_paths) != changed - reviewable
+        or any(not set(paths) <= changed for paths in safe_by_agent.values())
+    ):
+        return None
+    by_agent_union = {
+        path for paths in safe_by_agent.values() for path in paths
+    }
+    if by_agent_union & reviewable != assigned:
+        return None
+
+    return {
+        "changed": path_lists["changed"],
+        "reviewable": path_lists["reviewable"],
+        "by_agent": safe_by_agent,
+        "assigned": path_lists["assigned"],
+        "excluded": excluded,
+        "uncovered": path_lists["uncovered"],
+        "semantics": "generated_scope_not_proof_of_model_read",
+    }
+
+
+def _sanitize_summary(value: object) -> dict[str, Any]:
+    raw_summary = value if isinstance(value, dict) else {}
+    summary = _safe_scalar_map(
+        raw_summary, ("pr_size_category", "final_verdict")
+    )
+    if isinstance(raw_summary.get("quick_mode"), bool):
+        summary["quick_mode"] = raw_summary["quick_mode"]
+    for name in set(_SUMMARY_FIELDS) - {
+        "quick_mode",
+        "pr_size_category",
+        "final_verdict",
+    }:
+        count = _nonnegative_int(raw_summary.get(name))
+        if count is not None:
+            summary[name] = count
+    raw_severities = (
+        raw_summary.get("final_severities")
+        if isinstance(raw_summary, dict)
+        else None
+    )
+    if isinstance(raw_severities, dict):
+        summary["final_severities"] = {
+            name: count
+            for name in _SEVERITIES
+            if (count := _nonnegative_int(raw_severities.get(name))) is not None
+        }
+    return summary
+
+
+def _sanitize_outcome(value: object) -> dict[str, Any]:
+    value = value if isinstance(value, dict) else {}
+    summary = _sanitize_summary(value.get("summary"))
+    result = {"summary": summary}
+    result.update(_safe_scalar_map(value, ("pipeline_status", "verdict")))
+    critic_verdict = value.get("critic_verdict")
+    if critic_verdict in _RETAINED_CRITIC_VALUES:
+        result["critic_verdict"] = critic_verdict
+    return result
+
+
+def _sanitize_manifest(value: object) -> dict[str, Any]:
+    value = value if isinstance(value, dict) else {}
+    run = _sanitize_run(value.get("run"))
+    status = value.get("status") if isinstance(value.get("status"), str) else None
+    strict_agents = _strict_lifecycle_agents(
+        value.get("agents"), run_id=run.get("id"), status=status
+    )
+    agents = strict_agents if strict_agents is not None else _sanitize_agents(
+        value.get("agents")
+    )
+    availability = value.get("availability")
+    safe_availability = {
+        name: item
+        for name, item in availability.items()
+        if isinstance(name, str) and isinstance(item, bool)
+    } if isinstance(availability, dict) else {}
+    safe_availability["lifecycle"] = (
+        strict_agents is not None
+        and safe_availability.get("lifecycle") is not False
+    )
+    coverage = (
+        None
+        if safe_availability.get("coverage") is False
+        else _sanitize_coverage(value.get("coverage"))
+    )
+    raw_dispatch = value.get("dispatch")
+    dispatch = _sanitize_dispatch(raw_dispatch)
+    warnings = _sanitize_warnings(value.get("warnings"))
+    if (
+        dispatch is None
+        and _dispatch_projection_family_failure(raw_dispatch)
+        and "invalid_dispatch_projection" not in warnings
+    ):
+        warnings.append("invalid_dispatch_projection")
+    return {
+        "schema_version": _nonnegative_int(value.get("schema_version")) or 1,
+        "status": status,
+        "run": run,
+        "steps": _sanitize_steps(value.get("steps")),
+        "agents": agents,
+        "dispatch": dispatch,
+        "coverage": coverage,
+        "outcome": _sanitize_outcome(value.get("outcome")),
+        "availability": safe_availability,
+        "warnings": warnings,
+    }
+
+
+def _supported_manifest_envelope(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = {
+        "schema_version",
+        "status",
+        "run",
+        "steps",
+        "dispatch",
+        "coverage",
+        "outcome",
+        "availability",
+    }
+    if not required <= set(value):
+        return False
+    if type(value.get("schema_version")) is not int or value.get(
+        "schema_version"
+    ) != _SUPPORTED_MANIFEST_SCHEMA_VERSION:
+        return False
+    if value.get("status") not in _SUPPORTED_MANIFEST_STATUSES:
+        return False
+
+    run = value.get("run")
+    if not isinstance(run, dict) or _safe_run_id(run.get("id")) is None:
+        return False
+    required_run = {
+        "id",
+        "session_id",
+        "plugin_version",
+        "mode",
+        "repo_path",
+        "output_dir",
+        "started_at",
+        "ended_at",
+        "git",
+    }
+    if not required_run <= set(run):
+        return False
+    if not isinstance(run.get("git"), dict):
+        return False
+    for name in required_run - {"id", "git"}:
+        scalar = run.get(name)
+        if scalar is not None and _safe_string(scalar) is None:
+            return False
+
+    steps = value.get("steps")
+    outcome = value.get("outcome")
+    availability = value.get("availability")
+    if (
+        not isinstance(steps, list)
+        or any(not isinstance(step, dict) for step in steps)
+        or not isinstance(outcome, dict)
+        or not isinstance(outcome.get("summary"), dict)
+        or not isinstance(availability, dict)
+    ):
+        return False
+    if not all(
+        type(availability.get(name)) is bool
+        for name in ("pipeline", "transcript", "coverage")
+    ):
+        return False
+    return availability["pipeline"] is True
+
+
+def _valid_manifest(value: object) -> bool:
+    if not _supported_manifest_envelope(value):
+        return False
+    assert isinstance(value, dict)
+    sanitized = _sanitize_manifest(value)
+    if sanitized.get("run", {}).get("id") != value["run"].get("id"):
+        return False
+    if len(sanitized.get("steps", [])) != len(value["steps"]):
+        return False
+    raw_dispatch = value.get("dispatch")
+    if (
+        raw_dispatch is not None
+        and sanitized.get("dispatch") is None
+        and not _producer_declared_unusable_dispatch(raw_dispatch)
+        and not _dispatch_projection_family_failure(raw_dispatch)
+    ):
+        return False
+    coverage_available = value["availability"]["coverage"]
+    if coverage_available != isinstance(sanitized.get("coverage"), dict):
+        return False
+    if coverage_available is False and value.get("coverage") is not None:
+        return False
+    return True
