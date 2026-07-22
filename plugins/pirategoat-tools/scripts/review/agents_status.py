@@ -22,6 +22,22 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 
+try:
+    from .dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        validate_dispatch_plan_agents,
+    )
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        validate_dispatch_plan_agents,
+    )
+
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
 
@@ -58,6 +74,9 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
 
     with open(plan_path) as f:
         plan = json.load(f)
+    if not isinstance(plan, dict):
+        raise ValueError(f"Dispatch plan must be a JSON object, got {plan!r}")
+    plan_agents = validate_dispatch_plan_agents(plan.get("agents"))
 
     now = datetime.now(timezone.utc)
     agents = []
@@ -68,11 +87,11 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     not_dispatched = 0
     skipped = 0
 
-    for agent in plan.get("agents", []):
+    for agent in plan_agents:
         name = agent["name"]
-        status = agent.get("status", "SKIP")
+        status = agent["status"]
 
-        if status.startswith("SKIP"):
+        if status in SKIPPED_STATUSES:
             skipped += 1
             agents.append({
                 "name": name, "status": status,
@@ -80,7 +99,8 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
             })
             continue
 
-        dispatched += 1
+        if status in DISPATCHED_STATUSES:
+            dispatched += 1
         review_path = os.path.join(output_dir, _reviewer_filename(name))
         started_path = os.path.join(output_dir, f"{name}.started")
 
@@ -162,7 +182,7 @@ def format_output(result: dict) -> str:
     for a in result["agents"]:
         name = a["name"]
         st = a["status"]
-        if st.startswith("SKIP"):
+        if st in SKIPPED_STATUSES:
             lines.append(f"  {name:30s} {st}  ({a.get('reason', '')})")
         elif st == "FINISHED":
             counts = ", ".join(f"{k}={v}" for k, v in sorted(a.get("counts", {}).items()))
@@ -195,7 +215,7 @@ def main():
         result = check_status(args.output_dir)
         print(format_output(result))
         sys.exit(0 if result["all_done"] else 2)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 

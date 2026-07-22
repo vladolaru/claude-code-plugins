@@ -13,6 +13,8 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
 
+from review import dispatch_status
+
 
 def _load_module():
     spec = importlib.util.spec_from_file_location("check_status", SCRIPT_PATH)
@@ -143,7 +145,7 @@ class TestCheckStatus:
     def test_skipped_agents_dont_count(self, mod, tmp_path):
         _write_plan(tmp_path, [
             {"name": "code-reviewer", "status": "DISPATCH"},
-            {"name": "a11y-reviewer", "status": "SKIP", "reason": "no frontend files"},
+            {"name": "a11y-reviewer", "status": "SKIPPED", "reason": "no frontend files"},
         ])
         _start_agent(tmp_path, "code-reviewer")
         _finish_agent(tmp_path, "code-reviewer")
@@ -173,6 +175,165 @@ class TestCheckStatus:
         cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         assert r.returncode == 1
+
+    def test_invalid_status_exits_1_with_actionable_error(self, tmp_path):
+        _write_plan(tmp_path, [
+            {"name": "security-reviewer", "status": "DISPATCHED"},
+        ])
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        assert result.returncode == 1
+        assert "security-reviewer" in result.stderr
+        assert repr("DISPATCHED") in result.stderr
+
+
+class TestDispatchStatusContract:
+    def test_supported_statuses_partition_into_explicit_sets(self):
+        assert dispatch_status.SKIPPED_STATUSES == frozenset({
+            dispatch_status.SKIPPED,
+            dispatch_status.SKIPPED_OVERRIDE,
+            dispatch_status.SKIPPED_QUICK_MODE,
+            dispatch_status.SKIPPED_TRIAGE,
+        })
+        assert dispatch_status.SUPPORTED_DISPATCH_STATUSES == (
+            dispatch_status.DISPATCHED_STATUSES
+            | dispatch_status.SKIPPED_STATUSES
+        )
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "DISPATCH",
+            "DISPATCH_OVERRIDE",
+            "SKIPPED",
+            "SKIPPED_OVERRIDE",
+            "SKIPPED_QUICK_MODE",
+            "SKIPPED_TRIAGE",
+        ],
+    )
+    def test_validator_accepts_each_supported_status(self, status):
+        agents = [{"name": "code-reviewer", "status": status}]
+
+        assert dispatch_status.validate_dispatch_plan_agents(agents) == agents
+
+    @pytest.mark.parametrize(
+        "agents",
+        [
+            None,
+            {},
+            "code-reviewer",
+        ],
+    )
+    def test_validator_rejects_non_list_agents(self, agents):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents(agents)
+
+        assert repr(agents) in str(exc_info.value)
+
+    @pytest.mark.parametrize("entry", [None, "code-reviewer", []])
+    def test_validator_rejects_non_dict_entries_with_index(self, entry):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([entry])
+
+        assert "index 0" in str(exc_info.value)
+        assert repr(entry) in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "name",
+        [None, "", [], {}],
+    )
+    def test_validator_rejects_invalid_names_with_index_and_value(self, name):
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([
+                {"name": name, "status": "DISPATCH"},
+            ])
+
+        assert "index 0" in str(exc_info.value)
+        assert repr(name) in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "status,expected_repr",
+        [
+            pytest.param("__missing__", repr(None), id="missing"),
+            pytest.param(None, repr(None), id="null"),
+            pytest.param("", repr(""), id="empty"),
+            pytest.param([], repr([]), id="structured-list"),
+            pytest.param(
+                {"state": "DISPATCH"},
+                repr({"state": "DISPATCH"}),
+                id="structured-dict",
+            ),
+            pytest.param("DISPATCHED", repr("DISPATCHED"), id="unknown"),
+        ],
+    )
+    def test_validator_rejects_invalid_status_with_agent_and_repr(
+        self, status, expected_repr
+    ):
+        agent = {"name": "security-reviewer"}
+        if status != "__missing__":
+            agent["status"] = status
+
+        with pytest.raises(ValueError) as exc_info:
+            dispatch_status.validate_dispatch_plan_agents([agent])
+
+        message = str(exc_info.value)
+        assert "security-reviewer" in message
+        assert expected_repr in message
+
+
+class TestExplicitSkippedFormatting:
+    @pytest.mark.parametrize(
+        "status",
+        [
+            "SKIPPED",
+            "SKIPPED_OVERRIDE",
+            "SKIPPED_QUICK_MODE",
+            "SKIPPED_TRIAGE",
+        ],
+    )
+    def test_formats_each_supported_skipped_status(self, mod, status):
+        result = {
+            "all_done": True,
+            "dispatched": 0,
+            "finished": 0,
+            "running": 0,
+            "timed_out": 0,
+            "not_dispatched": 0,
+            "skipped": 1,
+            "agents": [
+                {"name": "code-reviewer", "status": status, "reason": "not needed"},
+            ],
+        }
+
+        output = mod.format_output(result)
+
+        assert status in output
+        assert "not needed" in output
+
+    def test_does_not_format_unknown_skip_prefix_as_skipped(self, mod):
+        result = {
+            "all_done": True,
+            "dispatched": 0,
+            "finished": 0,
+            "running": 0,
+            "timed_out": 0,
+            "not_dispatched": 0,
+            "skipped": 0,
+            "agents": [
+                {
+                    "name": "code-reviewer",
+                    "status": "SKIPPED_FOREVER",
+                    "reason": "unsupported",
+                },
+            ],
+        }
+
+        output = mod.format_output(result)
+
+        assert "SKIPPED_FOREVER" not in output
+        assert "unsupported" not in output
 
 
 class TestNotDispatchedDoesNotBlockPipeline:

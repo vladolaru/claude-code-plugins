@@ -128,6 +128,43 @@ SAMPLE_NOISE_ONLY_FILES = [
 
 
 # =============================================================================
+# Dispatch status contract
+# =============================================================================
+
+class TestDispatchStatusContract:
+    """Planner output and telemetry share one canonical status vocabulary."""
+
+    @pytest.mark.parametrize("quick", [False, True], ids=["normal", "quick"])
+    def test_planner_outputs_use_canonical_supported_statuses(
+        self, tmp_path, quick
+    ):
+        from review.dispatch_status import SUPPORTED_DISPATCH_STATUSES
+
+        quick_plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir=str(tmp_path),
+            changed_files=["src/service.py"],
+            registry={
+                "agents": {
+                    "simplification-reviewer": {
+                        "dispatch_class": "always",
+                        "domain": "code",
+                        "focus": "",
+                    },
+                }
+            },
+            commit_messages="",
+            diffstat={"added": 5, "removed": 0},
+            quick=quick,
+        )
+
+        assert {
+            agent["status"] for agent in quick_plan["agents"]
+        } <= SUPPORTED_DISPATCH_STATUSES
+
+
+# =============================================================================
 # Unit Tests — parse_changed_files_list
 # =============================================================================
 
