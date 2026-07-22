@@ -849,11 +849,38 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
         actions.append("")
         for agent in dispatched:
             name = agent.get("name", agent) if isinstance(agent, dict) else agent
-            actions.append(f"**{name}:**")
-            actions.append(f"```")
-            actions.append(f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {name} --range "{git_range}" --output-dir "{od}"')
-            actions.append(f"```")
-            actions.append("")
+            adapter = agent.get("adapter") if isinstance(agent, dict) else None
+            if adapter:
+                # Repo-contributed reviewer: dispatch the generic adapter
+                # subagent, parameterized with this reviewer's ref. The Agent
+                # tool's subagent_type MUST be the adapter (a real CC subagent),
+                # not the synthetic instance name.
+                scope_domains = ",".join(agent.get("scope_domains") or ["code"])
+                cmd = (
+                    f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {adapter} '
+                    f'--instance-name {name} --repo-agent-ref "{agent.get("ref", "")}" '
+                    f'--adapter-label "{agent.get("label", name)}" '
+                    f'--execution {agent.get("execution", "inline")} '
+                    f'--channel {agent.get("channel", "blocking")} '
+                    f'--scope-domains "{scope_domains}" '
+                    f'--range "{git_range}" --output-dir "{od}"'
+                )
+                model = agent.get("model")
+                model_hint = f" with model `{model}`" if model else ""
+                actions.append(
+                    f"**{name}** (repo reviewer — dispatch as subagent_type "
+                    f"`{adapter}`{model_hint}):"
+                )
+                actions.append("```")
+                actions.append(cmd)
+                actions.append("```")
+                actions.append("")
+            else:
+                actions.append(f"**{name}:**")
+                actions.append("```")
+                actions.append(f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {name} --range "{git_range}" --output-dir "{od}"')
+                actions.append("```")
+                actions.append("")
 
     actions.append("Monitor progress at any time:")
     actions.append(f"```")
@@ -1636,7 +1663,20 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 with open(plan_path) as f:
                     plan = json.load(f)
                 dispatched = [
-                    {"name": a["name"], "domain": a.get("domain", "")}
+                    {
+                        "name": a["name"],
+                        "domain": a.get("domain", ""),
+                        # Adapter fields (present only for repo-contributed
+                        # reviewers). Carried so step 6 can emit the ref-mode
+                        # bootstrap command instead of a plain --agent call.
+                        "adapter": a.get("adapter"),
+                        "ref": a.get("ref"),
+                        "label": a.get("label"),
+                        "channel": a.get("channel"),
+                        "execution": a.get("execution"),
+                        "model": a.get("model"),
+                        "scope_domains": a.get("scope_domains"),
+                    }
                     for a in plan.get("agents", [])
                     if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
                 ]

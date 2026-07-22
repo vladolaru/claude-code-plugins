@@ -51,6 +51,17 @@ DOMAIN_CATALOG = _scope_mod.DOMAIN_CATALOG
 filter_noise = _scope_mod.filter_noise
 filter_domain = _scope_mod.filter_domain
 
+# Repo-contributed reviewer applicability (shared with bootstrap).
+_review_config_spec = importlib.util.spec_from_file_location(
+    "review_config", str(_SCRIPTS_DIR / "review_config.py")
+)
+_review_config_mod = importlib.util.module_from_spec(_review_config_spec)
+_review_config_spec.loader.exec_module(_review_config_mod)
+reviewer_applies_to_diff = _review_config_mod.reviewer_applies_to_diff
+
+# The registry key of the generic adapter that runs repo-contributed reviewers.
+REPO_REVIEWER_ADAPTER = "repo-reviewer-adapter"
+
 # =============================================================================
 # Unrecognized-source safety net
 # =============================================================================
@@ -1789,6 +1800,56 @@ def _load_review_context(path: Optional[str]) -> Optional[dict]:
         return None
 
 
+def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_list):
+    """Expand repo-declared reviewers into synthetic adapter dispatch entries.
+
+    Each ``reviewers[]`` entry in the reviewed repo's ``.pirategoat/config.json``
+    becomes one dispatch entry named ``repo-<id>-reviewer`` (the ``-reviewer``
+    suffix is load-bearing: reconciliation maps it to ``repo-<id>-review.json``).
+    All such entries target the generic ``repo-reviewer-adapter`` body but carry a
+    distinct ``ref``/``channel``/``execution``/``model``/``scope_domains``.
+    Applicability gates dispatch like a conditional agent. Appended in place to
+    ``dispatch_list``; returns the human-readable signal strings.
+    """
+    signals: List[str] = []
+    review_config = (review_context or {}).get("review_config") or {}
+    reviewers = review_config.get("reviewers") or []
+    if not reviewers:
+        return signals
+
+    domains_with_files = {d for d, c in domain_counts.items() if c > 0}
+    for rev in reviewers:
+        applies = rev.get("applies_to")
+        applicable = reviewer_applies_to_diff(applies, domains_with_files, clean_files)
+        name = f"repo-{rev['id']}-reviewer"
+        # Scope the adapter to the reviewer's declared domains (fall back to the
+        # broad "code" domain when it declares none), filtered to real domains.
+        declared = [d for d in (applies or {}).get("domains", []) if d in DOMAIN_CATALOG]
+        scope_domains = declared or ["code"]
+        if applicable:
+            status = "DISPATCH"
+            reason = "repo reviewer applicable to this diff"
+        else:
+            status = "SKIPPED_TRIAGE"
+            reason = "repo reviewer not applicable (no matching domain files or paths)"
+        dispatch_list.append({
+            "name": name,
+            "adapter": REPO_REVIEWER_ADAPTER,
+            "ref": rev.get("ref"),
+            "label": rev.get("label", rev["id"]),
+            "channel": rev.get("channel", "blocking"),
+            "execution": rev.get("execution", "inline"),
+            "model": rev.get("model"),
+            "scope_domains": scope_domains,
+            "domain": None,
+            "focus": rev.get("label", rev["id"]),
+            "status": status,
+            "reason": reason,
+        })
+        signals.append(f"{name}: STATUS={status} ({reason})")
+    return signals
+
+
 def build_dispatch_plan(
     mode: str,
     git_range: str,
@@ -1900,6 +1961,13 @@ def build_dispatch_plan(
         else:
             signal = f"{agent_name}: STATUS=SKIPPED ({reason})"
         agent_signals.append(signal)
+
+    # Repo-contributed reviewers: expand each declared reviewer into a synthetic
+    # dispatch entry targeting the generic adapter, gated by applicability.
+    repo_signals = expand_repo_reviewers(
+        review_context, domain_counts, clean_files, dispatch_list
+    )
+    agent_signals.extend(repo_signals)
 
     # Safety net: changed source files no reviewer domain will read (unrecognized
     # language). Surfaced loudly so the gap can't masquerade as a clean review.

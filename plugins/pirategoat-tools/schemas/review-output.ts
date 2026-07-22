@@ -41,6 +41,7 @@ export interface Issue {
     references?: string[]; // Links to docs, patterns, skills
     behavior_evidence?: 'cited' | 'inferred';
     source_cited?: string; // "<file>:<line>" pointer to upstream evidence
+    channel?: 'blocking' | 'advisory'; // Repo-contributed reviewers only: 'advisory' findings are listed but never gate the verdict
 }
 
 /**

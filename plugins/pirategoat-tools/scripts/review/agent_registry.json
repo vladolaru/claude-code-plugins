@@ -626,6 +626,16 @@
       "focus": "Stress-test review conclusions via structured criticism",
       "model_tier": "opus"
     },
+    "repo-reviewer-adapter": {
+      "domain": null,
+      "protocols": [
+        "reviewer"
+      ],
+      "scope_flags": [],
+      "dispatch_class": "special",
+      "focus": "Runs a repo-declared reviewer prompt and normalizes its findings into the standard format",
+      "model_tier": "inherit"
+    },
     "code-clarity-reviewer": {
       "domain": "clarity",
       "protocols": [

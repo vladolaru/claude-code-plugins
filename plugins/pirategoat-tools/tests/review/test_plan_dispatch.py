@@ -40,6 +40,7 @@ triage_conditional_agent = _mod.triage_conditional_agent
 build_dispatch_plan = _mod.build_dispatch_plan
 get_diffstat = _mod.get_diffstat
 detect_unrecognized_source = _mod.detect_unrecognized_source
+expand_repo_reviewers = _mod.expand_repo_reviewers
 DOMAIN_CATALOG = _mod.DOMAIN_CATALOG
 
 
@@ -3648,3 +3649,86 @@ class TestRegistryKeywordHygiene:
         assert offenders == {}, (
             f"Generic keywords make conditional agents de-facto always-dispatch: {offenders}"
         )
+
+
+# =============================================================================
+# Repo-contributed reviewer expansion
+# =============================================================================
+
+def _review_ctx(reviewers):
+    return {"review_config": {"rules": [], "reviewers": reviewers}}
+
+
+class TestRepoReviewerExpansion:
+    """expand_repo_reviewers turns declared reviewers into adapter dispatches."""
+
+    def test_no_review_config_yields_nothing(self):
+        dispatch = []
+        signals = expand_repo_reviewers(None, {}, [], dispatch)
+        assert dispatch == []
+        assert signals == []
+
+    def test_applicable_reviewer_dispatches(self):
+        dispatch = []
+        rev = {"id": "renewals", "label": "Renewals Expert",
+               "ref": ".ai/agents/review/renewals.md",
+               "applies_to": {"domains": ["security"]},
+               "channel": "blocking", "execution": "inline", "model": "sonnet"}
+        signals = expand_repo_reviewers(
+            _review_ctx([rev]), {"security": 3}, ["includes/foo.php"], dispatch
+        )
+        assert len(dispatch) == 1
+        e = dispatch[0]
+        assert e["name"] == "repo-renewals-reviewer"  # -reviewer suffix load-bearing
+        assert e["adapter"] == "repo-reviewer-adapter"
+        assert e["ref"] == ".ai/agents/review/renewals.md"
+        assert e["channel"] == "blocking"
+        assert e["execution"] == "inline"
+        assert e["model"] == "sonnet"
+        assert e["scope_domains"] == ["security"]
+        assert e["status"] == "DISPATCH"
+        assert any("repo-renewals-reviewer: STATUS=DISPATCH" in s for s in signals)
+
+    def test_inapplicable_reviewer_skipped(self):
+        dispatch = []
+        rev = {"id": "switch", "label": "Switch", "ref": "r.md",
+               "applies_to": {"domains": ["performance"]}, "channel": "blocking",
+               "execution": "inline", "model": None}
+        expand_repo_reviewers(_review_ctx([rev]), {"security": 2}, ["a.php"], dispatch)
+        assert dispatch[0]["status"] == "SKIPPED_TRIAGE"
+
+    def test_path_glob_dispatches(self):
+        dispatch = []
+        rev = {"id": "sw", "label": "Sw", "ref": "r.md",
+               "applies_to": {"paths": ["includes/**"]}, "channel": "advisory",
+               "execution": "inline", "model": None}
+        expand_repo_reviewers(_review_ctx([rev]), {}, ["includes/core/x.php"], dispatch)
+        assert dispatch[0]["status"] == "DISPATCH"
+        assert dispatch[0]["channel"] == "advisory"
+
+    def test_scope_domains_fallback_to_code(self):
+        dispatch = []
+        rev = {"id": "any", "label": "Any", "ref": "r.md",
+               "applies_to": {"paths": ["**/*.php"]}, "channel": "blocking",
+               "execution": "inline", "model": None}
+        expand_repo_reviewers(_review_ctx([rev]), {}, ["x.php"], dispatch)
+        assert dispatch[0]["scope_domains"] == ["code"]
+
+    def test_integration_through_build_dispatch_plan(self, registry):
+        rev = {"id": "domain-expert", "label": "Domain Expert",
+               "ref": ".ai/agents/review/expert.md",
+               "applies_to": {"paths": ["**/*.php"]}, "channel": "blocking",
+               "execution": "inline", "model": "sonnet"}
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="main..HEAD",
+            output_dir="/tmp/test",
+            changed_files=["includes/foo.php"],
+            registry=registry,
+            review_context=_review_ctx([rev]),
+        )
+        names = [a["name"] for a in plan["agents"]]
+        assert "repo-domain-expert-reviewer" in names
+        entry = next(a for a in plan["agents"] if a["name"] == "repo-domain-expert-reviewer")
+        assert entry["adapter"] == "repo-reviewer-adapter"
+        assert entry["status"] == "DISPATCH"

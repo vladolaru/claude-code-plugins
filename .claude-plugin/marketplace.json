@@ -92,6 +92,7 @@
         "./agents/a11y-reviewer.md",
         "./agents/reliability-reviewer.md",
         "./agents/decision-reviewer.md",
+        "./agents/repo-reviewer-adapter.md",
         "./agents/api-contract-reviewer.md",
         "./agents/data-flow-privacy-reviewer.md",
         "./agents/concurrency-reviewer.md",

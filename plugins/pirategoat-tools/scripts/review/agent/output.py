@@ -296,6 +296,12 @@ class ReviewOutputBuilder:
         counts = {'critical': 0, 'high': 0, 'medium': 0}
 
         for issue in self.issues:
+            # Advisory-channel findings (repo-contributed reviewers on the
+            # advisory channel) never gate the verdict — they are listed but not
+            # enforced. Native agents never set 'channel', so this is a no-op for
+            # them (backward-compatible).
+            if issue.get('channel') == 'advisory':
+                continue
             sev = issue['severity']
             if sev in counts:
                 counts[sev] += 1

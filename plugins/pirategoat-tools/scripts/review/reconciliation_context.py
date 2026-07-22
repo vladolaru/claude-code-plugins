@@ -935,6 +935,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
                 line = issue.get("line", "")
                 category = issue.get("category", "")
                 severity_floor = resolve_severity_floor(issue)
+                channel = issue.get("channel", "")
                 description = issue.get("description", "")
                 recommendation = issue.get("recommendation", "")
 
@@ -947,6 +948,8 @@ def to_markdown(context: Dict[str, Any]) -> str:
                     parts.append(f"- Category: {category}")
                 if severity_floor:
                     parts.append(f"- Severity floor: {severity_floor}")
+                if channel == "advisory":
+                    parts.append("- Channel: advisory (non-gating — preserve on merge)")
                 if description:
                     desc = _escape_backtick_runs(description)
                     desc = _escape_block_syntax(desc)

@@ -161,7 +161,12 @@ builder.add_issue(
     recommendation="Actionable fix guidance",
     category="relevant-category",
     severity_floor="medium",  # Omit only when no verified floor applies.
-    confidence=0.95
+    confidence=0.95,
+    # channel="advisory",  # REQUIRED when the source finding was marked
+    # "Channel: advisory" in the context. Advisory findings (repo-contributed
+    # reviewers on the advisory channel — reuse, naming, boundaries) are listed
+    # but MUST NOT gate the verdict; passing channel="advisory" keeps them
+    # non-gating. Omit for blocking findings.
 )
 
 # Add quality metrics to the JSON output.
