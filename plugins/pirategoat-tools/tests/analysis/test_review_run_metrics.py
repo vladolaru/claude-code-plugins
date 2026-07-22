@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -67,6 +68,22 @@ def test_metrics_uses_canonical_telemetry_contract():
     assert (
         contracts._SUPPORTED_DISPATCH_STATUSES
         == dispatch_status.SUPPORTED_DISPATCH_STATUSES
+    )
+
+
+def test_warning_allowlist_covers_transcript_emitted_codes():
+    """Every warning code review_transcript.py can emit must survive
+    sanitization — a dropped code erases the diagnostic while the affected
+    metric families still degrade, leaving unexplained partial reports."""
+    source = (
+        PLUGIN_ROOT / "scripts" / "analysis" / "review_transcript.py"
+    ).read_text()
+    emitted = set(re.findall(r'\{"code": "([a-z_]+)"', source))
+
+    assert emitted, "expected review_transcript.py to emit warning codes"
+    missing = emitted - contracts._FIXED_WARNING_CODES
+    assert not missing, (
+        f"warning codes emitted but stripped by sanitization: {sorted(missing)}"
     )
 
 

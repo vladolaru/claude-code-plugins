@@ -77,6 +77,8 @@ _FIXED_WARNING_CODES = {
     "duplicate_run_id_conflict",
     "registry_unavailable",
     "orchestrator_transcript_parse_gap",
+    "orchestrator_transcript_time_gap",
+    "orchestrator_stage_timeline_invalid",
     "expected_agents_unavailable",
     "expected_agent_identity_invalid",
     "agent_dispatch_schema_gap",
