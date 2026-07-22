@@ -6515,3 +6515,85 @@ class TestStructuredSidecarValuesFailClosed:
 
         assert run["run"]["id"] == "legacy-structured"
         assert "legacy_log_no_manifest" in run["warnings"]
+
+
+class TestNonCanonicalPathsFailClosed:
+    """Coverage ledgers and lifecycle scope paths must satisfy the canonical
+    repository-relative path contract — absolute, traversal, backslash,
+    drive-prefixed, dot-segment, and control-character paths from malformed
+    or hand-edited sidecars may not survive into the privacy-reduced report."""
+
+    BAD_PATHS = [
+        "/abs/leak.py",
+        "../traversal.py",
+        "dir\\windows.py",
+        "C:drive.py",
+        "dir/./dot-segment.py",
+        "control\x07.py",
+    ]
+
+    @pytest.mark.parametrize("bad_path", BAD_PATHS)
+    def test_non_canonical_coverage_path_invalidates_manifest(
+        self, tmp_path, bad_path
+    ):
+        manifest = _manifest("cover-run")
+        manifest["coverage"]["changed"].append(bad_path)
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-fallback"
+        assert "invalid_manifest_fallback" in run["warnings"]
+
+    def test_non_canonical_excluded_coverage_path_invalidates_manifest(
+        self, tmp_path
+    ):
+        manifest = _manifest("cover-run")
+        manifest["coverage"]["changed"].append("/abs/noise.js")
+        manifest["coverage"]["excluded"].append(
+            {"path": "/abs/noise.js", "reason": "noise_filtered"}
+        )
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-fallback"
+        assert "invalid_manifest_fallback" in run["warnings"]
+
+    @pytest.mark.parametrize("bad_path", BAD_PATHS)
+    def test_non_canonical_lifecycle_scope_path_fails_lifecycle_closed(
+        self, tmp_path, bad_path
+    ):
+        manifest = _manifest("scope-run")
+        start = _agent_start(run_id="scope-run")
+        start["scope"]["paths"] = [bad_path]
+        manifest["agents"] = {
+            "started": [start],
+            "completed": [_agent_complete(run_id="scope-run")],
+            "incomplete": [],
+        }
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "scope-run"
+        assert run["availability"]["lifecycle"] is False
+
+    def test_canonical_lifecycle_scope_path_keeps_lifecycle_available(
+        self, tmp_path
+    ):
+        """Control case proving the bad-path rejection is the path's fault."""
+        manifest = _manifest("scope-run")
+        manifest["agents"] = {
+            "started": [_agent_start(run_id="scope-run")],
+            "completed": [_agent_complete(run_id="scope-run")],
+            "incomplete": [],
+        }
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "scope-run"
+        assert run["availability"]["lifecycle"] is True

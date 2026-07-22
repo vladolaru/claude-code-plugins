@@ -252,7 +252,11 @@ def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
                 count = _nonnegative_int(scope.get(name))
                 if count is not None:
                     safe_scope[name] = count
-            safe_scope["paths"] = _safe_strings(scope.get("paths"))
+            safe_scope["paths"] = [
+                path
+                for item in scope.get("paths", [])
+                if (path := _safe_repo_read_path(item)) is not None
+            ] if isinstance(scope.get("paths"), list) else []
             result["scope"] = safe_scope
     return result
 
@@ -345,7 +349,7 @@ def _strict_lifecycle_event(
         or _nonnegative_exact_int(scope.get("lines")) is None
     ):
         return None
-    paths = _strict_safe_strings(scope.get("paths", []))
+    paths = _strict_repo_read_paths(scope.get("paths", []))
     if paths is None:
         return None
     budget_target = value.get("budget_target")
@@ -826,7 +830,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
 
     path_lists: dict[str, list[str]] = {}
     for name in ("changed", "reviewable", "assigned", "uncovered"):
-        paths = _strict_safe_strings(value.get(name))
+        paths = _strict_repo_read_paths(value.get(name))
         if paths is None or len(paths) != len(set(paths)):
             return None
         path_lists[name] = paths
@@ -836,7 +840,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         return None
     safe_by_agent: dict[str, list[str]] = {}
     for name, raw_paths in by_agent.items():
-        paths = _strict_safe_strings(raw_paths)
+        paths = _strict_repo_read_paths(raw_paths)
         if (
             _safe_string(name) is None
             or paths is None
@@ -852,7 +856,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     for item in raw_excluded:
         if not isinstance(item, dict) or set(item) != {"path", "reason"}:
             return None
-        path = _safe_string(item.get("path"))
+        path = _safe_repo_read_path(item.get("path"))
         if path is None or item.get("reason") != "noise_filtered":
             return None
         excluded.append({"path": path, "reason": "noise_filtered"})
