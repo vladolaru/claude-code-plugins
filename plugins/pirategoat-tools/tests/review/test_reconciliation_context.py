@@ -2793,6 +2793,98 @@ class TestAggregateInlineCoverage:
         cov = mod.aggregate_inline_coverage(str(tmp_path))
         assert cov["files_never_inline"]["ci.yml"] == ["security-reviewer"]
 
+    def _write_review(self, output_dir, stem, unreviewed=None):
+        payload = {"reviewer": stem.replace("-review", ""), "issues": []}
+        if unreviewed is not None:
+            payload["unreviewed"] = unreviewed
+        with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
+            json.dump(payload, f)
+
+    def test_undeclared_deferred_file_counts_as_claimed_reviewed(
+        self, mod, tmp_path
+    ):
+        """An agent with output that did NOT declare a deferred file claims
+        to have reviewed it per the budget contract — not a coverage gap."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            ["src/a.php"], ["src/deferred.php"],
+        )
+        self._write_review(str(tmp_path), "security-review")
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert "src/deferred.php" not in cov["files_never_inline"]
+        assert cov["files_deferred_reviewed"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"] == {}
+
+    def test_declared_unreviewed_file_stays_a_gap_with_declaration(
+        self, mod, tmp_path
+    ):
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            ["src/a.php"], ["src/omitted.php"],
+        )
+        self._write_review(
+            str(tmp_path), "security-review", unreviewed=["src/omitted.php"]
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+
+    def test_one_agent_claim_outweighs_another_agent_declaration(
+        self, mod, tmp_path
+    ):
+        """A file is covered when ANY deferring agent reviewed it, even if a
+        different agent declared it unreviewed."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/shared.php"],
+        )
+        self._write_summary(
+            str(tmp_path), "code-reviewer-scope-summary.json",
+            [], ["src/shared.php"],
+        )
+        self._write_review(str(tmp_path), "security-review")
+        self._write_review(
+            str(tmp_path), "code-review", unreviewed=["src/shared.php"]
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert "src/shared.php" not in cov["files_never_inline"]
+        assert cov["files_deferred_reviewed"]["src/shared.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/shared.php"] == [
+            "code-reviewer",
+        ]
+
+    def test_agent_without_output_cannot_claim_deferred_files(
+        self, mod, tmp_path
+    ):
+        """No review JSON means the agent can neither claim nor declare —
+        its deferred files stay genuine gaps (pre-1.109.0 behavior)."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/deferred.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+
 
 class TestInlineCoverageMarkdown:
     """to_markdown() surfaces inline coverage gaps prominently."""
@@ -2826,3 +2918,39 @@ class TestInlineCoverageMarkdown:
     def test_no_section_without_coverage_data(self, mod):
         md = mod.to_markdown(_make_context_with_findings({}))
         assert "Inline Diff Coverage Gaps" not in md
+
+    def test_gap_entries_annotate_declarations(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {
+                "src/omitted.php": ["security-reviewer"],
+            },
+            "files_declared_unreviewed": {
+                "src/omitted.php": ["security-reviewer"],
+            },
+            "files_deferred_reviewed": {},
+        }
+        md = mod.to_markdown(ctx)
+        assert (
+            "`src/omitted.php` (skipped by: security-reviewer; "
+            "declared unreviewed (budget) by: security-reviewer)"
+        ) in md
+
+    def test_deferred_reviewed_files_render_as_claims_not_gaps(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {},
+            "files_declared_unreviewed": {},
+            "files_deferred_reviewed": {
+                "src/deferred.php": ["security-reviewer"],
+            },
+        }
+        md = mod.to_markdown(ctx)
+        assert "Inline Diff Coverage Gaps" not in md
+        assert "## Deferred Files Reviewed From The NOT DIFFED Queue" in md
+        assert "`src/deferred.php` (claimed by: security-reviewer)" in md
+        assert "not proof of read" in md

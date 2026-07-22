@@ -1428,10 +1428,10 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         actions.append("")
         actions.append(
             f"**⚠ Review coverage:** {len(gaps)} changed file(s) were skipped "
-            "by every matching agent's diff budget — no reviewer saw their "
-            "diff inline. Include a 'Review coverage' section in "
-            "`review-report.md` listing them; the verdict must acknowledge "
-            "this gap:"
+            "by every matching agent's diff budget and no reviewer reported "
+            "reviewing them from the deferred NOT DIFFED queue. Include a "
+            "'Review coverage' section in `review-report.md` listing them; "
+            "the verdict must acknowledge this gap:"
         )
         for f_path, agents in sorted(gaps.items()):
             agents_list = agents if isinstance(agents, list) else [str(agents)]

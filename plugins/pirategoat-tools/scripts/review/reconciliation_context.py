@@ -154,13 +154,42 @@ def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
     return host_context.get("banner")
 
 
+def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
+    """Read one agent's declared-unreviewed paths from its review JSON.
+
+    Returns None when the agent produced no parseable output (it can claim
+    nothing), else the list of declared paths (possibly empty).
+    """
+    stem = agent.replace("-reviewer", "-review")
+    path = os.path.join(output_dir, f"{stem}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    unreviewed = data.get("unreviewed")
+    if not isinstance(unreviewed, list):
+        return []
+    return [item.strip() for item in unreviewed if isinstance(item, str)]
+
+
 def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
     """Aggregate per-agent scope summaries into run-level inline coverage.
 
-    Reads ``*-scope-summary*.json`` sidecars written by bootstrap/scope.py.
-    A file is a coverage gap when at least one agent skipped it for budget
-    and NO agent received its diff inline — those files were never reviewed
-    against their actual changes by anyone.
+    Reads ``*-scope-summary*.json`` sidecars written by bootstrap/scope.py,
+    then reconciles them with each agent's review output. Budget-skipped
+    (NOT DIFFED) files are the agent's deferred work queue: the budget
+    contract requires each one to be reviewed or declared via
+    ``builder.add_unreviewed()``, so an agent that produced output and did
+    NOT declare a deferred file claims to have reviewed it.
+
+    A file is a coverage gap (``files_never_inline``) only when NO agent
+    received its diff inline AND no deferring agent claims to have reviewed
+    it. Claimed files surface separately in ``files_deferred_reviewed``
+    (an agent claim, not proof of read), and explicit declarations in
+    ``files_declared_unreviewed`` so warnings can name genuine omissions.
 
     Returns None when no summaries exist (pre-sidecar runs) so callers can
     distinguish "no data" from "no gaps".
@@ -193,13 +222,40 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
                 skipped.setdefault(f_path, set()).add(agent)
     if not agents_reporting:
         return None
+
+    never_inline = {f: a for f, a in skipped.items() if f not in inline}
+    unreviewed_by_agent: Dict[str, Optional[List[str]]] = {}
+    claimed: Dict[str, set] = {}
+    declared: Dict[str, set] = {}
+    for f_path, agents in never_inline.items():
+        for agent in agents:
+            if agent not in unreviewed_by_agent:
+                unreviewed_by_agent[agent] = _load_agent_unreviewed(
+                    output_dir, agent
+                )
+            agent_unreviewed = unreviewed_by_agent[agent]
+            if agent_unreviewed is None:
+                continue  # no output — the agent can neither claim nor declare
+            if f_path in agent_unreviewed:
+                declared.setdefault(f_path, set()).add(agent)
+            else:
+                claimed.setdefault(f_path, set()).add(agent)
+
     return {
         # Counts summary FILES aggregated (primary + secondary domains),
         # not unique agents.
         "agents_reporting": agents_reporting,
         "files_inline": {f: sorted(a) for f, a in sorted(inline.items())},
         "files_never_inline": {
-            f: sorted(a) for f, a in sorted(skipped.items()) if f not in inline
+            f: sorted(a)
+            for f, a in sorted(never_inline.items())
+            if f not in claimed
+        },
+        "files_deferred_reviewed": {
+            f: sorted(a) for f, a in sorted(claimed.items())
+        },
+        "files_declared_unreviewed": {
+            f: sorted(a) for f, a in sorted(declared.items())
         },
     }
 
@@ -933,17 +989,38 @@ def to_markdown(context: Dict[str, Any]) -> str:
     inline_coverage = context.get("inline_coverage")
     if isinstance(inline_coverage, dict) and inline_coverage.get("files_never_inline"):
         gaps = inline_coverage["files_never_inline"]
+        declared = inline_coverage.get("files_declared_unreviewed") or {}
         parts.append("## Inline Diff Coverage Gaps\n")
         parts.append(
             f"**⚠ {len(gaps)} changed file(s) matched reviewer domains but "
-            "NO reviewer received their diff inline** (every matching agent "
-            "skipped them for budget). Findings cannot exist for code no "
-            "agent saw — treat agent verdicts as NOT covering these files, "
-            "and carry this list into `review-findings.md` as a coverage "
-            "warning.\n"
+            "NO reviewer received their diff inline or reported reviewing "
+            "them from the deferred NOT DIFFED queue.** Findings cannot "
+            "exist for code no agent saw — treat agent verdicts as NOT "
+            "covering these files, and carry this list into "
+            "`review-findings.md` as a coverage warning.\n"
         )
         for f_path, agents in gaps.items():
-            parts.append(f"- `{f_path}` (skipped by: {', '.join(agents)})")
+            declaring = declared.get(f_path) if isinstance(declared, dict) else None
+            note = (
+                f"; declared unreviewed (budget) by: {', '.join(declaring)}"
+                if declaring
+                else ""
+            )
+            parts.append(f"- `{f_path}` (skipped by: {', '.join(agents)}{note})")
+        parts.append("")
+    if isinstance(inline_coverage, dict) and inline_coverage.get(
+        "files_deferred_reviewed"
+    ):
+        deferred = inline_coverage["files_deferred_reviewed"]
+        parts.append("## Deferred Files Reviewed From The NOT DIFFED Queue\n")
+        parts.append(
+            f"**{len(deferred)} file(s) never received their diff inline but "
+            "were reviewed from the deferred queue** per the budget contract "
+            "(reviewer output without an unreviewed declaration — an agent "
+            "claim, not proof of read).\n"
+        )
+        for f_path, agents in deferred.items():
+            parts.append(f"- `{f_path}` (claimed by: {', '.join(agents)})")
         parts.append("")
 
     # --- Title ---
