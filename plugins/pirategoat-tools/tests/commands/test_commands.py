@@ -156,6 +156,15 @@ class TestReviewCommandsReferenceUnifiedScript:
         assert '--mode "$MODE"' in content
 
 
+class TestReviewRunIdentity:
+    """Review commands link pipeline telemetry to the active Claude session."""
+
+    @pytest.mark.parametrize("command", ORCHESTRATOR_COMMANDS)
+    def test_step_one_passes_claude_session_id(self, command):
+        content = read_command(command)
+        assert '--session-id "${CLAUDE_SESSION_ID}"' in content
+
+
 # =============================================================================
 # Structural Tests — Marketplace Registration
 # =============================================================================
@@ -231,4 +240,3 @@ class TestUnifiedMission:
         """No command should say 'PR review orchestrator' — identity is mode-agnostic."""
         content = read_command(command)
         assert "pr review orchestrator" not in content.lower()
-

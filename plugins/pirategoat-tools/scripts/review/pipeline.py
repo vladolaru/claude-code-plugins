@@ -30,8 +30,28 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from .dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        SKIPPED_QUICK_MODE,
+        validate_dispatch_plan_agents,
+    )
+except ImportError:
+    _scripts_parent = str(Path(__file__).resolve().parent.parent)
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        SKIPPED_QUICK_MODE,
+        validate_dispatch_plan_agents,
+    )
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPTS_DIR.parents[1]
@@ -138,8 +158,16 @@ _STEP_MAP = {s["step"]: s for s in STEP_SEQUENCE}
 # Artifacts to clear at step 1 (stale from previous runs)
 _STALE_ARTIFACTS = [
     "pipeline-state.json",
+    ".telemetry-log-path",
     "dispatch-plan.json",
+    "dispatch-plan.initial.json",
     "*-review.json",
+    "*-review.md",
+    "*-scope-summary*.json",
+    "*.started",
+    "reconciliation-context.json",
+    "reconciliation-context.md",
+    "critic-context.md",
     "review-findings.json",
     "review-findings.md",
     "review-report.md",
@@ -294,6 +322,42 @@ def write_config(output_dir, config):
         json.dump(config, f, indent=2)
 
 
+def _reset_interactive_review_context(output_dir):
+    """Atomically replace prior-run context with the current run seed."""
+    context = {"output": {"directory": output_dir}}
+    path = os.path.join(output_dir, "review-context.json")
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            delete=False,
+            dir=output_dir,
+            encoding="utf-8",
+        ) as temp_file:
+            temp_path = temp_file.name
+            json.dump(context, temp_file, indent=2)
+            temp_file.flush()
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+    return context
+
+
+def read_review_context(output_dir):
+    """Read preserved review-context.json, or return an empty dict."""
+    path = os.path.join(output_dir, "review-context.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
 def resolve_params(output_dir, cli_mode=None, cli_pr_number=None,
                    cli_interactive=None, cli_output_instructions=None,
                    cli_git_range=None):
@@ -341,6 +405,55 @@ def clean_stale_artifacts(output_dir):
                     os.remove(filepath)
                 except OSError:
                     pass
+
+
+def _preserve_initial_dispatch_plan(output_dir, plan):
+    """Atomically preserve the planner baseline without blocking the review.
+
+    Any prior baseline is removed first so a failed measurement write cannot
+    make an older plan look like the current run's deterministic output.
+    """
+    initial_path = os.path.join(output_dir, "dispatch-plan.initial.json")
+    temp_path = None
+    try:
+        try:
+            os.remove(initial_path)
+        except FileNotFoundError:
+            pass
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            delete=False,
+            dir=output_dir,
+            encoding="utf-8",
+        ) as temp_file:
+            temp_path = temp_file.name
+            json.dump(plan, temp_file, indent=2, sort_keys=True)
+            temp_file.flush()
+        os.replace(temp_path, initial_path)
+    except (OSError, TypeError, ValueError):
+        try:
+            os.remove(initial_path)
+        except OSError:
+            pass
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
+def _load_dispatch_plan(plan_path):
+    """Load one dispatch plan and validate its agent decisions."""
+    with open(plan_path) as plan_file:
+        plan = json.load(plan_file)
+    if not isinstance(plan, dict):
+        raise ValueError(
+            f"Dispatch plan at {plan_path} must be a JSON object, got {plan!r}"
+        )
+    validate_dispatch_plan_agents(plan.get("agents"))
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -764,7 +877,7 @@ def _step_4_fetch_issues(mode, state, context, config, output_dir):
 # ---------------------------------------------------------------------------
 
 def _step_5_dispatch_plan(mode, state, context, config, output_dir):
-    """Step 5: Dispatch Plan + Triage — present human-readable summary, allow overrides."""
+    """Present the planner baseline for main-orchestrator adjustment."""
     od = output_dir or "<OUTPUT_DIR>"
 
     situation = [_PHASE_TRANSITIONS["EXECUTION"], ""]
@@ -795,10 +908,10 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         # In quick mode, filter out SKIPPED_QUICK_MODE agents from display
         visible_agents = [
             a for a in plan_agents
-            if not (is_quick and a["status"] == "SKIPPED_QUICK_MODE")
+            if not (is_quick and a["status"] == SKIPPED_QUICK_MODE)
         ]
-        dispatched = [a for a in visible_agents if a["status"] in ("DISPATCH", "DISPATCH_OVERRIDE")]
-        skipped = [a for a in visible_agents if a["status"].startswith("SKIPPED")]
+        dispatched = [a for a in visible_agents if a["status"] in DISPATCHED_STATUSES]
+        skipped = [a for a in visible_agents if a["status"] in SKIPPED_STATUSES]
 
         if dispatched:
             situation.append("")
@@ -823,9 +936,10 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         situation.append("(Dispatch plan will be computed by the script at runtime.)")
 
     actions.append(
-        "**Override rule: Lean toward skipping.** The planner handles keyword/file-type "
-        "signals, but you've read the diff and understand the change semantically. "
-        "Use that to prune:"
+        "**Main orchestrator adjustment rule: Lean toward skipping.** The planner "
+        "handles keyword/file-type signals, while you, the main orchestrator, have "
+        "read the diff and understand the change semantically. Use that to adjust "
+        "the plan:"
     )
     actions.append(
         '- Agents with reason "conditional (domain has files, no triage signal to skip)" '
@@ -837,7 +951,9 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         "something the plan missed."
     )
     actions.append("")
-    actions.append(f"To override, edit `{od}/dispatch-plan.json`:")
+    actions.append(
+        f"To record a main orchestrator adjustment, edit `{od}/dispatch-plan.json`:"
+    )
     actions.append('- Force-skip a dispatched agent: set status to `"SKIPPED_OVERRIDE"` with `"override_reason": "..."`')
     actions.append('- Force-dispatch a skipped agent: set status to `"DISPATCH_OVERRIDE"` with `"override_reason": "..."`')
 
@@ -854,7 +970,7 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
         actions.append(f"> {additional}")
         actions.append("")
         actions.append(
-            "Ensure the dispatch plan covers this focus. Override skipped agents if "
+            "Ensure the dispatch plan covers this focus. Adjust skipped agents if "
             "they're relevant to this guidance."
         )
 
@@ -1653,6 +1769,70 @@ def _init_telemetry(output_dir, log_dir=None):
         return None
 
 
+_SEMVER_PATTERN = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
+_SEMVER_ROOT_RE = re.compile(rf"^{_SEMVER_PATTERN}$")
+_CHANGELOG_VERSION_RE = re.compile(rf"^## \[({_SEMVER_PATTERN})\]", re.MULTILINE)
+
+
+def _git_output(*args):
+    """Return one Git identity value, or an empty string when unavailable."""
+    try:
+        return subprocess.check_output(
+            ["git", *args], text=True, stderr=subprocess.DEVNULL, timeout=5
+        ).strip()
+    except Exception:
+        return ""
+
+
+def _detect_plugin_version(plugin_root=None):
+    """Return the installed or source-checkout plugin version, best-effort."""
+    try:
+        root = Path(plugin_root) if plugin_root is not None else SCRIPTS_DIR.parent.parent
+        if _SEMVER_ROOT_RE.fullmatch(root.name):
+            return root.name
+
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        match = _CHANGELOG_VERSION_RE.search(changelog)
+        return match.group(1) if match else ""
+    except Exception:
+        return ""
+
+
+def _resolve_git_identity(git_range, base_sha="", head_sha=""):
+    """Resolve requested range endpoints without mutating Git.
+
+    Omitted endpoints around ``..`` or ``...`` default to ``HEAD``. For a
+    three-dot range, ``base_sha`` is the resolved left endpoint, not the Git
+    merge base; later context or manifest collection can record that value.
+    """
+    requested_range = git_range if isinstance(git_range, str) else ""
+    base_ref = ""
+    head_ref = ""
+    has_range_operator = False
+    if "..." in requested_range:
+        base_ref, head_ref = requested_range.split("...", 1)
+        has_range_operator = True
+    elif ".." in requested_range:
+        base_ref, head_ref = requested_range.split("..", 1)
+        has_range_operator = True
+
+    base_ref = base_ref.strip()
+    head_ref = head_ref.strip()
+    if has_range_operator:
+        base_ref = base_ref or "HEAD"
+        head_ref = head_ref or "HEAD"
+    resolved_base_sha = base_sha if isinstance(base_sha, str) else ""
+    resolved_head_sha = head_sha if isinstance(head_sha, str) else ""
+
+    if not resolved_base_sha and base_ref:
+        resolved_base_sha = _git_output("rev-parse", "--verify", base_ref)
+    if not resolved_head_sha:
+        resolved_head_sha = _git_output(
+            "rev-parse", "--verify", head_ref or "HEAD"
+        )
+    return requested_range, resolved_base_sha, resolved_head_sha
+
+
 # ---------------------------------------------------------------------------
 # Subprocess Helper
 # ---------------------------------------------------------------------------
@@ -1764,13 +1944,14 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             plan_path = os.path.join(output_dir, "dispatch-plan.json")
             if os.path.isfile(plan_path):
                 try:
-                    with open(plan_path) as f:
-                        plan = json.load(f)
-                    agents = plan.get("agents", [])
+                    plan = _load_dispatch_plan(plan_path)
+                    if ok:
+                        _preserve_initial_dispatch_plan(output_dir, plan)
+                    agents = plan["agents"]
                     state["dispatch_plan_summary"] = {
-                        "dispatched": sum(1 for a in agents if a.get("status") == "DISPATCH"),
-                        "skipped": sum(1 for a in agents if a.get("status") not in ("DISPATCH", "DISPATCH_OVERRIDE")),
-                        "conditional": sum(1 for a in agents if a.get("status") == "DISPATCH" and "conditional" in a.get("reason", "").lower()),
+                        "dispatched": sum(1 for a in agents if a.get("status") in DISPATCHED_STATUSES),
+                        "skipped": sum(1 for a in agents if a.get("status") in SKIPPED_STATUSES),
+                        "conditional": sum(1 for a in agents if a.get("status") in DISPATCHED_STATUSES and "conditional" in a.get("reason", "").lower()),
                     }
                     # Store agent details for human-readable step 5 summary
                     state["dispatch_plan_agents"] = [
@@ -1797,8 +1978,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         plan_path = os.path.join(output_dir, "dispatch-plan.json")
         if os.path.isfile(plan_path):
             try:
-                with open(plan_path) as f:
-                    plan = json.load(f)
+                plan = _load_dispatch_plan(plan_path)
                 dispatched = [
                     {
                         "name": a["name"],
@@ -1815,23 +1995,23 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                         "scope_domains": a.get("scope_domains"),
                     }
                     for a in plan.get("agents", [])
-                    if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                    if a.get("status") in DISPATCHED_STATUSES
                 ]
                 state["dispatched_agents"] = dispatched
                 # Recompute dispatch_plan_summary from final plan (post-override)
-                all_agents = plan.get("agents", [])
+                all_agents = plan["agents"]
                 state["dispatch_plan_summary"] = {
                     "dispatched": sum(
                         1 for a in all_agents
-                        if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                        if a.get("status") in DISPATCHED_STATUSES
                     ),
                     "skipped": sum(
                         1 for a in all_agents
-                        if a.get("status") not in ("DISPATCH", "DISPATCH_OVERRIDE")
+                        if a.get("status") in SKIPPED_STATUSES
                     ),
                     "conditional": sum(
                         1 for a in all_agents
-                        if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                        if a.get("status") in DISPATCHED_STATUSES
                         and "conditional" in a.get("reason", "").lower()
                     ),
                 }
@@ -1950,11 +2130,10 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         plan_path = os.path.join(output_dir, "dispatch-plan.json")
         if os.path.isfile(plan_path):
             try:
-                with open(plan_path) as f:
-                    plan = json.load(f)
+                plan = _load_dispatch_plan(plan_path)
                 dispatched_names = [
-                    a["name"] for a in plan.get("agents", [])
-                    if a.get("status") in ("DISPATCH", "DISPATCH_OVERRIDE")
+                    a["name"] for a in plan["agents"]
+                    if a.get("status") in DISPATCHED_STATUSES
                 ]
                 review_files = []
                 completed = []
@@ -2138,6 +2317,7 @@ def main():
                         help="Review mode")
     parser.add_argument("--output-dir", required=True, help="Output directory")
     parser.add_argument("--pr-number", help="PR number (PR mode)")
+    parser.add_argument("--session-id", help="Claude session ID for telemetry correlation")
     parser.add_argument("--interactive", type=lambda x: x.lower() in ("true", "1", "yes"),
                         default=None, help="Interactive mode (default: true)")
     parser.add_argument("--output-instructions", help="Custom output instructions")
@@ -2155,6 +2335,7 @@ def main():
 
     # Ensure output dir exists
     os.makedirs(output_dir, exist_ok=True)
+    context = read_review_context(output_dir)
 
     # --- Step 1: Special handling (seed config, clean artifacts) ---
     if step == 1:
@@ -2184,6 +2365,8 @@ def main():
                 config["output_instructions"] = args.output_instructions
             if args.git_range:
                 config["git_range"] = args.git_range
+            if args.session_id is not None:
+                config["session_id"] = args.session_id
             config["quick"] = args.quick
             write_config(output_dir, config)
         else:
@@ -2207,18 +2390,24 @@ def main():
                 config_changed = True
             if config_changed:
                 write_config(output_dir, config)
+            if args.session_id is not None and config.get("session_id") != args.session_id:
+                config["session_id"] = args.session_id
+                write_config(output_dir, config)
 
-        # Note: review-context.json is NOT cleared here. For interactive runs,
-        # context.py overwrites it at step 3. For non-interactive
-        # (bot) runs, the bot pre-writes it — deleting would break that flow.
-        # The output.directory field is needed by context.py to
-        # locate .branch-review-baseline.json for incremental reviews.
+        # Interactive output directories may be reused, so prior-run context
+        # cannot remain authoritative until step 3 gathers it afresh. Bot runs
+        # are non-interactive and retain their precomputed context contract.
+        if config.get("interactive", True):
+            context = _reset_interactive_review_context(output_dir)
 
         # Initialize fresh pipeline state
         state = json.loads(json.dumps(_DEFAULT_STATE))
         now = datetime.now(timezone.utc)
         identifier = config.get("pr_number", "branch")
-        state["run_id"] = f"{now.strftime('%Y%m%dT%H%M%S')}-{mode}-{identifier}"
+        state["run_id"] = (
+            f"{now.strftime('%Y%m%dT%H%M%S')}-{mode}-{identifier}-"
+            f"{uuid.uuid4().hex[:8]}"
+        )
 
         # Persist workspace params
         if args.original_branch:
@@ -2235,27 +2424,41 @@ def main():
                 pr_number = config.get("pr_number", "")
                 bot_mode = not config.get("interactive", True)
                 quick_mode = config.get("quick", False)
-                try:
-                    repo_path = subprocess.check_output(
-                        ["git", "rev-parse", "--show-toplevel"],
-                        text=True, stderr=subprocess.DEVNULL, timeout=5
-                    ).strip()
-                except Exception:
-                    repo_path = ""
+                repo_path = _git_output("rev-parse", "--show-toplevel")
                 # Identifier: PR number for pr mode, branch name otherwise
                 identifier = pr_number
                 if not identifier:
-                    try:
-                        identifier = subprocess.check_output(
-                            ["git", "branch", "--show-current"],
-                            text=True, stderr=subprocess.DEVNULL, timeout=5
-                        ).strip()
-                    except Exception:
-                        identifier = ""
+                    identifier = _git_output("branch", "--show-current")
+                git_context = (
+                    context.get("git", {})
+                    if not config.get("interactive", True)
+                    else {}
+                )
+                config_git_range = config.get("git_range", "")
+                context_git_range = git_context.get("git_range", "")
+                git_range = config_git_range or context_git_range
+                context_matches_range = (
+                    not config_git_range or config_git_range == context_git_range
+                )
+                context_base_sha = (
+                    git_context.get("merge_base", "") if context_matches_range else ""
+                )
+                context_head_sha = (
+                    git_context.get("head_sha", "") if context_matches_range else ""
+                )
+                git_range, base_sha, head_sha = _resolve_git_identity(
+                    git_range, base_sha=context_base_sha,
+                    head_sha=context_head_sha,
+                )
                 telemetry.start(pr_number=pr_number, total_steps=12,
                                 bot_mode=bot_mode, quick_mode=quick_mode,
                                 mode=mode, repo_path=repo_path,
-                                identifier=identifier)
+                                identifier=identifier,
+                                run_id=state["run_id"],
+                                session_id=config.get("session_id", ""),
+                                plugin_version=_detect_plugin_version(),
+                                git_range=git_range, base_sha=base_sha,
+                                head_sha=head_sha)
             except Exception:
                 pass
 
@@ -2283,18 +2486,15 @@ def main():
         print(f"ERROR: Invalid step {step}. Valid steps: 1-12", file=sys.stderr)
         sys.exit(1)
 
-    # --- Read review context if available ---
-    context_path = os.path.join(output_dir, "review-context.json")
-    context = {}
-    if os.path.isfile(context_path):
-        try:
-            with open(context_path) as f:
-                context = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
-
     # --- Step-specific orchestration ---
-    context = _orchestrate_step(step, mode, config, state, context, output_dir)
+    # A dispatch plan that fails validation is operator-actionable (step 5 invites
+    # hand-editing statuses), so surface it as a clean CLI error instead of a
+    # traceback. Matches agents_status.py, the other consumer of that contract.
+    try:
+        context = _orchestrate_step(step, mode, config, state, context, output_dir)
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        sys.exit(1)
 
     # Telemetry: log step (after orchestration so decisions are available)
     if step > 1:

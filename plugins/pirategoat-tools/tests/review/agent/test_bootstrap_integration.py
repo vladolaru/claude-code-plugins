@@ -26,6 +26,7 @@ _spec.loader.exec_module(_mod)
 AGENT_CONFIG = _mod.AGENT_CONFIG
 build_output = _mod.build_output
 derive_reviewer_name = _mod.derive_reviewer_name
+extract_scope_files = _mod.extract_scope_files
 
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 
@@ -109,6 +110,31 @@ class TestCategoryRepresentatives:
 
         # REVIEW SCOPE header not duplicated
         assert stdout.count("=== REVIEW SCOPE ===") <= 1
+
+    def test_agent_start_telemetry_uses_the_already_parsed_scope_paths(
+        self, tmp_path
+    ):
+        telemetry_log = tmp_path / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema_version": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+
+        assert result.returncode == 0
+        expected_scope = sorted(set(extract_scope_files(result.stdout)))
+        events = [json.loads(line) for line in telemetry_log.read_text().splitlines()]
+        agent_start = next(
+            event for event in events if event.get("event") == "agent_start"
+        )
+        assert expected_scope
+        assert agent_start["scope"]["paths"] == expected_scope
 
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""

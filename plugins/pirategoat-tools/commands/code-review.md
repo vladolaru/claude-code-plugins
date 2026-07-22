@@ -53,7 +53,8 @@ MODE=full
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
-  --step 1 --mode "$MODE" --output-dir "$OUTPUT_DIR"
+  --step 1 --mode "$MODE" --output-dir "$OUTPUT_DIR" \
+  --session-id "${CLAUDE_SESSION_ID}"
 ```
 
 If an explicit git range was provided, add `--git-range "<RANGE>"`.

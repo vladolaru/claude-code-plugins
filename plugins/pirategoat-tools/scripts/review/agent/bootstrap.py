@@ -1342,6 +1342,7 @@ def main():
                 scope_files=len(scope_files_for_budget),
                 scope_lines=scope_lines_for_budget,
                 budget_target=review_budget,
+                scope_paths=scope_files_for_budget,
             )
         except Exception:
             pass

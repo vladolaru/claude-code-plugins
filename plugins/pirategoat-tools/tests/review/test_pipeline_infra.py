@@ -228,6 +228,85 @@ class TestStateManagement:
         assert resolved["mode"] == "pr"  # config wins over CLI
 
 
+class TestTelemetryIdentityHelpers:
+    """Step 1 identity discovery is best-effort and release-aware."""
+
+    def test_installed_semver_directory_is_plugin_version(self, mod, tmp_path):
+        plugin_root = tmp_path / "1.108.0"
+        plugin_root.mkdir()
+        (plugin_root / "CHANGELOG.md").write_text("## [9.9.9] - 2026-01-01\n")
+
+        assert mod._detect_plugin_version(plugin_root) == "1.108.0"
+
+    def test_source_checkout_uses_first_changelog_version(self, mod, tmp_path):
+        plugin_root = tmp_path / "pirategoat-tools"
+        plugin_root.mkdir()
+        (plugin_root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [1.108.0] - 2026-07-19\n\n## [1.107.0] - 2026-07-19\n"
+        )
+
+        assert mod._detect_plugin_version(plugin_root) == "1.108.0"
+
+    def test_unavailable_identity_helpers_return_empty_strings(self, mod, tmp_path, monkeypatch):
+        def fail(*_args, **_kwargs):
+            raise OSError("unavailable")
+
+        monkeypatch.setattr(mod.subprocess, "check_output", fail)
+
+        assert mod._git_output("rev-parse", "HEAD") == ""
+        assert mod._detect_plugin_version(tmp_path / "missing") == ""
+
+    def test_explicit_right_endpoint_is_resolved_as_head(self, mod, monkeypatch):
+        identities = {
+            "HEAD~1": "previous-head",
+            "HEAD": "current-head",
+        }
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        requested_range, base_sha, head_sha = mod._resolve_git_identity(
+            "HEAD~1..HEAD~1"
+        )
+
+        assert requested_range == "HEAD~1..HEAD~1"
+        assert base_sha == "previous-head"
+        assert head_sha == "previous-head"
+
+    @pytest.mark.parametrize(
+        ("git_range", "expected_base", "expected_head"),
+        [
+            ("..topic", "current-head", "topic-head"),
+            ("...topic", "current-head", "topic-head"),
+            ("topic..", "topic-head", "current-head"),
+            ("topic...", "topic-head", "current-head"),
+            ("missing..topic", "", "topic-head"),
+            ("topic..missing", "topic-head", ""),
+            ("missing...topic", "", "topic-head"),
+            ("topic...missing", "topic-head", ""),
+        ],
+    )
+    def test_range_defaults_omitted_endpoints_and_preserves_unresolved_refs(
+        self, mod, monkeypatch, git_range, expected_base, expected_head
+    ):
+        identities = {
+            "HEAD": "current-head",
+            "topic": "topic-head",
+        }
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        _, base_sha, head_sha = mod._resolve_git_identity(git_range)
+
+        assert base_sha == expected_base
+        assert head_sha == expected_head
+
+
 class TestFailureRecovery:
     """Pipeline handles invalid states gracefully."""
 
@@ -409,12 +488,73 @@ class TestCLIIntegration:
         assert (tmp_path / "run-config.json").is_file()
         assert (tmp_path / ".branch-review-baseline.json").is_file()
 
-    def test_step_1_preserves_review_context(self, tmp_path):
-        """Step 1 should preserve review-context.json — review/context.py overwrites it at step 3."""
-        (tmp_path / "review-context.json").write_text('{"output": {"directory": "/some/path"}}')
+    def test_step_1_clears_per_agent_and_reconciliation_artifacts(self, tmp_path):
+        """Agent sidecars, markers, and reconciliation context are per-run artifacts.
+
+        Stale copies caused real failures in a reused output dir: a leftover
+        <agent>-review.md made an agent's Write no-op, a leftover .started
+        marker turns a forgotten dispatch into TIMED_OUT instead of
+        NOT_DISPATCHED, and stale scope summaries would contaminate the
+        run-level inline-coverage map.
+        """
+        (tmp_path / "security-review.md").write_text("stale agent markdown")
+        (tmp_path / "security-reviewer-scope-summary.json").write_text('{"stale": true}')
+        (tmp_path / "a11y-reviewer-scope-summary-config-ops.json").write_text('{"stale": true}')
+        (tmp_path / "security-reviewer.started").write_text("2026-07-20T00:00:00+00:00")
+        (tmp_path / "reconciliation-context.json").write_text('{"stale": true}')
+        (tmp_path / "reconciliation-context.md").write_text("stale")
+        (tmp_path / "critic-context.md").write_text("stale")
         self._run("--step", "1", "--mode", "full",
                    "--output-dir", str(tmp_path))
-        assert (tmp_path / "review-context.json").is_file(), "review-context.json should be preserved for incremental baseline lookup"
+        assert not (tmp_path / "security-review.md").exists()
+        assert not (tmp_path / "security-reviewer-scope-summary.json").exists()
+        assert not (tmp_path / "a11y-reviewer-scope-summary-config-ops.json").exists()
+        assert not (tmp_path / "security-reviewer.started").exists()
+        assert not (tmp_path / "reconciliation-context.json").exists()
+        assert not (tmp_path / "reconciliation-context.md").exists()
+        assert not (tmp_path / "critic-context.md").exists()
+
+    def test_step_1_resets_interactive_review_context_to_current_output(self, tmp_path):
+        """Interactive runs seed context without retaining prior-run fields."""
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": "stale-base..stale-head",
+                "merge_base": "stale-base",
+                "head_sha": "stale-head",
+            },
+            "pr": {"number": 41},
+            "output": {"directory": "/stale/output"},
+        }))
+
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+
+        assert json.loads((tmp_path / "review-context.json").read_text()) == {
+            "output": {"directory": str(tmp_path)},
+        }
+
+    def test_step_1_preserves_noninteractive_review_context(self, tmp_path):
+        """Bot runs retain their precomputed Git and PR context."""
+        context = {
+            "git": {
+                "git_range": "bot-base..bot-head",
+                "merge_base": "bot-base",
+                "head_sha": "bot-head",
+            },
+            "pr": {"number": 42},
+            "output": {"directory": str(tmp_path)},
+        }
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr",
+            "pr_number": "42",
+            "interactive": False,
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps(context))
+
+        result = self._run("--step", "1", "--output-dir", str(tmp_path))
+
+        assert result.returncode == 0
+        assert json.loads((tmp_path / "review-context.json").read_text()) == context
 
     def test_step_1_clears_change_purpose(self, tmp_path):
         """Step 1 should clear stale change-purpose.md from previous runs."""
@@ -430,6 +570,50 @@ class TestCLIIntegration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert "run_id" in state
         assert len(state["run_id"]) > 0
+
+    def test_step_1_persists_explicit_session_id(self, tmp_path):
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full",
+            "interactive": True,
+            "session_id": "session-stale",
+        }))
+
+        result = self._run(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            "--session-id", "session-current",
+        )
+
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["session_id"] == "session-current"
+
+    def test_step_1_uses_preseeded_session_id_when_cli_omits_it(self, tmp_path):
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr",
+            "pr_number": "42",
+            "interactive": False,
+            "session_id": "bot-session",
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {"merge_base": "abc123"},
+        }))
+
+        result = self._run("--step", "1", "--output-dir", str(tmp_path))
+
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["session_id"] == "bot-session"
+
+    def test_step_1_generates_unique_run_ids(self, tmp_path):
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+
+        self._run("--step", "1", "--mode", "full", "--output-dir", str(first))
+        self._run("--step", "1", "--mode", "full", "--output-dir", str(second))
+
+        first_state = json.loads((first / "pipeline-state.json").read_text())
+        second_state = json.loads((second / "pipeline-state.json").read_text())
+        assert first_state["run_id"] != second_state["run_id"]
 
 
 class TestQuickModeConfig:

@@ -12,15 +12,79 @@ Zero external dependencies (stdlib only).
 import glob as glob_mod
 import json
 import os
+import posixpath
 import re
 import sys
+import tempfile
+import unicodedata
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+try:
+    from .dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        validate_dispatch_plan_agents,
+    )
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.dispatch_status import (
+        DISPATCHED_STATUSES,
+        SKIPPED_STATUSES,
+        validate_dispatch_plan_agents,
+    )
+
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
+EVENT_SCHEMA_VERSION = 1
+_STEP_MANIFEST_FIELDS = (
+    "schema_version",
+    "run_id",
+    "event",
+    "timestamp",
+    "step",
+    "phase",
+    "title",
+    "duration_since_prev_ms",
+)
+_AGENT_START_MANIFEST_FIELDS = (
+    "schema_version",
+    "run_id",
+    "event",
+    "timestamp",
+    "agent",
+    "domain",
+    "model_tier",
+    "budget_target",
+)
+_AGENT_COMPLETE_MANIFEST_FIELDS = (
+    "schema_version",
+    "run_id",
+    "event",
+    "timestamp",
+    "agent",
+    "duration_ms",
+    "verdict",
+    "issue_count",
+)
+_SEVERITY_FIELDS = ("critical", "high", "medium", "low", "info")
+
+
+def _incomplete_agent_executions(
+    started: List[Dict[str, Any]], completed: List[Dict[str, Any]]
+) -> List[str]:
+    """Return a sorted multiset with one name per unmatched start event."""
+    unmatched = Counter(
+        event.get("agent") for event in started if event.get("agent")
+    ) - Counter(
+        event.get("agent") for event in completed if event.get("agent")
+    )
+    return sorted(unmatched.elements())
 
 
 class ReviewTelemetry:
@@ -48,10 +112,23 @@ class ReviewTelemetry:
                     self._log_path = f.read().strip()
         return self._log_path
 
+    @property
+    def manifest_path(self) -> Optional[str]:
+        """Materialized manifest path derived from the current JSONL log."""
+        log_path = self.log_path
+        if log_path is None:
+            return None
+        if log_path.endswith(".jsonl"):
+            return f"{log_path[:-len('.jsonl')]}.manifest.json"
+        return f"{log_path}.manifest.json"
+
     def start(self, pr_number: str = "", total_steps: int = 15,
               bot_mode: bool = False, quick_mode: bool = False,
               mode: str = "", repo_path: str = "",
-              identifier: str = "") -> str:
+              identifier: str = "", run_id: str = "",
+              session_id: str = "", plugin_version: str = "",
+              git_range: str = "", base_sha: str = "",
+              head_sha: str = "") -> str:
         """Create log file + marker. Write pipeline_start. Return log path.
 
         Args:
@@ -62,13 +139,13 @@ class ReviewTelemetry:
         os.makedirs(self.log_dir, exist_ok=True)
 
         self._quick_mode = quick_mode
+        self._run_id = run_id
 
         now = datetime.now(timezone.utc)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         prefix = self._build_filename_prefix(mode, repo_path, identifier)
         run_num = self._next_run_number(prefix)
-        filename = f"{prefix}-run{run_num}--{timestamp}.jsonl"
-        self._log_path = os.path.join(self.log_dir, filename)
+        self._log_path = self._allocate_log_path(prefix, run_num, timestamp)
 
         # Write marker so subsequent invocations can find the log
         marker = os.path.join(self.output_dir, MARKER_FILE)
@@ -76,6 +153,8 @@ class ReviewTelemetry:
             f.write(self._log_path)
 
         event = {
+            "schema_version": EVENT_SCHEMA_VERSION,
+            "run_id": run_id,
             "event": "pipeline_start",
             "timestamp": now.isoformat(),
             "step": 0,
@@ -85,9 +164,19 @@ class ReviewTelemetry:
                 "total_steps": total_steps,
                 "bot_mode": bot_mode,
                 "quick_mode": quick_mode,
+                "session_id": session_id,
+                "plugin_version": plugin_version,
+                "mode": mode,
+                "repo_path": repo_path,
+                "git": {
+                    "requested_range": git_range,
+                    "base_sha": base_sha,
+                    "head_sha": head_sha,
+                },
             },
         }
         self._append(event)
+        self._materialize_manifest("running")
         return self._log_path
 
     def log_step(self, step: int, phase: str, title: str,
@@ -116,11 +205,13 @@ class ReviewTelemetry:
         if decisions:
             event["decisions"] = decisions
         self._append(event)
+        self._materialize_manifest("running")
 
-    def log_agent_start(self, agent_name: str, domain: str = "",
+    def log_agent_start(self, agent_name: str, domain: Any = "",
                         model_tier: str = "", scope_files: int = 0,
                         scope_lines: int = 0,
-                        budget_target: Optional[int] = None) -> None:
+                        budget_target: Optional[int] = None,
+                        scope_paths: Optional[List[str]] = None) -> None:
         """Append agent_start event. No-op if not started."""
         if self.log_path is None:
             return
@@ -130,13 +221,18 @@ class ReviewTelemetry:
             "event": "agent_start",
             "timestamp": now.isoformat(),
             "agent": agent_name,
-            "domain": domain,
+            "domain": "" if domain is None else domain,
             "model_tier": model_tier,
             "scope": {
                 "files": scope_files,
                 "lines": scope_lines,
             },
         }
+        if scope_paths is not None:
+            event["scope"]["paths"] = self._normalize_repo_paths(
+                scope_paths,
+                repo_path=self._pipeline_repo_path(),
+            )
         if budget_target is not None:
             event["budget_target"] = budget_target
         self._append(event)
@@ -204,6 +300,7 @@ class ReviewTelemetry:
             "summary": self._build_summary(total_ms),
         }
         self._append(event)
+        self._materialize_manifest("complete")
 
     # ── Private helpers ──────────────────────────────────────────────
 
@@ -249,10 +346,812 @@ class ReviewTelemetry:
         existing = glob_mod.glob(pattern)
         return len(existing) + 1
 
+    def _allocate_log_path(self, prefix: str, run_num: int, timestamp: str) -> str:
+        """Atomically allocate a nonce-suffixed log path unique to this run."""
+        while True:
+            nonce = uuid.uuid4().hex
+            filename = f"{prefix}-run{run_num}--{timestamp}-{nonce}.jsonl"
+            path = os.path.join(self.log_dir, filename)
+            try:
+                with open(path, "x"):
+                    pass
+                return path
+            except FileExistsError:
+                continue
+
     def _append(self, event: dict) -> None:
         """Append a JSON line to the log file."""
+        schema_version, run_id = self._read_event_identity()
+        event.setdefault("schema_version", schema_version)
+        event.setdefault("run_id", run_id)
         with open(self._log_path, "a") as f:
             f.write(json.dumps(event, separators=(",", ":")) + "\n")
+
+    def _read_events(self) -> List[dict]:
+        """Read valid object events, skipping malformed JSONL lines."""
+        events = []
+        log_path = self.log_path
+        if not log_path or not os.path.isfile(log_path):
+            return events
+
+        try:
+            with open(log_path) as log:
+                for line in log:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if isinstance(event, dict):
+                        events.append(event)
+        except OSError:
+            pass
+        return events
+
+    def _read_json_file(self, name: str) -> Optional[dict]:
+        """Read an output JSON object without letting failures escape."""
+        path = os.path.join(self.output_dir, name)
+        try:
+            with open(path) as source:
+                value = json.load(source)
+            return value if isinstance(value, dict) else None
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _select_scalar_fields(event: dict, fields: tuple[str, ...]) -> dict:
+        """Copy only named scalar fields into a manifest event."""
+        return {
+            name: event[name]
+            for name in fields
+            if name in event
+            and (
+                event[name] is None
+                or isinstance(event[name], (str, int, float, bool))
+            )
+        }
+
+    @classmethod
+    def _decode_git_c_quoted_path(
+        cls, value: str
+    ) -> tuple[Optional[str], bool]:
+        """Decode one whole Git C-quoted path into Unicode.
+
+        Returns ``(value, False)`` for ordinary input, including raw legal
+        filenames delimited by quote characters but containing no C escapes.
+        Escape-bearing partial or malformed wrappers return ``(None, True)``
+        so authoritative sets become unavailable instead of inventing a path.
+        """
+        starts_quoted = value.startswith('"')
+        ends_quoted = value.endswith('"')
+        if not starts_quoted and not ends_quoted:
+            return value, False
+        if not starts_quoted or not ends_quoted or len(value) < 2:
+            if "\\" not in value:
+                return value, False
+            return None, True
+
+        escape_bytes = {
+            "a": b"\a",
+            "b": b"\b",
+            "t": b"\t",
+            "n": b"\n",
+            "v": b"\v",
+            "f": b"\f",
+            "r": b"\r",
+            "\\": b"\\",
+            '"': b'"',
+        }
+        content = value[1:-1]
+        if "\\" not in content:
+            return value, False
+        decoded = bytearray()
+        index = 0
+        while index < len(content):
+            char = content[index]
+            if char == '"':
+                return None, True
+            if char != "\\":
+                decoded.extend(char.encode("utf-8"))
+                index += 1
+                continue
+
+            if index + 1 >= len(content):
+                return None, True
+            escape = content[index + 1]
+            if escape in escape_bytes:
+                decoded.extend(escape_bytes[escape])
+                index += 2
+                continue
+            if escape in "01234567":
+                octal = content[index + 1:index + 4]
+                if len(octal) != 3 or any(
+                    digit not in "01234567" for digit in octal
+                ):
+                    return None, True
+                byte = int(octal, 8)
+                if byte > 0xFF:
+                    return None, True
+                decoded.append(byte)
+                index += 4
+                continue
+            return None, True
+
+        try:
+            return decoded.decode("utf-8"), True
+        except UnicodeDecodeError:
+            return None, True
+
+    @classmethod
+    def _normalize_repo_path(
+        cls,
+        value: Any,
+        repo_path: str = "",
+        *,
+        normalize_backslash_separators: bool = True,
+        decode_git_quoted: bool = True,
+    ) -> Optional[str]:
+        """Return one safe POSIX repository-relative path, if possible."""
+        if not isinstance(value, str) or not value:
+            return None
+
+        if decode_git_quoted:
+            decoded, was_git_quoted = cls._decode_git_c_quoted_path(value)
+        else:
+            decoded, was_git_quoted = value, False
+        if decoded is None or not decoded:
+            return None
+        if any(
+            unicodedata.category(char) in {"Cc", "Cf"}
+            for char in decoded
+        ):
+            return None
+
+        candidate = decoded
+        if not was_git_quoted and normalize_backslash_separators:
+            candidate = candidate.replace("\\", "/")
+
+        if ".." in candidate.split("/"):
+            return None
+        if not was_git_quoted and re.match(r"^[a-zA-Z]:", decoded):
+            return None
+
+        if posixpath.isabs(candidate):
+            root = repo_path.replace("\\", "/") if repo_path else ""
+            if not posixpath.isabs(root):
+                return None
+            normalized_root = posixpath.normpath(root)
+            normalized_absolute = posixpath.normpath(candidate)
+            try:
+                if posixpath.commonpath(
+                    [normalized_root, normalized_absolute]
+                ) != normalized_root:
+                    return None
+            except ValueError:
+                return None
+            candidate = posixpath.relpath(normalized_absolute, normalized_root)
+
+        normalized = posixpath.normpath(candidate)
+        if normalized in ("", ".") or posixpath.isabs(normalized):
+            return None
+        if normalized == ".." or normalized.startswith("../"):
+            return None
+        return normalized
+
+    @classmethod
+    def _normalize_repo_paths(
+        cls,
+        value: Any,
+        repo_path: str = "",
+        *,
+        strict: bool = False,
+        normalize_backslash_separators: bool = True,
+        decode_git_quoted: bool = True,
+    ) -> Optional[List[str]]:
+        """Normalize, sort, and deduplicate an allowlisted path list.
+
+        Scope events filter unsafe entries so arbitrary values never persist.
+        Authoritative context and plan sets use ``strict=True`` so partial data
+        becomes unavailable instead of silently shrinking the measured set.
+        """
+        if not isinstance(value, list):
+            return None if strict else []
+
+        normalized = []
+        for item in value:
+            path = cls._normalize_repo_path(
+                item,
+                repo_path=repo_path,
+                normalize_backslash_separators=normalize_backslash_separators,
+                decode_git_quoted=decode_git_quoted,
+            )
+            if path is None:
+                if strict:
+                    return None
+                continue
+            normalized.append(path)
+        return sorted(set(normalized))
+
+    def _pipeline_repo_path(self) -> str:
+        """Read the repository root recorded by the pipeline start event."""
+        start = next(
+            (
+                event
+                for event in self._read_events()
+                if event.get("event") == "pipeline_start"
+            ),
+            {},
+        )
+        pipeline = start.get("pipeline", {})
+        if not isinstance(pipeline, dict):
+            return ""
+        repo_path = pipeline.get("repo_path")
+        return repo_path if isinstance(repo_path, str) else ""
+
+    def _manifest_step_event(self, event: dict) -> dict:
+        """Sanitize one step event for the durable manifest."""
+        result = self._select_scalar_fields(event, _STEP_MANIFEST_FIELDS)
+
+        args = event.get("args", {})
+        if isinstance(args, dict):
+            safe_args = self._select_scalar_fields(
+                args, ("bot_mode", "thoughts_length")
+            )
+            if safe_args:
+                result["args"] = safe_args
+
+        decisions = event.get("decisions", {})
+        if (
+            isinstance(decisions, dict)
+            and isinstance(decisions.get("critic_skipped"), bool)
+        ):
+            result["decisions"] = {
+                "critic_skipped": decisions["critic_skipped"]
+            }
+        return result
+
+    def _manifest_agent_start_event(
+        self, event: dict, repo_path: str = ""
+    ) -> dict:
+        """Sanitize one agent start event for the durable manifest."""
+        result = self._select_scalar_fields(
+            event, _AGENT_START_MANIFEST_FIELDS
+        )
+        if event.get("domain") is None and "domain" in event:
+            result["domain"] = ""
+        scope = event.get("scope", {})
+        if isinstance(scope, dict):
+            safe_scope = self._select_scalar_fields(scope, ("files", "lines"))
+            if isinstance(scope.get("paths"), list):
+                safe_scope["paths"] = self._normalize_repo_paths(
+                    scope["paths"],
+                    repo_path=repo_path,
+                    normalize_backslash_separators=False,
+                    decode_git_quoted=False,
+                )
+            if safe_scope:
+                result["scope"] = safe_scope
+        return result
+
+    def _manifest_agent_complete_event(self, event: dict) -> dict:
+        """Sanitize one agent completion event for the durable manifest."""
+        result = self._select_scalar_fields(
+            event, _AGENT_COMPLETE_MANIFEST_FIELDS
+        )
+        severities = event.get("severities", {})
+        if isinstance(severities, dict):
+            safe_severities = {
+                name: severities[name]
+                for name in _SEVERITY_FIELDS
+                if type(severities.get(name)) is int
+            }
+            result["severities"] = safe_severities
+        return result
+
+    def _project_manifest_agent_lifecycle(
+        self, events: List[dict], repo_path: str
+    ) -> tuple[List[dict], List[dict]]:
+        """Project append-only saves into one completion per execution.
+
+        A new start opens a new execution for that agent. Further completion
+        events before another start are corrected saves of that execution, so
+        the latest completion replaces the prior projection. Completions with
+        no preceding start remain visible for strict consumers to reject.
+        """
+        started: List[dict] = []
+        completed: List[dict] = []
+        has_started: set[str] = set()
+        completion_slot: Dict[str, int] = {}
+
+        for event in events:
+            event_name = event.get("event")
+            agent = event.get("agent")
+            if event_name == "agent_start":
+                started.append(
+                    self._manifest_agent_start_event(event, repo_path=repo_path)
+                )
+                if isinstance(agent, str) and agent:
+                    has_started.add(agent)
+                    completion_slot.pop(agent, None)
+            elif event_name == "agent_complete":
+                completion = self._manifest_agent_complete_event(event)
+                if (
+                    isinstance(agent, str)
+                    and agent in completion_slot
+                ):
+                    completed[completion_slot[agent]] = completion
+                else:
+                    completed.append(completion)
+                    if isinstance(agent, str) and agent in has_started:
+                        completion_slot[agent] = len(completed) - 1
+
+        return started, completed
+
+    _AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+    def _inspect_dispatch_plan(self, filename: str) -> dict:
+        """Read a plan into safe list and index views with validity metadata."""
+        result = {
+            "available": False,
+            "plan": {},
+            "entries": [],
+            "index": {},
+            "duplicates": [],
+        }
+        plan = self._read_json_file(filename)
+        if plan is None:
+            return result
+
+        agents = plan.get("agents")
+        try:
+            valid_entries = validate_dispatch_plan_agents(agents)
+        except ValueError:
+            return result
+
+        names = []
+        for agent in valid_entries:
+            name = agent.get("name")
+            if not isinstance(name, str) or not self._AGENT_NAME_RE.fullmatch(name):
+                return result
+            names.append(name)
+
+        counts = Counter(names)
+        duplicates = sorted(name for name, count in counts.items() if count > 1)
+        result.update({
+            "available": True,
+            "plan": plan,
+            "entries": valid_entries,
+            "index": (
+                {}
+                if duplicates
+                else {agent["name"]: agent for agent in valid_entries}
+            ),
+            "duplicates": duplicates,
+        })
+        return result
+
+    @staticmethod
+    def _safe_dispatch_string(value: Any) -> Optional[str]:
+        """Return a dispatch scalar only when it is a string."""
+        return value if isinstance(value, str) else None
+
+    @classmethod
+    def _safe_dispatch_strings(cls, value: Any) -> List[str]:
+        """Allowlist a list of planner-produced string signals or checks."""
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
+
+    @staticmethod
+    def _is_dispatched(status: Any) -> bool:
+        """Return whether one supported plan status dispatches an agent."""
+        return isinstance(status, str) and status in DISPATCHED_STATUSES
+
+    def _registry_dispatch_metadata(self) -> Dict[str, dict]:
+        """Load safe static routing metadata from the adjacent agent registry."""
+        path = os.path.join(os.path.dirname(__file__), "agent_registry.json")
+        try:
+            with open(path) as source:
+                registry = json.load(source)
+            agents = registry.get("agents", {})
+            return agents if isinstance(agents, dict) else {}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return {}
+
+    def _planner_signals(self, plan: dict, name: str, agent: dict) -> List[str]:
+        """Select deterministic planner signals without copying arbitrary fields."""
+        prefix = f"{name}:"
+        top_level = plan.get("agent_signals", [])
+        if isinstance(top_level, list):
+            matched = [
+                signal
+                for signal in top_level
+                if isinstance(signal, str) and signal.startswith(prefix)
+            ]
+            if matched:
+                return matched
+
+        reason = self._safe_dispatch_string(agent.get("reason"))
+        return [reason] if reason else []
+
+    def _build_dispatch_manifest(self) -> dict:
+        """Compare the deterministic plan with main-orchestrator adjustments."""
+        initial_info = self._inspect_dispatch_plan("dispatch-plan.initial.json")
+        final_info = self._inspect_dispatch_plan("dispatch-plan.json")
+
+        initial_available = initial_info["available"]
+        final_available = final_info["available"]
+        duplicate_names = {}
+        invalid_reasons = []
+        if not initial_available:
+            invalid_reasons.append("planner_baseline_unavailable")
+        if not final_available:
+            invalid_reasons.append("final_plan_unavailable")
+        if initial_info["duplicates"]:
+            duplicate_names["planner_baseline"] = initial_info["duplicates"]
+            invalid_reasons.append("planner_baseline_duplicate_agents")
+        if final_info["duplicates"]:
+            duplicate_names["final_plan"] = final_info["duplicates"]
+            invalid_reasons.append("final_plan_duplicate_agents")
+
+        agent_sets_match = True
+        if (
+            initial_available
+            and final_available
+            and not initial_info["duplicates"]
+            and not final_info["duplicates"]
+        ):
+            agent_sets_match = (
+                set(initial_info["index"]) == set(final_info["index"])
+            )
+            if not agent_sets_match:
+                invalid_reasons.append("dispatch_agent_set_mismatch")
+
+        comparison_available = (
+            initial_available
+            and final_available
+            and not initial_info["duplicates"]
+            and not final_info["duplicates"]
+            and agent_sets_match
+        )
+        planner_entries = (
+            initial_info["entries"]
+            if initial_available
+            else final_info["entries"] if final_available else []
+        )
+        result = {
+            "planner_baseline_available": initial_available,
+            "final_plan_available": final_available,
+            "comparison_available": comparison_available,
+            "planner_candidate_count": sum(
+                self._is_dispatched(agent.get("status"))
+                for agent in planner_entries
+            ),
+            "final_dispatch_count": sum(
+                self._is_dispatched(agent.get("status"))
+                for agent in final_info["entries"]
+            ),
+            "adjustment_counts": {
+                "added": 0,
+                "removed": 0,
+                "unchanged": 0,
+            },
+            "invalid_reason_codes": invalid_reasons,
+            "agents": {},
+        }
+        if duplicate_names:
+            result["duplicate_agent_names"] = duplicate_names
+        if invalid_reasons == ["dispatch_agent_set_mismatch"]:
+            result["plan_projections"] = {
+                "planner_baseline": {
+                    name: initial_info["index"][name]["status"]
+                    for name in sorted(initial_info["index"])
+                },
+                "final_plan": {
+                    name: final_info["index"][name]["status"]
+                    for name in sorted(final_info["index"])
+                },
+            }
+
+        if (
+            not final_available
+            or initial_info["duplicates"]
+            or final_info["duplicates"]
+            or not agent_sets_match
+        ):
+            return result
+
+        if initial_available:
+            initial_plan = initial_info["plan"]
+            initial_agents = initial_info["index"]
+        else:
+            # Required legacy projection: without a usable baseline, show the
+            # final plan as unchanged while comparison_available remains false.
+            initial_plan = final_info["plan"]
+            initial_agents = final_info["index"]
+        final_agents = final_info["index"]
+
+        registry = self._registry_dispatch_metadata()
+        decisions = {}
+
+        for name in sorted(set(initial_agents) | set(final_agents)):
+            initial = initial_agents.get(name, {})
+            final = final_agents.get(name, {})
+            initial_status = self._safe_dispatch_string(initial.get("status"))
+            final_status = self._safe_dispatch_string(final.get("status"))
+            initially_dispatched = self._is_dispatched(initial_status)
+            finally_dispatched = self._is_dispatched(final_status)
+
+            if initially_dispatched == finally_dispatched:
+                change = "unchanged"
+            elif finally_dispatched:
+                change = "added"
+            else:
+                change = "removed"
+            result["adjustment_counts"][change] += 1
+
+            registry_agent = registry.get(name, {})
+            if not isinstance(registry_agent, dict):
+                registry_agent = {}
+            configured_planner_checks = self._safe_dispatch_strings(
+                registry_agent.get("triage_checks")
+            )
+
+            decisions[name] = {
+                "domain": (
+                    self._safe_dispatch_string(initial.get("domain"))
+                    or self._safe_dispatch_string(final.get("domain"))
+                ),
+                "initial_status": initial_status,
+                "initial_reason": self._safe_dispatch_string(initial.get("reason")),
+                "final_status": final_status,
+                "final_reason": self._safe_dispatch_string(final.get("reason")),
+                "planner_signals": self._planner_signals(
+                    initial_plan, name, initial
+                ),
+                "configured_planner_checks": configured_planner_checks,
+                "model_tier": (
+                    self._safe_dispatch_string(initial.get("model_tier"))
+                    or self._safe_dispatch_string(final.get("model_tier"))
+                    or self._safe_dispatch_string(registry_agent.get("model_tier"))
+                ),
+                "adjustment_reason": self._safe_dispatch_string(
+                    final.get("override_reason")
+                ),
+                "change": change,
+            }
+
+        result["agents"] = decisions
+        return result
+
+    def _build_coverage_manifest(
+        self, events: List[dict], context: Optional[dict], repo_path: str
+    ) -> Optional[dict]:
+        """Build descriptive generated-scope coverage from durable inputs."""
+        try:
+            if not isinstance(context, dict):
+                return None
+            context_git = context.get("git")
+            if not isinstance(context_git, dict):
+                return None
+            changed = self._normalize_repo_paths(
+                context_git.get("changed_files"),
+                repo_path=repo_path,
+                strict=True,
+            )
+
+            final_info = self._inspect_dispatch_plan("dispatch-plan.json")
+            if not final_info["available"] or final_info["duplicates"]:
+                return None
+            reviewable = self._normalize_repo_paths(
+                final_info["plan"].get("changed_files"),
+                repo_path=repo_path,
+                strict=True,
+            )
+            if changed is None or reviewable is None:
+                return None
+
+            changed_set = set(changed)
+            reviewable_set = set(reviewable)
+            if not reviewable_set.issubset(changed_set):
+                return None
+
+            final_agents = final_info["index"]
+            if any(
+                not isinstance(agent.get("status"), str)
+                for agent in final_agents.values()
+            ):
+                return None
+
+            by_agent_sets: Dict[str, set[str]] = {}
+            for event in events:
+                if event.get("event") != "agent_start":
+                    continue
+                name = event.get("agent")
+                final_agent = final_agents.get(name)
+                if not final_agent or not self._is_dispatched(
+                    final_agent.get("status")
+                ):
+                    continue
+                scope = event.get("scope")
+                if not isinstance(scope, dict) or not isinstance(
+                    scope.get("paths"), list
+                ):
+                    return None
+                scope_paths = self._normalize_repo_paths(
+                    scope["paths"],
+                    repo_path=repo_path,
+                    strict=True,
+                    normalize_backslash_separators=False,
+                    decode_git_quoted=False,
+                )
+                if scope_paths is None:
+                    return None
+                by_agent_sets.setdefault(name, set()).update(
+                    path for path in scope_paths if path in changed_set
+                )
+
+            by_agent = {
+                name: sorted(paths)
+                for name, paths in sorted(by_agent_sets.items())
+            }
+            assigned_set = reviewable_set.intersection(
+                path for paths in by_agent_sets.values() for path in paths
+            )
+
+            return {
+                "changed": changed,
+                "reviewable": reviewable,
+                "by_agent": by_agent,
+                "assigned": sorted(assigned_set),
+                "excluded": [
+                    {"path": path, "reason": "noise_filtered"}
+                    for path in sorted(changed_set - reviewable_set)
+                ],
+                "uncovered": sorted(reviewable_set - assigned_set),
+                "semantics": "generated_scope_not_proof_of_model_read",
+            }
+        except Exception:
+            return None
+
+    def _build_manifest(self, status: str) -> dict:
+        """Build the versioned materialized view from durable run events."""
+        events = self._read_events()
+        start = next(
+            (event for event in events if event.get("event") == "pipeline_start"),
+            {},
+        )
+        end = next(
+            (
+                event
+                for event in reversed(events)
+                if event.get("event") == "pipeline_end"
+            ),
+            {},
+        )
+
+        pipeline = start.get("pipeline", {})
+        if not isinstance(pipeline, dict):
+            pipeline = {}
+        git = pipeline.get("git", {})
+        git = dict(git) if isinstance(git, dict) else {}
+
+        context = self._read_json_file("review-context.json")
+        resolved_git = context.get("git", {}) if isinstance(context, dict) else {}
+        if isinstance(resolved_git, dict):
+            for manifest_name, context_name in (
+                ("requested_range", "git_range"),
+                ("base_sha", "merge_base"),
+                ("head_sha", "head_sha"),
+            ):
+                value = resolved_git.get(context_name)
+                if value:
+                    git[manifest_name] = value
+
+        steps = [
+            self._manifest_step_event(event)
+            for event in events
+            if event.get("event") == "step"
+        ]
+        repo_path = pipeline.get("repo_path")
+        repo_path = repo_path if isinstance(repo_path, str) else ""
+        started, completed = self._project_manifest_agent_lifecycle(
+            events, repo_path
+        )
+        incomplete = _incomplete_agent_executions(started, completed)
+
+        pipeline_result = self._read_json_file("pipeline-result.json") or {}
+        summary = end.get("summary", {})
+        if not isinstance(summary, dict):
+            summary = {}
+
+        manifest = {
+            "schema_version": EVENT_SCHEMA_VERSION,
+            "status": status,
+            "run": {
+                "id": start.get("run_id", ""),
+                "session_id": pipeline.get("session_id") or None,
+                "plugin_version": pipeline.get("plugin_version") or None,
+                "mode": pipeline.get("mode") or None,
+                "repo_path": pipeline.get("repo_path") or None,
+                "output_dir": pipeline.get("output_dir") or self.output_dir,
+                "started_at": start.get("timestamp"),
+                "ended_at": end.get("timestamp"),
+                "git": git,
+            },
+            "steps": steps,
+            "agents": {
+                "started": started,
+                "completed": completed,
+                "incomplete": incomplete,
+            },
+            "outcome": {
+                "summary": summary,
+                "pipeline_status": pipeline_result.get("status"),
+                "verdict": pipeline_result.get("verdict"),
+                "critic_verdict": pipeline_result.get("critic_verdict"),
+            },
+            "availability": {
+                "pipeline": True,
+                "transcript": False,
+            },
+        }
+        manifest["dispatch"] = self._build_dispatch_manifest()
+        coverage = self._build_coverage_manifest(events, context, repo_path)
+        manifest["coverage"] = coverage
+        manifest["availability"]["coverage"] = coverage is not None
+        return manifest
+
+    def _materialize_manifest(self, status: str) -> None:
+        """Atomically refresh the run manifest without affecting telemetry."""
+        temp_path = None
+        try:
+            manifest_path = self.manifest_path
+            if not manifest_path:
+                return
+            manifest = self._build_manifest(status)
+            manifest_dir = os.path.dirname(manifest_path) or "."
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                delete=False,
+                dir=manifest_dir,
+                encoding="utf-8",
+            ) as temp_file:
+                temp_path = temp_file.name
+                json.dump(manifest, temp_file, indent=2, sort_keys=True)
+                temp_file.flush()
+            os.replace(temp_path, manifest_path)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+    def _read_event_identity(self) -> tuple[int, str]:
+        """Read durable event identity from memory or the pipeline_start event."""
+        run_id = getattr(self, "_run_id", "")
+        if run_id:
+            return EVENT_SCHEMA_VERSION, run_id
+
+        if self.log_path and os.path.isfile(self.log_path):
+            try:
+                with open(self.log_path) as f:
+                    first_line = f.readline().strip()
+                if first_line:
+                    start = json.loads(first_line)
+                    return (
+                        start.get("schema_version", EVENT_SCHEMA_VERSION),
+                        start.get("run_id", ""),
+                    )
+            except (json.JSONDecodeError, OSError, TypeError):
+                pass
+
+        return EVENT_SCHEMA_VERSION, ""
 
     def _duration_since_prev(self, now: datetime) -> Optional[int]:
         """Calculate milliseconds since the previous event."""
@@ -342,6 +1241,9 @@ class ReviewTelemetry:
             pr = ctx.get("pr", {})
             git = ctx.get("git", {})
             size = ctx.get("pr_size", {})
+            changed_files = self._normalize_repo_paths(
+                git.get("changed_files"), strict=True
+            )
             return {
                 "pr_number": pr.get("number"),
                 "pr_title": pr.get("title"),
@@ -351,7 +1253,10 @@ class ReviewTelemetry:
                 "base_ref": git.get("base_ref"),
                 "head_ref": git.get("head_ref"),
                 "commit_count": git.get("commit_count"),
-                "changed_files_count": len(git.get("changed_files", [])),
+                "changed_files": changed_files,
+                "changed_files_count": (
+                    len(changed_files) if changed_files is not None else None
+                ),
                 "pr_size": size,
                 "linked_issues": ctx.get("linked_issues", []),
                 "source": ctx.get("source"),
@@ -368,10 +1273,13 @@ class ReviewTelemetry:
         try:
             with open(path) as f:
                 plan = json.load(f)
-            agents = plan.get("agents", [])
+            if not isinstance(plan, dict):
+                return None
+            raw_agents = plan.get("agents")
+            agents = validate_dispatch_plan_agents(raw_agents)
             by_status: Dict[str, List[str]] = {}
             for a in agents:
-                status = a.get("status", "SKIP")
+                status = a["status"]
                 by_status.setdefault(status, []).append(a["name"])
             return {
                 "total_agents": len(agents),
@@ -385,7 +1293,7 @@ class ReviewTelemetry:
                     for a in agents
                 },
             }
-        except (json.JSONDecodeError, KeyError):
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return None
 
     def _extract_agent_results(self) -> Optional[dict]:
@@ -453,10 +1361,10 @@ class ReviewTelemetry:
             summary["agents_total"] = dispatch["total_agents"]
             by_status = dispatch.get("by_status", {})
             summary["agents_dispatched"] = sum(
-                len(v) for k, v in by_status.items() if k.startswith("DISPATCH")
+                len(v) for k, v in by_status.items() if k in DISPATCHED_STATUSES
             )
             summary["agents_skipped"] = sum(
-                len(v) for k, v in by_status.items() if not k.startswith("DISPATCH")
+                len(v) for k, v in by_status.items() if k in SKIPPED_STATUSES
             )
 
         agents = self._extract_agent_results()

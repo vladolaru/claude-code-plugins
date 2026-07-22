@@ -31,15 +31,51 @@ def mod(pipeline_mod):
     return pipeline_mod
 
 
+def _init_git_repo(path):
+    """Initialize a minimal repository for pipeline subprocess tests."""
+    subprocess.run(["git", "init"], cwd=path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"],
+        cwd=path,
+        capture_output=True,
+        check=True,
+    )
+    (path / "README.md").write_text("# Test\n")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit"],
+        cwd=path,
+        capture_output=True,
+        check=True,
+    )
+
+
 class TestTelemetryIntegration:
     """Verify pipeline calls telemetry at each step."""
 
-    def _run(self, *args):
+    def _run(self, *args, cwd=None):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
 
     def test_step_1_creates_telemetry_log(self, tmp_path):
-        """Step 1 should create a telemetry log file."""
+        """Step 1 should create a telemetry log and running manifest."""
         log_dir = tmp_path / "telemetry-logs"
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             r = self._run(
@@ -49,6 +85,11 @@ class TestTelemetryIntegration:
         assert r.returncode == 0
         marker = tmp_path / ".telemetry-log-path"
         assert marker.is_file()
+        log_path = Path(marker.read_text().strip())
+        manifest_path = log_path.with_suffix(".manifest.json")
+        assert manifest_path.is_file()
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["status"] == "running"
 
     def test_telemetry_failure_does_not_break_pipeline(self, tmp_path):
         """Pipeline works even if telemetry log_dir is unwritable."""
@@ -83,6 +124,140 @@ class TestTelemetryIntegration:
         assert json.loads(lines[0])["event"] == "pipeline_start"
         assert json.loads(lines[1])["event"] == "step"
 
+    def test_step_1_uses_preserved_bot_context_git_identity(self, tmp_path):
+        """Bot-provided range and SHAs survive into the pipeline_start event."""
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr",
+            "pr_number": "42",
+            "interactive": False,
+            "session_id": "bot-session",
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": "context-base..context-head",
+                "merge_base": "base-from-context",
+                "head_sha": "head-from-context",
+            },
+        }))
+        log_dir = tmp_path / "telemetry-logs"
+
+        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+            result = self._run("--step", "1", "--output-dir", str(tmp_path))
+
+        assert result.returncode == 0
+        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        with open(log_path) as f:
+            start = json.loads(f.readline())
+        assert start["pipeline"]["git"] == {
+            "requested_range": "context-base..context-head",
+            "base_sha": "base-from-context",
+            "head_sha": "head-from-context",
+        }
+
+    def test_step_1_interactive_run_ignores_stale_context_git_identity(self, tmp_path):
+        """Interactive reruns do not leak the prior run's preserved Git identity."""
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full",
+            "interactive": True,
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": "stale-base..stale-head",
+                "merge_base": "stale-base-sha",
+                "head_sha": "stale-head-sha",
+            },
+        }))
+        log_dir = tmp_path / "telemetry-logs"
+        current_head = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD"], text=True
+        ).strip()
+
+        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+            result = self._run("--step", "1", "--output-dir", str(tmp_path))
+
+        assert result.returncode == 0
+        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        with open(log_path) as f:
+            start = json.loads(f.readline())
+        assert start["pipeline"]["git"] == {
+            "requested_range": "",
+            "base_sha": "",
+            "head_sha": current_head,
+        }
+        manifest = json.loads(Path(log_path).with_suffix(".manifest.json").read_text())
+        assert manifest["run"]["git"] == start["pipeline"]["git"]
+        assert json.loads((tmp_path / "review-context.json").read_text()) == {
+            "output": {"directory": str(tmp_path)},
+        }
+
+    def test_step_1_interactive_range_resolves_current_git_not_stale_context(self, tmp_path):
+        """An explicit interactive range resolves Git even when stale context matches it."""
+        git_range = "HEAD~1..HEAD~1"
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full",
+            "interactive": True,
+            "git_range": git_range,
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": git_range,
+                "merge_base": "stale-base-sha",
+                "head_sha": "stale-head-sha",
+            },
+        }))
+        log_dir = tmp_path / "telemetry-logs"
+        expected_sha = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD~1"], text=True
+        ).strip()
+
+        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+            result = self._run("--step", "1", "--output-dir", str(tmp_path))
+
+        assert result.returncode == 0
+        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        with open(log_path) as f:
+            start = json.loads(f.readline())
+        assert start["pipeline"]["git"] == {
+            "requested_range": git_range,
+            "base_sha": expected_sha,
+            "head_sha": expected_sha,
+        }
+
+    def test_incremental_context_uses_step_1_output_seed_for_baseline(
+        self, tmp_path
+    ):
+        _init_git_repo(tmp_path)
+        baseline_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+        ).strip()
+        (tmp_path / ".branch-review-baseline.json").write_text(json.dumps({
+            "last_reviewed_sha": baseline_sha,
+        }))
+        log_dir = tmp_path / "telemetry-logs"
+
+        with patch.dict(
+            os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}
+        ):
+            step_1 = self._run(
+                "--step", "1", "--mode", "incremental",
+                "--output-dir", str(tmp_path), cwd=tmp_path,
+            )
+            seeded_context = json.loads(
+                (tmp_path / "review-context.json").read_text()
+            )
+            step_3 = self._run(
+                "--step", "3", "--output-dir", str(tmp_path), cwd=tmp_path,
+            )
+
+        assert step_1.returncode == 0
+        assert seeded_context == {"output": {"directory": str(tmp_path)}}
+        assert step_3.returncode == 0
+        context = json.loads((tmp_path / "review-context.json").read_text())
+        assert context["output"]["directory"] == str(tmp_path)
+        assert context["git"]["merge_base"] == baseline_sha
+        assert context["git"]["git_range"] == f"{baseline_sha}..HEAD"
+        assert (tmp_path / ".branch-review-baseline.json").is_file()
+
 
 
 class TestStep2Orchestration:
@@ -92,21 +267,9 @@ class TestStep2Orchestration:
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
 
-    @staticmethod
-    def _init_git_repo(path):
-        """Initialize a minimal git repo so review/workspace_setup.py doesn't touch the real repo."""
-        subprocess.run(["git", "init"], cwd=str(path), capture_output=True, check=True)
-        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(path), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), capture_output=True)
-        subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=str(path), capture_output=True)
-        readme = path / "README.md"
-        readme.write_text("# test\n")
-        subprocess.run(["git", "add", "."], cwd=str(path), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "init"], cwd=str(path), capture_output=True)
-
     def test_step_2_completes_without_crash(self, tmp_path):
         """Step 2 should complete even when review/workspace_setup.py fails (no git repo)."""
-        self._init_git_repo(tmp_path)
+        _init_git_repo(tmp_path)
         self._run("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=str(tmp_path))
         r = self._run("--step", "2", "--mode", "pr",
@@ -117,7 +280,7 @@ class TestStep2Orchestration:
 
     def test_step_2_stores_workspace_setup_result(self, tmp_path):
         """Step 2 should store workspace_setup_result in state."""
-        self._init_git_repo(tmp_path)
+        _init_git_repo(tmp_path)
         self._run("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=str(tmp_path))
         self._run("--step", "2", "--mode", "pr",
@@ -289,6 +452,158 @@ class TestStep5Orchestration:
         assert 5 in state["completed_steps"]
         assert "dispatch_plan_summary" in state
 
+    def test_step_5_preserves_initial_plan_before_orchestrator_adjustment(
+        self, tmp_path
+    ):
+        """Step 5 keeps the deterministic plan unchanged for measurement."""
+        self._run("--step", "1", "--mode", "full",
+                  "--output-dir", str(tmp_path))
+        ctx = {
+            "git": {
+                "git_range": "HEAD~1..HEAD",
+                "changed_files": ["plugins/pirategoat-tools/scripts/review/pipeline.py"],
+                "commit_count": 1,
+            },
+            "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
+        }
+        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+
+        result = self._run(
+            "--step", "5", "--mode", "full", "--output-dir", str(tmp_path)
+        )
+
+        assert result.returncode == 0
+        initial_path = tmp_path / "dispatch-plan.initial.json"
+        final_path = tmp_path / "dispatch-plan.json"
+        initial = json.loads(initial_path.read_text())
+        final = json.loads(final_path.read_text())
+        assert initial == final
+
+        final["agents"][0]["status"] = "SKIPPED_OVERRIDE"
+        final["agents"][0]["override_reason"] = "main orchestrator adjustment"
+        final_path.write_text(json.dumps(final))
+
+        assert json.loads(initial_path.read_text()) == initial
+        assert json.loads(initial_path.read_text()) != json.loads(final_path.read_text())
+
+    def test_initial_plan_write_failure_is_fail_open(self, mod, tmp_path):
+        """Measurement failure neither alters the final plan nor raises."""
+        plan = {
+            "agents": [
+                {
+                    "name": "code-reviewer",
+                    "status": "DISPATCH",
+                    "reason": "always",
+                }
+            ]
+        }
+        final_path = tmp_path / "dispatch-plan.json"
+        initial_path = tmp_path / "dispatch-plan.initial.json"
+        final_path.write_text(json.dumps(plan))
+        initial_path.write_text('{"stale": true}')
+
+        with patch.object(mod.os, "replace", side_effect=OSError("nope")):
+            mod._preserve_initial_dispatch_plan(str(tmp_path), plan)
+
+        assert json.loads(final_path.read_text()) == plan
+        assert not initial_path.exists()
+
+    def test_failed_planner_retry_preserves_existing_baseline_and_adjusted_plan(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """A failed retry cannot reclassify an adjusted plan as deterministic."""
+        initial = {
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH", "reason": "always"}
+            ]
+        }
+        final = {
+            "agents": [
+                {
+                    "name": "code-reviewer",
+                    "status": "SKIPPED_OVERRIDE",
+                    "reason": "always",
+                    "override_reason": "main orchestrator adjustment",
+                }
+            ]
+        }
+        initial_path = tmp_path / "dispatch-plan.initial.json"
+        final_path = tmp_path / "dispatch-plan.json"
+        initial_path.write_text(json.dumps(initial))
+        final_path.write_text(json.dumps(final))
+        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", False))
+
+        mod._orchestrate_step(
+            5,
+            "full",
+            {},
+            {"resolved_params": {"git_range": "base..head"}},
+            {"git": {"git_range": "base..head"}},
+            str(tmp_path),
+        )
+
+        assert json.loads(initial_path.read_text()) == initial
+        assert json.loads(final_path.read_text()) == final
+
+    def test_failed_planner_without_baseline_does_not_fabricate_one(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """A failed planner may reuse a final artifact but never invents a baseline."""
+        final = {
+            "agents": [
+                {
+                    "name": "code-reviewer",
+                    "status": "SKIPPED_OVERRIDE",
+                    "reason": "always",
+                    "override_reason": "main orchestrator adjustment",
+                }
+            ]
+        }
+        final_path = tmp_path / "dispatch-plan.json"
+        final_path.write_text(json.dumps(final))
+        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", False))
+
+        mod._orchestrate_step(
+            5,
+            "full",
+            {},
+            {"resolved_params": {"git_range": "base..head"}},
+            {"git": {"git_range": "base..head"}},
+            str(tmp_path),
+        )
+
+        assert json.loads(final_path.read_text()) == final
+        assert not (tmp_path / "dispatch-plan.initial.json").exists()
+
+    def test_successful_planner_with_invalid_plan_shape_surfaces_value_error(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """Subprocess success cannot hide a malformed planner artifact."""
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(["not", "a", "plan"]))
+        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", True))
+        state = {"resolved_params": {"git_range": "base..head"}}
+
+        with pytest.raises(ValueError, match="must be a JSON object"):
+            mod._orchestrate_step(
+                5,
+                "full",
+                {},
+                state,
+                {"git": {"git_range": "base..head"}},
+                str(tmp_path),
+            )
+
+        assert not (tmp_path / "dispatch-plan.initial.json").exists()
+
+    def test_step_1_clears_stale_initial_dispatch_plan(self, mod, tmp_path):
+        """A prior run's planner baseline cannot leak into the next run."""
+        initial_path = tmp_path / "dispatch-plan.initial.json"
+        initial_path.write_text('{"stale": true}')
+
+        mod.clean_stale_artifacts(str(tmp_path))
+
+        assert not initial_path.exists()
+
 
 class TestStep6Orchestration:
     """Step 6 main() reads dispatch-plan.json and populates dispatched_agents."""
@@ -339,6 +654,33 @@ class TestStep6Orchestration:
         assert "bootstrap.py" in r.stdout
         assert "code-reviewer" in r.stdout
         assert "abc..HEAD" in r.stdout
+
+    def test_step_6_invalid_hand_edited_status_surfaces_value_error(
+        self, mod, tmp_path
+    ):
+        plan = {
+            "agents": [
+                {
+                    "name": "security-reviewer",
+                    "status": "DISPATCHED",
+                },
+            ],
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+
+        with pytest.raises(ValueError) as exc_info:
+            mod._orchestrate_step(
+                6,
+                "full",
+                {},
+                {},
+                {},
+                str(tmp_path),
+            )
+
+        message = str(exc_info.value)
+        assert "security-reviewer" in message
+        assert repr("DISPATCHED") in message
 
 
 class TestStep7Orchestration:
@@ -423,6 +765,40 @@ class TestStep8Orchestration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         review_files = state.get("agents", {}).get("review_files", [])
         assert any("code-review.json" in f for f in review_files)
+
+    def test_step_8_invalid_hand_edited_status_surfaces_value_error(
+        self, mod, tmp_path, monkeypatch
+    ):
+        plan = {
+            "agents": [
+                {
+                    "name": "security-reviewer",
+                    "status": None,
+                },
+            ],
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=1, stdout="", stderr="invalid plan"
+            ),
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            mod._orchestrate_step(
+                8,
+                "full",
+                {},
+                {"resolved_params": {}},
+                {},
+                str(tmp_path),
+            )
+
+        message = str(exc_info.value)
+        assert "security-reviewer" in message
+        assert repr(None) in message
 
 
 class TestStep9Orchestration:
@@ -536,7 +912,7 @@ class TestTelemetryFinalize:
         return subprocess.run(cmd, capture_output=True, text=True)
 
     def test_last_step_finalizes_telemetry(self, tmp_path):
-        """The last active step should call telemetry.finalize()."""
+        """The last active step should finalize telemetry and its manifest."""
         log_dir = tmp_path / "telemetry-logs"
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             self._run("--step", "1", "--mode", "full",
@@ -552,6 +928,9 @@ class TestTelemetryFinalize:
                 lines = f.readlines()
             events = [json.loads(l)["event"] for l in lines]
             assert "pipeline_end" in events, f"Expected pipeline_end event, got: {events}"
+            manifest_path = Path(log_path).with_suffix(".manifest.json")
+            manifest = json.loads(manifest_path.read_text())
+            assert manifest["status"] == "complete"
 
 
 class TestStep8AgentPrompt:

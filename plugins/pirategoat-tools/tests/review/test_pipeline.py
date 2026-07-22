@@ -378,7 +378,7 @@ class TestStep5DispatchPlan:
         assert not ("python3" in full_text and "plan_dispatch.py" in full_text)
 
     def test_shows_focus_for_agents(self, mod, tmp_path):
-        """Step 5 should show what each agent does so the LLM can make informed override decisions."""
+        """Step 5 gives the main orchestrator agent focus for adjustments."""
         state = self._make_state_with_plan()
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(5, "pr", state, ctx)
@@ -389,13 +389,35 @@ class TestStep5DispatchPlan:
         assert "SOLID" in text  # architecture-reviewer's focus
 
     def test_triage_authority(self, mod, tmp_path):
-        """Triage model should be consistent: planner is authoritative."""
+        """The deterministic planner is the baseline for orchestrator adjustment."""
         state = self._make_state_with_plan()
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(5, "full", state, ctx)
         text = "\n".join(g["actions"])
-        assert "authoritative" in text.lower() or "override" in text.lower()
+        assert "main orchestrator adjustment" in text.lower()
+        assert "adjust" in text.lower()
         assert "preliminary" not in text.lower()
+
+    def test_main_orchestrator_adjustment_contract(self, mod, tmp_path):
+        """Step 5 names the actor without changing its routing policy."""
+        state = self._make_state_with_plan()
+        g = mod.get_step_guidance(5, "pr", state, {})
+        text = "\n".join(g["actions"])
+        lowered = text.lower()
+
+        assert "main orchestrator" in lowered
+        assert "planner handles keyword/file-type signals" in lowered
+        assert "semantically" in lowered
+        assert "clearly irrelevant" in lowered
+        assert (
+            "only force-dispatch a skipped agent when you're confident it will find "
+            "something the plan missed."
+        ) in lowered
+        assert "useful review coverage" not in lowered
+        assert "human override" not in lowered
+        assert "DISPATCH_OVERRIDE" in text
+        assert "SKIPPED_OVERRIDE" in text
+        assert "override_reason" in text
 
     def test_override_writes_to_dispatch_plan(self, mod, tmp_path):
         state = self._make_state_with_plan()
@@ -732,6 +754,47 @@ class TestStep6DispatchAgents:
         summary = state["dispatch_plan_summary"]
         assert summary["dispatched"] == 2  # code-reviewer + security-reviewer
         assert summary["skipped"] == 2  # SKIPPED + SKIPPED_OVERRIDE
+
+    @pytest.mark.parametrize("step", [5, 6])
+    def test_dispatch_summaries_use_the_canonical_dispatched_set(
+        self, mod, tmp_path, monkeypatch, step
+    ):
+        plan = {
+            "agents": [
+                {"name": "code-reviewer", "status": "DISPATCH", "reason": "always"},
+                {
+                    "name": "a11y-reviewer",
+                    "status": "DISPATCH_OVERRIDE",
+                    "reason": "no files",
+                    "override_reason": "requested focus",
+                },
+                {"name": "docs-reviewer", "status": "SKIPPED", "reason": "no files"},
+                {
+                    "name": "perf-reviewer",
+                    "status": "SKIPPED_OVERRIDE",
+                    "reason": "conditional",
+                    "override_reason": "irrelevant",
+                },
+            ]
+        }
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", True))
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3],
+        }
+        config = {"mode": "pr", "interactive": True}
+        context = {"git": {"git_range": "abc..HEAD"}}
+
+        mod._orchestrate_step(step, "pr", config, state, context, str(tmp_path))
+
+        assert state["dispatch_plan_summary"]["dispatched"] == 2
+        assert state["dispatch_plan_summary"]["skipped"] == 2
+        if step == 6:
+            assert [agent["name"] for agent in state["dispatched_agents"]] == [
+                "code-reviewer",
+                "a11y-reviewer",
+            ]
 
 
 # ===================================================================

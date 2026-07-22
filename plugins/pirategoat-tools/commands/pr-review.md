@@ -47,7 +47,8 @@ mkdir -p "$OUTPUT_DIR"
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
-  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" [--quick]
+  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" \
+  --session-id "${CLAUDE_SESSION_ID}" [--quick]
 ```
 
 Add `--quick` only if the user indicated they want a quick review.
