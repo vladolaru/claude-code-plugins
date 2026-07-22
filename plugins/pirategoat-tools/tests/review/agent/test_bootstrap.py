@@ -580,3 +580,34 @@ class TestAdditionalInstructionsInjection:
         requested_pos = output.index("REVIEWER-REQUESTED FOCUS")
         budget_pos = output.index("REVIEW BUDGET")
         assert focus_pos < requested_pos < budget_pos
+
+
+# ---------------------------------------------------------------------------
+# run_scope_discovery — scope summary sidecar wiring
+# ---------------------------------------------------------------------------
+
+from unittest.mock import patch
+
+
+class TestScopeSummaryWiring:
+    """run_scope_discovery must forward the summary sidecar path to scope.py."""
+
+    def test_run_scope_discovery_passes_summary_flag(self):
+        with patch.object(_mod, "run_cmd", return_value=(0, "=== REVIEW SCOPE ===", "")) as mock_run:
+            _mod.run_scope_discovery(
+                str(PLUGIN_ROOT), "security", [], "abc..def",
+                output_dir="/tmp/out",
+                summary_json_out="/tmp/out/security-reviewer-scope-summary.json",
+            )
+        cmd = mock_run.call_args[0][0]
+        assert "--summary-json-out" in cmd
+        assert cmd[cmd.index("--summary-json-out") + 1] == (
+            "/tmp/out/security-reviewer-scope-summary.json"
+        )
+
+    def test_run_scope_discovery_omits_flag_when_none(self):
+        with patch.object(_mod, "run_cmd", return_value=(0, "=== REVIEW SCOPE ===", "")) as mock_run:
+            _mod.run_scope_discovery(
+                str(PLUGIN_ROOT), "security", [], "abc..def",
+            )
+        assert "--summary-json-out" not in mock_run.call_args[0][0]

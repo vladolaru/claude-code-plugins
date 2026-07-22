@@ -5,7 +5,7 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.108.0] - 2026-07-22
+## [1.109.0] - 2026-07-22
 
 Lets the repository under review contribute its own review knowledge and reviewers. General reviewers structurally miss repo-specific bug classes (runtime-environment assumptions, upstream-internals contracts, failure-path semantics, cross-flow blast radius) — knowledge that is regression-seeded and can only live with the code. A repository now declares that knowledge, and its own domain-expert lenses, in an optional `review` section of its `.pirategoat/config.json`, and pirategoat applies and dispatches them natively.
 
@@ -18,6 +18,34 @@ Lets the repository under review contribute its own review knowledge and reviewe
 ### Changed
 
 - `context.py` carries the parsed `review_config` into `review-context.json` (recomputed each run, alongside `host_context`). `schemas/review-output.ts` documents the optional `channel` field on `Issue`.
+
+## [1.108.0] - 2026-07-21
+
+Makes reviewer scope budgeting resilient and coverage gaps visible. A 2026-07-21 full-code-review on a test-heavy branch exposed a starvation failure: the largest changed file (a test file) was admitted unconditionally, blew the entire diff budget, and every remaining file — including all eight production files — was silently skipped. Six of seventeen agents reviewed zero production code and returned verdicts anyway; six findings were recovered only by manual re-runs.
+
+### Fixed
+
+- **One oversized diff no longer evicts the entire scope.** The protected oversized leading diff is tracked outside the ordinary budget pool, so later files still budget against the full `--max-lines` allowance. Coverage now degrades to "biggest file plus as many more as fit" instead of "one file".
+- **Bootstrap resolves the plugin root from its own location first.** The `/tmp/.pirategoat-tools-root` hook cache previously outranked own-location discovery, so bootstrap could drive a different install's `scope.py` with flags that version doesn't understand — and the resulting argparse failure (exit 2) was conflated with scope's "no changes" signal, degrading reviews silently. Scripts that ship together now run together.
+- **Reviewer protocol describes the real sort order** (priority tiers, largest-first within tier, one protected oversized file) instead of the stale "smallest-first" text, and makes NOT DIFFED handling mandatory: review each skipped file or declare it under `Not reviewed (budget):`.
+
+### Added
+
+- **Production-first budget priority.** The five mixed domains (`code`, `security`, `performance`, `wp-architecture`, `patterns`) now budget production files before test files (shared `_TEST_EXCLUDE` classifier; same tier mechanism as a11y's `markup_evidence`), so test-heavy branches can no longer spend the whole budget on test files while the code under review goes unseen. Test-only domains keep largest-first — test files are their evidence.
+- **Per-agent scope summary sidecars.** `scope.py --summary-json-out` persists each agent's admitted/skipped file sets as `<agent>-scope-summary.json`; bootstrap wires it for primary and secondary domains.
+- **Run-level inline coverage accounting.** Reconciliation aggregates the sidecars; files skipped by every matching agent surface as a prominent "Inline Diff Coverage Gaps" section in `reconciliation-context.md`, and pipeline step 9 deterministically injects a "Review coverage" instruction into the report briefing — a starved review can no longer present as a clean one.
+
+## [1.107.1] - 2026-07-21
+
+Hardens the reconciliation renderer against malformed reviewer output. A full-code-review aborted at the reconciliation step when a reviewer agent emitted a list-valued `recommendation`: the field flowed unchecked into `re.sub`, raising `TypeError: expected string or bytes-like object, got 'list'` and taking down the entire review. Reviewer JSON is model-authored, so a schema-string field can arrive as a list, number, or null — the pipeline must render it, not crash on it.
+
+### Fixed
+
+- **Non-string finding fields no longer crash the review.** `_escape_backtick_runs` and `_strip_critic_severity_floor_markers` — the two regex chokepoints every free-form finding field passes through — now coerce any value to a string first (lists join on newlines, `None` becomes empty), crash-proofing both `to_markdown` (reconciliation context, step 8) and `build_critic_context` (critic context, step 10) against malformed reviewer output.
+- **Coerced titles can't inject Markdown structure.** Titles render inline (`**N. …**`, `### F1: …`) without block-syntax escaping, so a coerced multiline title could otherwise forge a heading or thematic break and split the structured context. Titles are now collapsed to a single line — at the producer and defensively at both render sites — collapsing every line ending (LF, bare CR, and CRLF, all of which CommonMark treats as line breaks), not just LF.
+- **Legacy severity floors survive malformed descriptions.** `resolve_severity_floor` now coerces the description before scanning for a `Severity-floor:` marker, so a list-valued description no longer hits the non-string guard and returns `None` — which `load_agent_findings` would treat as "no floor" and drop, silently downgrading a mandatory floor during reconciliation.
+- **Producer-side validation stops malformed findings at the source.** `ReviewOutputBuilder.add_issue` and `add_recommendation` coerce `title` (single-line), `description`, `recommendation`, and recommendation text to strings at write time, so a non-string value never reaches disk. Defense in depth alongside the renderer guard.
+- **Reconciliation failures surface their root cause.** `reconciliation_context.py` now prints the full traceback to stderr on failure instead of only a terse message, so a future malformed-field abort names the offending field and finding instead of just "got 'list'".
 
 ## [1.107.0] - 2026-07-19
 

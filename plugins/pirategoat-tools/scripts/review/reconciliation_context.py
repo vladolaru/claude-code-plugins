@@ -101,9 +101,12 @@ def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
     if structured is not None:
         return structured
 
-    description = issue.get("description", "")
-    if not isinstance(description, str):
-        return None
+    # Coerce first: a malformed (list/non-string) description must not silently
+    # drop a mandatory floor. load_agent_findings pops severity_floor when this
+    # returns None, so returning None for a list that carries a legacy marker
+    # would downgrade the finding. _coerce_text joins list items on newlines,
+    # keeping the MULTILINE ^Severity-floor: anchor matchable.
+    description = _coerce_text(issue.get("description", ""))
     numeric = _NUMERIC_SEVERITY_FLOOR_RE.search(description)
     if numeric:
         return numeric.group(1).lower()
@@ -113,9 +116,14 @@ def resolve_severity_floor(issue: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _strip_critic_severity_floor_markers(text: str) -> str:
-    """Remove prose floor markers before content reaches the critic."""
-    return _CRITIC_SEVERITY_FLOOR_MARKER_RE.sub("", text)
+def _strip_critic_severity_floor_markers(text: Any) -> str:
+    """Remove prose floor markers before content reaches the critic.
+
+    Accepts any type and coerces first — like ``_escape_backtick_runs``, this
+    is a regex chokepoint that free-form (model-authored) finding text flows
+    through, so a non-string value must not raise here.
+    """
+    return _CRITIC_SEVERITY_FLOOR_MARKER_RE.sub("", _coerce_text(text))
 
 
 def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
@@ -144,6 +152,56 @@ def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
     if not isinstance(host_context, dict):
         return None
     return host_context.get("banner")
+
+
+def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
+    """Aggregate per-agent scope summaries into run-level inline coverage.
+
+    Reads ``*-scope-summary*.json`` sidecars written by bootstrap/scope.py.
+    A file is a coverage gap when at least one agent skipped it for budget
+    and NO agent received its diff inline — those files were never reviewed
+    against their actual changes by anyone.
+
+    Returns None when no summaries exist (pre-sidecar runs) so callers can
+    distinguish "no data" from "no gaps".
+    """
+    inline: Dict[str, set] = {}
+    skipped: Dict[str, set] = {}
+    agents_reporting = 0
+    try:
+        entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
+    except OSError:
+        return None
+    for entry in entries:
+        name = entry.name
+        if "-scope-summary" not in name or not name.endswith(".json"):
+            continue
+        agent = name.split("-scope-summary")[0]
+        try:
+            with open(entry.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        agents_reporting += 1
+        for f_path in data.get("files_with_diffs") or []:
+            if isinstance(f_path, str):
+                inline.setdefault(f_path, set()).add(agent)
+        for f_path in data.get("budget_exceeded_files") or []:
+            if isinstance(f_path, str):
+                skipped.setdefault(f_path, set()).add(agent)
+    if not agents_reporting:
+        return None
+    return {
+        # Counts summary FILES aggregated (primary + secondary domains),
+        # not unique agents.
+        "agents_reporting": agents_reporting,
+        "files_inline": {f: sorted(a) for f, a in sorted(inline.items())},
+        "files_never_inline": {
+            f: sorted(a) for f, a in sorted(skipped.items()) if f not in inline
+        },
+    }
 
 
 def load_agent_findings(
@@ -734,7 +792,27 @@ def _markdown_fence_for(text: str) -> str:
     return "`" * max(3, max_run + 1)
 
 
-def _escape_backtick_runs(text: str) -> str:
+def _coerce_text(value: Any) -> str:
+    """Coerce an agent-supplied finding field to a string for rendering.
+
+    Reviewer JSON is model-authored, so a field the schema expects to be a
+    string (``title``, ``description``, ``recommendation``) can arrive as a
+    list, number, or ``None``.  Passing those straight into the regex helpers
+    below raises ``TypeError`` and \u2014 because rendering happens inside the
+    reconciliation step \u2014 aborts the entire review.  Coerce defensively:
+    lists/tuples join on newlines (matching how multi-part text is rendered
+    elsewhere), ``None`` becomes empty, everything else stringifies.
+    """
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "\n".join(_coerce_text(item) for item in value)
+    return str(value)
+
+
+def _escape_backtick_runs(text: Any) -> str:
     """Neutralize backtick runs of 3+ in free-form text.
 
     Markdown interprets ````` as a code fence opener.  When agent-written
@@ -743,9 +821,32 @@ def _escape_backtick_runs(text: str) -> str:
     inserts a zero-width space after the second backtick in any run of 3+,
     breaking the fence pattern while keeping the text visually identical
     for the LLM consumer.
+
+    Accepts any type and coerces it to a string first (via ``_coerce_text``):
+    this is the single chokepoint every free-form finding field flows through
+    before rendering, so coercing here crash-proofs both ``to_markdown`` and
+    ``build_critic_context`` against non-string reviewer output.
     """
     import re
+    text = _coerce_text(text)
     return re.sub(r"(`{3,})", lambda m: m.group(0)[:2] + "\u200b" + m.group(0)[2:], text)
+
+
+def _escape_inline(text: Any) -> str:
+    """Render a value that must stay on a single line (e.g. a finding title).
+
+    Titles are rendered inline (``**N. <title>**``, ``### F1: <title>``) and \u2014
+    unlike descriptions/recommendations \u2014 do NOT pass through
+    ``_escape_block_syntax``. A line break in the title would therefore let a
+    line-leading ``## \u2026`` or ``---`` forge a heading or thematic break and
+    split/spoof the structured context. Coerce, neutralize backtick fences,
+    then collapse *all* whitespace runs to single spaces (matching the
+    producer) so no line ending survives \u2014 CommonMark treats bare CR and CRLF
+    as line endings too, so replacing only LF would leave a CR-delimited title
+    able to inject block-level Markdown. Producer-side coercion keeps titles
+    single-line already; this is the defensive last line at the render boundary.
+    """
+    return " ".join(_escape_backtick_runs(text).split())
 
 
 def _escape_block_syntax(text: str) -> str:
@@ -827,6 +928,23 @@ def to_markdown(context: Dict[str, Any]) -> str:
             f"{banner_json}\n"
             f"{fence}\n"
         )
+
+    # --- Inline Diff Coverage Gaps (prepended — must not be buried) ---
+    inline_coverage = context.get("inline_coverage")
+    if isinstance(inline_coverage, dict) and inline_coverage.get("files_never_inline"):
+        gaps = inline_coverage["files_never_inline"]
+        parts.append("## Inline Diff Coverage Gaps\n")
+        parts.append(
+            f"**⚠ {len(gaps)} changed file(s) matched reviewer domains but "
+            "NO reviewer received their diff inline** (every matching agent "
+            "skipped them for budget). Findings cannot exist for code no "
+            "agent saw — treat agent verdicts as NOT covering these files, "
+            "and carry this list into `review-findings.md` as a coverage "
+            "warning.\n"
+        )
+        for f_path, agents in gaps.items():
+            parts.append(f"- `{f_path}` (skipped by: {', '.join(agents)})")
+        parts.append("")
 
     # --- Title ---
     parts.append("# Reconciliation Context\n")
@@ -940,7 +1058,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
                 recommendation = issue.get("recommendation", "")
 
                 conf_str = f", confidence: {confidence}" if confidence else ""
-                parts.append(f"**{idx}. {_escape_backtick_runs(title)}** [{severity}{conf_str}]")
+                parts.append(f"**{idx}. {_escape_inline(title)}** [{severity}{conf_str}]")
                 if file_path:
                     loc = f"`{file_path}:{line}`" if line else f"`{file_path}`"
                     parts.append(f"- File: {loc}")
@@ -1148,7 +1266,7 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
         conf_str = f", confidence: {confidence}" if confidence else ""
         title = _strip_critic_severity_floor_markers(title)
         parts.append(
-            f"### F{idx}: {_escape_backtick_runs(title)} [{severity}{conf_str}]"
+            f"### F{idx}: {_escape_inline(title)} [{severity}{conf_str}]"
         )
 
         if file_path:
@@ -1335,6 +1453,9 @@ def main() -> int:
             "output_builder_path": output_builder_path,
             # Host context banner — surfaced for reviewer agents to calibrate findings.
             "host_context_banner": extract_host_banner(output_dir),
+            # Run-level inline coverage from per-agent scope summaries —
+            # None on pre-sidecar runs.
+            "inline_coverage": aggregate_inline_coverage(output_dir),
         }
         # Include dispatched agents, normalized to match agent_findings keys
         # (e.g., "security-reviewer" → "security-review") so the
@@ -1362,6 +1483,12 @@ def main() -> int:
         return 0
 
     except Exception as exc:
+        # Surface the full traceback to stderr — this failure aborts the whole
+        # review at pipeline step 8, and a bare message ("got 'list'") gives no
+        # clue which field of which finding is malformed. The structured stdout
+        # line stays terse for the pipeline's own error handling.
+        import traceback
+        traceback.print_exc()
         print(f"ERROR: {exc}", file=sys.stderr)
         result = {"status": "error", "error": str(exc)}
         print(json.dumps(result))

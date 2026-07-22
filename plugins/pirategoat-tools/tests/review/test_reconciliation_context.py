@@ -324,6 +324,36 @@ class TestSeverityFloorNormalization:
         issue = loaded["woo-regression-review"]["issues"][0]
         assert issue["severity_floor"] == "medium"
 
+    def test_resolves_floor_from_list_description(self, mod):
+        # A malformed (list-valued) description must not silently drop a
+        # mandatory floor marker: load_agent_findings pops severity_floor when
+        # resolve_severity_floor returns None, so returning None here would
+        # downgrade the finding.
+        issue = _make_issue(
+            description=["Finding body.", "Severity-floor: high — verified"]
+        )
+        assert mod.resolve_severity_floor(issue) == "high"
+
+    def test_loading_findings_materializes_floor_from_list_description(
+        self, mod, tmp_path
+    ):
+        review = _make_review_json(
+            issues=[
+                _make_issue(
+                    description=[
+                        "Public interface removed.",
+                        "Severity-floor: public-contract change; consumers exist",
+                    ],
+                )
+            ]
+        )
+        (tmp_path / "woo-regression-review.json").write_text(json.dumps(review))
+
+        loaded = mod.load_agent_findings(str(tmp_path))
+
+        issue = loaded["woo-regression-review"]["issues"][0]
+        assert issue["severity_floor"] == "medium"
+
 
 # ===========================================================================
 # TestExtractReferences
@@ -1318,6 +1348,7 @@ class TestFullScript:
             "output_dir",
             "output_builder_path",
             "host_context_banner",
+            "inline_coverage",
         }
         assert set(ctx.keys()) == expected_keys
 
@@ -2576,3 +2607,222 @@ def test_to_markdown_no_banner_when_absent(mod):
     }
     md = mod.to_markdown(context)
     assert "Host Context Banner" not in md
+
+
+# ===========================================================================
+# TestNonStringFieldCoercion
+# ===========================================================================
+
+class TestNonStringFieldCoercion:
+    """Non-string finding fields must not crash Markdown rendering.
+
+    Regression: a reviewer agent emitted a list-valued ``recommendation``.
+    ``_escape_backtick_runs`` passed it straight to ``re.sub``, which raised
+    ``TypeError: expected string or bytes-like object, got 'list'`` and aborted
+    pipeline step 8 (the whole review) because reconciliation-context.md could
+    not be written.
+    """
+
+    def test_escape_backtick_runs_coerces_list(self, mod):
+        out = mod._escape_backtick_runs(["one", "two"])
+        assert "one" in out and "two" in out
+
+    def test_escape_backtick_runs_coerces_none_and_int(self, mod):
+        assert mod._escape_backtick_runs(None) == ""
+        assert mod._escape_backtick_runs(7) == "7"
+
+    def test_escape_backtick_runs_preserves_str(self, mod):
+        assert mod._escape_backtick_runs("plain text") == "plain text"
+
+    def test_escape_backtick_runs_still_neutralizes_fences_after_coercion(self, mod):
+        # A list item carrying a fence must still be neutralized once coerced.
+        out = mod._escape_backtick_runs(["```py code```"])
+        assert "```" not in out
+
+    def test_to_markdown_handles_list_recommendation(self, mod):
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(recommendation=["Wire it in", "or drop it"])],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Wire it in" in md
+
+    def test_to_markdown_handles_list_description_and_title(self, mod):
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(title=["Ambiguous name"], description=["D1", "D2"])],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Ambiguous name" in md
+        assert "D1" in md
+
+    def test_build_critic_context_handles_list_recommendation(self, mod):
+        findings = {
+            "verdict": "comment",
+            "summary": {"total_issues": 1, "by_severity": {"medium": 1}},
+            "issues": [_make_issue(recommendation=["Do the thing"])],
+        }
+        out = mod.build_critic_context("REPORT BODY", findings)
+        assert "Do the thing" in out
+
+    def test_to_markdown_multiline_title_does_not_forge_heading(self, mod):
+        # A title carrying a newline must not inject a line-leading ATX heading
+        # into the inline `**N. title**` render — it would split/spoof the
+        # structured context the reconciliator consumes.
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(title="Legit title\n## Injected Heading Zebra")],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Legit title" in md
+        # The injected heading must never appear at the start of a line.
+        assert "\n## Injected Heading Zebra" not in md
+        assert "Legit title ## Injected Heading Zebra" in md
+
+    def test_build_critic_context_multiline_title_does_not_forge_heading(self, mod):
+        findings = {
+            "verdict": "comment",
+            "summary": {"total_issues": 1, "by_severity": {"medium": 1}},
+            "issues": [_make_issue(title="Legit title\n## Injected Heading Zebra")],
+        }
+        out = mod.build_critic_context("REPORT BODY", findings)
+        assert "Legit title" in out
+        assert "\n## Injected Heading Zebra" not in out
+
+    def test_escape_inline_collapses_newlines(self, mod):
+        out = mod._escape_inline(["Legit title", "## Source Snippets"])
+        assert "\n" not in out
+        assert "Legit title" in out and "## Source Snippets" in out
+
+    @pytest.mark.parametrize(
+        "sep",
+        [
+            pytest.param("\n", id="lf"),
+            pytest.param("\r", id="cr"),
+            pytest.param("\r\n", id="crlf"),
+        ],
+    )
+    def test_escape_inline_normalizes_all_line_endings(self, mod, sep):
+        # CommonMark treats bare CR and CRLF as line endings too, so replacing
+        # only LF would still let a CR-delimited title forge a heading.
+        out = mod._escape_inline(f"Legit{sep}## Injected Heading Zebra")
+        assert "\r" not in out and "\n" not in out
+        assert len(out.splitlines()) == 1
+        assert not out.lstrip().startswith("## Injected Heading Zebra")
+
+    def test_to_markdown_cr_title_does_not_forge_heading(self, mod):
+        findings = {
+            "dead-code-review": _make_review_json(
+                reviewer="dead-code",
+                issues=[_make_issue(title="Legit title\r## Injected Heading Zebra")],
+            ),
+        }
+        md = mod.to_markdown(_make_context_with_findings(findings))
+        assert "Legit title" in md
+        # No rendered line may start with the injected heading, regardless of
+        # which line ending was used.
+        assert not any(
+            line.lstrip().startswith("## Injected Heading Zebra")
+            for line in md.splitlines()
+        )
+
+
+# ===========================================================================
+# Inline coverage aggregation — scope summary sidecars
+# ===========================================================================
+
+class TestAggregateInlineCoverage:
+    """aggregate_inline_coverage() reads *-scope-summary*.json sidecars."""
+
+    def _write_summary(self, output_dir, name, files_with_diffs, budget_exceeded):
+        path = os.path.join(output_dir, name)
+        with open(path, "w") as f:
+            json.dump({
+                "schema": 1,
+                "domain": "x",
+                "status": "OK",
+                "files_with_diffs": files_with_diffs,
+                "budget_exceeded_files": budget_exceeded,
+                "list_only_files": [],
+            }, f)
+
+    def test_returns_none_without_summaries(self, mod, tmp_path):
+        assert mod.aggregate_inline_coverage(str(tmp_path)) is None
+
+    def test_returns_none_for_missing_dir(self, mod, tmp_path):
+        assert mod.aggregate_inline_coverage(str(tmp_path / "nope")) is None
+
+    def test_files_never_inline(self, mod, tmp_path):
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            ["src/a.php"], ["src/starved.php", "src/b.php"],
+        )
+        self._write_summary(
+            str(tmp_path), "code-reviewer-scope-summary.json",
+            ["src/b.php"], ["src/starved.php"],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["agents_reporting"] == 2
+        # b.php was inline for code-reviewer — covered, not a gap.
+        assert "src/b.php" not in cov["files_never_inline"]
+        # starved.php was skipped by every agent that matched it.
+        assert cov["files_never_inline"]["src/starved.php"] == [
+            "code-reviewer", "security-reviewer",
+        ]
+
+    def test_malformed_summary_skipped(self, mod, tmp_path):
+        (tmp_path / "broken-scope-summary.json").write_text("{not json")
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["agents_reporting"] == 1
+
+    def test_secondary_summaries_attribute_to_agent(self, mod, tmp_path):
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary-config-ops.json",
+            [], ["ci.yml"],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["files_never_inline"]["ci.yml"] == ["security-reviewer"]
+
+
+class TestInlineCoverageMarkdown:
+    """to_markdown() surfaces inline coverage gaps prominently."""
+
+    def test_gaps_render_loudly(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 3,
+            "files_inline": {"src/a.php": ["code-reviewer"]},
+            "files_never_inline": {
+                "src/starved.php": ["code-reviewer", "security-reviewer"],
+            },
+        }
+        md = mod.to_markdown(ctx)
+        assert "## Inline Diff Coverage Gaps" in md
+        assert "src/starved.php" in md
+        assert "NO reviewer received" in md
+        # Prepended — must appear before the findings sections.
+        assert md.index("Inline Diff Coverage Gaps") < md.index("## Metadata")
+
+    def test_no_section_without_gaps(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 3,
+            "files_inline": {"src/a.php": ["code-reviewer"]},
+            "files_never_inline": {},
+        }
+        md = mod.to_markdown(ctx)
+        assert "Inline Diff Coverage Gaps" not in md
+
+    def test_no_section_without_coverage_data(self, mod):
+        md = mod.to_markdown(_make_context_with_findings({}))
+        assert "Inline Diff Coverage Gaps" not in md

@@ -975,6 +975,25 @@ class TestStep9ReviewReport:
         assert "Keep it brief" in text
         assert "Bullet points only" in text
 
+    def test_surfaces_inline_coverage_gaps(self, mod, tmp_path):
+        """Files no reviewer saw inline must be forced into the report."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {
+                "src/starved.php": ["code-reviewer", "security-reviewer"],
+            },
+        }
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+        assert "Review coverage" in text
+        assert "src/starved.php" in text
+        assert "code-reviewer, security-reviewer" in text
+
+    def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
+        state = {"completed_steps": [], "inline_coverage_gaps": {}}
+        g = mod.get_step_guidance(9, "full", state, {})
+        assert "Review coverage" not in "\n".join(g["actions"])
+
     def test_output_instructions_override_replaces_default(self, mod, tmp_path):
         """When override is set in run-config.json, default instructions should NOT appear."""
         config = {"mode": "pr", "output_instructions": "Custom instructions only."}

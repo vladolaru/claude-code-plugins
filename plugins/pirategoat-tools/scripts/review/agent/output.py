@@ -38,6 +38,36 @@ _SEVERITY_RANK = {
 }
 
 
+def _coerce_text(value: Any, single_line: bool = False) -> str:
+    """Coerce a free-form finding field to a string at write time.
+
+    These fields are model-authored, so a value the schema expects to be a
+    string (``title``, ``description``, ``recommendation``) can arrive as a
+    list, number, or ``None``. Persisting a non-string here lets the malformed
+    value flow downstream into the reconciliation Markdown renderer, which
+    crashes the whole review at pipeline step 8. Coerce at the producer so bad
+    values never reach disk: lists/tuples join on newlines, ``None`` becomes
+    empty, everything else stringifies. (The reconciliation renderer keeps its
+    own equivalent guard as defense in depth.)
+
+    ``single_line=True`` additionally collapses all whitespace to single
+    spaces. Titles render inline downstream (``**N. …**``, ``### F1: …``)
+    without block-syntax escaping, so a newline could forge a heading or
+    thematic break — keeping titles single-line prevents that.
+    """
+    if isinstance(value, str):
+        result = value
+    elif value is None:
+        result = ""
+    elif isinstance(value, (list, tuple)):
+        result = "\n".join(_coerce_text(item) for item in value)
+    else:
+        result = str(value)
+    if single_line:
+        result = " ".join(result.split())
+    return result
+
+
 def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, severities):
     """Best-effort telemetry logging on agent completion. Never raises."""
     try:
@@ -178,11 +208,11 @@ class ReviewOutputBuilder:
             'id': issue_id,
             'category': category,
             'severity': severity_value,
-            'title': title,
-            'description': description,
+            'title': _coerce_text(title, single_line=True),
+            'description': _coerce_text(description),
             'file': file,
             'line': line,
-            'recommendation': recommendation,
+            'recommendation': _coerce_text(recommendation),
             'confidence': confidence,
             **extra_fields
         }
@@ -214,7 +244,7 @@ class ReviewOutputBuilder:
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
         if priority in self.recommendations:
-            self.recommendations[priority].append(text)
+            self.recommendations[priority].append(_coerce_text(text))
 
     def add_positive(self, observation: str):
         """Add positive observation."""

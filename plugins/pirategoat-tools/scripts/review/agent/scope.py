@@ -469,16 +469,22 @@ DOMAIN_CATALOG = {
         "description": "All code files (code-reviewer)",
         "include": _ext_re(_PROG_LANGS, _STYLE_LANGS, _QUERY_LANGS),
         "exclude": None,
+        # Matches production AND test files. Budget production first — on a
+        # test-heavy branch, pure largest-first hands the reviewer test
+        # files and starves the code under review (2026-07-21 incident).
+        "budget_priority": "production_first",
     },
     "security": {
         "description": "Security-relevant code files",
         "include": _ext_re(_PROG_LANGS),
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "performance": {
         "description": "Performance-relevant code files (incl. SQL)",
         "include": _ext_re(_PROG_LANGS, _QUERY_LANGS),
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "dead-code": {
         "description": "Production code only, excluding tests (dead-code-reviewer)",
@@ -494,6 +500,7 @@ DOMAIN_CATALOG = {
         "description": "WordPress PHP/JS/TS files",
         "include": r"\.(php|js|ts|jsx|tsx)$",
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "php-tests": {
         "description": "PHP test files only",
@@ -534,6 +541,7 @@ DOMAIN_CATALOG = {
         "description": "All code files for pattern analysis",
         "include": _ext_re(_PROG_LANGS, _STYLE_LANGS),
         "exclude": None,
+        "budget_priority": "production_first",
     },
     "a11y": {
         "description": "UI-emitting files for accessibility review (JS/TS/JSX/TSX/CSS + server-rendered markup: PHP/HTML/templates)",
@@ -1111,6 +1119,7 @@ def build_scope(args: argparse.Namespace) -> dict:
     max_lines = args.max_lines
     diffs = {}
     total_lines = 0
+    ordinary_budget_lines = 0
     budget_exceeded_files = []
     list_only_files = []
 
@@ -1153,6 +1162,22 @@ def build_scope(args: argparse.Namespace) -> dict:
                 ),
             )
 
+        # Production-first budget priority: domains that match both
+        # production and test files would otherwise let a test-heavy branch
+        # spend the whole budget on test files, starving the code under
+        # review. Non-test files (per the shared _TEST_EXCLUDE classifier)
+        # budget first, largest-first within each tier. Test-only domains
+        # keep pure largest-first — test files ARE their evidence.
+        elif domain_spec.get("budget_priority") == "production_first":
+            production_first_test_re = re.compile(_TEST_EXCLUDE)
+            domain_matched_sorted = sorted(
+                domain_matched_sorted,
+                key=lambda f: (
+                    bool(production_first_test_re.search(f)),  # production first
+                    -sum(diffstat.get(f, (0, 0))),             # then largest first
+                ),
+            )
+
         for filepath in domain_matched_sorted:
             # List-only files: appear in file list + diffstat, but no diff content.
             # These are files rescued from noise (e.g., lock files for toolchain domain)
@@ -1161,19 +1186,20 @@ def build_scope(args: argparse.Namespace) -> dict:
                 list_only_files.append(filepath)
                 continue
 
-            if total_lines >= max_lines:
+            if diffs and ordinary_budget_lines >= max_lines:
                 budget_exceeded_files.append(filepath)
                 continue
 
             # Pre-skip without fetching when the RAW diffstat estimate alone
-            # exceeds the whole budget — but ONLY when semantic filtering is
-            # off. With filtering enabled, raw size proves nothing: a
+            # exceeds the remaining ordinary budget — but ONLY when semantic
+            # filtering is off. With filtering enabled, raw size proves nothing: a
             # 2,050-line patch that is 2,040 docblock lines filters to 10
             # reviewable lines and fits comfortably; the budget contract is
             # on FILTERED lines, so the file must be measured, not guessed.
             if not use_semantic_filter:
                 est_lines = sum(diffstat.get(filepath, (0, 0)))
-                if est_lines >= max_lines and diffs:
+                remaining_ordinary_lines = max_lines - ordinary_budget_lines
+                if diffs and est_lines > remaining_ordinary_lines:
                     budget_exceeded_files.append(filepath)
                     continue
 
@@ -1184,14 +1210,21 @@ def build_scope(args: argparse.Namespace) -> dict:
                 diff_text = apply_semantic_filter(diff_text)
 
             diff_lines = count_diff_lines(diff_text)
+            is_protected_oversized_diff = not diffs and diff_lines > max_lines
 
-            if total_lines + diff_lines > max_lines and diffs:
-                # Would exceed budget and we already have some diffs
+            if (
+                not is_protected_oversized_diff
+                and ordinary_budget_lines + diff_lines > max_lines
+            ):
+                # Would exceed the ordinary pool. Keep scanning so a later,
+                # smaller diff may still fit.
                 budget_exceeded_files.append(filepath)
                 continue
 
             diffs[filepath] = diff_text
             total_lines += diff_lines
+            if not is_protected_oversized_diff:
+                ordinary_budget_lines += diff_lines
 
     # Step 7: Detect output directory (skip network calls when --output-dir provided)
     if args.output_dir:
@@ -1400,6 +1433,33 @@ def format_json_output(scope: dict) -> str:
 
 
 
+def write_scope_summary(scope: dict, path: str) -> None:
+    """Persist a compact machine-readable scope summary for run-level
+    coverage aggregation (reconciliation_context.aggregate_inline_coverage).
+
+    Fail-open: a summary-write failure must never break scope output.
+    """
+    summary = {
+        "schema": 1,
+        "domain": scope.get("domain"),
+        "range": scope.get("range"),
+        "status": scope.get("status"),
+        "files_with_diffs": sorted(scope.get("diffs", {}) or {}),
+        "budget_exceeded_files": list(scope.get("budget_exceeded_files", []) or []),
+        "list_only_files": list(scope.get("list_only_files", []) or []),
+        "total_diff_lines": scope.get("total_diff_lines", 0),
+        "budget_max": scope.get("budget_max"),
+    }
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+    except OSError as e:
+        print(f"WARNING: could not write scope summary to {path}: {e}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Review Scope — efficient diff scoping for review agents.",
@@ -1457,6 +1517,11 @@ def main():
         action="store_true",
         help="Disable semantic noise filtering on diffs (keep docblocks, comments, formatting).",
     )
+    parser.add_argument(
+        "--summary-json-out",
+        default=None,
+        help="Write a machine-readable scope summary JSON (admitted/skipped files) to this path. Fail-open.",
+    )
 
     args = parser.parse_args()
 
@@ -1475,6 +1540,9 @@ def main():
 
     try:
         scope = build_scope(args)
+
+        if args.summary_json_out:
+            write_scope_summary(scope, args.summary_json_out)
 
         if args.format == "json":
             print(format_json_output(scope))

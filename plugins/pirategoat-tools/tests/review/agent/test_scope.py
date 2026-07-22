@@ -840,6 +840,50 @@ def _mock_git_for_budget_test(cmd, check=True, capture_stderr=True):
     return ""
 
 
+_OVERSIZED_BUDGET_FILE_LINES = {
+    "oversized.php": 700,
+    "later-medium.php": 400,
+    "later-small.php": 200,
+}
+
+_RAW_EXACT_FIT_BUDGET_FILE_LINES = {
+    "oversized.php": 700,
+    "exact-fit.php": 600,
+    "later-small.php": 200,
+}
+
+
+def _make_mock_git_for_oversized_budget_test(file_lines):
+    """Mock an oversized leading diff plus later ordinary-budget candidates."""
+    def _mock(cmd, check=True, capture_stderr=True):
+        cmd_str = " ".join(cmd)
+        if "rev-parse --git-dir" in cmd_str:
+            return ".git"
+        if "rev-parse" in cmd_str:
+            return "abc123"
+        if "--name-only" in cmd_str:
+            return "\n".join(file_lines)
+        if "--numstat" in cmd_str:
+            return "\n".join(
+                f"{line_count}\t0\t{filepath}"
+                for filepath, line_count in file_lines.items()
+            )
+        if "merge-base" in cmd_str:
+            return "abc123"
+        if "rev-list --count" in cmd_str:
+            return "0"
+        if "diff" in cmd_str and "--" in cmd:
+            filepath = cmd[-1]
+            line_count = file_lines[filepath]
+            return "\n".join(
+                f"+$value_{line_number} = compute_{line_number}();"
+                for line_number in range(line_count)
+            )
+        return ""
+
+    return _mock
+
+
 class TestBudgetSortOrder:
     """Scope budgeting should sort files largest-first so large files get budget priority."""
 
@@ -884,6 +928,168 @@ class TestBudgetSortOrder:
             assert "large.php" in scope["files"], (
                 "Large file should be included when budget prioritizes largest first"
             )
+            assert "medium.php" in scope["skipped_files"]["budget"]
+            assert "small.php" in scope["files"]
+
+    def test_oversized_first_diff_preserves_normal_budget_for_later_files(self, tmp_path):
+        """One protected oversized diff must not consume the ordinary budget pool."""
+        max_lines = 600
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+            mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
+                _OVERSIZED_BUDGET_FILE_LINES
+            )
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=max_lines,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=False,
+            )
+            scope = review_scope.build_scope(args)
+
+        assert list(scope["diffs"]) == list(_OVERSIZED_BUDGET_FILE_LINES)
+        assert "later-medium.php" in scope["diffs"]
+        assert "later-small.php" in scope["diffs"]
+
+        included = set(scope["diffs"])
+        assert included.isdisjoint(scope["skipped_files"]["budget"])
+
+        included_sizes = {
+            filepath: review_scope.count_diff_lines(diff_text)
+            for filepath, diff_text in scope["diffs"].items()
+        }
+        oversized_size = included_sizes["oversized.php"]
+        ordinary_size = sum(
+            line_count
+            for filepath, line_count in included_sizes.items()
+            if filepath != "oversized.php"
+        )
+        assert oversized_size > max_lines
+        assert ordinary_size == max_lines
+        assert scope["total_diff_lines"] == sum(included_sizes.values())
+        assert scope["total_diff_lines"] <= oversized_size + max_lines
+
+    def test_raw_prefetch_allows_exact_fit_after_oversized_diff(self, tmp_path):
+        """A raw estimate equal to remaining capacity fits the ordinary pool."""
+        max_lines = 600
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+            mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
+                _RAW_EXACT_FIT_BUDGET_FILE_LINES
+            )
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=max_lines,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+
+        assert list(scope["diffs"]) == ["oversized.php", "exact-fit.php"]
+        assert "exact-fit.php" not in scope["skipped_files"]["budget"]
+        assert "later-small.php" in scope["skipped_files"]["budget"]
+        assert scope["total_diff_lines"] == 1300
+        assert scope["total_diff_lines"] <= 700 + max_lines
+
+
+_PRODUCTION_FIRST_FILE_LINES = {
+    "tests/test_helpers.php": 900,   # largest — would win under pure largest-first
+    "src/service.php": 500,
+    "src/util.php": 300,
+    "tests/test_util.php": 250,
+}
+
+
+class TestProductionFirstBudget:
+    """Mixed domains must budget production files before test files."""
+
+    def _build(self, domain, max_lines, tmp_path):
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref", side_effect=lambda x: x):
+            mock_run.side_effect = _make_mock_git_for_oversized_budget_test(
+                _PRODUCTION_FIRST_FILE_LINES
+            )
+            args = argparse.Namespace(
+                domain=domain, range="abc123..HEAD", max_lines=max_lines,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=False,
+            )
+            return review_scope.build_scope(args)
+
+    def test_security_budgets_production_before_tests(self, tmp_path):
+        scope = self._build("security", max_lines=600, tmp_path=tmp_path)
+        # Production files fill the ordinary pool first, largest-first.
+        assert "src/service.php" in scope["diffs"]
+        assert list(scope["diffs"])[0] == "src/service.php"
+        # The giant test file no longer evicts production code.
+        assert "tests/test_helpers.php" in scope["skipped_files"]["budget"]
+
+    def test_production_first_is_largest_first_within_tier(self, tmp_path):
+        scope = self._build("security", max_lines=2000, tmp_path=tmp_path)
+        assert list(scope["diffs"]) == [
+            "src/service.php",
+            "src/util.php",
+            "tests/test_helpers.php",
+            "tests/test_util.php",
+        ]
+
+    def test_php_tests_domain_keeps_largest_first(self, tmp_path):
+        # Test domains: test files are the evidence — no production tier.
+        scope = self._build("php-tests", max_lines=2000, tmp_path=tmp_path)
+        assert list(scope["diffs"]) == [
+            "tests/test_helpers.php",
+            "tests/test_util.php",
+        ]
+
+    def test_oversized_leading_production_file_still_protected(self, tmp_path):
+        # When the largest PRODUCTION file alone exceeds the budget, it is
+        # the protected oversized diff and later files still get the
+        # ordinary pool (the two budget behaviors compose).
+        scope = self._build("security", max_lines=400, tmp_path=tmp_path)
+        assert list(scope["diffs"])[0] == "src/service.php"
+        assert "src/util.php" in scope["diffs"]
+
+
+class TestScopeSummaryJson:
+    """--summary-json-out persists a machine-readable scope summary."""
+
+    def test_write_scope_summary_contents(self, tmp_path):
+        scope = {
+            "status": "OK",
+            "domain": "security",
+            "range": "abc123..HEAD",
+            "diffs": {"src/b.php": "+x", "src/a.php": "+y"},
+            "budget_exceeded_files": ["tests/test_big.php"],
+            "list_only_files": [],
+            "total_diff_lines": 42,
+            "budget_max": 2000,
+        }
+        path = tmp_path / "security-reviewer-scope-summary.json"
+        review_scope.write_scope_summary(scope, str(path))
+
+        data = json.loads(path.read_text())
+        assert data["schema"] == 1
+        assert data["domain"] == "security"
+        assert data["status"] == "OK"
+        assert data["files_with_diffs"] == ["src/a.php", "src/b.php"]
+        assert data["budget_exceeded_files"] == ["tests/test_big.php"]
+        assert data["total_diff_lines"] == 42
+        assert data["budget_max"] == 2000
+
+    def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
+        # NO_DOMAIN_FILES scopes lack diffs/budget keys — must not raise.
+        path = tmp_path / "sub" / "summary.json"
+        review_scope.write_scope_summary({"status": "NO_DOMAIN_FILES"}, str(path))
+        data = json.loads(path.read_text())
+        assert data["files_with_diffs"] == []
+        assert data["budget_exceeded_files"] == []
+
+    def test_write_scope_summary_fails_open(self, tmp_path, capsys):
+        # Unwritable path: warn on stderr, do not raise.
+        blocker = tmp_path / "blocker"
+        blocker.write_text("")
+        review_scope.write_scope_summary(
+            {"status": "OK"}, str(blocker / "impossible" / "summary.json")
+        )
+        assert "could not write scope summary" in capsys.readouterr().err
 
 
 # =============================================================================

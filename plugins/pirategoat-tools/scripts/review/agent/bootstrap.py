@@ -116,7 +116,19 @@ def run_cmd(cmd: List[str], timeout: int = 30) -> Tuple[int, str, str]:
 
 def find_plugin_root() -> Optional[str]:
     """Find the pirategoat-tools plugin root directory."""
-    # Method 1: cached value from hook
+    # Method 1: derive from own location. This MUST outrank the hook cache:
+    # bootstrap invokes sibling scripts (scope.py) whose CLI contract matches
+    # its own version. A cache file pointing at a different install (e.g. the
+    # plugin cache while running the repo checkout, or a stale version dir)
+    # silently mixes script versions — bootstrap then drives a scope.py that
+    # may not understand its flags.
+    # __file__ is in scripts/review/agent/, so go up 3 levels to plugin root
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # agent/ -> review/ -> scripts/ -> plugin root
+    if os.path.isfile(os.path.join(candidate, "scripts", "review", "agent", "scope.py")):
+        return candidate
+
+    # Method 2: cached value from hook
     cache_file = "/tmp/.pirategoat-tools-root"
     if os.path.isfile(cache_file):
         try:
@@ -126,13 +138,6 @@ def find_plugin_root() -> Optional[str]:
                 return root
         except OSError:
             pass
-
-    # Method 2: derive from own location (most reliable when running from plugin)
-    # __file__ is in scripts/review/agent/, so go up 3 levels to plugin root
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    candidate = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))  # agent/ -> review/ -> scripts/ -> plugin root
-    if os.path.isfile(os.path.join(candidate, "scripts", "review", "agent", "scope.py")):
-        return candidate
 
     # Method 3: find command fallback
     rc, stdout, _ = run_cmd([
@@ -221,6 +226,7 @@ def run_scope_discovery(
     extra_flags: List[str],
     git_range: Optional[str],
     output_dir: Optional[str] = None,
+    summary_json_out: Optional[str] = None,
 ) -> Tuple[int, str]:
     """Run scope.py and return (exit_code, output)."""
     script = os.path.join(plugin_root, "scripts", "review", "agent", "scope.py")
@@ -232,6 +238,8 @@ def run_scope_discovery(
         cmd.extend(["--range", git_range])
     if output_dir:
         cmd.extend(["--output-dir", output_dir])
+    if summary_json_out:
+        cmd.extend(["--summary-json-out", summary_json_out])
 
     rc, stdout, stderr = run_cmd(cmd, timeout=60)
     # Script outputs to stdout for agent consumption
@@ -1184,9 +1192,18 @@ def main():
         scope_flags = list(config.get("scope_flags", []))
         if config.get("no_semantic_filter", False):
             scope_flags.append("--no-semantic-filter")
+        # Persist a machine-readable scope summary per agent so the run
+        # level (reconciliation coverage aggregation) can compute which
+        # changed files no reviewer received inline. Only when the caller
+        # pinned the output dir — standalone runs detect it after the fact.
+        primary_summary_out = (
+            os.path.join(args.output_dir, f"{args.agent}-scope-summary.json")
+            if args.output_dir else None
+        )
         rc, scope_output = run_scope_discovery(
             plugin_root, config["domain"], scope_flags, args.range,
             output_dir=args.output_dir,
+            summary_json_out=primary_summary_out,
         )
 
         if rc != 0 and rc != 2:
@@ -1221,9 +1238,17 @@ def main():
             sec_flags = list(config.get("scope_flags", []))
             if config.get("no_semantic_filter", False):
                 sec_flags.append("--no-semantic-filter")
+            sec_summary_out = (
+                os.path.join(
+                    args.output_dir,
+                    f"{args.agent}-scope-summary-{sec_domain}.json",
+                )
+                if args.output_dir else None
+            )
             sec_rc, sec_output = run_scope_discovery(
                 plugin_root, sec_domain, sec_flags, args.range,
                 output_dir=args.output_dir,
+                summary_json_out=sec_summary_out,
             )
             sec_status = extract_status(sec_output)
             if sec_status and sec_status == "OK":
