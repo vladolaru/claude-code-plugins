@@ -480,3 +480,123 @@ class TestUnrelatedWritesInQualityReport:
         report = formatter([dispatch], None)
 
         assert "unknown" not in report
+
+
+# ---------------------------------------------------------------------------
+# Bash builder heredoc recognition (the mandated save mechanism)
+# ---------------------------------------------------------------------------
+
+def _builder_heredoc(reviewer="security", body=None):
+    """Build the canonical one-shot builder command bootstrap prescribes."""
+    if body is None:
+        body = (
+            "import sys, os\n"
+            'plugin_root = os.environ["PIRATEGOAT_PLUGIN_ROOT"]\n'
+            "sys.path.insert(0, os.path.join(plugin_root, \"scripts\"))\n"
+            "from review.agent.output import ReviewOutputBuilder\n"
+            f'builder = ReviewOutputBuilder(pr_id="42", reviewer="{reviewer}")\n'
+            'builder.add_issue(severity="high", title="Reviewer\'s finding — '
+            'unsafe echo", file="src/f.php",\n'
+            '    description="What is wrong", recommendation="How to fix",\n'
+            '    category="xss", line=42, confidence=0.9)\n'
+            'builder.add_issue("medium", "Positional style", "src/g.php",\n'
+            '    "desc", "rec", line=7)\n'
+            "result = builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
+        )
+    return (
+        "PIRATEGOAT_PLUGIN_ROOT='/plug' "
+        "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
+        f"PIRATEGOAT_REVIEWER_NAME='{reviewer}' "
+        "PIRATEGOAT_PR_ID='42' python3 <<'PY'\n"
+        f"{body}"
+        "PY"
+    )
+
+
+def _bash_entry(command):
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Bash",
+                    "input": {"command": command},
+                }
+            ],
+        },
+    }
+
+
+class TestBashBuilderRecognition:
+    """Compliant reviewers save via the mandated Bash heredoc, not Write —
+    session analysis must recognize that mechanism or new sessions produce
+    empty per-agent quality records."""
+
+    def test_synthesizes_review_record_from_heredoc(self):
+        record = _mod._builder_review_from_heredoc(_builder_heredoc())
+
+        assert record is not None
+        assert record["path"] == "/tmp/pr-review-42/security-review.json"
+        assert record["source"] == "bash_builder_heredoc"
+        review = json.loads(record["content"])
+        assert review["reviewer"] == "security"
+        kw_issue, positional_issue = review["issues"]
+        assert kw_issue["severity"] == "high"
+        assert kw_issue["file"] == "src/f.php"
+        assert kw_issue["line"] == 42
+        assert "Reviewer's finding" in kw_issue["title"]
+        assert positional_issue["severity"] == "medium"
+        assert positional_issue["file"] == "src/g.php"
+        assert positional_issue["line"] == 7
+
+    def test_non_builder_bash_is_not_recognized(self):
+        assert _mod._builder_review_from_heredoc("git diff main..HEAD") is None
+        assert (
+            _mod._builder_review_from_heredoc("python3 script.py <<PY\nx\nPY")
+            is None
+        )
+
+    def test_unparseable_heredoc_body_degrades_to_none(self):
+        command = _builder_heredoc(body="this is not python(\n")
+        assert _mod._builder_review_from_heredoc(command) is None
+
+    def test_categorizer_labels_builder_output(self):
+        detail = _mod._categorize_tool_call(
+            "Bash", {"command": _builder_heredoc()}
+        )
+        assert detail["category"] == "builder-output"
+
+    def test_parse_subagent_log_populates_write_outputs(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry("git diff main..HEAD -- src/f.php"),
+            _bash_entry(_builder_heredoc()),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert len(data["write_outputs"]) == 1
+        assert data["write_outputs"][0]["source"] == "bash_builder_heredoc"
+
+    def test_quality_report_counts_bash_saved_findings(self):
+        dispatch = (
+            {"agent_name": "security-reviewer"},
+            {
+                "write_outputs": [
+                    _mod._builder_review_from_heredoc(_builder_heredoc())
+                ],
+                "files_read": [],
+                "bash_commands": [],
+                "final_texts": [],
+            },
+        )
+
+        report = json.loads(format_quality_json_report([dispatch], None))
+
+        [agent_record] = report["per_agent"]
+        assert agent_record["agent_name"] == "security"
+        assert agent_record["total_findings"] == 2
+        assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}

@@ -400,7 +400,7 @@ python3 scripts/analysis/session_analyzer.py \
 - Tool call sequence with categorization (git-grep, git-show, git-log, git-diff, bootstrap, file-read-bash, file-list, other)
 - Dispatch classification (reviewer vs reconciliator vs crashed)
 - File read patterns (unique files, duplicates, most-read files)
-- Output file details (Write tool usage, content size, finding counts)
+- Output file details (Write tool usage plus the canonical Bash builder heredoc — recognized and reconstructed from its literal `add_issue()` calls — content size, finding counts)
 - Aggregate statistics (tool call breakdown, cross-dispatch patterns)
 
 **Output formats:**

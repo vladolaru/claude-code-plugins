@@ -36,14 +36,110 @@ Usage:
 """
 
 import argparse
+import ast
 import datetime
 import json
 import os
 import re
+import shlex
 import sys
 from collections import Counter, defaultdict
 from glob import glob
 from typing import Any
+
+# The canonical one-shot builder envelope mandated by bootstrap: four env
+# assignments (any order) followed by `python3 <<'PY'` on the first line.
+_BUILDER_ENV_NAMES = {
+    "PIRATEGOAT_PLUGIN_ROOT",
+    "PIRATEGOAT_OUTPUT_DIR",
+    "PIRATEGOAT_REVIEWER_NAME",
+    "PIRATEGOAT_PR_ID",
+}
+_BUILDER_ISSUE_POSITIONAL = (
+    "severity",
+    "title",
+    "file",
+    "description",
+    "recommendation",
+)
+
+
+def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
+    """Recognize the canonical Bash builder envelope; return its env vars."""
+    if not isinstance(command, str):
+        return None
+    lines = command.splitlines()
+    first_line = lines[0] if lines else ""
+    try:
+        tokens = shlex.split(first_line)
+    except ValueError:
+        return None
+    if len(tokens) != 6 or tokens[-2:] != ["python3", "<<PY"]:
+        return None
+    env: dict[str, str] = {}
+    for token in tokens[:4]:
+        name, separator, value = token.partition("=")
+        if separator != "=":
+            return None
+        env[name] = value
+    if set(env) != _BUILDER_ENV_NAMES:
+        return None
+    return env
+
+
+def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
+    """Synthesize the review record a canonical builder heredoc would save.
+
+    Compliant reviewers save through a mandated Bash heredoc instead of a
+    Write call, so the serialized review JSON never appears in the
+    transcript. The heredoc body is literal Python, though: parse it and
+    reconstruct the issues from the builder.add_issue() calls so quality
+    metrics keep working. Non-literal argument values degrade to omitted
+    fields; an unparseable body degrades to None.
+    """
+    env = _builder_heredoc_env(command)
+    if env is None:
+        return None
+    lines = command.splitlines()
+    end = next(
+        (i for i, line in enumerate(lines[1:], 1) if line.strip() == "PY"),
+        len(lines),
+    )
+    try:
+        tree = ast.parse("\n".join(lines[1:end]))
+    except SyntaxError:
+        return None
+
+    issues: list[dict[str, Any]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_issue"):
+            continue
+        issue: dict[str, Any] = {}
+        for name, arg in zip(_BUILDER_ISSUE_POSITIONAL, node.args):
+            try:
+                issue[name] = ast.literal_eval(arg)
+            except (ValueError, SyntaxError):
+                pass
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                continue
+            try:
+                issue[keyword.arg] = ast.literal_eval(keyword.value)
+            except (ValueError, SyntaxError):
+                pass
+        issues.append(issue)
+
+    reviewer = env["PIRATEGOAT_REVIEWER_NAME"]
+    return {
+        "path": os.path.join(
+            env["PIRATEGOAT_OUTPUT_DIR"], f"{reviewer}-review.json"
+        ),
+        "content": json.dumps({"reviewer": reviewer, "issues": issues}),
+        "source": "bash_builder_heredoc",
+    }
 
 
 def parse_subagent_log(filepath: str) -> dict[str, Any]:
@@ -113,7 +209,15 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                     if tool_name == "Read":
                         result["files_read"].append(tool_input.get("file_path", ""))
                     elif tool_name == "Bash":
-                        result["bash_commands"].append(tool_input.get("command", ""))
+                        command = tool_input.get("command", "")
+                        result["bash_commands"].append(command)
+                        # The mandated builder heredoc replaces the old
+                        # Write-based save — synthesize the review record it
+                        # produces so output analysis and quality metrics
+                        # see Bash-saved reviews.
+                        builder_output = _builder_review_from_heredoc(command)
+                        if builder_output is not None:
+                            result["write_outputs"].append(builder_output)
                     elif tool_name == "Grep":
                         result["grep_searches"].append({
                             "pattern": tool_input.get("pattern", ""),
@@ -145,7 +249,9 @@ def _categorize_tool_call(tool_name: str, tool_input: dict) -> dict[str, Any]:
         cmd = tool_input.get("command", "")
         detail["command"] = cmd
 
-        if "git grep" in cmd:
+        if _builder_heredoc_env(cmd) is not None:
+            detail["category"] = "builder-output"
+        elif "git grep" in cmd:
             detail["category"] = "git-grep"
             m = re.search(r'git grep[^"]*"([^"]*)"', cmd)
             detail["pattern"] = m.group(1) if m else cmd[:80]
