@@ -129,7 +129,11 @@ def _sanitize_warnings(value: object) -> list[str]:
             if isinstance(item, str)
             else item.get("code") if isinstance(item, dict) else None
         )
-        if code in _FIXED_WARNING_CODES and code not in result:
+        if (
+            isinstance(code, str)
+            and code in _FIXED_WARNING_CODES
+            and code not in result
+        ):
             result.append(code)
     return result
 
@@ -919,7 +923,7 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
     result = {"summary": summary}
     result.update(_safe_scalar_map(value, ("pipeline_status", "verdict")))
     critic_verdict = value.get("critic_verdict")
-    if critic_verdict in _RETAINED_CRITIC_VALUES:
+    if isinstance(critic_verdict, str) and critic_verdict in _RETAINED_CRITIC_VALUES:
         result["critic_verdict"] = critic_verdict
     return result
 
@@ -991,7 +995,8 @@ def _supported_manifest_envelope(value: object) -> bool:
         "schema_version"
     ) != _SUPPORTED_MANIFEST_SCHEMA_VERSION:
         return False
-    if value.get("status") not in _SUPPORTED_MANIFEST_STATUSES:
+    status = value.get("status")
+    if not isinstance(status, str) or status not in _SUPPORTED_MANIFEST_STATUSES:
         return False
 
     run = value.get("run")

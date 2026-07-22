@@ -6445,3 +6445,56 @@ class TestUnboundedCohortTranscriptCost:
         )
         assert cli._resolve_transcripts(args) is False
         assert capsys.readouterr().err == ""
+
+
+class TestStructuredSidecarValuesFailClosed:
+    """JSON-valid sidecars carrying structured values where scalars are
+    expected must be rejected per file — one malformed sidecar can never
+    raise and abort the whole cohort."""
+
+    def test_structured_status_falls_back_without_aborting_cohort(
+        self, tmp_path
+    ):
+        bad = _manifest("bad-run")
+        bad["status"] = []
+        _write_manifest(tmp_path / "bad.manifest.json", bad)
+        _write_jsonl(tmp_path / "bad.jsonl", _legacy_events("bad-legacy"))
+        _write_manifest(tmp_path / "good.manifest.json", _manifest("good-run"))
+
+        runs = load_runs(tmp_path)
+
+        assert {run["run"]["id"] for run in runs} == {"bad-legacy", "good-run"}
+        [fallback] = [run for run in runs if run["run"]["id"] == "bad-legacy"]
+        assert "invalid_manifest_fallback" in fallback["warnings"]
+
+    def test_structured_warning_code_is_dropped_not_fatal(self, tmp_path):
+        manifest = _manifest("warn-run")
+        manifest["warnings"] = [{"code": ["registry_unavailable"]}]
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "warn-run"
+        assert run["warnings"] == []
+
+    def test_structured_critic_verdict_is_dropped_not_fatal(self, tmp_path):
+        manifest = _manifest("critic-run")
+        manifest["outcome"]["critic_verdict"] = ["STAND"]
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "critic-run"
+        assert "critic_verdict" not in run["outcome"]
+
+    def test_structured_legacy_event_name_is_skipped_not_fatal(self, tmp_path):
+        events = _legacy_events("legacy-structured")
+        events.append(
+            {"event": ["step"], "timestamp": "2026-07-18T10:02:00+00:00"}
+        )
+        _write_jsonl(tmp_path / "review.jsonl", events)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-structured"
+        assert "legacy_log_no_manifest" in run["warnings"]

@@ -333,7 +333,12 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
     )
     pipeline = start.get("pipeline") if isinstance(start.get("pipeline"), dict) else {}
     steps = _sanitize_steps(
-        [event for event in events if event.get("event") in {"step", "pipeline_end"}]
+        [
+            event
+            for event in events
+            if isinstance(event.get("event"), str)
+            and event.get("event") in {"step", "pipeline_end"}
+        ]
     )
     started = [
         _sanitize_agent_event(event, completed=False)
