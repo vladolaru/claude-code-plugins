@@ -765,6 +765,40 @@ class TestAnalyzeSubagent:
         }
         assert result["usage_by_model"]["claude-opus-4-1"]["output_tokens"] == 13
 
+    def test_repeated_message_id_counts_final_cumulative_usage(self, tmp_path):
+        """A response split across records shares message.id; later records
+        carry the cumulative output count, so the last one is authoritative."""
+        transcript = _write_jsonl(
+            tmp_path / "agent.jsonl",
+            [
+                _assistant(
+                    usage=_usage(2, 7, create=26089, read=8813),
+                    model="claude-opus-4-1",
+                    message_id="split-response",
+                ),
+                _assistant(
+                    usage=_usage(2, 7, create=26089, read=8813),
+                    model="claude-opus-4-1",
+                    message_id="split-response",
+                ),
+                _assistant(
+                    usage=_usage(2, 484, create=26089, read=8813),
+                    model="claude-opus-4-1",
+                    message_id="split-response",
+                ),
+            ],
+        )
+
+        result = analyze_subagent(transcript, tmp_path, [])
+        assert result["usage"] == {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 26089,
+            "cache_read_input_tokens": 8813,
+            "effective_input_tokens": 34904,
+            "output_tokens": 484,
+        }
+        assert result["usage_by_model"]["claude-opus-4-1"]["output_tokens"] == 484
+
     def test_task_notification_aggregate_usage_contributes_no_tokens(
         self, tmp_path
     ):

@@ -874,19 +874,24 @@ def _usage_summary(
 ) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
     total = _empty_usage()
     by_model: dict[str, dict[str, int]] = {}
-    seen_message_ids: set[str] = set()
+    # One assistant response split across records shares message.id; input and
+    # cache fields repeat unchanged while output_tokens grows toward the final
+    # cumulative count, so the LAST record per ID is the response's real usage.
+    keyed: dict[str, tuple[dict[str, int], str | None]] = {}
+    unkeyed: list[tuple[dict[str, int], str | None]] = []
     for entry in entries:
         usage = _entry_usage(entry)
         if usage is None:
             continue
         message = entry.get("message")
         message_id = message.get("id") if isinstance(message, dict) else None
-        if isinstance(message_id, str):
-            if message_id in seen_message_ids:
-                continue
-            seen_message_ids.add(message_id)
-        _add_usage(total, usage)
         model = _safe_model(message.get("model") if isinstance(message, dict) else None)
+        if isinstance(message_id, str):
+            keyed[message_id] = (usage, model)
+        else:
+            unkeyed.append((usage, model))
+    for usage, model in (*keyed.values(), *unkeyed):
+        _add_usage(total, usage)
         if model:
             model_usage = by_model.setdefault(model, _empty_usage())
             _add_usage(model_usage, usage)
