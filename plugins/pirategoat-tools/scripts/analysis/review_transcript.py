@@ -1278,7 +1278,12 @@ def _analyze_orchestrator_entry_steps(
     transitions, timeline_complete = _manifest_step_timeline(manifest)
     active = "unattributed"
     stages: dict[str, dict[str, int]] = {active: _empty_usage()}
-    seen_usage_message_ids: set[str] = set()
+    # Same repeated-message.id contract as _usage_summary: the last record per
+    # ID carries the response's final cumulative usage. The response is
+    # attributed to the stage active at its FIRST record (where it began), so
+    # per-step totals stay consistent with total and per-model usage.
+    keyed: dict[str, tuple[str, dict[str, int]]] = {}
+    unkeyed: list[tuple[str, dict[str, int]]] = []
     transition_index = 0
     for entry in entries:
         timestamp = _aware_timestamp(entry.get("timestamp"))
@@ -1291,13 +1296,17 @@ def _analyze_orchestrator_entry_steps(
                 stages.setdefault(active, _empty_usage())
                 transition_index += 1
         usage = _entry_usage(entry)
-        if usage is not None:
-            message = entry.get("message")
-            message_id = message.get("id") if isinstance(message, dict) else None
-            if not isinstance(message_id, str) or message_id not in seen_usage_message_ids:
-                _add_usage(stages.setdefault(active, _empty_usage()), usage)
-                if isinstance(message_id, str):
-                    seen_usage_message_ids.add(message_id)
+        if usage is None:
+            continue
+        message = entry.get("message")
+        message_id = message.get("id") if isinstance(message, dict) else None
+        if isinstance(message_id, str):
+            stage = keyed[message_id][0] if message_id in keyed else active
+            keyed[message_id] = (stage, usage)
+        else:
+            unkeyed.append((active, usage))
+    for stage, usage in (*keyed.values(), *unkeyed):
+        _add_usage(stages.setdefault(stage, _empty_usage()), usage)
     return stages, timeline_complete
 
 

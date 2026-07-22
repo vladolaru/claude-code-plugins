@@ -2164,6 +2164,38 @@ def test_orchestrator_starts_step_one_at_run_start_without_step_events(tmp_path)
     assert stages["unattributed"]["output_tokens"] == 0
 
 
+def test_orchestrator_step_usage_counts_final_cumulative_record(tmp_path):
+    """Repeated message.id records carry cumulative usage — the last record is
+    authoritative and is attributed to the stage where the response began, so
+    per-step totals agree with total and per-model usage."""
+    session = tmp_path / "split-usage.jsonl"
+    run_dir = tmp_path / "run"
+    manifest = _manifest("split-usage", tmp_path, run_dir, started=[])
+    manifest["steps"] = [
+        {
+            "event": "step",
+            "step": 3,
+            "timestamp": (_TEST_TRANSCRIPT_START + timedelta(seconds=10)).isoformat(),
+        },
+    ]
+    _write_jsonl(
+        session,
+        [
+            _at(_assistant(usage=_usage(2, 7), message_id="split-response"), 5),
+            _at(_assistant(usage=_usage(2, 7), message_id="split-response"), 6),
+            _at(_assistant(usage=_usage(2, 484), message_id="split-response"), 12),
+            _at(_assistant(usage=_usage(1, 3)), 15),
+        ],
+    )
+
+    stages, complete = analyze_orchestrator_steps(session, manifest)
+
+    assert complete is True
+    assert stages["1"]["output_tokens"] == 484
+    assert stages["1"]["input_tokens"] == 2
+    assert stages["3"]["output_tokens"] == 3
+
+
 @pytest.mark.parametrize(
     "steps",
     [
