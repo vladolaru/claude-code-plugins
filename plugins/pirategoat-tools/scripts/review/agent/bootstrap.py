@@ -344,6 +344,31 @@ def extract_scope_files(scope_output: str) -> List[str]:
     return files
 
 
+def extract_not_diffed_files(scope_output: str) -> List[str]:
+    """Extract deferred in-scope file paths from === NOT DIFFED === sections.
+
+    These files ARE the agent's scope — their diffs were withheld only to fit
+    the context budget — so telemetry must record them alongside the inline
+    FILES entries, or coverage reports them as uncovered and transcript
+    analysis counts reading them as out-of-scope. Only lines carrying the
+    "path  (+N -M)" stats shape are files; the section's prose lines are not.
+    """
+    files = []
+    in_section = False
+    for line in scope_output.splitlines():
+        if line.startswith("=== NOT DIFFED"):
+            in_section = True
+            continue
+        if in_section and line.startswith("==="):
+            in_section = False
+            continue
+        if in_section and line.strip():
+            match = re.match(r'\s*(.+?)\s{2,}\(\+\d+\s+-\d+\)', line)
+            if match:
+                files.append(match.group(1).strip())
+    return files
+
+
 def extract_scope_line_count(scope_output: str) -> int:
     """Extract total in-scope changed lines for budget sizing.
 
@@ -1372,6 +1397,14 @@ def main():
     # for agents without domain scoping (domain=null).
     scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
     scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
+    # Deferred NOT DIFFED files are in-scope work too: telemetry must carry
+    # them or coverage marks them uncovered and reads of them count as
+    # out-of-scope. Kept out of scope_files_for_budget so inline-diff
+    # consumers (file history) keep their meaning.
+    not_diffed_paths = extract_not_diffed_files(scope_output) if scope_output else []
+    telemetry_scope_paths = list(
+        dict.fromkeys([*scope_files_for_budget, *not_diffed_paths])
+    )
 
     if scope_lines_for_budget > 0:
         review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
@@ -1403,10 +1436,10 @@ def main():
                 agent_name=args.agent,
                 domain=config.get("domain", ""),
                 model_tier=config.get("model_tier", ""),
-                scope_files=len(scope_files_for_budget),
+                scope_files=len(telemetry_scope_paths),
                 scope_lines=scope_lines_for_budget,
                 budget_target=review_budget,
-                scope_paths=scope_files_for_budget,
+                scope_paths=telemetry_scope_paths,
             )
         except Exception:
             pass

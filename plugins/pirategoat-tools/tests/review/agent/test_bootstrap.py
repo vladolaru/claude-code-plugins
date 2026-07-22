@@ -34,6 +34,7 @@ load_additional_instructions = _mod.load_additional_instructions
 compute_review_budget = _mod.compute_review_budget
 budget_was_capped = _mod.budget_was_capped
 extract_scope_files = _mod.extract_scope_files
+extract_not_diffed_files = _mod.extract_not_diffed_files
 extract_scope_line_count = _mod.extract_scope_line_count
 resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
@@ -541,6 +542,44 @@ class TestExtractScopeMultipleBlocks:
         assert extract_scope_line_count(scope) == 1400
         # Deferred lines must not enter the FILES-only file list.
         assert extract_scope_files(scope) == ["src/inline.py"]
+
+    def test_extract_not_diffed_files_skips_section_prose(self):
+        """Deferred paths come only from stats-shaped lines — the NOT DIFFED
+        section's instruction prose must never be parsed as file paths."""
+        scope = (
+            "=== FILES ===\n"
+            "src/inline.py  (+400 -100)\n"
+            "=== NOT DIFFED (budget exceeded, 2 files) ===\n"
+            "These files ARE IN YOUR SCOPE — their diffs were withheld only to fit\n"
+            "the context budget. This list is your remaining work queue, largest\n"
+            "first: review with 'git diff base..head -- <file>' while tool budget\n"
+            "remains, and declare only the files you genuinely cannot reach.\n"
+            "  src/deferred-large.py  (+700 -100)\n"
+            "  src/deferred-small.py  (+80 -20)\n"
+            "=== DIFFS ===\n"
+            "diff content\n"
+        )
+        assert extract_not_diffed_files(scope) == [
+            "src/deferred-large.py",
+            "src/deferred-small.py",
+        ]
+
+    def test_extract_not_diffed_files_accumulates_across_secondary_scopes(self):
+        scope = (
+            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
+            "  src/primary.py  (+300 -10)\n"
+            "=== SECONDARY SCOPE: config-ops ===\n"
+            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
+            "  config/secondary.php  (+200 -5)\n"
+        )
+        assert extract_not_diffed_files(scope) == [
+            "src/primary.py",
+            "config/secondary.php",
+        ]
+
+    def test_extract_not_diffed_files_empty_without_section(self):
+        scope = "=== FILES ===\nsrc/a.py  (+5 -1)\n=== DIFFS ===\n"
+        assert extract_not_diffed_files(scope) == []
 
     def test_line_count_excludes_lock_and_generated_stats(self):
         """CHANGED (no diff) lock/generated files stay out of budget sizing."""
