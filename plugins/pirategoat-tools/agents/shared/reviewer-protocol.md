@@ -64,10 +64,7 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted by budget priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal budget.
 
-**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. Your verdict does not cover them by default, and an APPROVE that silently ignores them is a protocol violation. Before writing output, handle every NOT DIFFED file in one of two ways:
-
-1. **Review it:** `git diff <RANGE> -- <file>` (prioritize production code over tests, largest diffstat first), or
-2. **Declare it:** list it under a `**Not reviewed (budget):**` line in your Markdown summary so the reconciliation step can account for the gap. Never count a declared-unreviewed file toward your verdict.
+**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. The handling contract — review or declare, and what a declaration costs — is delivered by bootstrap's `=== REVIEW BUDGET ===` section, which knows your actual budget. It is deliberately not repeated here: this section is stripped before you receive the protocol.
 
 ### When You Need More Context
 

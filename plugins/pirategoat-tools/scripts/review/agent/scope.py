@@ -1379,7 +1379,13 @@ def format_text_output(scope: dict) -> str:
         if budget_files:
             lines.append("")
             lines.append(f"=== NOT DIFFED (budget exceeded, {len(budget_files)} files) ===")
-            lines.append("Use 'git diff <range> -- <file>' to read any of these selectively.")
+            lines.append("These files ARE IN YOUR SCOPE — their diffs were withheld only to fit")
+            lines.append("the context budget. This list is your remaining work queue, largest")
+            lines.append(
+                f"first: review with 'git diff {scope.get('range', '')} -- <file>' "
+                "while tool budget"
+            )
+            lines.append("remains, and declare only the files you genuinely cannot reach.")
             # Sort budget-exceeded by size descending so agent sees biggest changes first
             budget_sorted = sorted(
                 budget_files,

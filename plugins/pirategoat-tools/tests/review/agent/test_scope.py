@@ -1768,3 +1768,27 @@ class TestListOnly:
             assert "pnpm-lock.yaml" in scope["list_only_files"]
             # Config files should still get budget allocation
             assert scope["files_with_diffs"] > 0
+
+
+class TestNotDiffedWorkQueueFraming:
+    """NOT DIFFED must read as a mandatory work queue, not an optional appendix.
+
+    Observed 2026-07-21 on a 349-file branch: agents used 37% of their tool
+    budget and treated 'read any of these selectively' as license to skip the
+    largest changed files entirely.
+    """
+
+    def test_not_diffed_section_frames_a_work_queue(self):
+        scope = {
+            "status": "OK",
+            "range": "abc123..HEAD",
+            "files": ["src/a.ts"],
+            "diffstat": {"src/a.ts": (10, 2), "src/big.ts": (862, 0)},
+            "diffs": {"src/a.ts": "+x"},
+            "skipped_files": {"budget": ["src/big.ts"]},
+        }
+        text = review_scope.format_text_output(scope)
+        assert "=== NOT DIFFED (budget exceeded, 1 files) ===" in text
+        assert "ARE IN YOUR SCOPE" in text
+        assert "work queue" in text
+        assert "selectively" not in text

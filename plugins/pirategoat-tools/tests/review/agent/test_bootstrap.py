@@ -32,6 +32,7 @@ load_pr_size_from_context = _mod.load_pr_size_from_context
 load_change_purpose = _mod.load_change_purpose
 load_additional_instructions = _mod.load_additional_instructions
 compute_review_budget = _mod.compute_review_budget
+budget_was_capped = _mod.budget_was_capped
 extract_scope_files = _mod.extract_scope_files
 extract_scope_line_count = _mod.extract_scope_line_count
 resolve_overall_status = _mod.resolve_overall_status
@@ -402,6 +403,66 @@ class TestComputeReviewBudget:
         """Agents with zero diff lines still get minimum budget."""
         budget = compute_review_budget(changed_lines=0, file_count=0)
         assert budget == 15
+
+
+class TestBudgetWasCapped:
+    """Cap detection feeds the honest capped-budget briefing text."""
+
+    def test_below_cap_not_capped(self):
+        assert budget_was_capped(changed_lines=130) is False
+
+    def test_at_formula_boundary_not_capped(self):
+        # 15 + 650//10 = 80 exactly — reaches the cap without exceeding it
+        assert budget_was_capped(changed_lines=650) is False
+
+    def test_above_cap_capped(self):
+        assert budget_was_capped(changed_lines=52879) is True
+
+
+class TestBudgetBriefingText:
+    """The budget section must be honest about capping and push spend-down."""
+
+    def _output(self, scope_output="scope", budget=80, capped=False):
+        return build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake",
+            status="OK",
+            review_rules="Rules here",
+            domain_rules=None,
+            scope_output=scope_output,
+            exploration_scope=None,
+            output_dir="/tmp/test",
+            pr_number="1",
+            reviewer_name="security",
+            review_budget=budget,
+            budget_capped=capped,
+        )
+
+    def test_uncapped_budget_claims_calibration(self):
+        output = self._output(budget=40, capped=False)
+        assert "Calibrated to YOUR scope." in output
+
+    def test_capped_budget_does_not_claim_calibration(self):
+        output = self._output(budget=80, capped=True)
+        assert "Calibrated to YOUR scope." not in output
+        assert "effort floor" in output
+
+    def test_not_diffed_scope_gets_spend_down_instruction(self):
+        scope = (
+            "=== FILES ===\n"
+            "src/a.ts  (+10 -2)\n"
+            "\n"
+            "=== NOT DIFFED (budget exceeded, 258 files) ===\n"
+            "  src/big.ts  (+862 -0)\n"
+        )
+        output = self._output(scope_output=scope, budget=80, capped=True)
+        assert "258 in-scope files" in output
+        assert "coverage gap, not efficiency" in output
+
+    def test_fully_diffed_scope_has_no_spend_down_instruction(self):
+        output = self._output(scope_output="=== FILES ===\nsrc/a.ts  (+10 -2)\n",
+                              budget=40, capped=False)
+        assert "coverage gap, not efficiency" not in output
 
 
 class TestBudgetOverride:

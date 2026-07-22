@@ -366,16 +366,29 @@ def extract_scope_line_count(scope_output: str) -> int:
     return total
 
 
+BUDGET_BASE = 15  # minimum viable budget
+BUDGET_CAP = 80  # cap for even the largest PRs
+BUDGET_LINES_PER_CALL = 10
+
+
 def compute_review_budget(changed_lines: int, file_count: int) -> int:
     """Compute a tool call budget proportionate to PR scope.
 
     Formula: base 15 + 1 call per 10 changed lines, capped at 80.
     The budget is a calibration hint, not a hard cap.
     """
-    budget = 15 + (changed_lines // 10)
-    budget = max(budget, 15)  # minimum viable budget
-    budget = min(budget, 80)  # cap for even the largest PRs
-    return budget
+    budget = BUDGET_BASE + (changed_lines // BUDGET_LINES_PER_CALL)
+    return min(max(budget, BUDGET_BASE), BUDGET_CAP)
+
+
+def budget_was_capped(changed_lines: int) -> bool:
+    """True when the scope wanted more budget than the cap allows.
+
+    Above the cap the budget is no longer proportionate to scope, so the
+    briefing must stop claiming calibration and present the target as an
+    effort floor instead.
+    """
+    return (BUDGET_BASE + (changed_lines // BUDGET_LINES_PER_CALL)) > BUDGET_CAP
 
 
 def load_pr_intent(output_dir: str) -> Optional[str]:
@@ -783,6 +796,7 @@ def build_output(
     change_purpose: Optional[str] = None,
     additional_instructions: Optional[str] = None,
     review_budget: Optional[int] = None,
+    budget_capped: bool = False,
     host_context: Optional[dict] = None,
     coverage_note: Optional[str] = None,
     repo_review_rules: Optional[str] = None,
@@ -859,10 +873,49 @@ def build_output(
     # Review Budget — scope-proportionate tool call calibration
     if review_budget is not None:
         ceiling = int(review_budget * 1.5)
+        not_diffed_count = sum(
+            int(n) for n in re.findall(
+                r'=== NOT DIFFED \(budget exceeded, (\d+) files\) ===',
+                scope_output or "",
+            )
+        )
         lines.append("=== REVIEW BUDGET ===")
         lines.append(f"Target: ~{review_budget} tool calls. Hard ceiling: {ceiling}.")
-        lines.append("Calibrated to YOUR scope. The pipeline waits for the slowest agent.")
+        if budget_capped:
+            lines.append(
+                "Your scope is larger than this target can fully cover. Treat the "
+                "target as an effort floor, not proof of coverage. The pipeline "
+                "waits for the slowest agent."
+            )
+        else:
+            lines.append("Calibrated to YOUR scope. The pipeline waits for the slowest agent.")
         lines.append("")
+        if not_diffed_count:
+            lines.append(
+                f"Spend the budget: {not_diffed_count} in-scope files are listed "
+                "under NOT DIFFED. While under target with NOT DIFFED files "
+                "unread, read the next one (largest first) — finishing early "
+                "with in-scope files unread is a coverage gap, not efficiency. "
+                "The budget is never a reason to skip a file you still have "
+                "calls left for."
+            )
+            lines.append("")
+            # This contract lives here, not in reviewer-protocol.md: bootstrap
+            # strips '## Scope Discovery', so policy placed there never reaches
+            # a reviewer. See REVIEWER_PROTOCOL_SKIP_SECTIONS.
+            lines.append(
+                "Before writing output, every NOT DIFFED file must be either "
+                "reviewed or declared — an APPROVE that silently ignores them is "
+                "a protocol violation. Declare what you could not reach under a "
+                "`**Not reviewed (budget):**` line in your Markdown summary, and "
+                "never count a declared-unreviewed file toward your verdict. "
+                "Declaring is for genuine budget exhaustion only: a declaration "
+                "written with most of your budget unspent is a protocol "
+                "violation, and citing your budget or ceiling as the reason for "
+                "skipping work you had calls left for is a false statement in "
+                "your review."
+            )
+            lines.append("")
         lines.append(f"At {review_budget} calls: open findings → finish and write. No findings → wrap up.")
         lines.append(f"At {ceiling} calls: STOP exploring. Write output immediately, no exceptions.")
         lines.append("")
@@ -1316,20 +1369,25 @@ def main():
 
     if scope_lines_for_budget > 0:
         review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
+        budget_capped = budget_was_capped(scope_lines_for_budget)
     else:
         # Fallback: use PR-level metrics when scope is unavailable or empty
         pr_size = load_pr_size_from_context(output_dir)
         if pr_size:
             review_budget = compute_review_budget(pr_size.get("lines", 0), pr_size.get("files", 0))
+            budget_capped = budget_was_capped(pr_size.get("lines", 0))
         else:
             review_budget = 15  # absolute minimum
+            budget_capped = False
 
     # Agent-level budget override — used when an agent's workload doesn't
     # correlate with diff size (e.g., history-insights explores git history,
-    # not diff lines).
+    # not diff lines). Overrides are deliberate per-agent choices, not
+    # scope-clamped values — never present them as capped.
     budget_override = config.get("budget_override")
     if budget_override is not None:
         review_budget = budget_override
+        budget_capped = False
 
     # Telemetry: log agent start (best-effort, after budget is finalized)
     if ReviewTelemetry is not None:
@@ -1430,6 +1488,7 @@ def main():
         change_purpose=change_purpose,
         additional_instructions=additional_instructions,
         review_budget=review_budget,
+        budget_capped=budget_capped,
         host_context=host_context,
         coverage_note=coverage_note,
         repo_review_rules=repo_review_rules,

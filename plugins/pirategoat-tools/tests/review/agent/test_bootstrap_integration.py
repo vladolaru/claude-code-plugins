@@ -1048,3 +1048,71 @@ def test_ecosystem_integration_reviewer_registered():
     assert entry.get("require_php_source_file") is True
     assert "host_context_runtime_host_resolved" not in entry.get("triage_checks", [])
     assert entry.get("budget_override", 0) > 0
+
+
+class TestNotDiffedContractIsDelivered:
+    """The NOT DIFFED handling contract must survive protocol stripping.
+
+    Regression guard for 1.109.0: the contract originally lived in
+    reviewer-protocol.md's '## Scope Discovery' section, which bootstrap strips,
+    so it never reached a single reviewer. Policy belongs in build_output.
+    """
+
+    NOT_DIFFED_SCOPE = (
+        "=== REVIEW SCOPE ===\n"
+        "=== FILES ===\n"
+        "src/big.py  (+900 -10)\n"
+        "=== NOT DIFFED (budget exceeded, 3 files) ===\n"
+        "  src/big.py  (+900 -10)\n"
+    )
+
+    def _build(self, tmp_path, scope_output, **kwargs):
+        return build_output(
+            agent_name="security-reviewer",
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output=scope_output,
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            review_budget=80,
+            **kwargs,
+        )
+
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "Not reviewed (budget):",          # the declaration format
+            "protocol violation",              # declaring on unspent budget
+            "false statement",                 # citing budget you did not spend
+            "never count a declared-unreviewed file",
+        ],
+    )
+    def test_contract_reaches_reviewer(self, tmp_path, phrase):
+        """Each clause of the contract appears in the delivered briefing."""
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE)
+        assert phrase in output
+
+    def test_contract_absent_without_not_diffed_files(self, tmp_path):
+        """No NOT DIFFED files means no declaration contract to deliver."""
+        clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
+        output = self._build(tmp_path, clean_scope)
+        assert "Not reviewed (budget):" not in output
+
+    def test_contract_is_not_sourced_from_stripped_protocol(self):
+        """The stripped protocol must not be the contract's only home.
+
+        extract_protocol_sections() drops '## Scope Discovery', so anything
+        placed there is invisible to reviewers by construction.
+        """
+        protocol = (PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md").read_text()
+        delivered = _mod.extract_protocol_sections(
+            protocol, _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
+        )
+        assert "Not reviewed (budget):" not in delivered, (
+            "Contract text placed in a stripped protocol section never reaches "
+            "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
+        )
