@@ -101,6 +101,7 @@ class ReviewOutputBuilder:
         self.recommendations = {'immediate': [], 'important': [], 'suggestions': []}
         self.positive_observations = []
         self.clearances = []
+        self.unreviewed = []
         self.files_reviewed = 0
         self.review_start = datetime.now()
         self.tool_results_used = []
@@ -281,6 +282,21 @@ class ReviewOutputBuilder:
             "evidence": evidence.strip() if evidence and evidence.strip() else None,
         })
 
+    def add_unreviewed(self, file: str):
+        """Declare an in-scope file left unreviewed after budget exhaustion.
+
+        Use ONLY for NOT DIFFED files genuinely out of reach when the tool
+        budget ran out. Declared files render under the
+        '**Not reviewed (budget):**' line in the Markdown summary and appear
+        as 'unreviewed' in the JSON output, so downstream coverage accounting
+        sees the gap. They never count toward the verdict.
+        """
+        if not isinstance(file, str) or not file.strip():
+            raise ValueError("add_unreviewed requires a non-empty file path.")
+        path = file.strip()
+        if path not in self.unreviewed:
+            self.unreviewed.append(path)
+
     def set_files_reviewed(self, count: int):
         """Set number of files reviewed."""
         self.files_reviewed = count
@@ -366,6 +382,7 @@ class ReviewOutputBuilder:
                 'by_severity': severity_counts
             },
             'issues': self.issues,
+            'unreviewed': self.unreviewed if self.unreviewed else None,
             'observations': self.observations if self.observations else None,
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,
@@ -400,6 +417,11 @@ class ReviewOutputBuilder:
             md.append(f"- Critical: {counts['critical']}\n")
             md.append(f"- High: {counts['high']}\n")
             md.append(f"- Medium: {counts['medium']}\n\n")
+
+        # Declared coverage gap — in-scope files unreached at budget exhaustion
+        if data.get('unreviewed'):
+            files = ", ".join(f"`{f}`" for f in data['unreviewed'])
+            md.append(f"**Not reviewed (budget):** {files}\n\n")
 
         # Issues — every severity that counts toward total_issues must render,
         # or the Markdown claims findings it doesn't show.

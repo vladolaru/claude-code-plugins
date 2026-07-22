@@ -909,9 +909,11 @@ def build_output(
             lines.append(
                 "Before writing output, every NOT DIFFED file must be either "
                 "reviewed or declared — an APPROVE that silently ignores them is "
-                "a protocol violation. Declare what you could not reach under a "
-                "`**Not reviewed (budget):**` line in your Markdown summary, and "
-                "never count a declared-unreviewed file toward your verdict. "
+                "a protocol violation. Declare each file you could not reach "
+                'with builder.add_unreviewed("<path>") — it renders the '
+                "`**Not reviewed (budget):**` line in your Markdown summary and "
+                "records the gap in the JSON output — and never count a "
+                "declared-unreviewed file toward your verdict. "
                 "Declaring is for genuine budget exhaustion only: a declaration "
                 "written with most of your budget unspent is a protocol "
                 "violation, and citing your budget or ceiling as the reason for "
@@ -1040,6 +1042,7 @@ def build_output(
     lines.append(f'builder.add_clearance(claim="Nothing depends on the removed X",')
     lines.append(f'    method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
     lines.append(f'    evidence="hit counts, file:line list")     # optional')
+    lines.append(f'builder.add_unreviewed("path/unreached.py")  # ONLY at budget exhaustion — declares a NOT DIFFED coverage gap')
     lines.append(
         'builder.set_files_reviewed(N)  # REQUIRED: replace N with the actual number of files you reviewed'
     )

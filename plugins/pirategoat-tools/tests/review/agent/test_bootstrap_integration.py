@@ -1086,6 +1086,7 @@ class TestNotDiffedContractIsDelivered:
         "phrase",
         [
             "Not reviewed (budget):",          # the declaration format
+            'builder.add_unreviewed("<path>")',  # the supported API for it
             "protocol violation",              # declaring on unspent budget
             "false statement",                 # citing budget you did not spend
             "never count a declared-unreviewed file",

@@ -433,8 +433,8 @@ class TestToDict:
         d = b.to_dict()
         expected_keys = {
             "pr_id", "reviewer", "timestamp", "version", "verdict",
-            "summary", "issues", "observations", "recommendations",
-            "positive_observations", "clearances", "meta",
+            "summary", "issues", "unreviewed", "observations",
+            "recommendations", "positive_observations", "clearances", "meta",
         }
         assert expected_keys == set(d.keys())
 
@@ -719,6 +719,55 @@ class TestAddObservation:
         md = b.to_markdown()
         assert "Observations" in md
         assert "File lacks CSRF protection" in md
+
+
+# =============================================================================
+# TestAddUnreviewed
+# =============================================================================
+
+
+class TestAddUnreviewed:
+    """add_unreviewed declares NOT DIFFED coverage gaps through the builder."""
+
+    def test_stores_and_dedupes_paths(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        b.add_unreviewed("  src/b.py  ")
+        b.add_unreviewed("src/a.py")
+        assert b.unreviewed == ["src/a.py", "src/b.py"]
+
+    @pytest.mark.parametrize("bad", ["", "   ", None, 42, ["src/a.py"]])
+    def test_rejects_non_path_values(self, bad):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError):
+            b.add_unreviewed(bad)
+
+    def test_unreviewed_in_dict_output(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        assert b.to_dict()["unreviewed"] == ["src/a.py"]
+
+    def test_unreviewed_null_when_empty(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        assert b.to_dict()["unreviewed"] is None
+
+    def test_unreviewed_does_not_affect_verdict(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        assert b._calculate_verdict() == "approve"
+
+    def test_unreviewed_renders_contract_line_in_markdown(self):
+        """The Markdown line must match the bootstrap-mandated declaration
+        format so the supported API satisfies the NOT DIFFED contract."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        b.add_unreviewed("src/b.py")
+        md = b.to_markdown()
+        assert "**Not reviewed (budget):** `src/a.py`, `src/b.py`" in md
+
+    def test_markdown_omits_line_when_nothing_declared(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        assert "Not reviewed (budget)" not in b.to_markdown()
 
 
 # =============================================================================
