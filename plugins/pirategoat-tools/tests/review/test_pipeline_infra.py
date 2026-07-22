@@ -306,6 +306,44 @@ class TestTelemetryIdentityHelpers:
         assert base_sha == expected_base
         assert head_sha == expected_head
 
+    def test_symbolic_supplied_endpoints_are_resolved_to_shas(
+        self, mod, monkeypatch
+    ):
+        """Context merge_base from an explicit range like "main..HEAD" is the
+        literal branch name — the durable identity must resolve it, never
+        record a movable ref."""
+        identities = {
+            "main": "a" * 40,
+            "HEAD": "b" * 40,
+        }
+
+        def fake_git_output(*args):
+            return identities.get(args[-1], "")
+
+        monkeypatch.setattr(mod, "_git_output", fake_git_output)
+
+        _, base_sha, head_sha = mod._resolve_git_identity(
+            "main..HEAD", base_sha="main", head_sha="HEAD"
+        )
+
+        assert base_sha == "a" * 40
+        assert head_sha == "b" * 40
+
+    def test_full_sha_supplied_endpoints_pass_through_without_git(
+        self, mod, monkeypatch
+    ):
+        def fail_git_output(*_args):
+            raise AssertionError("supplied full SHAs must not hit git")
+
+        monkeypatch.setattr(mod, "_git_output", fail_git_output)
+
+        _, base_sha, head_sha = mod._resolve_git_identity(
+            "main..HEAD", base_sha="c" * 40, head_sha="d" * 64
+        )
+
+        assert base_sha == "c" * 40
+        assert head_sha == "d" * 64
+
 
 class TestFailureRecovery:
     """Pipeline handles invalid states gracefully."""

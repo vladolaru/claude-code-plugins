@@ -1772,6 +1772,8 @@ def _init_telemetry(output_dir, log_dir=None):
 _SEMVER_PATTERN = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
 _SEMVER_ROOT_RE = re.compile(rf"^{_SEMVER_PATTERN}$")
 _CHANGELOG_VERSION_RE = re.compile(rf"^## \[({_SEMVER_PATTERN})\]", re.MULTILINE)
+# Full SHA-1 (40 hex) or SHA-256 (64 hex) object name.
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 
 
 def _git_output(*args):
@@ -1821,16 +1823,27 @@ def _resolve_git_identity(git_range, base_sha="", head_sha=""):
     if has_range_operator:
         base_ref = base_ref or "HEAD"
         head_ref = head_ref or "HEAD"
-    resolved_base_sha = base_sha if isinstance(base_sha, str) else ""
-    resolved_head_sha = head_sha if isinstance(head_sha, str) else ""
 
-    if not resolved_base_sha and base_ref:
-        resolved_base_sha = _git_output("rev-parse", "--verify", base_ref)
-    if not resolved_head_sha:
-        resolved_head_sha = _git_output(
-            "rev-parse", "--verify", head_ref or "HEAD"
-        )
-    return requested_range, resolved_base_sha, resolved_head_sha
+    # Supplied context values may be symbolic (an explicit range like
+    # "main..HEAD" stores "main" as the context merge_base). The durable
+    # manifest must record commit SHAs, not movable refs — resolve anything
+    # that is not already a full object name.
+    def resolve_endpoint(supplied, ref):
+        for candidate in (supplied if isinstance(supplied, str) else "", ref):
+            if not candidate:
+                continue
+            if _FULL_SHA_RE.fullmatch(candidate):
+                return candidate
+            resolved = _git_output("rev-parse", "--verify", candidate)
+            if resolved:
+                return resolved
+        return ""
+
+    return (
+        requested_range,
+        resolve_endpoint(base_sha, base_ref),
+        resolve_endpoint(head_sha, head_ref or "HEAD"),
+    )
 
 
 # ---------------------------------------------------------------------------

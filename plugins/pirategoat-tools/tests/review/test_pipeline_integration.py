@@ -125,7 +125,16 @@ class TestTelemetryIntegration:
         assert json.loads(lines[1])["event"] == "step"
 
     def test_step_1_uses_preserved_bot_context_git_identity(self, tmp_path):
-        """Bot-provided range and SHAs survive into the pipeline_start event."""
+        """Bot-provided range and full SHAs survive into pipeline_start.
+
+        The bot computes merge_base via `git merge-base` and head_sha via
+        `git rev-parse HEAD`, so its context values are always full SHAs and
+        pass through verbatim. Symbolic context values (an explicit range like
+        "main..HEAD" stores "main" as merge_base) are resolved instead — a
+        durable manifest must never record a movable ref as base_sha.
+        """
+        context_base = "a" * 40
+        context_head = "b" * 40
         (tmp_path / "run-config.json").write_text(json.dumps({
             "mode": "pr",
             "pr_number": "42",
@@ -135,8 +144,8 @@ class TestTelemetryIntegration:
         (tmp_path / "review-context.json").write_text(json.dumps({
             "git": {
                 "git_range": "context-base..context-head",
-                "merge_base": "base-from-context",
-                "head_sha": "head-from-context",
+                "merge_base": context_base,
+                "head_sha": context_head,
             },
         }))
         log_dir = tmp_path / "telemetry-logs"
@@ -150,9 +159,52 @@ class TestTelemetryIntegration:
             start = json.loads(f.readline())
         assert start["pipeline"]["git"] == {
             "requested_range": "context-base..context-head",
-            "base_sha": "base-from-context",
-            "head_sha": "head-from-context",
+            "base_sha": context_base,
+            "head_sha": context_head,
         }
+
+    def test_step_1_resolves_symbolic_context_merge_base(self, tmp_path):
+        """A symbolic context merge_base (explicit "main..HEAD" range) must be
+        resolved to a commit SHA before entering the durable run identity."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        subprocess.run(
+            ["git", "branch", "-M", "main"],
+            cwd=repo, capture_output=True, check=True,
+        )
+        main_sha = subprocess.run(
+            ["git", "rev-parse", "main"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full",
+            "interactive": False,
+            "session_id": "bot-session",
+            "git_range": "main..HEAD",
+        }))
+        (tmp_path / "review-context.json").write_text(json.dumps({
+            "git": {
+                "git_range": "main..HEAD",
+                "merge_base": "main",
+                "head_ref": "HEAD",
+            },
+        }))
+        log_dir = tmp_path / "telemetry-logs"
+
+        with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
+            result = self._run(
+                "--step", "1", "--output-dir", str(tmp_path), cwd=repo
+            )
+
+        assert result.returncode == 0
+        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        with open(log_path) as f:
+            start = json.loads(f.readline())
+        git_identity = start["pipeline"]["git"]
+        assert git_identity["requested_range"] == "main..HEAD"
+        assert git_identity["base_sha"] == main_sha
+        assert git_identity["head_sha"] == main_sha
 
     def test_step_1_interactive_run_ignores_stale_context_git_identity(self, tmp_path):
         """Interactive reruns do not leak the prior run's preserved Git identity."""
