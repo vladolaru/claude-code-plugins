@@ -33,6 +33,14 @@ DEFAULT_CHANNEL = "blocking"
 _VALID_EXECUTIONS = {"inline", "isolated"}
 _VALID_CHANNELS = {"blocking", "advisory"}
 
+# Complexity caps for repo-supplied path globs. Patterns come from the reviewed
+# repo's config (semi-trusted), and glob_match runs a translated regex against
+# every changed file. Chained ``**`` can drive catastrophic backtracking, so an
+# over-complex pattern is rejected (fails closed — the rule/reviewer simply does
+# not match). Real globs (``includes/**/*.php``) are far below these limits.
+_MAX_GLOB_LEN = 256
+_MAX_GLOB_STARS = 20
+
 
 def empty_config() -> Dict[str, Any]:
     """The neutral result: no repo review config present."""
@@ -52,7 +60,9 @@ def load_review_config(repo_path: str) -> Dict[str, Any]:
     """
     result = empty_config()
     config_path = os.path.join(repo_path, CONFIG_RELPATH)
-    if not os.path.isfile(config_path):
+    # Guard the config path itself against a committed symlink that escapes the
+    # repo (nested rule/reviewer paths get the same _path_inside_repo check).
+    if not os.path.isfile(config_path) or not _path_inside_repo(config_path, repo_path):
         return result
 
     try:
@@ -280,8 +290,14 @@ def _glob_to_regex(pattern: str) -> str:
 
 
 def glob_match(pattern: str, path: str) -> bool:
-    """True if ``path`` (repo-relative, forward slashes) matches ``pattern``."""
+    """True if ``path`` (repo-relative, forward slashes) matches ``pattern``.
+
+    Over-complex patterns (length or wildcard count beyond the caps) are treated
+    as non-matching to bound regex backtracking against semi-trusted input.
+    """
     if not pattern or not isinstance(path, str):
+        return False
+    if len(pattern) > _MAX_GLOB_LEN or pattern.count("*") > _MAX_GLOB_STARS:
         return False
     try:
         return bool(re.match(_glob_to_regex(pattern), path))

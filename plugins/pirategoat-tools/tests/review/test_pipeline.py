@@ -560,18 +560,79 @@ class TestStep6DispatchAgents:
                 },
             ],
         }
+        import shlex
         ctx = {"git": {"git_range": "abc..HEAD"}}
         g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
         # Native agent: plain --agent command.
         assert "--agent security-reviewer" in text
-        # Adapter instance: ref-mode command targeting the adapter registry key.
-        assert "--agent repo-reviewer-adapter" in text
-        assert "--instance-name repo-renewals-reviewer" in text
-        assert "--repo-agent-ref \".ai/agents/review/renewals.md\"" in text
-        assert "--scope-domains \"wp-architecture,architecture\"" in text
         assert "subagent_type `repo-reviewer-adapter`" in text
         assert "model `sonnet`" in text
+        # Adapter instance: parse the shell-quoted command and check its args.
+        cmd_line = next(
+            line for line in g["actions"]
+            if "bootstrap.py" in line and "--repo-agent-ref" in line
+        )
+        tok = shlex.split(cmd_line)
+        assert tok[tok.index("--agent") + 1] == "repo-reviewer-adapter"
+        assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
+        assert tok[tok.index("--repo-agent-ref") + 1] == ".ai/agents/review/renewals.md"
+        assert tok[tok.index("--scope-domains") + 1] == "wp-architecture,architecture"
+
+    def test_adapter_command_escapes_repo_controlled_strings(self, mod, tmp_path):
+        """A malicious repo-supplied label/ref cannot inject shell commands."""
+        import shlex
+        evil_label = '"; rm -rf ~; echo pwned "'
+        evil_ref = '.ai/agents/x";$(id)".md'
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [{
+                "name": "repo-evil-reviewer",
+                "adapter": "repo-reviewer-adapter",
+                "ref": evil_ref,
+                "label": evil_label,
+                "channel": "blocking",
+                "execution": "inline",
+                "model": None,
+                "scope_domains": ["code"],
+            }],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
+        # Find the generated bootstrap command line and parse it as a shell would.
+        cmd_line = next(
+            line for line in g["actions"]
+            if "bootstrap.py" in line and "--repo-agent-ref" in line
+        )
+        tokens = shlex.split(cmd_line)
+        # The malicious strings survive as SINGLE arguments — no breakout.
+        assert tokens[tokens.index("--adapter-label") + 1] == evil_label
+        assert tokens[tokens.index("--repo-agent-ref") + 1] == evil_ref
+        # No unescaped injection metacharacters leak as separate tokens.
+        assert "rm" not in tokens
+        assert "$(id)" not in cmd_line or shlex.quote("$(id)") not in cmd_line
+
+    def test_adapter_command_none_fields_use_defaults(self, mod, tmp_path):
+        """Explicit None on optional fields falls back, not the literal 'None'."""
+        import shlex
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [{
+                "name": "repo-x-reviewer", "adapter": "repo-reviewer-adapter",
+                "ref": ".ai/r.md", "label": None, "channel": None,
+                "execution": None, "model": None, "scope_domains": ["code"],
+            }],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
+        cmd_line = next(l for l in g["actions"] if "bootstrap.py" in l and "--channel" in l)
+        tokens = shlex.split(cmd_line)
+        assert tokens[tokens.index("--channel") + 1] == "blocking"
+        assert tokens[tokens.index("--execution") + 1] == "inline"
+        assert tokens[tokens.index("--adapter-label") + 1] == "repo-x-reviewer"
+        assert "None" not in tokens
 
     def test_step6_recomputes_dispatch_plan_summary(self, mod, tmp_path):
         """Step 6 orchestration must recompute summary from final dispatch-plan.json (post-override)."""

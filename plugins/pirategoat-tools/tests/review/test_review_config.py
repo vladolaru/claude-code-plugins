@@ -169,3 +169,40 @@ class TestReviewers:
         ]}})
         result = mod.load_review_config(str(tmp_path))
         assert result["reviewers"] == []
+
+
+class TestSecurityHardening:
+    def test_config_symlink_escaping_repo_is_ignored(self, mod, tmp_path):
+        # A committed .pirategoat/config.json symlink pointing outside the repo
+        # must not be opened/parsed.
+        repo = tmp_path / "repo"
+        (repo / ".pirategoat").mkdir(parents=True)
+        outside = tmp_path / "outside.json"
+        outside.write_text(json.dumps({"review": {"rules": [{"id": "x", "path": "a.md"}]}}))
+        link = repo / ".pirategoat" / "config.json"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        result = mod.load_review_config(str(repo))
+        assert result["rules"] == []
+        assert result["reviewers"] == []
+
+    def test_glob_complexity_cap_fails_closed_fast(self, mod):
+        import time
+        # A pathological chained-** pattern must not stall (ReDoS guard).
+        evil = "**/" * 40 + "Z"
+        t0 = time.perf_counter()
+        matched = mod.glob_match(evil, "a/" * 40 + "x")
+        elapsed = time.perf_counter() - t0
+        assert matched is False
+        assert elapsed < 0.5  # capped, not backtracking
+
+    def test_glob_star_count_cap(self, mod):
+        assert mod.glob_match("*" * 100, "anything") is False
+
+    def test_normal_globs_still_match(self, mod):
+        # The cap must not break realistic patterns.
+        assert mod.glob_match("includes/**/*.php", "includes/core/foo.php") is True
+        assert mod.glob_match("**/*.php", "a.php") is True
+        assert mod.glob_match("src/**", "src/a/b.js") is True

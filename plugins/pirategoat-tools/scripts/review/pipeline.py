@@ -26,6 +26,7 @@ import argparse
 import glob as glob_mod
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -856,15 +857,25 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                 # tool's subagent_type MUST be the adapter (a real CC subagent),
                 # not the synthetic instance name.
                 scope_domains = ",".join(agent.get("scope_domains") or ["code"])
-                cmd = (
-                    f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {adapter} '
-                    f'--instance-name {name} --repo-agent-ref "{agent.get("ref", "")}" '
-                    f'--adapter-label "{agent.get("label", name)}" '
-                    f'--execution {agent.get("execution", "inline")} '
-                    f'--channel {agent.get("channel", "blocking")} '
-                    f'--scope-domains "{scope_domains}" '
-                    f'--range "{git_range}" --output-dir "{od}"'
-                )
+                # ref/label/id all originate from the reviewed repo's
+                # .pirategoat/config.json (PR-controlled, semi-trusted), and the
+                # adapter is instructed to run this command in a shell. Every
+                # token MUST be shell-quoted to prevent command injection. Use
+                # `or` (not dict.get default) so an explicit None falls back
+                # instead of embedding the literal string "None".
+                cmd_parts = [
+                    "python3", f"{SCRIPTS_DIR}/agent/bootstrap.py",
+                    "--agent", adapter,
+                    "--instance-name", name,
+                    "--repo-agent-ref", agent.get("ref") or "",
+                    "--adapter-label", agent.get("label") or name,
+                    "--execution", agent.get("execution") or "inline",
+                    "--channel", agent.get("channel") or "blocking",
+                    "--scope-domains", scope_domains,
+                    "--range", git_range,
+                    "--output-dir", od,
+                ]
+                cmd = " ".join(shlex.quote(p) for p in cmd_parts)
                 model = agent.get("model")
                 model_hint = f" with model `{model}`" if model else ""
                 actions.append(
