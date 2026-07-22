@@ -5,6 +5,20 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.109.0] - 2026-07-22
+
+Lets the repository under review contribute its own review knowledge and reviewers. General reviewers structurally miss repo-specific bug classes (runtime-environment assumptions, upstream-internals contracts, failure-path semantics, cross-flow blast radius) — knowledge that is regression-seeded and can only live with the code. A repository now declares that knowledge, and its own domain-expert lenses, in an optional `review` section of its `.pirategoat/config.json`, and pirategoat applies and dispatches them natively.
+
+### Added
+
+- **Repo-contributed review rules.** A repo declares markdown checklists in `review.rules[]`. Bootstrap injects the ones applicable to each agent (by agent name, domain, or a changed-file path glob) as a fenced, demoted `REPO REVIEW RULES` block after the generic domain rules, so project standards override generic patterns. Repo-supplied bodies are treated as semi-trusted: a dynamically-sized fence plus a provenance/demotion banner prevents them from overriding the reviewer's output contract. `scripts/review/review_config.py` is the new single source of truth for parsing the section and for applicability matching.
+- **Repo-contributed reviewers via a generic adapter.** A repo declares self-contained, pirategoat-agnostic reviewer prompts in `review.reviewers[]`. `plan_dispatch.py` expands each into a synthetic dispatch entry targeting the new `repo-reviewer-adapter` agent, gated by applicability like a conditional agent. The adapter runs the repo's prompt against the scoped diff (bootstrap ref-mode) and normalizes its findings into the standard format, so reconciliation, verification, and the verdict ingest them like any native lens. Per-instance output naming keeps N adapter instances from colliding. Inline execution ships in this release; isolated (headless, different model family) is reserved behind the `execution` flag.
+- **Advisory channel.** Rules and reviewers can declare `"channel": "advisory"`. Advisory findings are listed but never gate the verdict (`_calculate_verdict` skips them; the reconciliation context and reconciliator preserve the channel). This gives judgment-call lenses (reuse, naming, boundaries) a separate precision budget without eroding the blocking channel's credibility. Native agents never set a channel, so behavior is unchanged for them.
+
+### Changed
+
+- `context.py` carries the parsed `review_config` into `review-context.json` (recomputed each run, alongside `host_context`). `schemas/review-output.ts` documents the optional `channel` field on `Issue`.
+
 ## [1.108.0] - 2026-07-21
 
 Makes reviewer scope budgeting resilient and coverage gaps visible. A 2026-07-21 full-code-review on a test-heavy branch exposed a starvation failure: the largest changed file (a test file) was admitted unconditionally, blew the entire diff budget, and every remaining file — including all eight production files — was silently skipped. Six of seventeen agents reviewed zero production code and returned verdicts anyway; six findings were recovered only by manual re-runs.

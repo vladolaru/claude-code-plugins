@@ -6,7 +6,7 @@ Everything here is opinionated, actively used, and evolving.
 
 ## What's Inside
 
-### 33 Agents
+### 34 Agents
 
 #### 28 Domain Review Agents
 
@@ -61,11 +61,12 @@ External LLM cross-validation — shell out to other CLI tools for independent p
 | **gemini-reviewer** | Cross-validates via Google Gemini CLI | haiku |
 | **codex-reviewer** | Cross-validates via OpenAI Codex CLI | haiku |
 
-#### 1 Utility Agent
+#### 2 Utility Agents
 
 | Agent | Role | Model |
 |-------|------|-------|
 | **technical-writer** | Creates documentation after feature completion | haiku |
+| **repo-reviewer-adapter** | Runs a reviewer prompt contributed by the repo under review (declared in `.pirategoat/config.json`) and normalizes its findings into the standard format | inherit |
 
 #### Model Tiers
 
@@ -158,7 +159,7 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 
 ```
 pirategoat-tools/
-├── agents/           # 33 agent definitions (28 reviewers, 2 pipeline, 2 cross-validators, 1 utility)
+├── agents/           # 34 agent definitions (28 reviewers, 2 pipeline, 2 cross-validators, 2 utility)
 ├── commands/         # 7 slash commands
 ├── skills/           # 21 skills with SKILL.md files
 │   ├── testing-patterns/references/      # 190KB test quality library

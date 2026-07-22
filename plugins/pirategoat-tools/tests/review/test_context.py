@@ -412,3 +412,35 @@ def test_fill_host_context_does_not_mutate_sys_path(tmp_path, monkeypatch):
         f"sys.path was mutated by _fill_host_context. "
         f"Before: {before!r}\nAfter: {after!r}"
     )
+
+
+def test_fill_review_config_populates_context(tmp_path, monkeypatch):
+    """load_and_fill writes a review_config key sourced from .pirategoat/config.json."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    (repo / ".pirategoat").mkdir(parents=True)
+    (repo / "rule.md").write_text("# rule\n")
+    (repo / ".pirategoat" / "config.json").write_text(json.dumps({
+        "review": {"rules": [{"id": "r1", "path": "rule.md"}]}
+    }))
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+    }))
+
+    _insert_scripts_onto_path()
+    from review.context import load_and_fill
+
+    ctx = load_and_fill(
+        ctx_path=str(outdir / "review-context.json"),
+        branch=True,
+        repo_path=str(repo),
+    )
+    assert "review_config" in ctx
+    assert ctx["review_config"] is not None
+    ids = [r["id"] for r in ctx["review_config"]["rules"]]
+    assert "r1" in ids
