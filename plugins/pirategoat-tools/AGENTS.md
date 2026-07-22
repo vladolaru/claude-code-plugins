@@ -162,6 +162,47 @@ The registry `focus` field is surfaced to the main session at step 5 so the LLM 
 
 **Calibration:** `focus` should be specific enough to inform override decisions (not just "test quality") but concise enough to scan in a list (not a full sentence). Aim for 5-10 keywords/phrases that distinguish this agent from others.
 
+## Repo-Contributed Reviewers and Rules
+
+The repository **under review** can extend a review with its own regression-seeded
+knowledge and domain-expert lenses, declared in an optional `review` section of its
+`.pirategoat/config.json` (the same repo-owned file `ExplicitResolver` reads for
+`hosts.runtime`). `scripts/review/review_config.py` is the single source of truth —
+it parses/validates the section and owns the shared applicability primitives
+(`glob_match`, `rule_applies_to_agent`, `reviewer_applies_to_diff`). `context.py`
+carries the normalized result into `review-context.json` under `review_config`
+(recomputed each run, like `host_context`).
+
+**Two capabilities:**
+
+1. **Repo rules** (`review.rules[]`) — markdown checklists the repo authors. `bootstrap.py`
+   selects the rules applicable to each agent (by agent name, domain, or a changed file
+   matching a path glob) and injects a `=== REPO REVIEW RULES ===` block after DOMAIN RULES
+   (project standards override generic patterns). Repo bodies are SEMI-TRUSTED: rendered
+   inside a dynamic backtick fence with a provenance/demotion banner so they cannot override
+   the reviewer's output contract.
+
+2. **Repo reviewers** (`review.reviewers[]`) — self-contained, pirategoat-agnostic reviewer
+   prompts. `plan_dispatch.py::expand_repo_reviewers` turns each into a synthetic dispatch
+   entry named `repo-<id>-reviewer` targeting the generic `repo-reviewer-adapter` agent,
+   gated by applicability like a conditional agent. The adapter (registry `special`,
+   `domain: null`) runs in bootstrap **ref-mode** (`--repo-agent-ref/--instance-name/
+   --execution/--channel/--scope-domains`): it reads the repo prompt, runs it against the
+   scoped diff, and normalizes findings via `ReviewOutputBuilder`.
+
+**Load-bearing invariants** (break these and findings silently vanish or collide):
+- The synthetic name MUST end in `-reviewer` — reconciliation maps `-reviewer`→`-review` to
+  find `repo-<id>-review.json`.
+- Ref-mode derives the reviewer name and `.started` marker from `--instance-name`, not the
+  shared adapter key, so N adapter instances never clobber one output file.
+- **Advisory channel:** a reviewer/rule with `"channel": "advisory"` produces findings that
+  are listed but NEVER gate the verdict. `add_issue(..., channel="advisory")` is skipped in
+  `_calculate_verdict`. Native agents never set `channel`, so this is backward-compatible;
+  `reconciliation_context.py` surfaces it and the reconciliator preserves it.
+
+**Execution:** inline only in v1 (the adapter reads and runs the repo prompt in-context).
+`isolated` (headless CLI, different model family) is reserved behind the `--execution` flag.
+
 ## Output Contract
 
 Each reviewer agent produces two files in `OUTPUT_DIR`:

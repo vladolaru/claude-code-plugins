@@ -541,6 +541,38 @@ class TestStep6DispatchAgents:
         text = "\n".join(g["actions"])
         assert "agents_status.py" in text
 
+    def test_repo_reviewer_adapter_command(self, mod, tmp_path):
+        """Adapter instances emit the ref-mode bootstrap command + subagent_type hint."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [
+                {"name": "security-reviewer", "domain": "security"},
+                {
+                    "name": "repo-renewals-reviewer",
+                    "adapter": "repo-reviewer-adapter",
+                    "ref": ".ai/agents/review/renewals.md",
+                    "label": "Renewals Expert",
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "model": "sonnet",
+                    "scope_domains": ["wp-architecture", "architecture"],
+                },
+            ],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        # Native agent: plain --agent command.
+        assert "--agent security-reviewer" in text
+        # Adapter instance: ref-mode command targeting the adapter registry key.
+        assert "--agent repo-reviewer-adapter" in text
+        assert "--instance-name repo-renewals-reviewer" in text
+        assert "--repo-agent-ref \".ai/agents/review/renewals.md\"" in text
+        assert "--scope-domains \"wp-architecture,architecture\"" in text
+        assert "subagent_type `repo-reviewer-adapter`" in text
+        assert "model `sonnet`" in text
+
     def test_step6_recomputes_dispatch_plan_summary(self, mod, tmp_path):
         """Step 6 orchestration must recompute summary from final dispatch-plan.json (post-override)."""
         import json
