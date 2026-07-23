@@ -513,7 +513,7 @@ def _builder_heredoc(reviewer="security", body=None):
     )
 
 
-def _bash_entry(command):
+def _bash_entry(command, tool_id="bash-1"):
     return {
         "type": "assistant",
         "message": {
@@ -521,8 +521,26 @@ def _bash_entry(command):
             "content": [
                 {
                     "type": "tool_use",
+                    "id": tool_id,
                     "name": "Bash",
                     "input": {"command": command},
+                }
+            ],
+        },
+    }
+
+
+def _tool_result_entry(tool_id, is_error=False):
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": "RECORDED COUNTS: ..." if not is_error else "Traceback",
+                    "is_error": is_error,
                 }
             ],
         },
@@ -587,8 +605,10 @@ class TestBashBuilderRecognition:
     def test_parse_subagent_log_populates_write_outputs(self, tmp_path):
         log = tmp_path / "agent.jsonl"
         entries = [
-            _bash_entry("git diff main..HEAD -- src/f.php"),
-            _bash_entry(_builder_heredoc()),
+            _bash_entry("git diff main..HEAD -- src/f.php", tool_id="diff-1"),
+            _tool_result_entry("diff-1"),
+            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
@@ -596,6 +616,44 @@ class TestBashBuilderRecognition:
 
         assert len(data["write_outputs"]) == 1
         assert data["write_outputs"][0]["source"] == "bash_builder_heredoc"
+
+    def test_failed_builder_heredoc_does_not_count_as_saved(self, tmp_path):
+        """A heredoc that exited with an error saved nothing — its findings
+        must not enter quality reports."""
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-fail"),
+            _tool_result_entry("builder-fail", is_error=True),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+
+    def test_failed_then_retried_builder_heredoc_counts_once(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-fail"),
+            _tool_result_entry("builder-fail", is_error=True),
+            _bash_entry(_builder_heredoc(), tool_id="builder-retry"),
+            _tool_result_entry("builder-retry"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert len(data["write_outputs"]) == 1
+
+    def test_unresolved_builder_heredoc_does_not_count_as_saved(self, tmp_path):
+        """No paired tool result means the save was never confirmed."""
+        log = tmp_path / "agent.jsonl"
+        entries = [_bash_entry(_builder_heredoc(), tool_id="builder-dangling")]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
 
     def test_quality_report_counts_bash_saved_findings(self):
         dispatch = (

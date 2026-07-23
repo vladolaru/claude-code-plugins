@@ -189,6 +189,12 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         "final_texts": [],
     }
 
+    # Builder heredocs synthesize a review record only when their paired
+    # tool result reports success — a failed save produced no artifacts,
+    # and a retry after failure must count once, not twice.
+    pending_builder_outputs: dict[str, dict[str, Any]] = {}
+    tool_result_errors: dict[str, bool] = {}
+
     for entry in entries:
         msg = entry.get("message", {})
         if isinstance(msg, str):
@@ -196,6 +202,18 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
 
         role = msg.get("role", "")
         content = msg.get("content", "")
+
+        # Tool results — needed to confirm builder heredoc saves succeeded
+        if role == "user" and isinstance(content, list):
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_result"
+                    and isinstance(block.get("tool_use_id"), str)
+                ):
+                    tool_result_errors[block["tool_use_id"]] = (
+                        block.get("is_error") is True
+                    )
 
         # First user message = prompt
         if role == "user" and not result["prompt_content"]:
@@ -234,10 +252,13 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                         # The mandated builder heredoc replaces the old
                         # Write-based save — synthesize the review record it
                         # produces so output analysis and quality metrics
-                        # see Bash-saved reviews.
+                        # see Bash-saved reviews. Held back until the paired
+                        # tool result confirms the save succeeded.
                         builder_output = _builder_review_from_heredoc(command)
-                        if builder_output is not None:
-                            result["write_outputs"].append(builder_output)
+                        if builder_output is not None and isinstance(
+                            block.get("id"), str
+                        ):
+                            pending_builder_outputs[block["id"]] = builder_output
                     elif tool_name == "Grep":
                         result["grep_searches"].append({
                             "pattern": tool_input.get("pattern", ""),
@@ -257,6 +278,10 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
 
         if role == "assistant" and isinstance(content, str):
             result["final_texts"].append(content)
+
+    for call_id, builder_output in pending_builder_outputs.items():
+        if tool_result_errors.get(call_id) is False:
+            result["write_outputs"].append(builder_output)
 
     return result
 
