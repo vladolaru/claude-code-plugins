@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.0] - 2026-07-23
+
+### Added
+
+- Codex plugin packaging for the existing `UserPromptSubmit` and `Stop`
+  hooks, including marketplace metadata and the standard Codex hook trust
+  flow.
+- Host-neutral hook metadata, documentation, and script guidance for Claude
+  Code and Codex sessions.
+
 ## [1.0.0] - 2026-03-08
 
 ### Added

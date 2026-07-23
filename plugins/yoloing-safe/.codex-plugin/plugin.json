@@ -1,0 +1,33 @@
+{
+  "name": "yoloing-safe",
+  "version": "1.14.0",
+  "description": "YOLO mode safety net - PreToolUse guardrails that block destructive commands (rm -rf, disk formatting, data exfiltration), gate risky-but-maybe-intentional actions with host-aware behavior, and nudge the agent toward safer alternatives. Configurable credential file protection. Because shipping fast shouldn't mean losing your home directory.",
+  "author": {
+    "name": "Vlad Olaru",
+    "url": "https://github.com/vladolaru"
+  },
+  "homepage": "https://github.com/vladolaru/claude-code-plugins",
+  "repository": "https://github.com/vladolaru/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "safety",
+    "yolo",
+    "hooks",
+    "security",
+    "guardrails"
+  ],
+  "interface": {
+    "displayName": "YOLOing Safe",
+    "shortDescription": "YOLO mode safety net - PreToolUse guardrails that block destructive commands (rm -rf, disk formatting, data.",
+    "longDescription": "YOLO mode safety net - PreToolUse guardrails that block destructive commands (rm -rf, disk formatting, data exfiltration), gate risky-but-maybe-intentional actions with host-aware behavior, and nudge the agent toward safer alternatives. Configurable credential file protection. Because shipping fast shouldn't mean losing your home directory.",
+    "developerName": "Vlad Olaru",
+    "category": "Security",
+    "capabilities": [
+      "Hooks"
+    ],
+    "websiteURL": "https://github.com/vladolaru/claude-code-plugins",
+    "defaultPrompt": [
+      "Use YOLOing Safe guardrails while working in this repository."
+    ]
+  }
+}

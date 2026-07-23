@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Keep Mac awake during Claude Code sessions via caffeinate
+# Keep Mac awake during Claude Code and Codex sessions via caffeinate
 # Uses per-session marker files (PPID) instead of counter to handle crashes gracefully
 
 LOCK_DIR="/tmp/claude_caffeinate"
@@ -9,7 +9,7 @@ PID_FILE="$LOCK_DIR/pid"
 
 mkdir -p "$SESSIONS_DIR"
 
-# Register this session (PPID = Claude Code's node process)
+# Register this session using the host process's PPID
 touch "$SESSIONS_DIR/$PPID"
 
 # Clean up stale sessions (process no longer exists)
@@ -21,7 +21,7 @@ for f in "$SESSIONS_DIR"/*; do
     fi
 done
 
-# Restart caffeinate with fresh 1h timeout (safety net if Claude crashes)
+# Restart caffeinate with fresh 1h timeout (safety net if the host crashes)
 if [ -f "$PID_FILE" ]; then
     pid=$(cat "$PID_FILE")
     if ps -p "$pid" -o args= 2>/dev/null | grep -q '^caffeinate'; then

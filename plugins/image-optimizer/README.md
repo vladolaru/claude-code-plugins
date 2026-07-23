@@ -40,10 +40,22 @@ No quality loss. Just smaller files.
 
 ## Installation
 
+### Claude Code
+
 ```bash
 /plugin marketplace add vladolaru/claude-code-plugins
 /plugin install image-optimizer@vladolaru-claude-code-plugins
 ```
+
+### Codex
+
+```bash
+codex plugin marketplace add vladolaru/claude-code-plugins
+codex plugin add image-optimizer@vladolaru-claude-code-plugins
+```
+
+Use `/optimize-images path/to/images` in Claude Code or
+`$image-optimizer:optimize-images path/to/images` in Codex.
 
 ### Dependencies
 

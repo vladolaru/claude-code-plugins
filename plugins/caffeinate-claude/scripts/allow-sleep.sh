@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Re-enable Mac sleep only when all Claude Code sessions have stopped
+# Re-enable Mac sleep only when all Claude Code and Codex sessions have stopped
 # Removes session marker, cleans stale sessions, kills caffeinate when none remain
 
 LOCK_DIR="/tmp/claude_caffeinate"

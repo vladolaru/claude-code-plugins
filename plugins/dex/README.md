@@ -107,10 +107,22 @@ Promoted rules are one-liners with links:
 
 ## Installation
 
+### Claude Code
+
 ```bash
 /plugin marketplace add vladolaru/claude-code-plugins
 /plugin install dex@vladolaru-claude-code-plugins
 ```
+
+### Codex
+
+```bash
+codex plugin marketplace add vladolaru/claude-code-plugins
+codex plugin add dex@vladolaru-claude-code-plugins
+```
+
+In Codex, invoke commands as plugin skills, for example
+`$dex:grok`. These adapters are generated from the canonical command files.
 
 ## Further Reading
 

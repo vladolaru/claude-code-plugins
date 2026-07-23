@@ -1,6 +1,6 @@
 # pirategoat-tools
 
-My main Claude Code plugin — the Swiss army knife I reach for on every project. Started as a personal grab bag of experimental features and grew into a proper toolkit for code review, testing, architecture, and WordPress development.
+My main Claude Code and Codex plugin - the Swiss army knife I reach for on every project. Started as a personal grab bag of experimental features and grew into a proper toolkit for code review, testing, architecture, and WordPress development.
 
 Everything here is opinionated, actively used, and evolving.
 
@@ -114,6 +114,11 @@ Not all work requires the same level of reasoning. Agents are assigned to model 
 | `/copy-as [content] [slack\|p2]` | Copy content to clipboard — markdown, Slack mrkdwn, or P2 HTML |
 | `/switch-to <branch\|PR_URL>` | Switch to a branch or PR — handles dirty state, remote sync, fork remotes, and post-switch context |
 
+Codex installs generated skill adapters for these commands. Invoke them with
+the explicit plugin skill syntax, such as `$pirategoat-tools:pr-review 42`.
+The adapters are generated from the command files, so the workflow has one
+canonical source.
+
 ### Pipeline Analytics
 
 `scripts/analysis/session_metrics.py` — extracts operational metrics from Claude Code session transcripts to measure agent performance and triage effectiveness.
@@ -133,14 +138,27 @@ Outputs markdown and JSON reports. Auto-detects the Claude Code sessions directo
 
 ## Installation
 
+### Claude Code
+
 ```bash
 /plugin marketplace add vladolaru/claude-code-plugins
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
 ```
 
+### Codex
+
+```bash
+codex plugin marketplace add vladolaru/claude-code-plugins
+codex plugin add pirategoat-tools@vladolaru-claude-code-plugins
+```
+
+The Codex review path uses native parallel subagents. Each subagent receives
+the same canonical reviewer file used by Claude Code. Claude-specific model
+labels are not translated because the hosts expose different model catalogs.
+
 ## How Reviews Work
 
-1. Check for project-specific context (CLAUDE.md, skills)
+1. Check for project-specific context (AGENTS.md, CLAUDE.md, skills)
 2. Load skill knowledge (testing-patterns, software-architecture)
 3. Analyze code changes
 4. Report findings with confidence scores
@@ -159,9 +177,12 @@ All output is dual-format — `.json` for automation, `.md` for reading.
 
 ```
 pirategoat-tools/
+├── .codex-plugin/
+│   └── plugin.json   # Generated Codex manifest
 ├── agents/           # 34 agent definitions (28 reviewers, 2 pipeline, 2 cross-validators, 2 utility)
+├── codex-skills/     # 7 generated Codex command adapters
 ├── commands/         # 7 slash commands
-├── skills/           # 21 skills with SKILL.md files
+├── skills/           # 21 shared skills
 │   ├── testing-patterns/references/      # 190KB test quality library
 │   └── software-architecture/patterns/   # 87KB design pattern library
 ├── scripts/          # Helper scripts organized by domain

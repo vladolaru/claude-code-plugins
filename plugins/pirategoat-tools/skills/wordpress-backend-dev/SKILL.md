@@ -3,6 +3,13 @@ name: wordpress-backend-dev
 description: Use when writing or reviewing WordPress plugin/theme PHP code, fixing PHPCS errors, resolving XSS/SQL injection/CSRF vulnerabilities, implementing i18n translations, or building AJAX/REST handlers - provides WPCS coding standards, security patterns, hooks API, database operations, and admin interface patterns.
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # WordPress Backend Development
 
 This skill provides comprehensive guidance for WordPress backend PHP development, covering coding standards, internationalization, security, and best practices.
@@ -77,24 +84,24 @@ echo esc_html( $value );
 Before beginning development work, read the relevant reference files:
 
 ```
-${CLAUDE_SKILL_DIR}/references/coding-standards.md        # PHP coding standards (WPCS)
-${CLAUDE_SKILL_DIR}/references/i18n.md                    # Internationalization best practices
-${CLAUDE_SKILL_DIR}/references/security.md                # Security patterns and sanitization
-${CLAUDE_SKILL_DIR}/references/hooks-api.md               # Actions, filters, and hook patterns
-${CLAUDE_SKILL_DIR}/references/database.md                # WPDB and database operations
-${CLAUDE_SKILL_DIR}/references/transients.md              # Transients API for caching
-${CLAUDE_SKILL_DIR}/references/users.md                   # Users, roles, capabilities, user meta
-${CLAUDE_SKILL_DIR}/references/ajax.md                    # AJAX handlers and JavaScript enqueuing
-${CLAUDE_SKILL_DIR}/references/http-api.md                # HTTP requests to external APIs
+$SKILL_DIR/references/coding-standards.md        # PHP coding standards (WPCS)
+$SKILL_DIR/references/i18n.md                    # Internationalization best practices
+$SKILL_DIR/references/security.md                # Security patterns and sanitization
+$SKILL_DIR/references/hooks-api.md               # Actions, filters, and hook patterns
+$SKILL_DIR/references/database.md                # WPDB and database operations
+$SKILL_DIR/references/transients.md              # Transients API for caching
+$SKILL_DIR/references/users.md                   # Users, roles, capabilities, user meta
+$SKILL_DIR/references/ajax.md                    # AJAX handlers and JavaScript enqueuing
+$SKILL_DIR/references/http-api.md                # HTTP requests to external APIs
 
 # REST API (comprehensive coverage)
-${CLAUDE_SKILL_DIR}/references/rest-api.md                # Overview, key concepts, global params
-${CLAUDE_SKILL_DIR}/references/rest-api-endpoints.md      # Routes, parameters, validation
-${CLAUDE_SKILL_DIR}/references/rest-api-authentication.md # Auth methods, nonces, app passwords
-${CLAUDE_SKILL_DIR}/references/rest-api-controllers.md    # Controller classes and patterns
+$SKILL_DIR/references/rest-api.md                # Overview, key concepts, global params
+$SKILL_DIR/references/rest-api-endpoints.md      # Routes, parameters, validation
+$SKILL_DIR/references/rest-api-authentication.md # Auth methods, nonces, app passwords
+$SKILL_DIR/references/rest-api-controllers.md    # Controller classes and patterns
 
 # Admin interface
-${CLAUDE_SKILL_DIR}/references/admin-menus.md             # Admin menu pages and settings screens
+$SKILL_DIR/references/admin-menus.md             # Admin menu pages and settings screens
 ```
 
 ## Core Principles (Quick Summary)

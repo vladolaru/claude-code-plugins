@@ -5,6 +5,14 @@ All notable changes to the image-optimizer plugin will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-23
+
+### Added
+
+- Codex plugin packaging and a generated
+  `$image-optimizer:optimize-images` command adapter derived from the
+  canonical Claude Code command.
+
 ## [1.1.0] - 2025-12-11
 
 ### Changed

@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/pattern.md
+interface:
+  display_name: "Pattern"
+  short_description: "Capture a reusable pattern from the current conversation - approaches."
+  default_prompt: "Use $dex:pattern."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,33 @@
+{
+  "name": "caffeinate-claude",
+  "version": "1.1.0",
+  "description": "Keeps your Mac awake during Claude Code and Codex sessions using macOS caffeinate. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end.",
+  "author": {
+    "name": "Vlad Olaru",
+    "url": "https://github.com/vladolaru"
+  },
+  "homepage": "https://github.com/vladolaru/claude-code-plugins",
+  "repository": "https://github.com/vladolaru/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "macos",
+    "caffeinate",
+    "sleep-prevention",
+    "hooks",
+    "productivity"
+  ],
+  "interface": {
+    "displayName": "Caffeinate Claude",
+    "shortDescription": "Keeps your Mac awake during Claude Code and Codex sessions using macOS caffeinate. Supports multiple tabs, handles.",
+    "longDescription": "Keeps your Mac awake during Claude Code and Codex sessions using macOS caffeinate. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end.",
+    "developerName": "Vlad Olaru",
+    "category": "Productivity",
+    "capabilities": [
+      "Hooks"
+    ],
+    "websiteURL": "https://github.com/vladolaru/claude-code-plugins",
+    "defaultPrompt": [
+      "Keep this Codex session awake while it works."
+    ]
+  }
+}

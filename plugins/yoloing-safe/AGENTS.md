@@ -1,13 +1,23 @@
 # yoloing-safe — Agent Instructions
 
-You maintain a PreToolUse safety hook for Claude Code's YOLO mode (`--dangerously-skip-permissions`). The hook evaluates tool calls in this order:
+You maintain a dual-host PreToolUse safety hook for Claude Code's YOLO mode
+(`--dangerously-skip-permissions`) and Codex. The hook evaluates tool calls in
+this order:
 
 1. allowlist
 2. block-tier rules
 3. ask-tier rules
 4. allow
 
-The runtime entrypoint stays at `scripts/pre-tool-use-safety.py`, but that file is now a compatibility shim. The assembled rule registry in `scripts/yoloing_safe/rules/__init__.py` is the canonical rule order and metadata source.
+The runtime entrypoint stays at `scripts/pre-tool-use-safety.py`, but that file
+is now a compatibility shim. The assembled rule registry in
+`scripts/yoloing_safe/rules/__init__.py` is the canonical rule order and
+metadata source. Claude Code receives ask-tier confirmation output. Codex
+payloads include `turn_id`; because Codex `PreToolUse` does not support `ask`,
+the runtime converts those outcomes into explicit blocks. Codex also emits
+`apply_patch` plus a patch command instead of Write/Edit plus `file_path`;
+`paths.extract_apply_patch_paths()` and `paths.resolve_tool_path()` adapt every
+patch target to the canonical Write rules.
 
 ## Key Files
 

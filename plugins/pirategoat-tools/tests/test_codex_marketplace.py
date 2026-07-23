@@ -1,0 +1,128 @@
+"""Repository-wide tests for generated Codex marketplace compatibility."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CLAUDE_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
+CODEX_MARKETPLACE = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
+GENERATOR = REPO_ROOT / "scripts" / "generate_codex_compat.py"
+GENERATED_MARKER = "GENERATED FILE - DO NOT EDIT"
+
+
+def _canonical_plugins() -> list[dict]:
+    return json.loads(CLAUDE_MARKETPLACE.read_text())["plugins"]
+
+
+def test_codex_marketplace_covers_every_canonical_plugin():
+    assert CODEX_MARKETPLACE.is_file()
+    marketplace = json.loads(CODEX_MARKETPLACE.read_text())
+    canonical = _canonical_plugins()
+
+    assert marketplace["name"] == "vladolaru-claude-code-plugins"
+    assert marketplace["interface"]["displayName"]
+    assert [entry["name"] for entry in marketplace["plugins"]] == [
+        entry["name"] for entry in canonical
+    ]
+
+    for entry in marketplace["plugins"]:
+        assert entry["source"] == {
+            "source": "local",
+            "path": f"./plugins/{entry['name']}",
+        }
+        assert entry["policy"] == {
+            "installation": "AVAILABLE",
+            "authentication": "ON_INSTALL",
+        }
+        assert entry["category"]
+
+
+def test_every_plugin_has_matching_codex_manifest():
+    for entry in _canonical_plugins():
+        plugin_root = REPO_ROOT / entry["source"].removeprefix("./")
+        manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+        assert manifest_path.is_file(), entry["name"]
+
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["name"] == entry["name"]
+        assert manifest["version"] == entry["version"]
+        assert manifest["description"] == entry["description"].replace("\u2014", "-")
+        assert manifest["author"]["name"] == entry["author"]["name"]
+        assert manifest["repository"] == entry["repository"]
+        assert manifest["license"] == entry["license"]
+        assert manifest["interface"]["displayName"]
+        assert manifest["interface"]["shortDescription"]
+        assert manifest["interface"]["developerName"] == entry["author"]["name"]
+        assert sorted(path.name for path in manifest_path.parent.iterdir()) == [
+            "plugin.json"
+        ]
+
+        if entry.get("commands"):
+            assert manifest["skills"] == "./codex-skills/"
+            assert (plugin_root / manifest["skills"]).is_dir()
+
+
+def test_every_claude_command_has_generated_codex_skill():
+    for entry in _canonical_plugins():
+        plugin_root = REPO_ROOT / entry["source"].removeprefix("./")
+        for command_ref in entry.get("commands", []):
+            command_path = plugin_root / command_ref.removeprefix("./")
+            skill_dir = (
+                plugin_root
+                / "codex-skills"
+                / command_path.stem
+            )
+            skill_path = skill_dir / "SKILL.md"
+            policy_path = skill_dir / "agents" / "openai.yaml"
+
+            assert skill_path.is_file(), command_path
+            skill_text = skill_path.read_text()
+            assert GENERATED_MARKER in skill_text
+            assert f"Source: {command_ref}" in skill_text
+            assert f"name: {command_path.stem}" in skill_text
+            assert "${CLAUDE_PLUGIN_ROOT}" not in skill_text
+            assert "$ARGUMENTS" not in skill_text
+
+            assert policy_path.is_file(), command_path
+            policy_text = policy_path.read_text()
+            assert GENERATED_MARKER in policy_text
+            assert "allow_implicit_invocation: false" in policy_text
+            assert not (
+                plugin_root / "skills" / command_path.stem / "SKILL.md"
+            ).exists()
+
+
+def test_review_command_adapters_select_codex_host():
+    plugin_root = REPO_ROOT / "plugins" / "pirategoat-tools"
+    for command_name in ("pr-review", "full-code-review", "code-review"):
+        text = (
+            plugin_root
+            / "codex-skills"
+            / command_name
+            / "SKILL.md"
+        ).read_text()
+        assert "--host codex" in text
+
+
+def test_canonical_skills_use_host_neutral_skill_directory():
+    for skill_path in REPO_ROOT.glob("plugins/*/skills/*/SKILL.md"):
+        text = skill_path.read_text()
+        assert "${CLAUDE_SKILL_DIR}" not in text, skill_path
+        if "$SKILL_DIR" in text:
+            assert "directory containing this `SKILL.md`" in text
+            assert "not a host-exported environment variable" in text
+
+
+def test_generated_codex_compatibility_files_are_current():
+    result = subprocess.run(
+        [sys.executable, str(GENERATOR), "--check"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

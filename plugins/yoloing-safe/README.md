@@ -10,14 +10,20 @@ Real incidents have wiped home directories, deleted production databases, and pu
 
 ## How It Works
 
-A `PreToolUse` hook evaluates every Bash, Read, Write, and Edit tool call against safety rules. Four tiers, checked in order — first match wins:
+A `PreToolUse` hook evaluates Bash calls, Claude Code Read/Write/Edit calls,
+and Codex `apply_patch` targets against safety rules. Four tiers, checked in
+order - first match wins:
 
-1. **Allowlist** — safe variants that look dangerous but aren't (`git checkout -b`, `rm -rf /tmp/`, `--force-with-lease`)
-2. **Block** — irreversible operations an agent should never do (exit code 2, guidance on stderr)
-3. **Ask** — risky but sometimes intentional (user gets a confirmation prompt)
-4. **Allow** — everything else flies through silently
+1. **Allowlist** - safe variants that look dangerous but aren't (`git checkout -b`, `rm -rf /tmp/`, `--force-with-lease`)
+2. **Block** - irreversible operations an agent should never do (exit code 2, guidance on stderr)
+3. **Ask** - risky but sometimes intentional (Claude Code gets a confirmation prompt; Codex fails closed with actionable guidance)
+4. **Allow** - everything else flies through silently
 
-The hook auto-wires on install via `hooks.json`. Zero configuration needed — it just works.
+The hook auto-wires on install via `hooks.json`. Codex asks you to review and
+trust plugin hooks before running them. Codex `PreToolUse` hooks cannot surface
+an interactive `ask` decision, so ask-tier matches become explicit blocks in
+Codex. The denial names the matching rule and explains how to opt in through
+configuration when the action is intentional.
 
 ## Architecture
 
@@ -30,7 +36,7 @@ The runtime entrypoint stays at `scripts/pre-tool-use-safety.py`, but the implem
 - `runtime.py` — allow/block/ask/allow flow
 - `rules/` — domain rule modules plus the assembled ordered `RULES` registry
 
-This keeps the hook path stable for Claude Code while making rule maintenance less error-prone.
+This keeps the hook path stable for both hosts while making rule maintenance less error-prone.
 
 ## What Gets Caught
 
@@ -50,7 +56,7 @@ This keeps the hook path stable for Claude Code while making rule maintenance le
 | Bare git push | `git push`, `git push origin` (no explicit branch — use `git push origin HEAD`) |
 | Self-protection | Write/Edit/Bash writes or destructive mutations to the hook's own config or plugin files (non-configurable) |
 
-### Asked (user confirms)
+### Asked in Claude Code (blocked in Codex)
 
 | Category | Examples |
 |----------|----------|
@@ -107,29 +113,43 @@ Most rules can be disabled via `disable_rules` in your config file. The followin
 
 ## Installation
 
+### Claude Code
+
 ```bash
 /plugin marketplace add vladolaru/claude-code-plugins
 /plugin install yoloing-safe@vladolaru-claude-code-plugins
 ```
 
-No dependencies — Python 3 stdlib only.
+### Codex
+
+```bash
+codex plugin marketplace add vladolaru/claude-code-plugins
+codex plugin add yoloing-safe@vladolaru-claude-code-plugins
+```
+
+Review the plugin's hook definition when Codex presents its trust prompt.
+Ask-tier actions fail closed in Codex because its `PreToolUse` hook protocol
+does not support confirmation prompts. Disable the named rule in
+`~/.claude/yoloing-safe.json` only when you intentionally accept that risk.
+No dependencies - Python 3 stdlib only.
 
 ## Alternatives
 
-If you want a different style of safety layer, there are other projects in this space. One worth evaluating is [destructive_command_guard](https://github.com/Dicklesworthstone/destructive_command_guard), another AI-agent command safety hook with a broader cross-agent focus. `yoloing-safe` is intentionally narrower: a Claude Code plugin that installs as a `PreToolUse` hook and guards Bash plus Claude Code `Read`/`Write`/`Edit` operations with allowlist, block, and ask tiers.
+If you want a different style of safety layer, there are other projects in this space. One worth evaluating is [destructive_command_guard](https://github.com/Dicklesworthstone/destructive_command_guard), another AI-agent command safety hook with a broader cross-agent focus. `yoloing-safe` is intentionally narrower: a Claude Code and Codex plugin that installs as a `PreToolUse` hook and guards Bash plus supported file operations with allowlist, block, and ask-tier policies.
 
 ## Design Decisions
 
 A few deliberate choices worth calling out:
 
-- **Fail-open** — if the hook script errors, the tool call proceeds. Safety hooks should not break the agent on their own bugs.
+- **Fail-open** - if the hook script errors, the tool call proceeds. Safety hooks should not break the agent on their own bugs.
+- **Fail-closed Codex asks** - Codex reports `permissionDecision: "ask"` as an unsupported hook result and continues the tool call. The runtime identifies Codex's documented `turn_id` field and converts ask-tier results into explicit blocks instead.
 - **Positive framing** — block/ask messages tell Claude what to do instead, not just what's wrong. This shapes the next attempt, not just blocks the current one.
 - **Exit 2 for blocks** — Claude treats this as a system error it can't negotiate with. Stronger than a policy denial for behavior shaping.
 - **5-second timeout** — if the script hangs, the tool call proceeds. No blocking the agent forever.
 - **Allowlist checked first** — without it, `git checkout -b feature` would false-positive against `git checkout --`, and `rm -rf /tmp/build` would match the destructive deletion pattern. Order matters.
 - **Compound command evaluation** — commands with shell separators (`&&`, `;`, `||`, `|`, `&`, newline) are split into segments, each evaluated independently against the allowlist and rules. This prevents safe-prefix attacks (`git checkout -b safe && rm -rf /` or `git checkout -b safe` on one line followed by `rm -rf /` on the next) while correctly allowing compound commands where every segment is safe.
 - **Self-protection** — the hook blocks Write/Edit/Bash writes and destructive mutations (`>`, `>|`, `cp`, `mv`, `tee`, `sed -i`, `rm`, `ln -s`, `touch`, `chmod`, `chown`, interpreter writes, etc.) to its own config file and plugin directory, preventing an agent from disabling all rules then running destructive commands. Path checks resolve symlinks (`realpath`) and relative targets (including `cd ... &&` command chains). This check is hardcoded and cannot be disabled via `disable_rules`.
-- **Tool-scoped rules** — each rule declares which tools it applies to. Read evaluates 2 rules (credential access, protected paths), Write/Edit evaluate 3, and Bash evaluates the rest plus Bash-side sensitive-write detection for redirects/copies/moves/removals into shell init files, git hooks, and home-directory package config. A new rule must include example commands — the e2e generator fails if examples are missing.
+- **Tool-scoped rules** - each rule declares which tools it applies to. Read evaluates 2 rules (credential access, protected paths), Write/Edit evaluate 3, and Bash evaluates the rest plus Bash-side sensitive-write detection for redirects/copies/moves/removals into shell init files, git hooks, and home-directory package config. Codex `apply_patch` source and destination paths are resolved against the tool working directory and adapted to the canonical Write rules. A new rule must include example commands - the e2e generator fails if examples are missing.
 - **Command normalization** — strips leading binary paths (`/usr/bin/rm` or `/opt/homebrew/bin/git` → `rm`/`git`) and command wrappers (`sudo`, `env`, `nice`, `nohup`, etc.) so detection works regardless of how the command is invoked.
 - **Path expansion** — zero-access paths are checked in both `~/` form and expanded absolute form (`/Users/you/`), so protection works regardless of which form the tool provides.
 - **Case-insensitive matching** — credential patterns and zero-access paths match case-insensitively (`.ENV`, `~/.AWS/`), so protection works on case-insensitive filesystems like macOS HFS+/APFS.
@@ -153,7 +173,8 @@ This hook is a safety net, not a sandbox. It catches common and accidental destr
 
 These are fundamentally hard to catch without a shell parser, which is beyond the scope of a fast, stateless hook.
 
-**Unmonitored tools.** The hook only monitors `Bash`, `Read`, `Write`, and `Edit` tools. Other tools are not checked:
+**Unmonitored tools.** The hook monitors `Bash`, Claude Code `Read`/`Write`/`Edit`,
+and Codex `apply_patch`. Other tools are not checked:
 - MCP server tools (filesystem, browser automation, etc.) can read/write/delete files
 - `NotebookEdit` can write executable code cells
 

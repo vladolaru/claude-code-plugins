@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/pr-update.md
+interface:
+  display_name: "Pr Update"
+  short_description: "Analyze the current PR branch and update the PR description with an accurate."
+  default_prompt: "Use $pirategoat-tools:pr-update."
+policy:
+  allow_implicit_invocation: false

@@ -41,7 +41,7 @@ Core principle: **verify before you code** - issues are frequently invalid, alre
 **Linear MCP server is required.** Before starting, verify it is available by checking your tool list for `mcp__linear-server__get_issue`. If it is not available, STOP and ask the user:
 
 ```
-AskUserQuestion:
+Ask using the current host's input mechanism:
   question: "The Linear MCP server is not available. This skill requires it to fetch issue details and comments. Please configure it and retry."
   header: "Linear MCP required"
 ```
@@ -205,7 +205,7 @@ If the issue has an **open PR** linked to it (exclude draft PRs), present option
 **Multiple open PRs?** If there are multiple non-draft open PRs, mention all of them in the question and let the user choose which one to review, or offer to continue investigation.
 
 ```
-AskUserQuestion:
+Ask using the current host's input mechanism:
   question: "This issue has an open PR linked: PR #<number> - <title>. How would you like to proceed?"
   header: "Open PR"
   options:

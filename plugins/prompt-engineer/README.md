@@ -63,12 +63,23 @@ Output your tests with explanations for each test case.
 
 ## Installation
 
+### Claude Code
+
 ```bash
 /plugin marketplace add vladolaru/claude-code-plugins
 /plugin install prompt-engineer@vladolaru-claude-code-plugins
 ```
 
-No dependencies. Works with any LLM prompt, optimized for Claude.
+### Codex
+
+```bash
+codex plugin marketplace add vladolaru/claude-code-plugins
+codex plugin add prompt-engineer@vladolaru-claude-code-plugins
+```
+
+Use `/optimize-prompt` in Claude Code or
+`$prompt-engineer:optimize-prompt` in Codex. No dependencies. Works with any
+LLM prompt and includes host-specific explicit invocation controls.
 
 ## Credits
 

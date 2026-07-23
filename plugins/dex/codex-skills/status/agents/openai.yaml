@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/status.md
+interface:
+  display_name: "Status"
+  short_description: "Show knowledge health report for the current project"
+  default_prompt: "Use $dex:status."
+policy:
+  allow_implicit_invocation: false

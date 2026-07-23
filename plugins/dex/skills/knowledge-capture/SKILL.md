@@ -83,7 +83,9 @@ Throughout this skill and all `/dex:*` commands:
 
 Substitute the resolved values in all paths and user-facing messages. For example, when `ai_dir` is `.ai`: "Promote to AGENTS.md?", "Create `.ai/docs/`?", scaffolding creates `.ai/docs/learnings/` etc.
 
-If `.claude/docs/` doesn't exist, commands should offer scaffolding via AskUserQuestion before proceeding (except `/dex:status` which reports the absence).
+If `.claude/docs/` doesn't exist, commands should ask the user whether to
+scaffold it using the current host's input mechanism before proceeding (except
+`/dex:status`, which reports the absence).
 
 ### Scaffolding
 
@@ -326,7 +328,8 @@ digraph promotion_decision {
 
 **Skip promotion silently** for informational learnings, one-off debugging insights, decisions, and research.
 
-**Budget 500–550**: Warn via AskUserQuestion — "CLAUDE.md is at X/500 lines." Options: "Add anyway" / "Extract a section first"
+**Budget 500-550**: Warn using the current host's input mechanism: "CLAUDE.md
+is at X/500 lines." Options: "Add anyway" / "Extract a section first"
 
 **Budget 550+**: Hard block. Tell user to extract sections first. Show sections ranked by line count, offer to extract largest. Proceed only after extraction brings count below 550.
 
@@ -360,7 +363,8 @@ When promoting a rule to CLAUDE.md:
 When extracting a section from CLAUDE.md:
 
 1. List all `##` sections with their line counts
-2. AskUserQuestion: "Which section to extract?" — show sections ranked by size
+2. Ask the user "Which section to extract?" using the current host's input
+   mechanism, and show sections ranked by size
 3. Move the section content to `.claude/docs/` as a standalone doc
 4. Replace the section in CLAUDE.md with a 1-2 line summary + bare path:
    ```markdown
@@ -386,7 +390,7 @@ Then draft:
 1. **Title** — short directive statement (imperative or declarative)
 2. **Key section** — Rule for learnings, Pattern for patterns, Decision for decisions, Summary for research
 3. **Tags** — 3-5 from the technical domain (lowercase, hyphen-separated)
-4. **Present via AskUserQuestion** for confirmation
+4. **Present using the current host's input mechanism** for confirmation
 
 Focus on what an agent needs to act differently next time, not on narrating what happened during debugging.
 

@@ -1,0 +1,80 @@
+{
+  "name": "vladolaru-claude-code-plugins",
+  "interface": {
+    "displayName": "Vlad Olaru's Claude Code and Codex Plugins"
+  },
+  "plugins": [
+    {
+      "name": "pirategoat-tools",
+      "source": {
+        "source": "local",
+        "path": "./plugins/pirategoat-tools"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "image-optimizer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/image-optimizer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "prompt-engineer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/prompt-engineer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "dex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/dex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "yoloing-safe",
+      "source": {
+        "source": "local",
+        "path": "./plugins/yoloing-safe"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Security"
+    },
+    {
+      "name": "caffeinate-claude",
+      "source": {
+        "source": "local",
+        "path": "./plugins/caffeinate-claude"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

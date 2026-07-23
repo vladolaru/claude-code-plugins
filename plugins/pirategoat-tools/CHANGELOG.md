@@ -5,6 +5,32 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.111.0] - 2026-07-29
+
+Adds first-class Codex installation and execution while preserving the
+existing Claude Code workflows as the canonical authoring surface.
+
+### Added
+
+- **Generated Codex packaging.** The repository generator creates the Codex
+  plugin manifest and seven explicit command-skill adapters from the canonical
+  marketplace entry and command files.
+- **Native Codex review orchestration.** The review pipeline persists a host
+  selection and emits Codex briefings that dispatch parallel subagents,
+  reconciliation, and decision criticism with native Codex agent tools.
+  Reviewer names are normalized to Codex-safe task identifiers while the
+  canonical hyphenated names remain unchanged everywhere else.
+- **Shared reviewer definitions.** Codex subagents load the same canonical
+  reviewer Markdown files as Claude Code instead of maintaining a second
+  prompt tree. Briefings explicitly treat YAML frontmatter as Claude Code
+  packaging metadata and do not translate model or tool labels.
+
+### Changed
+
+- Shared skill resource paths now use a host-neutral `SKILL_DIR` convention.
+- Review pipeline stop and dispatch instructions adapt to the selected host
+  while retaining Claude Code as the default for existing invocations.
+
 ## [1.110.0] - 2026-07-27
 
 Closes a review blind spot around speculative extension surface and sharpens two structural lenses. Field feedback from WooCommerce Subscriptions reviews showed new hooks/filters being introduced without a stated need and maintained nearly forever afterward — while simplification-reviewer's framework-convention exemption actively excluded them from YAGNI review and wp-architecture-reviewer only checked for *missing* hooks, never unwarranted ones.

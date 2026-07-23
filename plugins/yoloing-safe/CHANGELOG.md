@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Removed `tests/__init__.py` as part of the repo-wide fix for multi-plugin pytest collection collisions (all plugin suites were importable as the same package `tests`, and conftests collided as `tests.conftest`); the root `pytest.ini` now pins `--import-mode=importlib`. No runtime change.
 
+## [1.14.0] - 2026-07-23
+
+### Added
+
+- Codex plugin packaging for the existing `PreToolUse` hook, including
+  marketplace metadata and the standard Codex hook trust flow.
+- Host-aware ask-tier handling: Claude Code keeps its interactive confirmation
+  prompt, while Codex fails closed with the matching rule ID and opt-in
+  guidance because Codex `PreToolUse` hooks do not support `ask` decisions.
+- Codex `apply_patch` payload adaptation, including every add, update, delete,
+  and move target resolved against the tool's working directory, so canonical
+  file safety and self-protection rules apply even though Codex does not emit
+  Claude's Write/Edit payload shape.
+
 ## [1.13.1] - 2026-04-24
 
 ### Fixed

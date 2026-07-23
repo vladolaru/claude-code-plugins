@@ -26,6 +26,7 @@ import argparse
 import glob as glob_mod
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -33,6 +34,49 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+PLUGIN_ROOT = SCRIPTS_DIR.parents[1]
+AGENTS_DIR = PLUGIN_ROOT / "agents"
+
+HOST_CLAUDE = "claude"
+HOST_CODEX = "codex"
+SUPPORTED_HOSTS = (HOST_CLAUDE, HOST_CODEX)
+
+
+def _host(config):
+    """Return the persisted orchestration host."""
+    host = (config or {}).get("host", HOST_CLAUDE)
+    return host if host in SUPPORTED_HOSTS else HOST_CLAUDE
+
+
+def _agent_definition_path(agent_name):
+    """Return the canonical reviewer definition path for either host."""
+    return AGENTS_DIR / f"{agent_name}.md"
+
+
+def _codex_task_name(agent_name):
+    """Map a reviewer name to Codex's lowercase task-name contract."""
+    normalized = re.sub(r"[^a-z0-9_]+", "_", str(agent_name).lower())
+    normalized = normalized.strip("_")
+    if not normalized:
+        normalized = "reviewer"
+    if normalized[0].isdigit():
+        normalized = f"reviewer_{normalized}"
+    return normalized[:64]
+
+
+def _codex_agent_instruction(agent_name):
+    """Describe how Codex should reuse a canonical Claude agent definition."""
+    return (
+        f"In the message, first read `{_agent_definition_path(agent_name)}` "
+        "completely. Treat its YAML frontmatter as Claude Code packaging "
+        "metadata, do not translate its model or tool labels, and follow the "
+        "Markdown reviewer instructions."
+    )
+
+
+def _stop_operation(config):
+    """Return the host-native operation used to stop a subagent."""
+    return "interrupt_agent" if _host(config) == HOST_CODEX else "TaskStop"
 
 # ---------------------------------------------------------------------------
 # Pipeline Identity
@@ -839,18 +883,31 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
         "Agents will be dispatched based on the dispatch plan.",
     ]
 
-    actions = [
-        "Dispatch ALL eligible agents in a SINGLE message with MULTIPLE Agent tool calls.",
-        "Each agent runs in parallel — do NOT dispatch them one at a time.",
-        "",
-    ]
+    codex_host = _host(config) == HOST_CODEX
+    if codex_host:
+        actions = [
+            "Dispatch ALL eligible reviewers in parallel with multiple `spawn_agent` calls.",
+            "Issue the calls together rather than waiting for one reviewer before starting the next.",
+            "For each subagent, use the canonical reviewer definition and exact bootstrap command below.",
+            "",
+        ]
+    else:
+        actions = [
+            "Dispatch ALL eligible agents in a SINGLE message with MULTIPLE Agent tool calls.",
+            "Each agent runs in parallel - do NOT dispatch them one at a time.",
+            "",
+        ]
 
     if dispatched:
-        actions.append("Agent dispatch calls (copy each to an Agent tool):")
+        if codex_host:
+            actions.append("Codex subagent dispatch inputs:")
+        else:
+            actions.append("Agent dispatch calls (copy each to an Agent tool):")
         actions.append("")
         for agent in dispatched:
             name = agent.get("name", agent) if isinstance(agent, dict) else agent
             adapter = agent.get("adapter") if isinstance(agent, dict) else None
+            agent_type = adapter or name
             if adapter:
                 # Repo-contributed reviewer: dispatch the generic adapter
                 # subagent, parameterized with this reviewer's ref. The Agent
@@ -878,16 +935,38 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                 cmd = " ".join(shlex.quote(p) for p in cmd_parts)
                 model = agent.get("model")
                 model_hint = f" with model `{model}`" if model else ""
-                actions.append(
-                    f"**{name}** (repo reviewer — dispatch as subagent_type "
-                    f"`{adapter}`{model_hint}):"
-                )
+                if codex_host:
+                    actions.append(f"**{name}** (repo reviewer adapter):")
+                else:
+                    actions.append(
+                        f"**{name}** (repo reviewer - dispatch as subagent_type "
+                        f"`{adapter}`{model_hint}):"
+                    )
+                if codex_host:
+                    actions.append(
+                        f"- Call `spawn_agent` with task name `{_codex_task_name(name)}` "
+                        "and no Claude model override."
+                    )
+                    actions.append(
+                        f"- {_codex_agent_instruction(agent_type)} Then run the exact "
+                        "bootstrap command below and follow the emitted scope and "
+                        "output contract."
+                    )
                 actions.append("```")
                 actions.append(cmd)
                 actions.append("```")
                 actions.append("")
             else:
                 actions.append(f"**{name}:**")
+                if codex_host:
+                    actions.append(
+                        f"- Call `spawn_agent` with task name `{_codex_task_name(name)}`."
+                    )
+                    actions.append(
+                        f"- {_codex_agent_instruction(agent_type)} Then run the exact "
+                        "bootstrap command below and follow the emitted scope and "
+                        "output contract."
+                    )
                 actions.append("```")
                 actions.append(f'python3 {SCRIPTS_DIR}/agent/bootstrap.py --agent {name} --range "{git_range}" --output-dir "{od}"')
                 actions.append("```")
@@ -988,7 +1067,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
             state["_escalation_warning"] = (
                 f"**Escalation:** Waited {elapsed_min}m for {len(running)} agent(s) "
                 f"that never finished: {', '.join(running)}. "
-                f"**TaskStop these agents before proceeding.**"
+                f"**Use {_stop_operation(config)} on these agents before proceeding.**"
             )
             # Don't return — fall through to normal reconciliation briefing below
         else:
@@ -1052,16 +1131,33 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         situation.insert(0, escalation)
         situation.insert(1, "")
 
+    stop_operation = _stop_operation(config)
     actions = [
-        ("**1. TaskStop** stuck agents that exceeded their timeout."
+        (f"**1. {stop_operation}** stuck agents that exceeded their timeout."
          if escalation else
-         "**1. TaskStop** all remaining background review agents."),
+         f"**1. {stop_operation}** all remaining background review agents."),
         "",
-        "**2. Dispatch `review-reconciliator`** with:",
+    ]
+    if _host(config) == HOST_CODEX and dispatched:
+        actions.extend([
+            "Codex task targets:",
+            ", ".join(f"`{_codex_task_name(name)}`" for name in dispatched),
+            "",
+        ])
+    if _host(config) == HOST_CODEX:
+        actions.extend([
+            "**2. Call `spawn_agent` with task name `review_reconciliator` "
+            "for `review-reconciliator`.**",
+            f"- {_codex_agent_instruction('review-reconciliator')}",
+            "- Then provide these concrete inputs:",
+        ])
+    else:
+        actions.append("**2. Dispatch `review-reconciliator`** with:")
+    actions.extend([
         f"- **Reconciliation context:** `{od}/reconciliation-context.md` (pre-gathered Markdown briefing: all agent findings, source snippets, scope annotations)",
         f"- **Output builder path:** `{SCRIPTS_DIR / 'agent' / 'output.py'}`",
         f"- Output directory: `{od}`",
-    ]
+    ])
 
     if change_purpose:
         actions.append(
@@ -1317,9 +1413,18 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         actions.append("```")
         actions.append("")
 
-    actions.append(
-        f"Dispatch the `decision-reviewer` agent to stress-test the review conclusions."
-    )
+    if _host(config) == HOST_CODEX:
+        actions.append(
+            "Call `spawn_agent` with task name `decision_reviewer` for "
+            "`decision-reviewer` to stress-test the review conclusions."
+        )
+        actions.append(
+            _codex_agent_instruction("decision-reviewer")
+        )
+    else:
+        actions.append(
+            "Dispatch the `decision-reviewer` agent to stress-test the review conclusions."
+        )
     actions.append("")
     actions.append("Use this dispatch prompt:")
     actions.append("```")
@@ -2038,6 +2143,8 @@ def main():
     parser.add_argument("--stash-ref", help="Stash ref to restore on cleanup")
     parser.add_argument("--quick", action="store_true", default=False,
                         help="Quick review mode: fewer agents, conditional critic skip")
+    parser.add_argument("--host", choices=SUPPORTED_HOSTS, default=None,
+                        help="Orchestration host (default on first call: claude)")
 
     args = parser.parse_args()
     output_dir = args.output_dir
@@ -2062,6 +2169,7 @@ def main():
         if not existing_config.get("mode"):
             config = {
                 "mode": mode,
+                "host": args.host or HOST_CLAUDE,
             }
             if args.pr_number:
                 config["pr_number"] = args.pr_number
@@ -2077,6 +2185,13 @@ def main():
             write_config(output_dir, config)
         else:
             config = existing_config
+            config_changed = False
+            if "host" not in config:
+                config["host"] = args.host or HOST_CLAUDE
+                config_changed = True
+            elif args.host is not None and config.get("host") != args.host:
+                config["host"] = args.host
+                config_changed = True
             # On interactive rerun, sync --quick from CLI into config.
             # Without this, a quick→normal rerun stays in quick mode,
             # and a normal→quick rerun was already handled.
@@ -2086,6 +2201,8 @@ def main():
             # prompt overrides), so we must not overwrite the bot's value.
             if config.get("interactive", True) and config.get("quick") != args.quick:
                 config["quick"] = args.quick
+                config_changed = True
+            if config_changed:
                 write_config(output_dir, config)
 
         # Note: review-context.json is NOT cleared here. For interactive runs,

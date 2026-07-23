@@ -3,6 +3,13 @@ name: testing-patterns
 description: Core test quality principles - philosophy, smells, structure, mocking, and coverage. For language-specific patterns see php-testing-patterns, js-testing-patterns, e2e-testing-patterns.
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # Testing Patterns
 
 Apply these language-agnostic test quality principles when writing or reviewing tests. Diagnose test smells. Enforce behavior-first testing. Route to language-specific skills for framework details.
@@ -35,18 +42,18 @@ When you find a test concern, read ONLY the specified sections. Do NOT read full
 
 | Test Concern | Reference File | Sections to Read |
 |---|---|---|
-| Tests pass but don't verify behavior | `${CLAUDE_SKILL_DIR}/references/test-philosophy.md` | `## Quick Reference` + `## The Behavior vs Implementation Distinction` |
-| Flaky tests (random pass/fail) — usually an implementation bug, not a test bug | `${CLAUDE_SKILL_DIR}/references/test-smells.md` | `## Quick Reference` + `### 1. Flaky Tests` |
-| Brittle tests (break on refactor) | `${CLAUDE_SKILL_DIR}/references/test-smells.md` | `## Quick Reference` + `### 2. Brittle Tests` |
-| Over-mocking / mock confusion | `${CLAUDE_SKILL_DIR}/references/mocking-strategies.md` | `## Quick Reference` + `## The Mocking Decision Framework` |
-| Poor structure (no AAA, bad names) | `${CLAUDE_SKILL_DIR}/references/test-structure.md` | `## Quick Reference` + `## The AAA Pattern` |
-| Missing edge/error case coverage | `${CLAUDE_SKILL_DIR}/references/coverage.md` | `## Quick Reference` + `## What to Test` |
-| Over-testing trivial code | `${CLAUDE_SKILL_DIR}/references/coverage.md` | `## Quick Reference` + `## What NOT to Test` |
-| Test data strategy | `${CLAUDE_SKILL_DIR}/references/test-data.md` | `## Quick Reference` + `## Factories` |
-| Choosing test layer (unit/integration/system) | `${CLAUDE_SKILL_DIR}/references/test-layers.md` | `## Quick Reference` + `## Choosing the Right Layer` |
-| Independence/determinism/speed/readability issues | `${CLAUDE_SKILL_DIR}/references/test-philosophy.md` | `## Quick Reference` + relevant pillar section |
-| "Why should we test this?" — stakeholder justification | `${CLAUDE_SKILL_DIR}/references/test-benefits.md` | `## Quick Reference` |
-| TDD red-green-refactor questions | `${CLAUDE_SKILL_DIR}/references/tdd-workflow.md` | `## Quick Reference` + `## The Red-Green-Refactor Cycle` |
+| Tests pass but don't verify behavior | `$SKILL_DIR/references/test-philosophy.md` | `## Quick Reference` + `## The Behavior vs Implementation Distinction` |
+| Flaky tests (random pass/fail) - usually an implementation bug, not a test bug | `$SKILL_DIR/references/test-smells.md` | `## Quick Reference` + `### 1. Flaky Tests` |
+| Brittle tests (break on refactor) | `$SKILL_DIR/references/test-smells.md` | `## Quick Reference` + `### 2. Brittle Tests` |
+| Over-mocking / mock confusion | `$SKILL_DIR/references/mocking-strategies.md` | `## Quick Reference` + `## The Mocking Decision Framework` |
+| Poor structure (no AAA, bad names) | `$SKILL_DIR/references/test-structure.md` | `## Quick Reference` + `## The AAA Pattern` |
+| Missing edge/error case coverage | `$SKILL_DIR/references/coverage.md` | `## Quick Reference` + `## What to Test` |
+| Over-testing trivial code | `$SKILL_DIR/references/coverage.md` | `## Quick Reference` + `## What NOT to Test` |
+| Test data strategy | `$SKILL_DIR/references/test-data.md` | `## Quick Reference` + `## Factories` |
+| Choosing test layer (unit/integration/system) | `$SKILL_DIR/references/test-layers.md` | `## Quick Reference` + `## Choosing the Right Layer` |
+| Independence/determinism/speed/readability issues | `$SKILL_DIR/references/test-philosophy.md` | `## Quick Reference` + relevant pillar section |
+| "Why should we test this?" - stakeholder justification | `$SKILL_DIR/references/test-benefits.md` | `## Quick Reference` |
+| TDD red-green-refactor questions | `$SKILL_DIR/references/tdd-workflow.md` | `## Quick Reference` + `## The Red-Green-Refactor Cycle` |
 
 **How to read sections:** Grep for the start heading to find its line number, then Read with offset+limit to the next heading at the same or higher level (e.g., `### ` stops at the next `### ` or `## `; `## ` stops at the next `## `).
 

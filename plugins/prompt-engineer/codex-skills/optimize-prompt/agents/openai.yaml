@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/optimize-prompt.md
+interface:
+  display_name: "Optimize Prompt"
+  short_description: "Optimize a prompt or file (skill, CLAUDE.md, agent) using the prompt-engineer."
+  default_prompt: "Use $prompt-engineer:optimize-prompt."
+policy:
+  allow_implicit_invocation: false

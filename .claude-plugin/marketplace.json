@@ -5,7 +5,7 @@
     "url": "https://github.com/vladolaru"
   },
   "metadata": {
-    "description": "Vlad Olaru's Claude Code plugins marketplace",
+    "description": "Vlad Olaru's Claude Code and Codex plugins marketplace",
     "version": "1.0.0"
   },
   "plugins": [
@@ -13,7 +13,7 @@
       "name": "pirategoat-tools",
       "source": "./plugins/pirategoat-tools",
       "description": "Code review orchestration (28 domain reviewers + pipeline/cross-validation agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
-      "version": "1.110.0",
+      "version": "1.111.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -110,7 +110,7 @@
       "name": "image-optimizer",
       "source": "./plugins/image-optimizer",
       "description": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -133,7 +133,7 @@
       "name": "prompt-engineer",
       "source": "./plugins/prompt-engineer",
       "description": "Human-in-the-loop prompt optimization with evidence-grounded pattern attribution using proven prompt engineering patterns.",
-      "version": "2.1.1",
+      "version": "2.2.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -161,7 +161,7 @@
       "name": "dex",
       "source": "./plugins/dex",
       "description": "Frictionless knowledge capture that compounds engineering work. Captures learnings, patterns, decisions, and research from conversations into agent-first documents, with optional promotion to CLAUDE.md or AGENTS.md.",
-      "version": "1.5.3",
+      "version": "1.6.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -195,8 +195,8 @@
     {
       "name": "yoloing-safe",
       "source": "./plugins/yoloing-safe",
-      "description": "YOLO mode safety net \u2014 PreToolUse guardrails that block destructive commands (rm -rf, disk formatting, data exfiltration), ask for confirmation on the risky-but-maybe-intentional stuff (force push, permission changes), and nudge Claude toward safer alternatives. Configurable credential file protection. Because shipping fast shouldn't mean losing your home directory.",
-      "version": "1.13.1",
+      "description": "YOLO mode safety net - PreToolUse guardrails that block destructive commands (rm -rf, disk formatting, data exfiltration), gate risky-but-maybe-intentional actions with host-aware behavior, and nudge the agent toward safer alternatives. Configurable credential file protection. Because shipping fast shouldn't mean losing your home directory.",
+      "version": "1.14.0",
       "author": {
         "name": "Vlad Olaru"
       },
@@ -215,8 +215,8 @@
     {
       "name": "caffeinate-claude",
       "source": "./plugins/caffeinate-claude",
-      "description": "Keeps your Mac awake during Claude Code sessions using macOS caffeinate. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end.",
-      "version": "1.0.0",
+      "description": "Keeps your Mac awake during Claude Code and Codex sessions using macOS caffeinate. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end.",
+      "version": "1.1.0",
       "author": {
         "name": "Vlad Olaru"
       },

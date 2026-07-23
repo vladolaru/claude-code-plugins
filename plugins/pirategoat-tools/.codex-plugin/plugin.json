@@ -1,0 +1,47 @@
+{
+  "name": "pirategoat-tools",
+  "version": "1.111.0",
+  "description": "Code review orchestration (28 domain reviewers + pipeline/cross-validation agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
+  "author": {
+    "name": "Vlad Olaru",
+    "url": "https://github.com/vladolaru"
+  },
+  "homepage": "https://github.com/vladolaru/claude-code-plugins",
+  "repository": "https://github.com/vladolaru/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "wordpress",
+    "project-management",
+    "code-review",
+    "browser-automation",
+    "linear",
+    "architecture",
+    "design-patterns",
+    "accessibility",
+    "a11y",
+    "wcag",
+    "figma",
+    "design-system",
+    "design-to-code",
+    "copy-sync"
+  ],
+  "skills": "./codex-skills/",
+  "interface": {
+    "displayName": "Pirategoat Tools",
+    "shortDescription": "Code review orchestration (28 domain reviewers + pipeline/cross-validation agents), WordPress/WooCommerce development.",
+    "longDescription": "Code review orchestration (28 domain reviewers + pipeline/cross-validation agents), WordPress/WooCommerce development patterns, Figma-to-code workflow, accessibility guidance, testing patterns, and browser automation.",
+    "developerName": "Vlad Olaru",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Hooks"
+    ],
+    "websiteURL": "https://github.com/vladolaru/claude-code-plugins",
+    "defaultPrompt": [
+      "Use $pirategoat-tools:full-code-review.",
+      "Use $pirategoat-tools:code-review.",
+      "Use $pirategoat-tools:pr-update."
+    ]
+  }
+}

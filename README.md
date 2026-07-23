@@ -1,10 +1,12 @@
 # vladolaru/claude-code-plugins
 
-My personal Claude Code plugins — open source tools I've built for development workflows, code review, knowledge capture, and prompt optimization.
+My personal Claude Code and Codex plugin marketplace. These open source tools cover development workflows, code review, knowledge capture, prompt optimization, and agent safety.
 
 Each plugin started as something I needed for my own work. They're opinionated, actively maintained, and battle-tested on real projects.
 
 ## Quick Start
+
+### Claude Code
 
 ```bash
 # Add the marketplace
@@ -21,20 +23,41 @@ Each plugin started as something I needed for my own work. They're opinionated, 
 # Restart Claude Code to activate
 ```
 
+Claude Code commands use slash syntax, for example `/pr-review 42`.
+
+### Codex
+
+```bash
+# Add the same marketplace
+codex plugin marketplace add vladolaru/claude-code-plugins
+
+# Install what you need
+codex plugin add pirategoat-tools@vladolaru-claude-code-plugins
+codex plugin add dex@vladolaru-claude-code-plugins
+codex plugin add prompt-engineer@vladolaru-claude-code-plugins
+codex plugin add image-optimizer@vladolaru-claude-code-plugins
+codex plugin add yoloing-safe@vladolaru-claude-code-plugins
+codex plugin add caffeinate-claude@vladolaru-claude-code-plugins
+```
+
+Codex exposes command workflows as explicit plugin skills, for example
+`$pirategoat-tools:pr-review 42`. Plugins with hooks require the normal Codex
+trust review before those hooks run.
+
 ## Plugins
 
 | Plugin | What it does |
 |--------|-------------|
-| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools — 34 agents (28 domain reviewers + pipeline/cross-validation/utility), 21 skills, rich feedback loops |
+| [**pirategoat-tools**](plugins/pirategoat-tools/README.md) | Development tools - 34 agents (28 domain reviewers + pipeline/cross-validation/utility), 21 shared skills, rich feedback loops |
 | [**dex**](plugins/dex/README.md) | Knowledge capture — frictionless capture of learnings, patterns, and decisions from conversations into agent-first docs |
 | [**prompt-engineer**](plugins/prompt-engineer/README.md) | Prompt optimization — evidence-grounded pattern attribution with human-in-the-loop approval gates |
 | [**image-optimizer**](plugins/image-optimizer/README.md) | Image optimization — lossless compression for PNG, JPEG, GIF, SVG with review-before-apply workflow |
-| [**yoloing-safe**](plugins/yoloing-safe/README.md) | YOLO mode safety net — PreToolUse guardrails that block destructive commands, ask about risky ones, and nudge toward safer alternatives |
-| [**caffeinate-claude**](plugins/caffeinate-claude/README.md) | Mac sleep prevention — keeps your Mac awake during Claude Code sessions, multi-tab aware |
+| [**yoloing-safe**](plugins/yoloing-safe/README.md) | YOLO mode safety net - PreToolUse guardrails that block destructive commands and gate risky ones with host-aware behavior |
+| [**caffeinate-claude**](plugins/caffeinate-claude/README.md) | Mac sleep prevention - keeps your Mac awake during Claude Code and Codex sessions, multi-tab aware |
 
 ### pirategoat-tools
 
-The main plugin. 34 agents — 28 domain reviewers running in parallel, 2 pipeline agents (reconciliation + decision critic), 2 cross-validators (Gemini + Codex), 2 utility (technical writer + repo-reviewer-adapter). Plus 21 skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, Figma-to-code workflows, and browser automation.
+The main plugin. 34 agents - 28 domain reviewers running in parallel, 2 pipeline agents (reconciliation + decision critic), 2 cross-validators (Gemini + Codex), 2 utility (technical writer + repo-reviewer-adapter). Plus 21 shared skills covering testing patterns (190KB reference library), software architecture (87KB pattern library), WordPress/WooCommerce development, Figma-to-code workflows, and browser automation.
 
 **[Full documentation →](plugins/pirategoat-tools/README.md)** | [Changelog](plugins/pirategoat-tools/CHANGELOG.md)
 
@@ -58,13 +81,16 @@ Lossless image compression using ImageOptim and svgo. Shows you the before/after
 
 ### yoloing-safe
 
-YOLO mode safety net. A `PreToolUse` hook that evaluates every tool call against safety rules — blocks the irreversible stuff (`rm -rf`, `npm publish`, credential access), asks about the risky-but-maybe-intentional stuff (force push, `brew install`, `terraform destroy`), and lets everything else fly. Configurable credential patterns and zero-access paths. Zero dependencies, zero config needed.
+YOLO mode safety net. A `PreToolUse` hook that evaluates every tool call against safety rules - blocks the irreversible stuff (`rm -rf`, `npm publish`, credential access), gates risky-but-maybe-intentional actions (force push, `brew install`, `terraform destroy`), and lets everything else fly. Claude Code presents confirmation prompts for the ask tier; Codex fails closed with configuration guidance because its hook protocol cannot surface those prompts. Configurable credential patterns and zero-access paths. Zero dependencies, zero config needed.
 
 **[Full documentation →](plugins/yoloing-safe/README.md)** | [Changelog](plugins/yoloing-safe/CHANGELOG.md)
 
 ### caffeinate-claude
 
-Keeps your Mac awake during Claude Code sessions using macOS `caffeinate`. Supports multiple tabs, handles crashes gracefully with a 1-hour safety timeout, and cleans up automatically when all sessions end. Zero config needed.
+Keeps your Mac awake during Claude Code and Codex sessions using macOS
+`caffeinate`. Supports multiple tabs, handles crashes gracefully with a 1-hour
+safety timeout, and cleans up automatically when all sessions end. Zero config
+needed.
 
 **[Full documentation →](plugins/caffeinate-claude/README.md)** | [Changelog](plugins/caffeinate-claude/CHANGELOG.md)
 
@@ -72,19 +98,57 @@ Keeps your Mac awake during Claude Code sessions using macOS `caffeinate`. Suppo
 
 ```text
 vladolaru-claude-code-plugins/
+├── .agents/
+│   └── plugins/
+│       └── marketplace.json      # Generated Codex marketplace
 ├── .claude-plugin/
-│   └── marketplace.json          # Plugin registry
+│   └── marketplace.json          # Canonical marketplace registry
 ├── plugins/
-│   ├── pirategoat-tools/         # 34 agents, 21 skills, 7 commands
-│   ├── dex/                      # 7 commands, 1 skill, tests
-│   ├── prompt-engineer/          # 1 command, 1 skill, reference library
-│   ├── image-optimizer/          # 1 command, optimization scripts
+│   ├── pirategoat-tools/         # 34 agents, 21 shared skills, 7 commands
+│   ├── dex/                      # 7 commands, 1 shared skill, tests
+│   ├── prompt-engineer/          # 1 command, 1 shared skill, reference library
+│   ├── image-optimizer/          # 1 command and optimization scripts
 │   ├── yoloing-safe/            # PreToolUse safety hook, tests
 │   └── caffeinate-claude/       # macOS sleep prevention hooks
+├── scripts/
+│   └── generate_codex_compat.py  # Claude source to Codex adapters
 ├── CLAUDE.md
 ├── LICENSE
 └── README.md
 ```
+
+Every plugin directory contains a generated `.codex-plugin/plugin.json`.
+Plugins with commands also contain generated adapters under
+`codex-skills/`, isolated from Claude Code's top-level skill discovery.
+
+## Dual-Host Maintenance
+
+Claude Code definitions are the canonical authoring format. Codex manifests
+and command-to-skill adapters are deterministic generated output. This avoids
+maintaining two independent prompt trees while leaving shared skills, scripts,
+hooks, and reviewer definitions directly reusable by both hosts.
+
+When a plugin, command, or marketplace entry changes:
+
+```bash
+python3 scripts/generate_codex_compat.py
+python3 scripts/generate_codex_compat.py --check
+```
+
+Do not hand-edit files marked `GENERATED FILE - DO NOT EDIT`. The repository
+test suite and the dual-host compatibility workflow run the drift check on
+every pull request.
+
+The generator intentionally does not copy Claude model labels into Codex.
+The review pipeline instead dispatches native Codex subagents and gives each
+one the canonical reviewer definition at runtime. This keeps reviewer
+instructions synchronized without pretending the two hosts have identical
+model routing.
+
+[claude-code-codex-bridge](https://github.com/vladolaru/claude-code-codex-bridge)
+was a useful reference for host mappings and remains useful for converting
+user or project configuration. Installing this marketplace does not require
+the bridge.
 
 ## Design Patterns
 
@@ -106,11 +170,20 @@ Integration guides for spawning external CLIs as subprocesses, documented in [`d
 git clone https://github.com/vladolaru/claude-code-plugins.git
 cd claude-code-plugins
 
-# Add as local marketplace for testing
+# Add as a local Claude Code marketplace
 /plugin marketplace add /path/to/claude-code-plugins
 
-# Install from local
+# Install in Claude Code
 /plugin install pirategoat-tools@vladolaru-claude-code-plugins
+
+# Add as a local Codex marketplace
+codex plugin marketplace add /path/to/claude-code-plugins
+
+# Install in Codex
+codex plugin add pirategoat-tools@vladolaru-claude-code-plugins
+
+# Verify generated host adapters
+python3 scripts/generate_codex_compat.py --check
 ```
 
 ## Credits
@@ -125,6 +198,7 @@ cd claude-code-plugins
 - [Claude Code documentation](https://code.claude.com/docs/en/overview)
 - [Plugins guide](https://code.claude.com/docs/en/plugins)
 - [Skills guide](https://code.claude.com/docs/en/skills)
+- [Codex plugins guide](https://developers.openai.com/codex/plugins)
 
 ## License
 

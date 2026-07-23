@@ -8,7 +8,8 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 
 | File | Role |
 |------|------|
-| `scripts/review/pipeline.py` | Unified 12-step review pipeline. Owns step sequence, routing, state management, and curated briefings. Called by all three review commands with `--mode pr\|full\|incremental`. |
+| `scripts/review/pipeline.py` | Unified 12-step review pipeline. Owns step sequence, routing, state management, host-specific orchestration wording, and curated briefings. Called by all three review commands with `--mode pr\|full\|incremental` and generated Codex adapters with `--host codex`. |
+| `../../scripts/generate_codex_compat.py` | Repository-level generator that converts canonical Claude Code commands into Codex command-skill adapters and emits this plugin's `.codex-plugin/plugin.json`. |
 | `scripts/review/agent_registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
 | `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. When a primary domain matches nothing but a secondary domain does, `resolve_overall_status` flips the status to a scoped `OK` and injects a `COVERAGE NOTE` so the agent reviews the secondary files with an honestly-scoped verdict instead of silently masking the gap. |
 | `scripts/review/agent/scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. **Language recognition lives in one place:** the `_PROG_LANGS`/`_STYLE_LANGS`/`_QUERY_LANGS`/`_DOC_LANGS`/`_DATA_LANGS`/`_FRONTEND_LANGS` groups, plus `_MIXED_MARKUP_LANGS`, `_TEMPLATE_LANGS`, and `_TEMPLATE_SUFFIXES` for rendered UI. Domains compose extensions via `_ext_re(...)`; `is_template_file()` distinguishes pure and compound templates for a11y dispatch and budget priority. Add formats to these sources once — never edit per-domain regexes. Budget priority tiers (`production_first`, `markup_evidence`) order files before largest-first budgeting; one oversized leading diff is protected outside the ordinary pool, and `--summary-json-out` persists per-agent scope summaries for run-level coverage accounting. |
@@ -32,6 +33,24 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/hosts/cache/` | Internal ecosystem-cache manager (`manager.py`): clone / git-pull / verify-staleness for WordPress + WooCommerce. |
 
 ## Architecture
+
+### Dual-Host Contract
+
+The command files under `commands/` are canonical. Their generated Codex
+adapters live in same-named directories under `codex-skills/` and are marked
+`GENERATED FILE - DO NOT EDIT`. Never edit those adapters directly. Keeping
+them outside the top-level `skills/` directory prevents Claude Code from
+discovering each canonical command a second time.
+
+The review pipeline defaults to Claude Code behavior and persists
+`--host codex` when selected by a generated adapter. Codex briefings dispatch native
+parallel subagents and tell each one to read the canonical `agents/*.md`
+definition before running bootstrap. This intentionally shares reviewer
+prompts without mapping Claude model labels to a different host.
+
+Shared skills use `$SKILL_DIR` for their own resource paths. Define it as the
+absolute directory containing the loaded `SKILL.md`; do not introduce
+`${CLAUDE_SKILL_DIR}` in shared skill prose.
 
 ### Review Pipeline
 
@@ -346,8 +365,9 @@ Each subagent JSONL file contains one JSON object per line, with the first line 
 3. Use `review/plan_dispatch.py` for triage decisions (don't duplicate triage logic)
 4. Add command to `.claude-plugin/marketplace.json` in the `commands` array
 5. Add structural tests in `tests/commands/test_commands.py` (new `TestXxx` class)
-6. Run tests: `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v`
-7. **Update all docs** — see [Doc Update Checklist](#doc-update-checklist-for-new-commands-skills-or-agents) below
+6. Run `python3 scripts/generate_codex_compat.py` from the repository root and commit the generated command-skill adapter
+7. Run tests: `pytest plugins/pirategoat-tools/tests/commands/test_commands.py plugins/pirategoat-tools/tests/test_codex_marketplace.py -v`
+8. **Update all docs** - see [Doc Update Checklist](#doc-update-checklist-for-new-commands-skills-or-agents) below
 
 ### Adding a Skill
 
@@ -371,7 +391,7 @@ These are normal — handle them, do not stop or apologize:
 
 ### Doc Update Checklist for New Commands, Skills, or Agents
 
-**Every new command, skill, or agent requires updates in all four locations below.** Do not skip — stale counts and missing entries make the plugin inventory unreliable.
+**Every new command, skill, or agent requires updates in all five locations below.** Do not skip - stale counts and missing entries make the plugin inventory unreliable.
 
 | # | File | What to update |
 |---|------|----------------|
@@ -379,3 +399,4 @@ These are normal — handle them, do not stop or apologize:
 | 2 | `plugins/pirategoat-tools/README.md` | Update count in directory tree + add row to the relevant table |
 | 3 | Root `AGENTS.md` → Plugin Inventory → pirategoat-tools | Update summary count + add to the `commands/`/`skills/`/`agents/` contents row |
 | 4 | Root `README.md` | Update count in directory tree (e.g., "19 agents, 19 skills, 7 commands") |
+| 5 | Generated Codex outputs | Run `python3 scripts/generate_codex_compat.py` and commit the result |

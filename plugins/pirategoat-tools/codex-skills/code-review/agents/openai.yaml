@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/code-review.md
+interface:
+  display_name: "Code Review"
+  short_description: "Incremental code review of new commits on the current branch since the last."
+  default_prompt: "Use $pirategoat-tools:code-review."
+policy:
+  allow_implicit_invocation: false

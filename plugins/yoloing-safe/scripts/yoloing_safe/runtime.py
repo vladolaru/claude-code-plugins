@@ -12,7 +12,11 @@ from .config import (
     load_config,
 )
 from .context import EvalContext
-from .paths import _bash_targets_protected_path
+from .paths import (
+    _bash_targets_protected_path,
+    extract_apply_patch_paths,
+    resolve_tool_path,
+)
 from .registry import is_allowlisted
 from .rules import ALLOWLIST_PATTERNS, RULES_BY_TOOL
 from .shell import (
@@ -47,6 +51,17 @@ def ask(message, mark=None):
     sys.exit(0)
 
 
+def block_codex_ask(rule_id, message, mark=None):
+    """Fail closed when Codex cannot surface a PreToolUse confirmation."""
+    block(
+        "Codex cannot display a confirmation prompt from PreToolUse, so "
+        f"yoloing-safe blocked ask-tier rule '{rule_id}' instead. {message} "
+        "Disable that rule in your yoloing-safe configuration only if you "
+        "intentionally accept the risk, then retry.",
+        mark,
+    )
+
+
 def allow(mark=None):
     """Allow the tool call: exit 0 silently."""
     if mark is not None:
@@ -78,6 +93,36 @@ def main(mark=None):
     disabled = set(config.get("disable_rules", []))
     disabled -= NON_DISABLEABLE_RULES
     mark("config_loaded")
+
+    if tool_name == "apply_patch":
+        patch = tool_input.get("command", tool_input.get("patch", ""))
+        first_ask = None
+        mark("rules_start")
+        for file_path in extract_apply_patch_paths(patch):
+            resolved_path = resolve_tool_path(file_path, tool_input)
+            if is_self_protected_path(resolved_path):
+                block(SELF_PROTECTION_MESSAGE, mark)
+            file_input = {
+                "file_path": resolved_path,
+                "cwd": tool_input.get("cwd", ""),
+            }
+            ctx = EvalContext("Write", file_input, config, "")
+            for rule_id, tier, detect_fn in RULES_BY_TOOL.get("Write", []):
+                if rule_id in disabled:
+                    continue
+                detected, message = detect_fn(ctx)
+                if not detected:
+                    continue
+                if tier == "block":
+                    mark("rules_done")
+                    block(message, mark)
+                if tier == "ask" and first_ask is None:
+                    first_ask = (rule_id, message)
+        mark("rules_done")
+        if first_ask:
+            rule_id, message = first_ask
+            block_codex_ask(rule_id, message, mark)
+        allow(mark)
 
     command = ""
     bash_segments = []
@@ -122,7 +167,7 @@ def main(mark=None):
                     mark("rules_done")
                     block(message, mark)
                 if tier == "ask" and first_ask is None:
-                    first_ask = message
+                    first_ask = (rule_id, message)
                 break
     else:
         for rule_id, tier, detect_fn in RULES_BY_TOOL.get(tool_name, []):
@@ -135,9 +180,12 @@ def main(mark=None):
                 mark("rules_done")
                 block(message, mark)
             if tier == "ask" and first_ask is None:
-                first_ask = message
+                first_ask = (rule_id, message)
 
     mark("rules_done")
     if first_ask:
-        ask(first_ask, mark)
+        rule_id, message = first_ask
+        if "turn_id" in data:
+            block_codex_ask(rule_id, message, mark)
+        ask(message, mark)
     allow(mark)

@@ -80,8 +80,11 @@ class TestIntegrationBlock:
 class TestIntegrationAsk:
     """Run the actual script, verify exit 0 + JSON with permissionDecision: ask."""
 
-    def _run_hook(self, tool_name, tool_input):
-        payload = json.dumps({"tool_name": tool_name, "tool_input": tool_input})
+    def _run_hook(self, tool_name, tool_input, *, codex=False):
+        hook_input = {"tool_name": tool_name, "tool_input": tool_input}
+        if codex:
+            hook_input["turn_id"] = "019f8e34-acdc-7732-bd30-b8a5e2175402"
+        payload = json.dumps(hook_input)
         return subprocess.run(
             ["python3", SCRIPT],
             input=payload, capture_output=True, text=True, timeout=5
@@ -137,6 +140,105 @@ class TestIntegrationAsk:
         assert r.returncode == 0
         output = json.loads(r.stdout)
         assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+    def test_codex_ask_tier_blocks_with_actionable_guidance(self):
+        r = self._run_hook(
+            "Bash",
+            {"command": "git push --force origin main"},
+            codex=True,
+        )
+        assert r.returncode == 2
+        assert r.stdout == ""
+        assert "Codex cannot display a confirmation prompt from PreToolUse" in r.stderr
+        assert "git_force_push" in r.stderr
+        assert "force-with-lease" in r.stderr
+
+
+class TestCodexApplyPatch:
+    """Adapt Codex apply_patch payloads to the canonical file safety rules."""
+
+    def _run_hook(self, patch, *, cwd=None):
+        tool_input = {"command": patch}
+        if cwd is not None:
+            tool_input["cwd"] = str(cwd)
+        payload = json.dumps({
+            "turn_id": "019f8e34-acdc-7732-bd30-b8a5e2175402",
+            "tool_name": "apply_patch",
+            "tool_input": tool_input,
+        })
+        return subprocess.run(
+            ["python3", SCRIPT],
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    def test_benign_patch_is_allowed(self):
+        r = self._run_hook(
+            "*** Begin Patch\n"
+            "*** Update File: README.md\n"
+            "@@\n"
+            "-old\n"
+            "+new\n"
+            "*** End Patch\n"
+        )
+        assert r.returncode == 0
+        assert r.stdout == ""
+        assert r.stderr == ""
+
+    def test_each_patch_target_is_checked_for_credentials(self):
+        r = self._run_hook(
+            "*** Begin Patch\n"
+            "*** Update File: README.md\n"
+            "@@\n"
+            "-old\n"
+            "+new\n"
+            "*** Add File: config/.env.local\n"
+            "+SECRET=value\n"
+            "*** End Patch\n"
+        )
+        assert r.returncode == 2
+        assert "secrets or credentials" in r.stderr
+
+    def test_sensitive_patch_target_uses_codex_ask_fallback(self):
+        r = self._run_hook(
+            "*** Begin Patch\n"
+            "*** Update File: ~/.zshrc\n"
+            "@@\n"
+            "-old\n"
+            "+new\n"
+            "*** End Patch\n"
+        )
+        assert r.returncode == 2
+        assert "sensitive_write_target" in r.stderr
+
+    def test_self_protected_patch_target_is_blocked(self):
+        protected = Path(SCRIPT).resolve()
+        r = self._run_hook(
+            "*** Begin Patch\n"
+            f"*** Update File: {protected}\n"
+            "@@\n"
+            "-old\n"
+            "+new\n"
+            "*** End Patch\n"
+        )
+        assert r.returncode == 2
+        assert "safety hook infrastructure" in r.stderr
+
+    def test_relative_self_protected_target_uses_tool_cwd(self):
+        plugin_root = Path(SCRIPT).resolve().parents[1]
+        r = self._run_hook(
+            "*** Begin Patch\n"
+            "*** Update File: scripts/pre-tool-use-safety.py\n"
+            "@@\n"
+            "-old\n"
+            "+new\n"
+            "*** End Patch\n",
+            cwd=plugin_root,
+        )
+        assert r.returncode == 2
+        assert "safety hook infrastructure" in r.stderr
 
 
 class TestIntegrationAllow:

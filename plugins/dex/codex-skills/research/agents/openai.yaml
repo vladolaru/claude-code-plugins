@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/research.md
+interface:
+  display_name: "Research"
+  short_description: "Capture research findings from the current conversation - investigations."
+  default_prompt: "Use $dex:research."
+policy:
+  allow_implicit_invocation: false

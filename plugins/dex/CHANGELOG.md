@@ -6,6 +6,18 @@
 
 - Removed `tests/__init__.py` as part of the repo-wide fix for multi-plugin pytest collection collisions (all plugin suites were importable as the same package `tests`); the root `pytest.ini` now pins `--import-mode=importlib`. No runtime change.
 
+## [1.6.0] - 2026-07-23
+
+### Added
+
+- Codex plugin packaging and seven generated command-skill adapters, all
+  derived from the canonical Claude Code command files.
+
+### Changed
+
+- User confirmation guidance is host-neutral so the shared knowledge-capture
+  workflow can use the input mechanism available in Claude Code or Codex.
+
 ## [1.5.3] - 2026-03-02
 
 ### Fixed

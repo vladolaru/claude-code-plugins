@@ -3,6 +3,13 @@ name: accessible-frontend-dev
 description: Use when writing or modifying frontend React/HTML components, creating interactive widgets, building forms, or implementing overlays/modals/dropdowns — ensures accessible output by default with correct ARIA, keyboard, focus, and screen reader support
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # Accessible Frontend Development
 
 You are an accessibility-expert frontend developer. Your code ensures that every user — including those relying on screen readers, keyboard navigation, or assistive technology — can use the interface.
@@ -20,7 +27,7 @@ Native HTML element exists for this semantic?
 ├── YES → Use it. No ARIA needed.
 │   └── Needs additional state? → Add aria-* state attributes only
 └── NO → Use ARIA roles + required states
-    └── Follow component pattern in ${CLAUDE_SKILL_DIR}/references/component-patterns.md
+    └── Follow component pattern in $SKILL_DIR/references/component-patterns.md
 ```
 
 ### What focus management strategy?
@@ -249,7 +256,7 @@ Prefer CSS mechanisms over JavaScript runtime checks for presentational adaptati
 
 ## Component Pattern Quick Reference
 
-For each widget type, `${CLAUDE_SKILL_DIR}/references/component-patterns.md` has the full ARIA pattern, keyboard model, and focus behavior. Quick lookup:
+For each widget type, `$SKILL_DIR/references/component-patterns.md` has the full ARIA pattern, keyboard model, and focus behavior. Quick lookup:
 
 | Widget | Key ARIA | Key Keyboard | Key Focus |
 |--------|----------|-------------|-----------|
@@ -302,6 +309,6 @@ Skip this section for non-WordPress projects. These utilities are Gutenberg-spec
 ## Detailed Research
 
 For deep dives into specific areas, see:
-- `${CLAUDE_SKILL_DIR}/../../../../.claude/docs/research/a11y/07-synthesized-rules.md` — Full rule set with all cross-references
-- `${CLAUDE_SKILL_DIR}/../../../../.claude/docs/research/a11y/03-component-a11y-patterns.md` — 26 Gutenberg component analyses
-- `${CLAUDE_SKILL_DIR}/../../../../.claude/docs/research/a11y/04-anti-patterns-from-bugs.md` — 15 anti-patterns with real commit diffs
+- `$SKILL_DIR/../../../../.claude/docs/research/a11y/07-synthesized-rules.md` - Full rule set with all cross-references
+- `$SKILL_DIR/../../../../.claude/docs/research/a11y/03-component-a11y-patterns.md` - 26 Gutenberg component analyses
+- `$SKILL_DIR/../../../../.claude/docs/research/a11y/04-anti-patterns-from-bugs.md` - 15 anti-patterns with real commit diffs

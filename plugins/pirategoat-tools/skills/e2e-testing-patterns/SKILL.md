@@ -3,6 +3,13 @@ name: e2e-testing-patterns
 description: Use when writing or reviewing Playwright E2E tests - locator strategies, Page Object Model, auto-waiting, network interception, and WordPress/WooCommerce test helpers.
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # E2E Testing Patterns
 
 Playwright end-to-end testing patterns. For shared test quality principles (philosophy, smells, mocking decisions), see `testing-patterns`.
@@ -11,11 +18,11 @@ Playwright end-to-end testing patterns. For shared test quality principles (phil
 
 | Need | Reference File | Sections to Read |
 |------|---------------|-----------------|
-| Playwright + E2E patterns | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/playwright-patterns.md` | Full file (~461L, manageable) |
-| Behavior vs implementation | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
-| Flaky/brittle tests | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
-| Mock usage decisions | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
-| Test layer strategy | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-layers.md` | `## The Three Layers` + `## Choosing the Right Layer` |
+| Playwright + E2E patterns | `$SKILL_DIR/../testing-patterns/references/playwright-patterns.md` | Full file (~461L, manageable) |
+| Behavior vs implementation | `$SKILL_DIR/../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
+| Flaky/brittle tests | `$SKILL_DIR/../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
+| Mock usage decisions | `$SKILL_DIR/../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
+| Test layer strategy | `$SKILL_DIR/../testing-patterns/references/test-layers.md` | `## The Three Layers` + `## Choosing the Right Layer` |
 
 **How to read sections:** Grep for heading to find line number, Read with offset+limit.
 

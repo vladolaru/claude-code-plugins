@@ -3,6 +3,13 @@ name: go-testing-patterns
 description: Use when writing or reviewing Go tests - standard testing package, table-driven tests, subtests, test helpers, httptest, benchmarks, fuzz testing, and interface-based mocking.
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # Go Testing Patterns
 
 Standard Go `testing` package patterns and common libraries. For shared test quality principles (philosophy, smells, mocking decisions), see `testing-patterns`.
@@ -11,12 +18,12 @@ Standard Go `testing` package patterns and common libraries. For shared test qua
 
 | Need | Reference File | Sections to Read |
 |------|---------------|-----------------|
-| Go testing patterns | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/go-testing-patterns.md` | Full file (~420L, manageable) |
-| Behavior vs implementation | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
-| Flaky/brittle tests | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
-| Mock usage decisions | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
-| AAA pattern/naming | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-structure.md` | `## The AAA Pattern` + `## Test Naming Conventions` |
-| Test data strategy | `${CLAUDE_SKILL_DIR}/../testing-patterns/references/test-data.md` | `## Factories` + `## Builders` |
+| Go testing patterns | `$SKILL_DIR/../testing-patterns/references/go-testing-patterns.md` | Full file (~420L, manageable) |
+| Behavior vs implementation | `$SKILL_DIR/../testing-patterns/references/test-philosophy.md` | `## The Fundamental Shift` + `## Four Core Principles` |
+| Flaky/brittle tests | `$SKILL_DIR/../testing-patterns/references/test-smells.md` | `## The Six Major Test Smells` (relevant subsection) |
+| Mock usage decisions | `$SKILL_DIR/../testing-patterns/references/mocking-strategies.md` | `## The Mocking Decision Framework` |
+| AAA pattern/naming | `$SKILL_DIR/../testing-patterns/references/test-structure.md` | `## The AAA Pattern` + `## Test Naming Conventions` |
+| Test data strategy | `$SKILL_DIR/../testing-patterns/references/test-data.md` | `## Factories` + `## Builders` |
 
 **How to read sections:** Grep for heading to find line number, Read with offset+limit.
 
