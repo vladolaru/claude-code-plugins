@@ -146,6 +146,11 @@ export interface ReviewOutput {
     // Issues
     issues: Issue[]; // Can be SecurityIssue, PerformanceIssue, etc.
 
+    // Declared coverage gap (null when nothing declared) — canonical
+    // repo-relative paths of in-scope NOT DIFFED files the reviewer could
+    // not reach at budget exhaustion. Never counts toward the verdict.
+    unreviewed: string[] | null;
+
     // Recommendations (optional)
     recommendations?: {
         immediate: string[]; // Must fix before merge
