@@ -3911,6 +3911,48 @@ class TestBudgetAndEvidenceAccounting:
         [entry] = result["agent_usage"]
         assert entry["tool_calls"] == 1
 
+    def test_synthesis_only_run_keeps_builder_metrics_available(
+        self, tmp_path
+    ):
+        """A complete run that dispatched only synthesis agents has nothing
+        for builder metrics to observe — available and empty, not the
+        contradictory available=false/complete=true the sanitizer rejects."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "synthesis-only"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _special_agent_call(
+                        "reconcile", output_dir, "review-reconciliator"
+                    )
+                ),
+                _result("reconcile", structured={"agentId": "reconciler-agent"}),
+            ],
+        )
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-reconciler-agent.jsonl",
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/a.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read"),
+            ],
+        )
+        manifest = _manifest(session_id, tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(
+            manifest, sessions, {"review-reconciliator"}
+        )
+
+        artifacts = result["artifact_writes"]
+        assert artifacts["available"] is True
+        assert artifacts["complete"] is True
+        assert artifacts["builder_attempted"] is False
+        assert artifacts["by_agent"] == []
+
     def test_synthesis_agents_stay_out_of_builder_attempt_metrics(
         self, tmp_path
     ):

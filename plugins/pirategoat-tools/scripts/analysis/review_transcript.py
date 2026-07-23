@@ -1697,8 +1697,16 @@ def enrich_run_transcript(
     builder_observed = any(
         item["builder_attempted"] for item in artifact_by_agent
     )
+    # Builder metrics measure regular reviewers only — a complete run whose
+    # expected agents are all synthesis identities has nothing to observe
+    # and is available-and-empty, not missing.
+    expected_regular_reviewers = [
+        agent
+        for agent in expected_counts
+        if agent not in _NON_SCOPE_COMPARABLE_AGENTS
+    ]
     artifact_available = bool(artifact_by_agent) or (
-        agent_data_complete and not expected_counts
+        agent_data_complete and not expected_regular_reviewers
     )
     artifact_writes = {
         "available": artifact_available,
