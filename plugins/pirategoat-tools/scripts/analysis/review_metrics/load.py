@@ -80,7 +80,15 @@ def _read_jsonl_strict(path: Path) -> list[dict[str, Any]] | None:
 def _privacy_reduced_lifecycle_event(
     event: dict[str, Any], *, completed: bool
 ) -> dict[str, Any]:
-    """Project a validated raw event to lifecycle measurement evidence."""
+    """Project a validated raw event to lifecycle measurement evidence.
+
+    Free-string fields (verdict, domain, model_tier) and scope paths are
+    withheld — fresh JSONL events may carry prose the durable sidecar never
+    retained. Validated numeric measurements (durations, issue and severity
+    counts, scope sizes, budget targets) are preserved: zeroing them would
+    report measured zeros for work that occurred, violating the
+    missing/partial-data contract.
+    """
     common = {
         "schema_version": event["schema_version"],
         "run_id": event["run_id"],
@@ -93,15 +101,22 @@ def _privacy_reduced_lifecycle_event(
             **common,
             "duration_ms": event.get("duration_ms"),
             "verdict": "unavailable",
-            "issue_count": 0,
-            "severities": {},
+            "issue_count": event["issue_count"],
+            "severities": dict(event["severities"]),
         }
-    return {
+    reduced = {
         **common,
         "domain": "",
         "model_tier": "",
-        "scope": {"files": 0, "lines": 0, "paths": []},
+        "scope": {
+            "files": event["scope"]["files"],
+            "lines": event["scope"]["lines"],
+            "paths": [],
+        },
     }
+    if "budget_target" in event:
+        reduced["budget_target"] = event["budget_target"]
+    return reduced
 
 
 def _project_lifecycle_revisions(

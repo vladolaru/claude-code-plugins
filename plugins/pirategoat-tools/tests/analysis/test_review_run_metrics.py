@@ -610,6 +610,46 @@ class TestLoadRuns:
         ][-1]
         assert run["agents"]["completed"][0]["verdict"] == "unavailable"
 
+    def test_running_overlay_preserves_validated_numeric_measurements(
+        self, tmp_path
+    ):
+        """Fresh lifecycle suffix events keep their validated numerics —
+        zeroing issue/severity counts and scope sizes would report measured
+        zeros for work that occurred. String fields stay reduced."""
+        telemetry_mod = _load_telemetry_module()
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        telemetry = telemetry_mod.ReviewTelemetry(
+            str(output_dir), log_dir=str(tmp_path)
+        )
+        telemetry.start(run_id="numeric-run")
+        telemetry.log_step(step=6, phase="EXECUTION", title="Run Reviewers")
+        telemetry.log_agent_start(
+            agent_name="code-reviewer",
+            domain="code",
+            scope_files=3,
+            scope_lines=120,
+            budget_target=20,
+            scope_paths=["src/a.py"],
+        )
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer",
+            verdict="comment",
+            issue_count=2,
+            severities={"high": 1, "medium": 1},
+        )
+
+        [run] = load_runs(tmp_path)
+
+        [started] = run["agents"]["started"]
+        [completed] = run["agents"]["completed"]
+        assert started["scope"] == {"files": 3, "lines": 120, "paths": []}
+        assert started["budget_target"] == 20
+        assert started["domain"] == ""
+        assert completed["issue_count"] == 2
+        assert completed["severities"] == {"high": 1, "medium": 1}
+        assert completed["verdict"] == "unavailable"
+
     def test_null_domain_producer_manifest_remains_lifecycle_available(
         self, tmp_path
     ):
