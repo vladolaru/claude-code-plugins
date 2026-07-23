@@ -3584,7 +3584,10 @@ def test_malformed_synthesis_call_id_remains_expected_and_incomplete(
     assert result["completeness"]["agent_data"] is False
     assert result["completeness"]["usage"] is False
     assert result["completeness"]["tool_failures"] is False
-    assert result["completeness"]["artifact_writes"] is False
+    # Builder compliance is regular-reviewer evidence only: a missing
+    # SYNTHESIS transcript does not degrade it, and with no expected
+    # regular reviewers it is complete-and-empty.
+    assert result["completeness"]["artifact_writes"] is True
     assert result["completeness"]["observed_reads"] is False
     assert secret not in " ".join(_flatten_strings(result))
 
@@ -3938,6 +3941,101 @@ class TestBudgetAndEvidenceAccounting:
             "agent": "security-reviewer",
         } in result["warnings"]
         assert result["completeness"]["scope_comparable_reads"] is False
+
+    def test_missing_scope_mapping_downgrades_reads_but_not_usage(
+        self, tmp_path
+    ):
+        """Without an authoritative by_agent scope mapping the in/out
+        partition is unsupported — the reads family goes partial instead of
+        reporting every read as out-of-scope with complete confidence.
+        Usage and builder evidence do not depend on scope and stay
+        complete."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "scopeless"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call("dispatch", "Agent", prompt=_agent_prompt(output_dir))
+                ),
+                _result("dispatch", structured={"agentId": "reviewer-agent"}),
+            ],
+        )
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-reviewer-agent.jsonl",
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/in.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read"),
+            ],
+        )
+        manifest = _manifest(
+            session_id, tmp_path, output_dir, started=["security-reviewer"]
+        )
+        manifest["coverage"] = None
+
+        result = enrich_run_transcript(manifest, sessions, {"security-reviewer"})
+
+        assert {
+            "code": "agent_scope_evidence_missing",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["scope_comparable_reads"] is False
+        assert result["completeness"]["observed_reads"] is False
+        assert result["observed_reads"]["all"] == ["src/in.py"]
+        assert result["completeness"]["agent_data"] is True
+        assert result["completeness"]["usage"] is True
+        assert result["completeness"]["artifact_writes"] is True
+
+    def test_missing_synthesis_transcript_keeps_builder_compliance_complete(
+        self, tmp_path
+    ):
+        """Builder compliance is regular-reviewer evidence; a missing critic
+        transcript degrades the synthesis read family, not artifact data."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "critic-missing"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call("dispatch", "Agent", prompt=_agent_prompt(output_dir))
+                ),
+                _result("dispatch", structured={"agentId": "reviewer-agent"}),
+                _assistant(
+                    _special_agent_call("judge", output_dir, "critic")
+                ),
+                _result("judge", structured={"agentId": "critic-agent"}),
+            ],
+        )
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-reviewer-agent.jsonl",
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/in.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read"),
+            ],
+        )
+        # No transcript for critic-agent — its evidence is missing.
+        manifest = _manifest(
+            session_id, tmp_path, output_dir, started=["security-reviewer"]
+        )
+
+        result = enrich_run_transcript(
+            manifest, sessions, {"security-reviewer", "critic"}
+        )
+
+        assert result["completeness"]["scope_comparable_reads"] is True
+        assert result["completeness"]["non_scope_comparable_reads"] is False
+        assert result["completeness"]["agent_data"] is False
+        assert result["completeness"]["artifact_writes"] is True
+        assert result["artifact_writes"]["complete"] is True
+        assert result["artifact_writes"]["builder_attempted"] is False
 
     def test_synthesis_only_run_keeps_builder_metrics_available(
         self, tmp_path

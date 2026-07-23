@@ -1422,11 +1422,19 @@ def _unavailable(reason: str) -> dict[str, Any]:
     }
 
 
-def _scope_for_agent(manifest: dict[str, Any], agent: str) -> list[str]:
+def _scope_for_agent(manifest: dict[str, Any], agent: str) -> list[str] | None:
+    """Return the agent's authoritative scope mapping, or None without one.
+
+    An absent mapping (no coverage, no by_agent, no entry for the agent) is
+    NOT an empty scope: classifying reads against it would report every
+    read as out-of-scope while claiming completeness.
+    """
     coverage = manifest.get("coverage")
     by_agent = coverage.get("by_agent") if isinstance(coverage, dict) else None
     paths = by_agent.get(agent) if isinstance(by_agent, dict) else None
-    return [path for path in paths if isinstance(path, str)] if isinstance(paths, list) else []
+    if not isinstance(paths, list):
+        return None
+    return [path for path in paths if isinstance(path, str)]
 
 
 def _expected_agents(
@@ -1543,6 +1551,7 @@ def enrich_run_transcript(
     missing_transcripts: set[str] = set()
     agent_transcript_parse_gaps: set[str] = set()
     unresolved_evidence: set[str] = set()
+    missing_scope_evidence: set[str] = set()
 
     call_expected, dispatch_schema_gaps = _expected_call_counts(
         main_entries, output_dir, recognized
@@ -1611,10 +1620,22 @@ def enrich_run_transcript(
                 {"code": "agent_transcript_parse_gap", "agent": dispatch["agent"]}
             )
 
+        agent_scope = _scope_for_agent(manifest, dispatch["agent"])
+        if (
+            agent_scope is None
+            and dispatch["agent"] not in _NON_SCOPE_COMPARABLE_AGENTS
+        ):
+            missing_scope_evidence.add(dispatch["agent"])
+            warnings.append(
+                {
+                    "code": "agent_scope_evidence_missing",
+                    "agent": dispatch["agent"],
+                }
+            )
         analysis = _analyze_entries(
             entries,
             repo_path,
-            _scope_for_agent(manifest, dispatch["agent"]),
+            agent_scope or [],
         )
         if analysis["unresolved_calls"]:
             unresolved_evidence.add(dispatch["agent"])
@@ -1661,7 +1682,11 @@ def enrich_run_transcript(
         | agent_transcript_parse_gaps
         | unresolved_evidence
     )
-    scope_comparable_reads_complete = (
+    # Two independent completeness axes: whether every expected transcript
+    # was observed and classified (per actor family), and — for the reads
+    # partition only — whether an authoritative scope mapping backed the
+    # in/out-of-scope classification of each regular reviewer.
+    regular_transcripts_complete = (
         expected_available
         and not expected_invalid
         and not any(
@@ -1669,7 +1694,7 @@ def enrich_run_transcript(
             for agent in incomplete_read_agents
         )
     )
-    non_scope_comparable_reads_complete = (
+    synthesis_transcripts_complete = (
         expected_available
         and not expected_invalid
         and not any(
@@ -1677,9 +1702,12 @@ def enrich_run_transcript(
             for agent in incomplete_read_agents
         )
     )
+    scope_comparable_reads_complete = (
+        regular_transcripts_complete and not missing_scope_evidence
+    )
+    non_scope_comparable_reads_complete = synthesis_transcripts_complete
     agent_data_complete = (
-        scope_comparable_reads_complete
-        and non_scope_comparable_reads_complete
+        regular_transcripts_complete and synthesis_transcripts_complete
     )
     usage_complete = main_data_complete and agent_data_complete
     correlation = {
@@ -1707,14 +1735,18 @@ def enrich_run_transcript(
         for agent in expected_counts
         if agent not in _NON_SCOPE_COMPARABLE_AGENTS
     ]
+    # Builder compliance is regular-reviewer evidence only — a missing
+    # synthesis transcript must not downgrade fully observed reviewer data.
     artifact_available = bool(artifact_by_agent) or (
-        agent_data_complete and not expected_regular_reviewers
+        regular_transcripts_complete and not expected_regular_reviewers
     )
     artifact_writes = {
         "available": artifact_available,
-        "complete": agent_data_complete,
+        "complete": regular_transcripts_complete,
         "builder_attempted": (
-            True if builder_observed else (False if agent_data_complete else None)
+            True
+            if builder_observed
+            else (False if regular_transcripts_complete else None)
         ),
         "builder_attempts": sum(
             item["builder_attempts"] for item in artifact_by_agent
@@ -1741,17 +1773,19 @@ def enrich_run_transcript(
         "non_scope_comparable_transcript_data_complete": (
             non_scope_comparable_reads_complete
         ),
-        "transcript_data_complete": usage_complete,
+        "transcript_data_complete": (
+            usage_complete and scope_comparable_reads_complete
+        ),
     }
     completeness = {
         "orchestrator_data": main_data_complete and stage_timeline_complete,
         "agent_data": agent_data_complete,
         "usage": usage_complete,
         "tool_failures": usage_complete,
-        "artifact_writes": agent_data_complete,
+        "artifact_writes": regular_transcripts_complete,
         "scope_comparable_reads": scope_comparable_reads_complete,
         "non_scope_comparable_reads": non_scope_comparable_reads_complete,
-        "observed_reads": usage_complete,
+        "observed_reads": usage_complete and scope_comparable_reads_complete,
     }
     return {
         "available": True,
