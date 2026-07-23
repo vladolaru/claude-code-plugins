@@ -2325,7 +2325,13 @@ class TestEnrichRunTranscript:
             _at(_assistant(usage=_usage(100, 100)), -1),
             _at(_assistant(usage=_usage(1, 2)), 0),
             _at(_assistant(usage=_usage(2, 3)), 60),
-            _at(_assistant(usage=_usage(100, 100)), 61),
+            # Post-run foreign work follows a human prompt — the completed
+            # window closes there.
+            _at(
+                {"type": "user", "message": {"role": "user", "content": "next"}},
+                61,
+            ),
+            _at(_assistant(usage=_usage(100, 100)), 62),
         ]
         _write_jsonl(sessions / "inclusive.jsonl", entries)
         manifest = _manifest("inclusive", tmp_path, output_dir, started=[])
@@ -2341,6 +2347,62 @@ class TestEnrichRunTranscript:
         running = enrich_run_transcript(manifest, sessions, set())
 
         assert running["usage"]["output_tokens"] == 105
+
+    def test_completed_run_window_includes_final_presentation_turn(
+        self, tmp_path
+    ):
+        """telemetry.finalize() records ended_at inside the final step's
+        subprocess, before the orchestrator reads the report and writes its
+        summary — the window must stay open through that in-flight turn and
+        close at the next human prompt."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(
+                _assistant(
+                    _call(
+                        "step11",
+                        "Bash",
+                        command="python3 pipeline.py --step 11",
+                    ),
+                    usage=_usage(1, 2),
+                ),
+                50,
+            ),
+            # ended_at (+60) lands here, inside the step-11 subprocess.
+            _at(_result("step11", structured={"exitCode": 0}), 61),
+            _at(
+                _assistant(
+                    _call(
+                        "report",
+                        "Read",
+                        file_path=str(output_dir / "review-report.md"),
+                    ),
+                    usage=_usage(2, 3),
+                ),
+                62,
+            ),
+            _at(_result("report"), 63),
+            _at(_assistant(usage=_usage(3, 400)), 64),
+            # Next human prompt — later work is not this run's.
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "new task"},
+                },
+                70,
+            ),
+            _at(_assistant(usage=_usage(100, 100)), 71),
+        ]
+        _write_jsonl(sessions / "presentation.jsonl", entries)
+        manifest = _manifest("presentation", tmp_path, output_dir, started=[])
+        manifest["run"]["ended_at"] = (
+            _TEST_TRANSCRIPT_START + timedelta(seconds=60)
+        ).isoformat()
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2 + 3 + 400
 
     def test_same_session_is_bounded_before_dispatch_usage_and_failure_analysis(
         self, tmp_path
@@ -2375,6 +2437,15 @@ class TestEnrichRunTranscript:
                     11,
                 ),
                 _at(_assistant(usage=_usage(2, 3)), 12),
+                # Later unrelated work follows a human prompt — the completed
+                # window closes there.
+                _at(
+                    {
+                        "type": "user",
+                        "message": {"role": "user", "content": "unrelated task"},
+                    },
+                    3650,
+                ),
                 _at(
                     _assistant(
                         _call("later", "Bash", command="false"),

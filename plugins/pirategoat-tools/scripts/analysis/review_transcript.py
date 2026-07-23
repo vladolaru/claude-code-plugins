@@ -122,6 +122,13 @@ def _bounded_jsonl_entries(
     Returns entries plus independent malformed-record and timestamp-gap flags.
     Evidence records without a usable timestamp cannot safely be assigned to a
     run. Timestamp-less session metadata is not run evidence and is ignored.
+
+    ``ended_at`` is recorded by telemetry.finalize() INSIDE the final step's
+    pipeline subprocess — before the orchestrator's response to that briefing
+    (the report read and final presentation) reaches the transcript. The
+    window therefore stays open past ``ended_at`` through the in-flight turn,
+    closing at the next human prompt: any post-run foreign work follows one,
+    while the presentation turn never does.
     """
     started_at, ended_at = window
     entries: list[dict[str, Any]] = []
@@ -147,12 +154,37 @@ def _bounded_jsonl_entries(
                     continue
                 if timestamp < started_at:
                     continue
-                if ended_at is not None and timestamp > ended_at:
-                    continue
+                if (
+                    ended_at is not None
+                    and timestamp > ended_at
+                    and _is_human_prompt(value)
+                ):
+                    break
                 entries.append(value)
     except OSError:
         parse_gap = True
     return entries, parse_gap, time_gap
+
+
+def _is_human_prompt(value: dict[str, Any]) -> bool:
+    """Return whether an entry is a human prompt rather than a tool result.
+
+    User-role entries during an assistant turn carry tool_result blocks; a
+    genuine prompt carries plain text content. Used as the closing boundary
+    of a completed run's transcript window.
+    """
+    if value.get("type") != "user":
+        return False
+    message = value.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        return not any(
+            isinstance(block, dict) and block.get("type") == "tool_result"
+            for block in content
+        )
+    return False
 
 
 def find_session_file(sessions_root: str | Path, session_id: str) -> str | None:
