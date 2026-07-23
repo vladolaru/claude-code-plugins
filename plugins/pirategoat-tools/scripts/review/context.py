@@ -221,6 +221,18 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
                 git["merge_base"] = merge_base
                 git.setdefault("git_range", f"{merge_base}..HEAD")
 
+    # Reviewed head as a commit SHA. Step 1 resolves HEAD before any PR
+    # checkout happens at step 2, so the durable run identity must be
+    # re-resolved here, after workspace setup. The telemetry manifest
+    # refresh only accepts full SHAs, which is exactly what this provides.
+    # Bot-precomputed context already carries head_sha and is preserved.
+    if "head_sha" not in git:
+        head_sha = _run_cmd(
+            ["git", "rev-parse", "--verify", git.get("head_ref") or "HEAD"]
+        )
+        if head_sha:
+            git["head_sha"] = head_sha
+
     # Changed files
     if "changed_files" not in git and git.get("git_range"):
         files_output = _run_cmd(["git", "diff", "--name-only", git["git_range"]])

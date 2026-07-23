@@ -170,6 +170,75 @@ class TestIncrementalAncestryValidation:
         assert ctx["git"]["merge_base"] == "fullrange123"
 
 
+class TestReviewedHeadSha:
+    """Step 3 records the reviewed head as a commit SHA post-checkout —
+    step 1 resolves HEAD before the PR checkout, so the durable identity
+    must come from here."""
+
+    def test_resolves_head_ref_to_full_sha(self, mod):
+        head_sha = "a" * 40
+
+        def mock_run_cmd(cmd, cwd=None):
+            cmd_str = " ".join(cmd)
+            if cmd_str == "git rev-parse --verify feature-branch":
+                return head_sha
+            if "branch --show-current" in cmd_str:
+                return "feature-branch"
+            if "symbolic-ref" in cmd_str:
+                return "refs/remotes/origin/main"
+            if "merge-base" in cmd_str:
+                return "b" * 40
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, branch=True)
+
+        assert ctx["git"]["head_sha"] == head_sha
+
+    def test_explicit_range_resolves_the_range_head_endpoint(self, mod):
+        def mock_run_cmd(cmd, cwd=None):
+            if " ".join(cmd) == "git rev-parse --verify feature":
+                return "c" * 40
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range="main..feature")
+
+        assert ctx["git"]["head_sha"] == "c" * 40
+
+    def test_precomputed_head_sha_is_preserved(self, mod):
+        """Bot-provided context already carries the resolved head."""
+        ctx = {"git": {"git_range": "x..y", "head_ref": "y",
+                       "head_sha": "d" * 40, "merge_base": "x"}}
+        calls = []
+
+        def mock_run_cmd(cmd, cwd=None):
+            calls.append(" ".join(cmd))
+            return None
+
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range=None)
+
+        assert ctx["git"]["head_sha"] == "d" * 40
+        assert not any("rev-parse --verify" in call for call in calls)
+
+    def test_unresolvable_head_leaves_head_sha_absent(self, mod):
+        def mock_run_cmd(cmd, cwd=None):
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range="main..gone")
+
+        assert "head_sha" not in ctx["git"]
+
+
 class TestCLI:
     def _run(self, *args):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
