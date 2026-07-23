@@ -3911,6 +3911,34 @@ class TestBudgetAndEvidenceAccounting:
         [entry] = result["agent_usage"]
         assert entry["tool_calls"] == 1
 
+    def test_unclassifiable_result_marks_agent_evidence_incomplete(
+        self, tmp_path
+    ):
+        """A paired result whose payload matches no recognized schema is
+        unclassifiable evidence — the families must not claim completeness."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("odd", "Read", file_path="src/a.py"),
+                    usage=_usage(1, 2),
+                ),
+                # Structured payload with an unrecognized shape resolves to
+                # neither success nor failure.
+                _result(
+                    "odd",
+                    structured={"unrecognized": {"shape": True}},
+                    is_error=None,
+                ),
+            ],
+        )
+
+        assert {
+            "code": "agent_transcript_unresolved_calls",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["scope_comparable_reads"] is False
+
     def test_synthesis_only_run_keeps_builder_metrics_available(
         self, tmp_path
     ):

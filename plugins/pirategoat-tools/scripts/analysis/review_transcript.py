@@ -1196,14 +1196,16 @@ def _analyze_entries(
             continue
         operation, target = _operation(call)
         result = result_by_id.get(call["id"])
-        if result is None:
-            # tool_use without a tool_result — the transcript ends mid-call
-            # (e.g., a crash during Read). The call resolves to neither
-            # success nor failure, so the evidence is incomplete.
-            unresolved_calls += 1
         state, category, detector = _result_state(
             result, call["name"], operation
         )
+        if state == "unknown":
+            # The call resolves to neither success nor failure — either the
+            # transcript ends mid-call (no tool_result) or the paired result
+            # payload matches no recognized schema. Either way the call
+            # vanishes from read and failure metrics, so the evidence is
+            # incomplete.
+            unresolved_calls += 1
         analyzed_calls.append(
             {
                 "call": call,
