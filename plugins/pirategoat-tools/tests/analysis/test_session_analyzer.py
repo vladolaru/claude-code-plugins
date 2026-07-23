@@ -551,6 +551,22 @@ class TestBashBuilderRecognition:
         assert positional_issue["file"] == "src/g.php"
         assert positional_issue["line"] == 7
 
+    def test_reconstruction_applies_severity_floor_promotion(self):
+        """The builder lowercases severities and promotes to severity_floor;
+        the reconstruction must match what was actually saved."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="LOW", title="Floored", file="f.php",\n'
+            '    description="d", recommendation="r", line=3,\n'
+            '    severity_floor="medium")\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        [issue] = json.loads(record["content"])["issues"]
+        assert issue["severity"] == "medium"
+
     def test_non_builder_bash_is_not_recognized(self):
         assert _mod._builder_review_from_heredoc("git diff main..HEAD") is None
         assert (

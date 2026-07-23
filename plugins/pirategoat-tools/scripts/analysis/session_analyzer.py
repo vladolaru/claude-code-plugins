@@ -62,6 +62,25 @@ _BUILDER_ISSUE_POSITIONAL = (
     "description",
     "recommendation",
 )
+# Mirrors ReviewOutputBuilder.add_issue severity normalization: severities
+# are lowercased and a severity_floor promotes lower severities to it. The
+# reconstruction must match what the builder actually saved.
+_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _normalize_builder_severity(issue: dict[str, Any]) -> None:
+    severity = issue.get("severity")
+    if isinstance(severity, str):
+        severity = severity.lower()
+        issue["severity"] = severity
+    floor = issue.get("severity_floor")
+    floor = floor.lower() if isinstance(floor, str) else None
+    if (
+        severity in _SEVERITY_RANK
+        and floor in _SEVERITY_RANK
+        and _SEVERITY_RANK[severity] < _SEVERITY_RANK[floor]
+    ):
+        issue["severity"] = floor
 
 
 def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
@@ -130,6 +149,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
                 issue[keyword.arg] = ast.literal_eval(keyword.value)
             except (ValueError, SyntaxError):
                 pass
+        _normalize_builder_severity(issue)
         issues.append(issue)
 
     reviewer = env["PIRATEGOAT_REVIEWER_NAME"]
