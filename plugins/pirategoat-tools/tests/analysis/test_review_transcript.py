@@ -2322,7 +2322,13 @@ class TestEnrichRunTranscript:
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
         entries = [
-            _at(_assistant(usage=_usage(100, 100)), -1),
+            # Pre-run foreign work sits before the run's triggering prompt —
+            # the window opens at that prompt.
+            _at(_assistant(usage=_usage(100, 100)), -2),
+            _at(
+                {"type": "user", "message": {"role": "user", "content": "go"}},
+                -1,
+            ),
             _at(_assistant(usage=_usage(1, 2)), 0),
             _at(_assistant(usage=_usage(2, 3)), 60),
             # Post-run foreign work follows a human prompt — the completed
@@ -2372,6 +2378,48 @@ class TestEnrichRunTranscript:
         assert result["available"] is True
         assert result["usage"]["output_tokens"] == 5
         assert {"code": "orchestrator_transcript_parse_gap"} in result["warnings"]
+
+    def test_run_window_includes_the_opening_turn_before_started_at(
+        self, tmp_path
+    ):
+        """telemetry.start() runs inside the Step 1 subprocess, so the
+        assistant entry that invoked it — the opening turn with its usage —
+        is timestamped just before started_at and must still be counted,
+        attributed to step 1."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "review this PR"},
+                },
+                -5,
+            ),
+            # The step-1 invocation entry: 139ms-class gap before started_at,
+            # carrying the opening turn's heavy cache-read usage.
+            _at(
+                _assistant(
+                    _call(
+                        "step1", "Bash", command="python3 pipeline.py --step 1"
+                    ),
+                    usage=_usage(2, 7, read=73_944),
+                ),
+                -1,
+            ),
+            _at(_result("step1", structured={"exitCode": 0}), 1),
+            _at(_assistant(usage=_usage(3, 5)), 10),
+        ]
+        _write_jsonl(sessions / "opening.jsonl", entries)
+        manifest = _manifest("opening", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 12
+        assert result["usage"]["cache_read_input_tokens"] == 73_944
+        by_step = result["orchestrator_usage_by_step"]
+        assert by_step["1"]["cache_read_input_tokens"] == 73_944
+        assert by_step["unattributed"]["output_tokens"] == 0
 
     def test_completed_run_window_includes_final_presentation_turn(
         self, tmp_path
@@ -2450,6 +2498,15 @@ class TestEnrichRunTranscript:
                     -20,
                 ),
                 _at(_result("old", structured={"agentId": "old-agent"}), -19),
+                # The current run's triggering prompt — prior-session work
+                # above stays outside the window.
+                _at(
+                    {
+                        "type": "user",
+                        "message": {"role": "user", "content": "review this"},
+                    },
+                    -1,
+                ),
                 _at(
                     _assistant(
                         _call("current", "Agent", prompt=current_prompt),

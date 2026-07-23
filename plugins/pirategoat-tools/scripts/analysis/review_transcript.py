@@ -123,15 +123,20 @@ def _bounded_jsonl_entries(
     Evidence records without a usable timestamp cannot safely be assigned to a
     run. Timestamp-less session metadata is not run evidence and is ignored.
 
-    ``ended_at`` is recorded by telemetry.finalize() INSIDE the final step's
-    pipeline subprocess — before the orchestrator's response to that briefing
-    (the report read and final presentation) reaches the transcript. The
-    window therefore stays open past ``ended_at`` through the in-flight turn,
-    closing at the next human prompt: any post-run foreign work follows one,
-    while the presentation turn never does.
+    Both manifest bounds are recorded INSIDE pipeline subprocesses:
+    telemetry.start() runs within the Step 1 invocation, so the assistant
+    entry that issued that call — the run's opening turn, carrying its
+    usage — is timestamped just before ``started_at``; telemetry.finalize()
+    likewise precedes the orchestrator's presentation response. The window
+    therefore spans whole turns: it opens at the last human prompt at or
+    before ``started_at`` (the run's trigger) and closes at the first human
+    prompt after ``ended_at``. Foreign work in a reused session always sits
+    on the far side of one of those prompts.
     """
     started_at, ended_at = window
     entries: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    in_window = False
     parse_gap = False
     time_gap = False
     try:
@@ -155,7 +160,17 @@ def _bounded_jsonl_entries(
                         time_gap = True
                     continue
                 if timestamp < started_at:
+                    # Buffer the turn in flight at started_at; each earlier
+                    # human prompt starts a fresh (discarded) turn buffer.
+                    if _is_human_prompt(value):
+                        pending = [value]
+                    else:
+                        pending.append(value)
                     continue
+                if not in_window:
+                    in_window = True
+                    entries.extend(pending)
+                    pending = []
                 if (
                     ended_at is not None
                     and timestamp > ended_at
@@ -1310,8 +1325,12 @@ def _analyze_orchestrator_entry_steps(
     """Attribute bounded main-session usage from manifest step timestamps."""
     entries = list(entries)
     transitions, timeline_complete = _manifest_step_timeline(manifest)
-    active = "unattributed"
-    stages: dict[str, dict[str, int]] = {active: _empty_usage()}
+    stages: dict[str, dict[str, int]] = {"unattributed": _empty_usage()}
+    # With a complete timeline the bounded window opens at the run's
+    # triggering turn, whose entries precede started_at — that opening
+    # work is Step 1's, not unattributed.
+    active = "1" if timeline_complete else "unattributed"
+    stages.setdefault(active, _empty_usage())
     # Same repeated-message.id contract as _usage_summary: the last record per
     # ID carries the response's final cumulative usage. The response is
     # attributed to the stage active at its FIRST record (where it began), so
