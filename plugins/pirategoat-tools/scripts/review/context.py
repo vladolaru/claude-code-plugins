@@ -145,12 +145,18 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
     git = ctx.setdefault("git", {})
 
     if git_range:
-        # Explicit range provided
+        # Explicit range provided. Match on "..." before ".." — a naive
+        # two-dot split turns "main...topic" into head_ref ".topic". An
+        # omitted endpoint stays unset so downstream resolution defaults
+        # to HEAD, matching git's own range semantics.
         git.setdefault("git_range", git_range)
-        parts = git_range.split("..")
-        if len(parts) == 2:
-            git.setdefault("merge_base", parts[0])
-            git.setdefault("head_ref", parts[1])
+        separator = "..." if "..." in git_range else ".."
+        base_ref, found, head_ref = git_range.partition(separator)
+        if found:
+            if base_ref.strip():
+                git.setdefault("merge_base", base_ref.strip())
+            if head_ref.strip():
+                git.setdefault("head_ref", head_ref.strip())
     elif pr_number and "merge_base" not in git:
         gh_cmd = ctx.get("github_cli_command", "gh")
         # Get PR base info

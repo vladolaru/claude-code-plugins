@@ -197,7 +197,13 @@ class TestReviewedHeadSha:
 
         assert ctx["git"]["head_sha"] == head_sha
 
-    def test_explicit_range_resolves_the_range_head_endpoint(self, mod):
+    @pytest.mark.parametrize(
+        "git_range", ["main..feature", "main...feature"],
+        ids=["two-dot", "three-dot"],
+    )
+    def test_explicit_range_resolves_the_range_head_endpoint(
+        self, mod, git_range
+    ):
         def mock_run_cmd(cmd, cwd=None):
             if " ".join(cmd) == "git rev-parse --verify feature":
                 return "c" * 40
@@ -206,9 +212,25 @@ class TestReviewedHeadSha:
         ctx = {}
         from unittest.mock import patch
         with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
-            mod._fill_git_context(ctx, git_range="main..feature")
+            mod._fill_git_context(ctx, git_range=git_range)
 
+        assert ctx["git"]["merge_base"] == "main"
+        assert ctx["git"]["head_ref"] == "feature"
         assert ctx["git"]["head_sha"] == "c" * 40
+
+    def test_omitted_range_head_endpoint_falls_back_to_head(self, mod):
+        def mock_run_cmd(cmd, cwd=None):
+            if " ".join(cmd) == "git rev-parse --verify HEAD":
+                return "e" * 40
+            return None
+
+        ctx = {}
+        from unittest.mock import patch
+        with patch.object(mod, '_run_cmd', side_effect=mock_run_cmd):
+            mod._fill_git_context(ctx, git_range="main..")
+
+        assert "head_ref" not in ctx["git"]
+        assert ctx["git"]["head_sha"] == "e" * 40
 
     def test_precomputed_head_sha_is_preserved(self, mod):
         """Bot-provided context already carries the resolved head."""
