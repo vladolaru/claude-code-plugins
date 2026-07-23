@@ -130,10 +130,13 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         return None
 
     issues: list[dict[str, Any]] = []
+    saw_save = False
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "save":
+            saw_save = True
         if not (isinstance(func, ast.Attribute) and func.attr == "add_issue"):
             continue
         issue: dict[str, Any] = {}
@@ -151,6 +154,13 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
                 pass
         _normalize_builder_severity(issue)
         issues.append(issue)
+
+    # A heredoc that never calls builder.save() persisted nothing — its
+    # findings must not be fabricated into a review record. (The save
+    # target is env-pinned by the envelope and not statically resolvable,
+    # so the call's presence is the verifiable signal.)
+    if not saw_save:
+        return None
 
     reviewer = env["PIRATEGOAT_REVIEWER_NAME"]
     return {
@@ -279,9 +289,14 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         if role == "assistant" and isinstance(content, str):
             result["final_texts"].append(content)
 
+    # Successful saves to the same artifact overwrite each other — a
+    # corrected rerun must count once, as its final content, not as an
+    # extra dispatch with duplicated findings.
+    final_by_path: dict[str, dict[str, Any]] = {}
     for call_id, builder_output in pending_builder_outputs.items():
         if tool_result_errors.get(call_id) is False:
-            result["write_outputs"].append(builder_output)
+            final_by_path[builder_output["path"]] = builder_output
+    result["write_outputs"].extend(final_by_path.values())
 
     return result
 

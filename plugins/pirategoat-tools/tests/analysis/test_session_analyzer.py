@@ -645,6 +645,50 @@ class TestBashBuilderRecognition:
 
         assert len(data["write_outputs"]) == 1
 
+    def test_heredoc_without_save_is_not_a_review_record(self):
+        """add_issue() calls without builder.save() persisted nothing."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="high", title="Unsaved", file="f.php",\n'
+            '    description="d", recommendation="r", line=3)\n'
+        )
+        assert _mod._builder_review_from_heredoc(_builder_heredoc(body=body)) is None
+
+    def test_corrected_rerun_counts_once_with_final_content(self, tmp_path):
+        """Successful saves overwrite the same artifact — quality reports
+        must see the final save only, not one dispatch per rerun."""
+        first_body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="high", title="First", file="f.php",\n'
+            '    description="d", recommendation="r", line=3)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        corrected_body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="high", title="Corrected", file="f.php",\n'
+            '    description="d", recommendation="r", line=3)\n'
+            'builder.add_issue(severity="low", title="Added", file="g.php",\n'
+            '    description="d", recommendation="r", line=9)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(body=first_body), tool_id="save-1"),
+            _tool_result_entry("save-1"),
+            _bash_entry(_builder_heredoc(body=corrected_body), tool_id="save-2"),
+            _tool_result_entry("save-2"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        [record] = data["write_outputs"]
+        issues = json.loads(record["content"])["issues"]
+        assert [issue["title"] for issue in issues] == ["Corrected", "Added"]
+
     def test_unresolved_builder_heredoc_does_not_count_as_saved(self, tmp_path):
         """No paired tool result means the save was never confirmed."""
         log = tmp_path / "agent.jsonl"
