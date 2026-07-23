@@ -4102,6 +4102,7 @@ class TestTranscriptFamilyAvailability:
                 "available": True,
                 "usage": usage,
                 "usage_by_model": usage_by_model,
+                "tool_calls": 3,
             }
         ]
 
@@ -5090,6 +5091,7 @@ class TestTranscriptFamilyAvailability:
                         "available": True,
                         "usage": _usage(1),
                         "usage_by_model": {"claude-sonnet-4-5": _usage(1)},
+                        "tool_calls": 1,
                     }
                 ],
             ),
@@ -5105,6 +5107,7 @@ class TestTranscriptFamilyAvailability:
                         "available": True,
                         "usage": _usage(1),
                         "usage_by_model": {"claude-sonnet-4-5": _usage(1)},
+                        "tool_calls": 1,
                     }
                 ],
             ),

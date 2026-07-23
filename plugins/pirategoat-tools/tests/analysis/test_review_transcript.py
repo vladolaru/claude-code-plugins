@@ -2729,6 +2729,7 @@ class TestEnrichRunTranscript:
                 "available": False,
                 "usage": None,
                 "usage_by_model": None,
+                "tool_calls": None,
             }
         ]
         assert result["usage"]["output_tokens"] == 2
@@ -3836,3 +3837,122 @@ def test_multiple_retry_calls_are_counted_as_distinct_dispatches(tmp_path):
     assert result["correlation"]["missing_count"] == 0
     assert result["correlation"]["complete"] is True
     assert len(result["agent_usage"]) == 2
+
+
+class TestBudgetAndEvidenceAccounting:
+    """Round-7 accounting contracts: tool-call numerators, synthesis
+    exclusion from builder metrics, and unresolved-call incompleteness."""
+
+    def _run_with_subagent(self, tmp_path, subagent_entries):
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "accounting"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call("dispatch", "Agent", prompt=_agent_prompt(output_dir))
+                ),
+                _result("dispatch", structured={"agentId": "reviewer-agent"}),
+            ],
+        )
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-reviewer-agent.jsonl",
+            subagent_entries,
+        )
+        manifest = _manifest(
+            session_id, tmp_path, output_dir, started=["security-reviewer"]
+        )
+        return enrich_run_transcript(manifest, sessions, {"security-reviewer"})
+
+    def test_agent_usage_carries_tool_call_counts(self, tmp_path):
+        """Budget utilization needs a numerator: the actual number of tool
+        calls the agent issued, alongside the budget_target denominator."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/a.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read"),
+                _assistant(_call("search", "Glob", pattern="src/*.py")),
+                _result("search"),
+            ],
+        )
+
+        [entry] = result["agent_usage"]
+        assert entry["tool_calls"] == 2
+        assert result["completeness"]["agent_data"] is True
+
+    def test_unresolved_tool_call_marks_agent_evidence_incomplete(
+        self, tmp_path
+    ):
+        """A transcript ending after tool_use but before tool_result (agent
+        crash mid-call) is truncated evidence — the run must not report
+        complete empty read/failure data."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("dangling", "Read", file_path="src/a.py"),
+                    usage=_usage(1, 2),
+                ),
+            ],
+        )
+
+        assert {
+            "code": "agent_transcript_unresolved_calls",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["scope_comparable_reads"] is False
+        assert result["completeness"]["agent_data"] is False
+        assert result["artifact_writes"]["complete"] is False
+        [entry] = result["agent_usage"]
+        assert entry["tool_calls"] == 1
+
+    def test_synthesis_agents_stay_out_of_builder_attempt_metrics(
+        self, tmp_path
+    ):
+        """Synthesis agents are not subject to the reviewer builder-envelope
+        contract; their builder_attempted=false rows must not inflate the
+        noncompliance denominator."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "synthesis-artifacts"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call("dispatch", "Agent", prompt=_agent_prompt(output_dir))
+                ),
+                _result("dispatch", structured={"agentId": "reviewer-agent"}),
+                _assistant(
+                    _special_agent_call(
+                        "reconcile", output_dir, "review-reconciliator"
+                    )
+                ),
+                _result("reconcile", structured={"agentId": "reconciler-agent"}),
+            ],
+        )
+        for agent_id in ("reviewer-agent", "reconciler-agent"):
+            _write_jsonl(
+                sessions / session_id / "subagents" / f"agent-{agent_id}.jsonl",
+                [
+                    _assistant(
+                        _call(f"{agent_id}-read", "Read", file_path="src/a.py"),
+                        usage=_usage(1, 2),
+                    ),
+                    _result(f"{agent_id}-read"),
+                ],
+            )
+        manifest = _manifest(
+            session_id, tmp_path, output_dir, started=["security-reviewer"]
+        )
+
+        result = enrich_run_transcript(
+            manifest, sessions, {"security-reviewer", "review-reconciliator"}
+        )
+
+        by_agent = result["artifact_writes"]["by_agent"]
+        assert [item["agent"] for item in by_agent] == ["security-reviewer"]

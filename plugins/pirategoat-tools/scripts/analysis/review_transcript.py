@@ -1190,11 +1190,17 @@ def _analyze_entries(
     usage, usage_by_model = _usage_summary(entries)
 
     analyzed_calls: list[dict[str, Any]] = []
+    unresolved_calls = 0
     for call in calls:
         if call_counts[call["id"]] != 1:
             continue
         operation, target = _operation(call)
         result = result_by_id.get(call["id"])
+        if result is None:
+            # tool_use without a tool_result — the transcript ends mid-call
+            # (e.g., a crash during Read). The call resolves to neither
+            # success nor failure, so the evidence is incomplete.
+            unresolved_calls += 1
         state, category, detector = _result_state(
             result, call["name"], operation
         )
@@ -1294,6 +1300,10 @@ def _analyze_entries(
     return {
         "usage": usage,
         "usage_by_model": usage_by_model,
+        # Budget-utilization numerator: every issued call, including
+        # duplicated-id and unresolved ones — each spent budget.
+        "tool_calls": len(calls),
+        "unresolved_calls": unresolved_calls,
         "tool_failures": failures,
         "artifact_writes": artifact_writes,
         "observed_reads": observed_reads,
@@ -1530,6 +1540,7 @@ def enrich_run_transcript(
     seen_paths = {str(Path(main_session).resolve(strict=False))}
     missing_transcripts: set[str] = set()
     agent_transcript_parse_gaps: set[str] = set()
+    unresolved_evidence: set[str] = set()
 
     call_expected, dispatch_schema_gaps = _expected_call_counts(
         main_entries, output_dir, recognized
@@ -1579,6 +1590,7 @@ def enrich_run_transcript(
                     "available": False,
                     "usage": None,
                     "usage_by_model": None,
+                    "tool_calls": None,
                 }
             )
             continue
@@ -1602,6 +1614,14 @@ def enrich_run_transcript(
             repo_path,
             _scope_for_agent(manifest, dispatch["agent"]),
         )
+        if analysis["unresolved_calls"]:
+            unresolved_evidence.add(dispatch["agent"])
+            warnings.append(
+                {
+                    "code": "agent_transcript_unresolved_calls",
+                    "agent": dispatch["agent"],
+                }
+            )
         _add_usage(total_usage, analysis["usage"])
         agent_usage.append(
             {
@@ -1609,15 +1629,22 @@ def enrich_run_transcript(
                 "available": True,
                 "usage": analysis["usage"],
                 "usage_by_model": analysis["usage_by_model"],
+                "tool_calls": analysis["tool_calls"],
             }
         )
         failures.extend(
             {"actor": dispatch["agent"], **failure}
             for failure in analysis["tool_failures"]
         )
-        artifact_by_agent.append(
-            {"agent": dispatch["agent"], **analysis["artifact_writes"]}
-        )
+        # Only regular reviewers are subject to the bootstrap builder-envelope
+        # contract; synthesis agents (reconciliator, decision-reviewer,
+        # critic) save through other mechanisms, and counting their normal
+        # builder_attempted=false entries would inflate the reviewer
+        # noncompliance denominator.
+        if dispatch["agent"] not in _NON_SCOPE_COMPARABLE_AGENTS:
+            artifact_by_agent.append(
+                {"agent": dispatch["agent"], **analysis["artifact_writes"]}
+            )
         if dispatch["agent"] in _NON_SCOPE_COMPARABLE_AGENTS:
             read_non_scope_comparable.update(
                 analysis["observed_reads"]["all"]
@@ -1630,6 +1657,7 @@ def enrich_run_transcript(
         set(missing_counts)
         | missing_transcripts
         | agent_transcript_parse_gaps
+        | unresolved_evidence
     )
     scope_comparable_reads_complete = (
         expected_available

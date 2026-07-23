@@ -111,13 +111,16 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
         if item["available"]:
             usage = _safe_usage(item.get("usage"))
             usage_by_model = _sanitize_usage_map(item.get("usage_by_model"))
-            if usage is None or usage_by_model is None:
+            tool_calls = _nonnegative_exact_int(item.get("tool_calls"))
+            if usage is None or usage_by_model is None or tool_calls is None:
                 return None
             safe["usage"] = usage
             safe["usage_by_model"] = usage_by_model
+            safe["tool_calls"] = tool_calls
         else:
             safe["usage"] = None
             safe["usage_by_model"] = None
+            safe["tool_calls"] = None
         result.append(safe)
     return result
 
