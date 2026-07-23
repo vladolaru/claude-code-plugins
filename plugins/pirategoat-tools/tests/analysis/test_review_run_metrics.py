@@ -6597,3 +6597,20 @@ class TestNonCanonicalPathsFailClosed:
 
         assert run["run"]["id"] == "scope-run"
         assert run["availability"]["lifecycle"] is True
+
+
+class TestDamagedLegacyLogBytes:
+    """One invalid UTF-8 byte in a legacy log must cost that line only,
+    never abort the cohort scan."""
+
+    def test_invalid_utf8_line_is_skipped_not_fatal(self, tmp_path):
+        events = _legacy_events("legacy-damaged")
+        payload = b"\n".join(json.dumps(event).encode("utf-8") for event in events)
+        (tmp_path / "review.jsonl").write_bytes(
+            payload + b'\n{"event": "step", "note": "\xff\xfe"}\n'
+        )
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-damaged"
+        assert "legacy_log_no_manifest" in run["warnings"]

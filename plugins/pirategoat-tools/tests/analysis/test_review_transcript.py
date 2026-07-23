@@ -2348,6 +2348,31 @@ class TestEnrichRunTranscript:
 
         assert running["usage"]["output_tokens"] == 105
 
+    def test_invalid_utf8_line_costs_one_line_not_the_enrichment(
+        self, tmp_path
+    ):
+        """A damaged byte in the main session reports parse_gap for that
+        line while the rest of the run's evidence still measures."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        good = [
+            _at(_assistant(usage=_usage(1, 2)), 0),
+            _at(_assistant(usage=_usage(2, 3)), 10),
+        ]
+        payload = b"\n".join(
+            json.dumps(entry).encode("utf-8") for entry in good
+        )
+        session = sessions / "damaged.jsonl"
+        session.parent.mkdir(parents=True, exist_ok=True)
+        session.write_bytes(payload + b'\n{"type": "assistant", "x": "\xff"}\n')
+        manifest = _manifest("damaged", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["available"] is True
+        assert result["usage"]["output_tokens"] == 5
+        assert {"code": "orchestrator_transcript_parse_gap"} in result["warnings"]
+
     def test_completed_run_window_includes_final_presentation_turn(
         self, tmp_path
     ):

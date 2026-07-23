@@ -135,7 +135,9 @@ def _bounded_jsonl_entries(
     parse_gap = False
     time_gap = False
     try:
-        with Path(path).open(encoding="utf-8") as stream:
+        # Binary like _read_jsonl: a bad UTF-8 byte must cost one line
+        # (parse_gap), not the run's entire transcript enrichment.
+        with Path(path).open("rb") as stream:
             for line in stream:
                 if not line.strip():
                     continue

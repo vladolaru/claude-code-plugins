@@ -37,9 +37,12 @@ def _read_json(path: Path) -> object | None:
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    # Binary line iteration so one invalid UTF-8 byte damages only its own
+    # line — text-mode decoding fails while ADVANCING the iterator, outside
+    # any per-line handler, and would abort the whole cohort scan.
     events: list[dict[str, Any]] = []
     try:
-        with path.open(encoding="utf-8") as stream:
+        with path.open("rb") as stream:
             for line in stream:
                 if not line.strip():
                     continue
