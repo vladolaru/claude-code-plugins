@@ -84,11 +84,16 @@ def iter_jsonl(path: str | Path) -> Iterator[dict[str, Any]]:
 
 
 def _aware_timestamp(value: object) -> datetime | None:
-    """Parse one timezone-aware ISO timestamp into UTC."""
+    """Parse one timezone-aware ISO timestamp into UTC.
+
+    Claude Code writes "Z"-suffixed timestamps, which fromisoformat() only
+    accepts from Python 3.11 — normalize like the metrics contract parser
+    so 3.10 does not discard every timestamped record as a gap.
+    """
     if not isinstance(value, str) or not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
@@ -184,24 +189,40 @@ def _bounded_jsonl_entries(
 
 
 def _is_human_prompt(value: dict[str, Any]) -> bool:
-    """Return whether an entry is a human prompt rather than a tool result.
+    """Return whether an entry is a genuine human prompt.
 
-    User-role entries during an assistant turn carry tool_result blocks; a
-    genuine prompt carries plain text content. Used as the closing boundary
-    of a completed run's transcript window.
+    User-role entries during an assistant turn carry tool_result blocks, and
+    the harness injects synthetic <task-notification> text records when a
+    background agent completes — neither is a human turn, so neither may
+    open or close a run's transcript window.
     """
     if value.get("type") != "user":
         return False
     message = value.get("message")
     content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, str):
-        return True
-    if isinstance(content, list):
-        return not any(
+        texts = [content]
+    elif isinstance(content, list):
+        if any(
             isinstance(block, dict) and block.get("type") == "tool_result"
             for block in content
+        ):
+            return False
+        texts = [
+            block.get("text")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+    else:
+        return False
+    return not (
+        texts
+        and all(
+            isinstance(text, str)
+            and text.lstrip().startswith("<task-notification>")
+            for text in texts
         )
-    return False
+    )
 
 
 def find_session_file(sessions_root: str | Path, session_id: str) -> str | None:

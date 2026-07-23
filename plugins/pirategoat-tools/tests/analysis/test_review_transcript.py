@@ -2379,6 +2379,73 @@ class TestEnrichRunTranscript:
         assert result["usage"]["output_tokens"] == 5
         assert {"code": "orchestrator_transcript_parse_gap"} in result["warnings"]
 
+    def test_aware_timestamps_accept_z_suffix(self):
+        """Claude Code writes Z-suffixed timestamps; Python 3.10's
+        fromisoformat() rejects them unless normalized like the metrics
+        contract parser — without this every record becomes a time gap."""
+        parsed = _mod._aware_timestamp("2026-07-23T06:28:20.661Z")
+        assert parsed == datetime(
+            2026, 7, 23, 6, 28, 20, 661000, tzinfo=timezone.utc
+        )
+
+    @pytest.mark.parametrize(
+        "notification_content",
+        [
+            "<task-notification><usage>x</usage></task-notification>",
+            [
+                {
+                    "type": "text",
+                    "text": (
+                        "  <task-notification>agent done"
+                        "</task-notification>"
+                    ),
+                }
+            ],
+        ],
+        ids=["string-content", "text-block-content"],
+    )
+    def test_task_notification_does_not_close_the_run_window(
+        self, tmp_path, notification_content
+    ):
+        """A background-agent completion arriving between ended_at and the
+        final response is harness-injected, not a human turn — the window
+        must run through the presentation and close at the real prompt."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(_assistant(usage=_usage(1, 2)), 50),
+            # ended_at (+60) lands here; the notification and the final
+            # presentation follow it.
+            _at(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": notification_content,
+                    },
+                },
+                62,
+            ),
+            _at(_assistant(usage=_usage(3, 400)), 64),
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "new task"},
+                },
+                70,
+            ),
+            _at(_assistant(usage=_usage(100, 100)), 71),
+        ]
+        _write_jsonl(sessions / "notified.jsonl", entries)
+        manifest = _manifest("notified", tmp_path, output_dir, started=[])
+        manifest["run"]["ended_at"] = (
+            _TEST_TRANSCRIPT_START + timedelta(seconds=60)
+        ).isoformat()
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2 + 400
+
     def test_run_window_includes_the_opening_turn_before_started_at(
         self, tmp_path
     ):
