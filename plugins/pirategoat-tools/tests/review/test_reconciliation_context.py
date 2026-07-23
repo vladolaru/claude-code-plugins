@@ -2868,6 +2868,30 @@ class TestAggregateInlineCoverage:
             "code-reviewer",
         ]
 
+    def test_equivalent_declared_path_forms_still_count_as_declared(
+        self, mod, tmp_path
+    ):
+        """A declaration of "./src/omitted.php" must match the sidecar's
+        "src/omitted.php" — otherwise an explicit coverage gap inverts into
+        a deferred-but-reviewed claim."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/omitted.php"],
+        )
+        self._write_review(
+            str(tmp_path), "security-review", unreviewed=["./src/omitted.php"]
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+
     def test_agent_without_output_cannot_claim_deferred_files(
         self, mod, tmp_path
     ):

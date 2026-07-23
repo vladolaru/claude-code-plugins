@@ -736,6 +736,14 @@ class TestAddUnreviewed:
         b.add_unreviewed("src/a.py")
         assert b.unreviewed == ["src/a.py", "src/b.py"]
 
+    def test_normalizes_equivalent_paths_to_canonical_form(self):
+        """"./src/a.py" and "src//a.py" declare the same scope path — the
+        stored form must match what the scope sidecars emit."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("./src/a.py")
+        b.add_unreviewed("src//a.py")
+        assert b.unreviewed == ["src/a.py"]
+
     @pytest.mark.parametrize("bad", ["", "   ", None, 42, ["src/a.py"]])
     def test_rejects_non_path_values(self, bad):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")

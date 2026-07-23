@@ -22,6 +22,7 @@ Usage:
 
 import json
 import os
+import posixpath
 import sys
 import uuid
 from datetime import datetime
@@ -293,7 +294,9 @@ class ReviewOutputBuilder:
         """
         if not isinstance(file, str) or not file.strip():
             raise ValueError("add_unreviewed requires a non-empty file path.")
-        path = file.strip()
+        # Normalize to the canonical repo-relative form scope.py emits, so
+        # "./src/x.php" and "src/x.php" declare the same coverage gap.
+        path = posixpath.normpath(file.strip())
         if path not in self.unreviewed:
             self.unreviewed.append(path)
 

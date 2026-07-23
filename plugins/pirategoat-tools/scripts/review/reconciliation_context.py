@@ -21,6 +21,7 @@ Zero external dependencies (stdlib only).
 import argparse
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -172,7 +173,14 @@ def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
     unreviewed = data.get("unreviewed")
     if not isinstance(unreviewed, list):
         return []
-    return [item.strip() for item in unreviewed if isinstance(item, str)]
+    # Normalize declarations to the canonical repo-relative form the scope
+    # sidecars use — "./src/x.php" must match "src/x.php", or an explicit
+    # declaration silently inverts into a deferred-but-reviewed claim.
+    return [
+        posixpath.normpath(item.strip())
+        for item in unreviewed
+        if isinstance(item, str) and item.strip()
+    ]
 
 
 def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
