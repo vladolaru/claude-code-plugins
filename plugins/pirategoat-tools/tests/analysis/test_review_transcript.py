@@ -3914,6 +3914,33 @@ class TestBudgetAndEvidenceAccounting:
         [entry] = result["agent_usage"]
         assert entry["tool_calls"] == 1
 
+    def test_duplicate_tool_call_ids_mark_agent_evidence_incomplete(
+        self, tmp_path
+    ):
+        """Repeated tool-use IDs make pairing ambiguous — the skipped calls
+        vanish from reads and failures, so the evidence is incomplete."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("dup", "Read", file_path="src/a.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("dup"),
+                _assistant(_call("dup", "Read", file_path="src/b.py")),
+                _result("dup"),
+            ],
+        )
+
+        assert {
+            "code": "agent_transcript_unresolved_calls",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["scope_comparable_reads"] is False
+        [entry] = result["agent_usage"]
+        assert entry["tool_calls"] == 2
+        assert result["observed_reads"]["all"] == []
+
     def test_unclassifiable_result_marks_agent_evidence_incomplete(
         self, tmp_path
     ):

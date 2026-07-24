@@ -1193,6 +1193,11 @@ def _analyze_entries(
     unresolved_calls = 0
     for call in calls:
         if call_counts[call["id"]] != 1:
+            # A repeated tool-use ID makes call/result pairing ambiguous:
+            # these calls are skipped, so their reads, failures, and builder
+            # attempts vanish — that is unresolved evidence, not a
+            # complete-looking transcript.
+            unresolved_calls += 1
             continue
         operation, target = _operation(call)
         result = result_by_id.get(call["id"])
