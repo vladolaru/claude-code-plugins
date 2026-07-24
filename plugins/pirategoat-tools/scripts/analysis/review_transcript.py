@@ -49,6 +49,10 @@ _BOOTSTRAP_BUILDER_ENV = (
     "PIRATEGOAT_REVIEWER_NAME",
     "PIRATEGOAT_PR_ID",
 )
+# Both current and legacy names of the subagent dispatch tool. Dispatch
+# anomalies (dangling, malformed, duplicated calls) are the correlation
+# machinery's domain — every unresolved-evidence carve-out must exempt both.
+_DISPATCH_TOOL_NAMES = frozenset({"Agent", "Task"})
 _NON_SCOPE_COMPARABLE_AGENTS = frozenset(
     {"review-reconciliator", "decision-reviewer", "critic"}
 )
@@ -323,7 +327,7 @@ def _tool_calls(
             name = block.get("name")
             tool_input = block.get("input")
             if not isinstance(tool_id, str) or not isinstance(name, str):
-                if name != "Agent":
+                if name not in _DISPATCH_TOOL_NAMES:
                     malformed += 1
                 continue
             calls.append(
@@ -482,6 +486,21 @@ def _read_shape_succeeded(structured: object) -> bool:
     if not isinstance(structured, dict) or set(structured) != {"type", "file"}:
         return False
     file_data = structured.get("file")
+    result_type = structured.get("type")
+    if result_type == "file_unchanged":
+        # Repeated Read of an unchanged file — a current, known non-error
+        # variant carrying only the file path.
+        return (
+            isinstance(file_data, dict)
+            and set(file_data) == {"filePath"}
+            and isinstance(file_data.get("filePath"), str)
+            and bool(file_data["filePath"])
+        )
+    if result_type == "image":
+        # Image reads carry a rendered payload instead of text-file
+        # metadata; the {"type": "image", "file": {...}} envelope is the
+        # known non-error signal.
+        return isinstance(file_data, dict) and bool(file_data)
     required_file = {"content", "filePath", "numLines", "startLine", "totalLines"}
     allowed_file = required_file | {"truncatedByTokenCap"}
     if (
@@ -802,10 +821,10 @@ def _dispatch_call_blocks(
         if entry.get("type") != "assistant":
             continue
         for block in _content_blocks(entry):
-            if block.get("type") != "tool_use" or block.get("name") not in {
-                "Agent",
-                "Task",
-            }:
+            if (
+                block.get("type") != "tool_use"
+                or block.get("name") not in _DISPATCH_TOOL_NAMES
+            ):
                 continue
             tool_input = block.get("input")
             if not isinstance(tool_input, dict):
@@ -1266,7 +1285,7 @@ def _analyze_entries(
             # these calls are skipped, so their reads, failures, and builder
             # attempts vanish — that is unresolved evidence, not a
             # complete-looking transcript.
-            if call["name"] != "Agent":
+            if call["name"] not in _DISPATCH_TOOL_NAMES:
                 unresolved_calls += 1
             continue
         operation, target = _operation(call)
@@ -1274,7 +1293,7 @@ def _analyze_entries(
         state, category, detector = _result_state(
             result, call["name"], operation
         )
-        if state == "unknown" and call["name"] != "Agent":
+        if state == "unknown" and call["name"] not in _DISPATCH_TOOL_NAMES:
             # The call resolves to neither success nor failure — either the
             # transcript ends mid-call (no tool_result) or the paired result
             # payload matches no recognized schema. Either way the call

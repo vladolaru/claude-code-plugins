@@ -4121,6 +4121,62 @@ class TestBudgetAndEvidenceAccounting:
         } in result["warnings"]
         assert result["completeness"]["scope_comparable_reads"] is False
 
+    @pytest.mark.parametrize(
+        "structured",
+        [
+            {"type": "file_unchanged", "file": {"filePath": "src/in.py"}},
+            {"type": "image", "file": {"base64": "aWc=", "type": "image/png"}},
+        ],
+        ids=["file-unchanged", "image"],
+    )
+    def test_non_text_read_variants_are_successful_reads(
+        self, tmp_path, structured
+    ):
+        """file_unchanged and image Read results are current non-error
+        variants — they must count as observed reads with complete
+        evidence, not as damaged unknowns."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/in.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read", is_error=None, structured=structured),
+            ],
+        )
+
+        assert result["warnings"] == []
+        assert result["completeness"]["scope_comparable_reads"] is True
+        assert result["observed_reads"]["in_scope"] == ["src/in.py"]
+
+    def test_dangling_legacy_task_dispatch_stays_with_correlation(
+        self, tmp_path
+    ):
+        """A legacy Task dispatch left without a result is the correlation
+        machinery's evidence (missing agent, per-family) — it must not also
+        degrade the whole main session as an unresolved call."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        _write_jsonl(
+            sessions / "legacy-task.jsonl",
+            [
+                _assistant(
+                    _call("t1", "Task", prompt=_agent_prompt(output_dir)),
+                    usage=_usage(1, 2),
+                ),
+            ],
+        )
+        manifest = _manifest(
+            "legacy-task", tmp_path, output_dir, started=["security-reviewer"]
+        )
+
+        result = enrich_run_transcript(manifest, sessions, {"security-reviewer"})
+
+        codes = [warning["code"] for warning in result["warnings"]]
+        assert "orchestrator_transcript_unresolved_calls" not in codes
+        assert "expected_agent_uncorrelated" in codes
+
     def test_unresolved_orchestrator_call_marks_main_evidence_incomplete(
         self, tmp_path
     ):
