@@ -122,26 +122,33 @@ def _privacy_reduced_lifecycle_event(
 def _project_lifecycle_revisions(
     events: list[tuple[bool, dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
-    """Project sequential same-agent save revisions without execution IDs."""
+    """Project same-agent save revisions without execution IDs.
+
+    Mirrors the telemetry producer's projection exactly: a completion
+    matches an outstanding start while any remain (overlapping executions
+    each keep their completion); only afterwards does a further completion
+    replace the latest one as a corrected save.
+    """
     started: list[dict[str, Any]] = []
     completed_events: list[dict[str, Any]] = []
-    has_started: set[str] = set()
+    start_counts: Counter[str] = Counter()
+    completion_counts: Counter[str] = Counter()
     completion_slot: dict[str, int] = {}
 
     for completed, event in events:
         agent = event["agent"]
         if completed:
-            if agent not in has_started:
+            if agent not in start_counts:
                 return None
-            if agent in completion_slot:
+            if completion_counts[agent] >= start_counts[agent]:
                 completed_events[completion_slot[agent]] = event
             else:
                 completed_events.append(event)
+                completion_counts[agent] += 1
                 completion_slot[agent] = len(completed_events) - 1
         else:
             started.append(event)
-            has_started.add(agent)
-            completion_slot.pop(agent, None)
+            start_counts[agent] += 1
     return started, completed_events
 
 

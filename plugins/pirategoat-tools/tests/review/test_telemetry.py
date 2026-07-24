@@ -609,6 +609,60 @@ class TestRunManifest:
         ]
         assert agents["incomplete"] == []
 
+    def test_overlapping_executions_each_keep_their_completion(
+        self, telemetry
+    ):
+        """Two starts before either completes: both completions match
+        outstanding starts — never a false incomplete execution."""
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
+        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer", verdict="approve"
+        )
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer", verdict="comment",
+            issue_count=1, severities={"medium": 1},
+        )
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        agents = _read_manifest(telemetry)["agents"]
+        assert len(agents["started"]) == 2
+        assert [event["verdict"] for event in agents["completed"]] == [
+            "approve",
+            "comment",
+        ]
+        assert agents["incomplete"] == []
+
+    def test_completion_beyond_outstanding_starts_is_a_corrected_save(
+        self, telemetry
+    ):
+        """Once every start is matched, a further completion revises the
+        latest one instead of inventing an execution."""
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
+        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer", verdict="approve"
+        )
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer", verdict="comment",
+            issue_count=1, severities={"medium": 1},
+        )
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer", verdict="request_changes",
+            issue_count=2, severities={"high": 2},
+        )
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        agents = _read_manifest(telemetry)["agents"]
+        assert len(agents["started"]) == 2
+        assert [event["verdict"] for event in agents["completed"]] == [
+            "approve",
+            "request_changes",
+        ]
+        assert agents["incomplete"] == []
+
     def test_completion_without_start_remains_visible_for_strict_validation(
         self, telemetry
     ):

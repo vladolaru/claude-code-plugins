@@ -658,14 +658,16 @@ class ReviewTelemetry:
     ) -> tuple[List[dict], List[dict]]:
         """Project append-only saves into one completion per execution.
 
-        A new start opens a new execution for that agent. Further completion
-        events before another start are corrected saves of that execution, so
-        the latest completion replaces the prior projection. Completions with
+        A completion matches an outstanding start while any remain — so
+        overlapping executions of the same agent each keep their completion.
+        Only once every start is matched does a further completion count as
+        a corrected save, replacing the latest completion. Completions with
         no preceding start remain visible for strict consumers to reject.
         """
         started: List[dict] = []
         completed: List[dict] = []
-        has_started: set[str] = set()
+        start_counts: Counter = Counter()
+        completion_counts: Counter = Counter()
         completion_slot: Dict[str, int] = {}
 
         for event in events:
@@ -676,18 +678,19 @@ class ReviewTelemetry:
                     self._manifest_agent_start_event(event, repo_path=repo_path)
                 )
                 if isinstance(agent, str) and agent:
-                    has_started.add(agent)
-                    completion_slot.pop(agent, None)
+                    start_counts[agent] += 1
             elif event_name == "agent_complete":
                 completion = self._manifest_agent_complete_event(event)
                 if (
                     isinstance(agent, str)
                     and agent in completion_slot
+                    and completion_counts[agent] >= start_counts[agent]
                 ):
                     completed[completion_slot[agent]] = completion
                 else:
                     completed.append(completion)
-                    if isinstance(agent, str) and agent in has_started:
+                    if isinstance(agent, str) and start_counts[agent] > 0:
+                        completion_counts[agent] += 1
                         completion_slot[agent] = len(completed) - 1
 
         return started, completed
