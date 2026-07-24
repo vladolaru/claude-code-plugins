@@ -302,6 +302,7 @@ class ReviewOutputBuilder:
         path = posixpath.normpath(file.strip().replace("\\", "/"))
         if (
             path.startswith("/")
+            or path == "."
             or path == ".."
             or path.startswith("../")
             or (len(path) >= 2 and path[1] == ":" and path[0].isalpha())

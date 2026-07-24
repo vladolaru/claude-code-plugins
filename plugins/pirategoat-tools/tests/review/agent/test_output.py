@@ -757,7 +757,11 @@ class TestAddUnreviewed:
 
     @pytest.mark.parametrize(
         "bad",
-        ["/abs/a.py", "../outside.py", "..", "C:/win.py", "c:win.py"],
+        [
+            "/abs/a.py", "../outside.py", "..", "C:/win.py", "c:win.py",
+            # These normalize to "." — a form no scope summary can contain.
+            ".", "./", "foo/..",
+        ],
     )
     def test_rejects_non_repo_relative_paths(self, bad):
         """Forms that can never match a canonical scope path must fail

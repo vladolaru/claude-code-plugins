@@ -2892,6 +2892,50 @@ class TestAggregateInlineCoverage:
         ]
         assert cov["files_deferred_reviewed"] == {}
 
+    def test_malformed_unreviewed_field_cannot_claim_deferred_files(
+        self, mod, tmp_path
+    ):
+        """A non-null, non-list unreviewed field is unknowable intent — the
+        agent can claim nothing, so its deferred files stay genuine gaps
+        instead of silently flipping to deferred-but-reviewed."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/deferred.php"],
+        )
+        self._write_review(
+            str(tmp_path), "security-review", unreviewed="src/deferred.php"
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_declared_unreviewed"] == {}
+
+    def test_canonical_null_unreviewed_still_claims_deferred_files(
+        self, mod, tmp_path
+    ):
+        """The builder serializes unreviewed as null when nothing was
+        declared — that is the canonical no-declarations case, and per the
+        budget contract the agent claims its deferred files were reviewed."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/deferred.php"],
+        )
+        with open(os.path.join(str(tmp_path), "security-review.json"), "w") as f:
+            json.dump(
+                {"reviewer": "security", "issues": [], "unreviewed": None}, f
+            )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert "src/deferred.php" not in cov["files_never_inline"]
+        assert cov["files_deferred_reviewed"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+
     def test_agent_without_output_cannot_claim_deferred_files(
         self, mod, tmp_path
     ):

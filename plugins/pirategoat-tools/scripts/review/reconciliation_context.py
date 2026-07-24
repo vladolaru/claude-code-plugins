@@ -158,8 +158,10 @@ def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
 def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
     """Read one agent's declared-unreviewed paths from its review JSON.
 
-    Returns None when the agent produced no parseable output (it can claim
-    nothing), else the list of declared paths (possibly empty).
+    Returns None when the agent produced no parseable output OR its
+    unreviewed field is malformed (non-null, non-list) — either way it can
+    claim nothing. Returns the list of declared paths (possibly empty)
+    otherwise; canonical null and an absent key mean "declared nothing".
     """
     stem = agent.replace("-reviewer", "-review")
     path = os.path.join(output_dir, f"{stem}.json")
@@ -171,8 +173,17 @@ def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
     if not isinstance(data, dict):
         return None
     unreviewed = data.get("unreviewed")
-    if not isinstance(unreviewed, list):
+    if unreviewed is None:
+        # Canonical "no declarations": the builder serializes null when
+        # nothing was declared (absent predates the field). Output without
+        # declarations claims full review per the budget contract.
         return []
+    if not isinstance(unreviewed, list):
+        # Malformed field: what the agent meant to declare is unknowable,
+        # so it can claim nothing — same as unparseable output. Coercing
+        # to [] would invert genuine gaps into deferred-but-reviewed
+        # claims and erase them from files_never_inline.
+        return None
     # Normalize declarations to the canonical repo-relative form the scope
     # sidecars use — "./src/x.php" and "src\\x.php" must match "src/x.php",
     # or an explicit declaration silently inverts into a
