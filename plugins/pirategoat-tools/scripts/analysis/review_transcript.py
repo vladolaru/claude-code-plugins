@@ -52,6 +52,11 @@ _BOOTSTRAP_BUILDER_ENV = (
 _NON_SCOPE_COMPARABLE_AGENTS = frozenset(
     {"review-reconciliator", "decision-reviewer", "critic"}
 )
+# Regular reviewers with no registry domain: they discover their own scope
+# (mutation testing), so their reads have no in/out-of-scope partition to
+# compare against — but they remain regular reviewers for builder metrics
+# and the regular evidence-completeness family.
+_SCOPE_EXEMPT_REVIEWERS = frozenset({"tests-mutation-reviewer"})
 _OBSERVED_READS_SCHEMA_VERSION = 2
 
 
@@ -302,7 +307,9 @@ def _tool_calls(
 
     A tool_use block with a missing or non-string id/name cannot be paired
     or classified, but it was still an issued call — callers accounting for
-    evidence completeness must count it as unresolved.
+    evidence completeness must count it as unresolved. Malformed Agent
+    dispatch blocks are excluded: dispatch anomalies belong to the
+    correlation machinery, which tracks them per actor family.
     """
     calls: list[dict[str, Any]] = []
     malformed = 0
@@ -316,7 +323,8 @@ def _tool_calls(
             name = block.get("name")
             tool_input = block.get("input")
             if not isinstance(tool_id, str) or not isinstance(name, str):
-                malformed += 1
+                if name != "Agent":
+                    malformed += 1
                 continue
             calls.append(
                 {
@@ -1246,6 +1254,11 @@ def _analyze_entries(
     analyzed_calls: list[dict[str, Any]] = []
     # Malformed tool_use blocks were issued calls that can never be paired
     # or classified — unresolved evidence from the start.
+    # Agent dispatch calls are carved out of every unresolved bucket: their
+    # anomalies (dangling, malformed, duplicated dispatches) are the
+    # correlation machinery's domain, tracked per actor family through
+    # expected/missing counts and dispatch warnings. Counting them here too
+    # would collapse that per-family isolation into whole-run degradation.
     unresolved_calls = malformed_calls
     for call in calls:
         if call_counts[call["id"]] != 1:
@@ -1253,14 +1266,15 @@ def _analyze_entries(
             # these calls are skipped, so their reads, failures, and builder
             # attempts vanish — that is unresolved evidence, not a
             # complete-looking transcript.
-            unresolved_calls += 1
+            if call["name"] != "Agent":
+                unresolved_calls += 1
             continue
         operation, target = _operation(call)
         result = result_by_id.get(call["id"])
         state, category, detector = _result_state(
             result, call["name"], operation
         )
-        if state == "unknown":
+        if state == "unknown" and call["name"] != "Agent":
             # The call resolves to neither success nor failure — either the
             # transcript ends mid-call (no tool_result) or the paired result
             # payload matches no recognized schema. Either way the call
@@ -1591,13 +1605,20 @@ def enrich_run_transcript(
     # observed family may claim completeness until the run settles.
     run_settled = window[1] is not None and manifest.get("status") != "running"
     main_data_complete = (
-        not main_parse_gap and not main_time_gap and run_settled
+        not main_parse_gap
+        and not main_time_gap
+        and not main_analysis["unresolved_calls"]
+        and run_settled
     )
     expected_available = manifest_expected_available and main_data_complete
     if main_parse_gap:
         warnings.append({"code": "orchestrator_transcript_parse_gap"})
     if main_time_gap:
         warnings.append({"code": "orchestrator_transcript_time_gap"})
+    if main_analysis["unresolved_calls"]:
+        # Same contract as subagents: a call resolving to neither success
+        # nor failure is incomplete evidence, not a complete transcript.
+        warnings.append({"code": "orchestrator_transcript_unresolved_calls"})
     if not manifest_expected_available:
         warnings.append({"code": "expected_agents_unavailable"})
     elif expected_invalid:
@@ -1699,6 +1720,7 @@ def enrich_run_transcript(
         if (
             agent_scope is None
             and dispatch["agent"] not in _NON_SCOPE_COMPARABLE_AGENTS
+            and dispatch["agent"] not in _SCOPE_EXEMPT_REVIEWERS
         ):
             missing_scope_evidence.add(dispatch["agent"])
             warnings.append(
@@ -1755,7 +1777,13 @@ def enrich_run_transcript(
             artifact_by_agent.append(
                 {"agent": dispatch["agent"], **analysis["artifact_writes"]}
             )
-        if dispatch["agent"] in _NON_SCOPE_COMPARABLE_AGENTS:
+        if (
+            dispatch["agent"] in _NON_SCOPE_COMPARABLE_AGENTS
+            or dispatch["agent"] in _SCOPE_EXEMPT_REVIEWERS
+        ):
+            # Scope-exempt reviewers have no scope to compare against —
+            # partitioning their self-discovered reads would report every
+            # legitimate read as out-of-scope.
             read_non_scope_comparable.update(
                 analysis["observed_reads"]["all"]
             )

@@ -3728,12 +3728,16 @@ def test_malformed_unrelated_or_wrong_run_calls_do_not_affect_expectations(tmp_p
         {"review-reconciliator", "decision-reviewer"},
     )
 
-    assert result["warnings"] == []
+    # Malformed dispatch-shaped calls never create correlation expectations;
+    # the malformed unrelated Read block, though, is unresolved orchestrator
+    # evidence and degrades main completeness honestly.
+    assert result["warnings"] == [
+        {"code": "orchestrator_transcript_unresolved_calls"}
+    ]
     assert result["correlation"]["expected"] == []
     assert result["correlation"]["expected_by_agent"] == {}
     assert result["correlation"]["expected_count"] == 0
-    assert result["correlation"]["complete"] is True
-    assert result["usage_complete"] is True
+    assert result["usage_complete"] is False
 
 
 @pytest.mark.parametrize(
@@ -4116,6 +4120,91 @@ class TestBudgetAndEvidenceAccounting:
             "agent": "security-reviewer",
         } in result["warnings"]
         assert result["completeness"]["scope_comparable_reads"] is False
+
+    def test_unresolved_orchestrator_call_marks_main_evidence_incomplete(
+        self, tmp_path
+    ):
+        """A main-session call resolving to neither success nor failure is
+        incomplete evidence — same contract as subagent calls."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        _write_jsonl(
+            sessions / "dangling-main.jsonl",
+            [
+                _at(_assistant(usage=_usage(1, 2)), 0),
+                _at(
+                    _assistant(
+                        _call("dangling", "Bash", command="git diff"),
+                        usage=_usage(2, 3),
+                    ),
+                    10,
+                ),
+            ],
+        )
+        manifest = _manifest("dangling-main", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert {
+            "code": "orchestrator_transcript_unresolved_calls"
+        } in result["warnings"]
+        assert result["completeness"]["usage"] is False
+        assert result["completeness"]["tool_failures"] is False
+
+    def test_scope_exempt_reviewer_reads_are_non_scope_comparable(
+        self, tmp_path
+    ):
+        """tests-mutation-reviewer discovers its own scope — its reads must
+        not be partitioned against the empty recorded mapping (which would
+        report every legitimate read as out-of-scope), while it remains a
+        regular reviewer for builder metrics."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "mutation"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call(
+                        "dispatch",
+                        "Agent",
+                        prompt=_agent_prompt(
+                            output_dir, agent="tests-mutation-reviewer"
+                        ),
+                    )
+                ),
+                _result("dispatch", structured={"agentId": "mutation-agent"}),
+            ],
+        )
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-mutation-agent.jsonl",
+            [
+                _assistant(
+                    _call("read", "Read", file_path="tests/test_a.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read"),
+            ],
+        )
+        manifest = _manifest(
+            session_id, tmp_path, output_dir,
+            started=["tests-mutation-reviewer"],
+        )
+        manifest["coverage"] = {"by_agent": {"tests-mutation-reviewer": []}}
+
+        result = enrich_run_transcript(
+            manifest, sessions, {"tests-mutation-reviewer"}
+        )
+
+        reads = result["observed_reads"]
+        assert reads["non_scope_comparable"] == ["tests/test_a.py"]
+        assert reads["out_of_scope"] == []
+        assert result["completeness"]["scope_comparable_reads"] is True
+        # Regular reviewer for builder metrics: its (non-builder) artifact
+        # entry is present and counted.
+        assert [
+            item["agent"] for item in result["artifact_writes"]["by_agent"]
+        ] == ["tests-mutation-reviewer"]
 
     def test_running_manifest_caps_transcript_families_at_partial(
         self, tmp_path
