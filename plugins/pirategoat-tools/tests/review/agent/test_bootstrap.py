@@ -37,6 +37,7 @@ extract_scope_files = _mod.extract_scope_files
 extract_not_diffed_files = _mod.extract_not_diffed_files
 extract_list_only_files = _mod.extract_list_only_files
 extract_scope_line_count = _mod.extract_scope_line_count
+load_scope_facts = _mod.load_scope_facts
 resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
@@ -627,6 +628,73 @@ class TestExtractScopeMultipleBlocks:
     def test_extract_list_only_files_empty_without_section(self):
         scope = "=== FILES ===\nsrc/a.py  (+5 -1)\n=== DIFFS ===\n"
         assert extract_list_only_files(scope) == []
+
+
+class TestLoadScopeFacts:
+    """load_scope_facts derives scope facts from summary sidecars, falling
+    back to None (→ text parsing) on any missing or malformed sidecar."""
+
+    def _write_summary(self, path, **overrides):
+        data = {
+            "schema": 1,
+            "files_with_diffs": ["src/a.py"],
+            "budget_exceeded_files": ["src/deferred.py"],
+            "list_only_files": ["package-lock.json"],
+            "in_scope_stat_lines": 100,
+        }
+        data.update(overrides)
+        path.write_text(json.dumps(data))
+        return str(path)
+
+    def test_accumulates_across_primary_and_secondary(self, tmp_path):
+        primary = self._write_summary(tmp_path / "a-scope-summary.json")
+        secondary = self._write_summary(
+            tmp_path / "a-scope-summary-config-ops.json",
+            files_with_diffs=["ci.yml"],
+            budget_exceeded_files=[],
+            list_only_files=[],
+            in_scope_stat_lines=7,
+        )
+        facts = load_scope_facts([primary, secondary])
+        assert facts == {
+            "files": ["src/a.py", "ci.yml"],
+            "not_diffed": ["src/deferred.py"],
+            "list_only": ["package-lock.json"],
+            "stat_lines": 107,
+        }
+
+    def test_no_paths_returns_none(self):
+        assert load_scope_facts([]) is None
+
+    def test_missing_sidecar_returns_none(self, tmp_path):
+        primary = self._write_summary(tmp_path / "a-scope-summary.json")
+        assert load_scope_facts(
+            [primary, str(tmp_path / "gone.json")]
+        ) is None
+
+    def test_malformed_json_returns_none(self, tmp_path):
+        path = tmp_path / "a-scope-summary.json"
+        path.write_text("{not json")
+        assert load_scope_facts([str(path)]) is None
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"in_scope_stat_lines": None},   # pre-field producer
+            {"in_scope_stat_lines": True},   # bool is not a count
+            {"in_scope_stat_lines": 1.5},
+            {"files_with_diffs": "src/a.py"},
+            {"budget_exceeded_files": [1]},
+            {"list_only_files": None},
+        ],
+    )
+    def test_malformed_fields_return_none(self, tmp_path, overrides):
+        """Any deviation falls back wholesale to text parsing — mixed-source
+        facts would be harder to reason about than one honest fallback."""
+        path = self._write_summary(
+            tmp_path / "a-scope-summary.json", **overrides
+        )
+        assert load_scope_facts([path]) is None
 
 
 class TestLoadAdditionalInstructions:

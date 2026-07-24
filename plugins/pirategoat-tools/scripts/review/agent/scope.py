@@ -1445,6 +1445,17 @@ def write_scope_summary(scope: dict, path: str) -> None:
 
     Fail-open: a summary-write failure must never break scope output.
     """
+    # Raw diffstat lines over the reviewer's in-scope workload: inline FILES
+    # plus deferred budget-exceeded files, excluding list-only stats. This is
+    # the budget-sizing number (bootstrap's tool-call budget input) — NOT
+    # total_diff_lines, which counts semantically filtered inline lines only.
+    diffstat = scope.get("diffstat", {}) or {}
+    in_scope_files = list(scope.get("files", []) or []) + list(
+        scope.get("budget_exceeded_files", []) or []
+    )
+    in_scope_stat_lines = sum(
+        sum(diffstat.get(f, (0, 0))) for f in in_scope_files
+    )
     summary = {
         "schema": 1,
         "domain": scope.get("domain"),
@@ -1454,6 +1465,7 @@ def write_scope_summary(scope: dict, path: str) -> None:
         "budget_exceeded_files": list(scope.get("budget_exceeded_files", []) or []),
         "list_only_files": list(scope.get("list_only_files", []) or []),
         "total_diff_lines": scope.get("total_diff_lines", 0),
+        "in_scope_stat_lines": in_scope_stat_lines,
         "budget_max": scope.get("budget_max"),
     }
     try:

@@ -415,6 +415,50 @@ def extract_scope_line_count(scope_output: str) -> int:
     return total
 
 
+def load_scope_facts(summary_paths: List[str]) -> Optional[Dict[str, Any]]:
+    """Derive scope facts from the machine-readable scope-summary sidecars.
+
+    The sidecars carry the same producer dict the text renderer prints, so
+    consuming them directly means a scope section unknown to the text
+    extractors can never be silently invisible. Returns None when no paths
+    were given or any expected sidecar is missing, malformed, or predates
+    the in_scope_stat_lines field — callers then fall back to parsing the
+    rendered text (the sidecar write is fail-open by design).
+    """
+    if not summary_paths:
+        return None
+    facts: Dict[str, Any] = {
+        "files": [],
+        "not_diffed": [],
+        "list_only": [],
+        "stat_lines": 0,
+    }
+    for path in summary_paths:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        stat_lines = data.get("in_scope_stat_lines")
+        if not isinstance(stat_lines, int) or isinstance(stat_lines, bool):
+            return None
+        for fact_key, summary_key in (
+            ("files", "files_with_diffs"),
+            ("not_diffed", "budget_exceeded_files"),
+            ("list_only", "list_only_files"),
+        ):
+            value = data.get(summary_key)
+            if not isinstance(value, list) or not all(
+                isinstance(p, str) for p in value
+            ):
+                return None
+            facts[fact_key].extend(value)
+        facts["stat_lines"] += stat_lines
+    return facts
+
+
 BUDGET_BASE = 15  # minimum viable budget
 BUDGET_CAP = 80  # cap for even the largest PRs
 BUDGET_LINES_PER_CALL = 10
@@ -1273,6 +1317,7 @@ def main():
     pr_number = None
     exploration_scope = None
     secondary_with_content = []  # secondary domains that matched files
+    scope_summary_paths = []  # machine-readable sidecars backing scope_output
 
     if ref_mode:
         # Adapter ref-mode: the adapter has no registry domain. Scope by the
@@ -1324,6 +1369,8 @@ def main():
             output_dir=args.output_dir,
             summary_json_out=primary_summary_out,
         )
+        if primary_summary_out:
+            scope_summary_paths.append(primary_summary_out)
 
         if rc != 0 and rc != 2:
             # rc=2 means no changes, which is still structured output
@@ -1369,6 +1416,8 @@ def main():
                 output_dir=args.output_dir,
                 summary_json_out=sec_summary_out,
             )
+            if sec_summary_out:
+                scope_summary_paths.append(sec_summary_out)
             sec_status = extract_status(sec_output)
             if sec_status and sec_status == "OK":
                 scope_output += f"\n\n=== SECONDARY SCOPE: {sec_domain} ===\n"
@@ -1415,16 +1464,33 @@ def main():
 
     # Prefer scope-level metrics (domain-filtered) over PR-level totals.
     # Scope data gives the agent's actual workload; PR-level is a fallback
-    # for agents without domain scoping (domain=null).
-    scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
-    scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
+    # for agents without domain scoping (domain=null). Facts come from the
+    # machine-readable sidecars first — the same producer dict the rendered
+    # text was printed from — with text parsing as the fallback for
+    # standalone runs (no pinned output dir) and failed sidecar writes.
+    scope_facts = load_scope_facts(scope_summary_paths)
+    if scope_facts is None:
+        scope_facts = {
+            "files": extract_scope_files(scope_output) if scope_output else [],
+            "not_diffed": (
+                extract_not_diffed_files(scope_output) if scope_output else []
+            ),
+            "list_only": (
+                extract_list_only_files(scope_output) if scope_output else []
+            ),
+            "stat_lines": (
+                extract_scope_line_count(scope_output) if scope_output else 0
+            ),
+        }
+    scope_files_for_budget = scope_facts["files"]
+    scope_lines_for_budget = scope_facts["stat_lines"]
     # Deferred NOT DIFFED files and list-only CHANGED (no diff) files are
     # in-scope work too: telemetry must carry them or coverage marks them
     # uncovered and reads of them count as out-of-scope. Both are kept out
     # of scope_files_for_budget so inline-diff consumers (file history) keep
     # their meaning, and list-only lines never enter budget sizing.
-    not_diffed_paths = extract_not_diffed_files(scope_output) if scope_output else []
-    list_only_paths = extract_list_only_files(scope_output) if scope_output else []
+    not_diffed_paths = scope_facts["not_diffed"]
+    list_only_paths = scope_facts["list_only"]
     telemetry_scope_paths = list(
         dict.fromkeys([*scope_files_for_budget, *not_diffed_paths, *list_only_paths])
     )
@@ -1470,7 +1536,7 @@ def main():
     # Compute file history for agents that request it
     file_history_output = None
     if config.get("file_history") and scope_output:
-        file_lines = extract_scope_files(scope_output)
+        file_lines = scope_files_for_budget
         if file_lines:
             max_commits = config.get("max_history_commits", 15)
             file_history_output = get_file_history(file_lines, max_commits=max_commits)

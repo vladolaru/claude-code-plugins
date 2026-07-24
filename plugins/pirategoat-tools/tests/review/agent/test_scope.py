@@ -1056,9 +1056,16 @@ class TestScopeSummaryJson:
             "status": "OK",
             "domain": "security",
             "range": "abc123..HEAD",
+            "files": ["src/b.php", "src/a.php"],
             "diffs": {"src/b.php": "+x", "src/a.php": "+y"},
+            "diffstat": {
+                "src/a.php": (10, 5),
+                "src/b.php": (3, 2),
+                "tests/test_big.php": (700, 100),
+                "package-lock.json": (9000, 9000),
+            },
             "budget_exceeded_files": ["tests/test_big.php"],
-            "list_only_files": [],
+            "list_only_files": ["package-lock.json"],
             "total_diff_lines": 42,
             "budget_max": 2000,
         }
@@ -1072,6 +1079,9 @@ class TestScopeSummaryJson:
         assert data["files_with_diffs"] == ["src/a.php", "src/b.php"]
         assert data["budget_exceeded_files"] == ["tests/test_big.php"]
         assert data["total_diff_lines"] == 42
+        # Raw diffstat over inline + budget-exceeded files, excluding the
+        # list-only lock file: (10+5) + (3+2) + (700+100) = 820.
+        assert data["in_scope_stat_lines"] == 820
         assert data["budget_max"] == 2000
 
     def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
@@ -1081,6 +1091,7 @@ class TestScopeSummaryJson:
         data = json.loads(path.read_text())
         assert data["files_with_diffs"] == []
         assert data["budget_exceeded_files"] == []
+        assert data["in_scope_stat_lines"] == 0
 
     def test_write_scope_summary_fails_open(self, tmp_path, capsys):
         # Unwritable path: warn on stderr, do not raise.
