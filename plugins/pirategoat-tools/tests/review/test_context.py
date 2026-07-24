@@ -180,7 +180,7 @@ class TestReviewedHeadSha:
 
         def mock_run_cmd(cmd, cwd=None):
             cmd_str = " ".join(cmd)
-            if cmd_str == "git rev-parse --verify feature-branch":
+            if cmd_str == "git rev-parse --verify feature-branch^{commit}":
                 return head_sha
             if "branch --show-current" in cmd_str:
                 return "feature-branch"
@@ -205,7 +205,7 @@ class TestReviewedHeadSha:
         self, mod, git_range
     ):
         def mock_run_cmd(cmd, cwd=None):
-            if " ".join(cmd) == "git rev-parse --verify feature":
+            if " ".join(cmd) == "git rev-parse --verify feature^{commit}":
                 return "c" * 40
             return None
 
@@ -220,7 +220,7 @@ class TestReviewedHeadSha:
 
     def test_omitted_range_head_endpoint_falls_back_to_head(self, mod):
         def mock_run_cmd(cmd, cwd=None):
-            if " ".join(cmd) == "git rev-parse --verify HEAD":
+            if " ".join(cmd) == "git rev-parse --verify HEAD^{commit}":
                 return "e" * 40
             return None
 

@@ -233,8 +233,11 @@ def _fill_git_context(ctx, pr_number=None, branch=False, incremental=False, git_
     # refresh only accepts full SHAs, which is exactly what this provides.
     # Bot-precomputed context already carries head_sha and is preserved.
     if "head_sha" not in git:
+        # ^{commit} peels annotated tag endpoints to their commit — plain
+        # rev-parse would record the tag object id.
+        head_ref = git.get("head_ref") or "HEAD"
         head_sha = _run_cmd(
-            ["git", "rev-parse", "--verify", git.get("head_ref") or "HEAD"]
+            ["git", "rev-parse", "--verify", f"{head_ref}^{{commit}}"]
         )
         if head_sha:
             git["head_sha"] = head_sha

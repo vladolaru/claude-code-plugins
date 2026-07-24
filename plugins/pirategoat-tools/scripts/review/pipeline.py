@@ -1826,17 +1826,22 @@ def _resolve_git_identity(git_range, base_sha="", head_sha=""):
 
     # Supplied context values may be symbolic (an explicit range like
     # "main..HEAD" stores "main" as the context merge_base). The durable
-    # manifest must record commit SHAs, not movable refs — resolve anything
-    # that is not already a full object name.
+    # manifest must record COMMIT identity: ^{commit} both resolves refs and
+    # peels annotated tags, whose plain rev-parse would return the tag
+    # OBJECT id — even a full-hex supplied value can be a tag object.
     def resolve_endpoint(supplied, ref):
         for candidate in (supplied if isinstance(supplied, str) else "", ref):
             if not candidate:
                 continue
+            peeled = _git_output(
+                "rev-parse", "--verify", f"{candidate}^{{commit}}"
+            )
+            if peeled:
+                return peeled
             if _FULL_SHA_RE.fullmatch(candidate):
+                # Git unavailable — an already-full object id is the best
+                # obtainable identity.
                 return candidate
-            resolved = _git_output("rev-parse", "--verify", candidate)
-            if resolved:
-                return resolved
         return ""
 
     return (

@@ -258,8 +258,8 @@ class TestTelemetryIdentityHelpers:
 
     def test_explicit_right_endpoint_is_resolved_as_head(self, mod, monkeypatch):
         identities = {
-            "HEAD~1": "previous-head",
-            "HEAD": "current-head",
+            "HEAD~1^{commit}": "previous-head",
+            "HEAD^{commit}": "current-head",
         }
 
         def fake_git_output(*args):
@@ -292,8 +292,8 @@ class TestTelemetryIdentityHelpers:
         self, mod, monkeypatch, git_range, expected_base, expected_head
     ):
         identities = {
-            "HEAD": "current-head",
-            "topic": "topic-head",
+            "HEAD^{commit}": "current-head",
+            "topic^{commit}": "topic-head",
         }
 
         def fake_git_output(*args):
@@ -313,8 +313,8 @@ class TestTelemetryIdentityHelpers:
         literal branch name — the durable identity must resolve it, never
         record a movable ref."""
         identities = {
-            "main": "a" * 40,
-            "HEAD": "b" * 40,
+            "main^{commit}": "a" * 40,
+            "HEAD^{commit}": "b" * 40,
         }
 
         def fake_git_output(*args):
@@ -329,13 +329,12 @@ class TestTelemetryIdentityHelpers:
         assert base_sha == "a" * 40
         assert head_sha == "b" * 40
 
-    def test_full_sha_supplied_endpoints_pass_through_without_git(
+    def test_full_sha_endpoints_survive_when_git_is_unavailable(
         self, mod, monkeypatch
     ):
-        def fail_git_output(*_args):
-            raise AssertionError("supplied full SHAs must not hit git")
-
-        monkeypatch.setattr(mod, "_git_output", fail_git_output)
+        """Peeling needs git; without it an already-full object id is the
+        best obtainable identity and must not be dropped."""
+        monkeypatch.setattr(mod, "_git_output", lambda *_args: "")
 
         _, base_sha, head_sha = mod._resolve_git_identity(
             "main..HEAD", base_sha="c" * 40, head_sha="d" * 64
@@ -343,6 +342,29 @@ class TestTelemetryIdentityHelpers:
 
         assert base_sha == "c" * 40
         assert head_sha == "d" * 64
+
+    def test_full_sha_tag_object_endpoints_are_peeled_to_commits(
+        self, mod, monkeypatch
+    ):
+        """A supplied full object id can be an annotated tag object —
+        ^{commit} peels it so the manifest records commit identity."""
+        tag_object = "e" * 40
+        commit = "f" * 40
+        identities = {
+            f"{tag_object}^{{commit}}": commit,
+            "HEAD^{commit}": "b" * 40,
+        }
+
+        monkeypatch.setattr(
+            mod, "_git_output", lambda *args: identities.get(args[-1], "")
+        )
+
+        _, base_sha, head_sha = mod._resolve_git_identity(
+            "v1.0..HEAD", base_sha=tag_object
+        )
+
+        assert base_sha == commit
+        assert head_sha == "b" * 40
 
 
 class TestFailureRecovery:
