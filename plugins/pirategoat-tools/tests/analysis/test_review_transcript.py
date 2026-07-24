@@ -3957,7 +3957,9 @@ class TestBudgetAndEvidenceAccounting:
     """Round-7 accounting contracts: tool-call numerators, synthesis
     exclusion from builder metrics, and unresolved-call incompleteness."""
 
-    def _run_with_subagent(self, tmp_path, subagent_entries):
+    def _run_with_subagent(
+        self, tmp_path, subagent_entries, manifest_overrides=None
+    ):
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
         session_id = "accounting"
@@ -3977,6 +3979,11 @@ class TestBudgetAndEvidenceAccounting:
         manifest = _manifest(
             session_id, tmp_path, output_dir, started=["security-reviewer"]
         )
+        for name, value in (manifest_overrides or {}).items():
+            if name == "ended_at":
+                manifest["run"]["ended_at"] = value
+            else:
+                manifest[name] = value
         return enrich_run_transcript(manifest, sessions, {"security-reviewer"})
 
     def test_agent_usage_carries_tool_call_counts(self, tmp_path):
@@ -4109,6 +4116,84 @@ class TestBudgetAndEvidenceAccounting:
             "agent": "security-reviewer",
         } in result["warnings"]
         assert result["completeness"]["scope_comparable_reads"] is False
+
+    def test_running_manifest_caps_transcript_families_at_partial(
+        self, tmp_path
+    ):
+        """An open-window running run keeps growing — observed usage is
+        measured but no family may claim completeness until it settles."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/in.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read"),
+            ],
+            manifest_overrides={"status": "running", "ended_at": None},
+        )
+
+        assert result["available"] is True
+        assert result["usage"]["output_tokens"] > 0
+        completeness = result["completeness"]
+        assert all(value is False for value in completeness.values())
+
+    def test_fractional_main_usage_downgrades_instead_of_truncating(
+        self, tmp_path
+    ):
+        """A non-integral token count is corruption — excluded from totals
+        and reported as a damaged record, never floored into an exact
+        total that still claims completeness."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(_assistant(usage=_usage(1, 2)), 0),
+            _at(
+                _assistant(
+                    usage={
+                        "input_tokens": 1,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 1.9,
+                    }
+                ),
+                10,
+            ),
+        ]
+        _write_jsonl(sessions / "fractional.jsonl", entries)
+        manifest = _manifest("fractional", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2
+        assert {"code": "orchestrator_transcript_parse_gap"} in result["warnings"]
+        assert result["completeness"]["usage"] is False
+
+    def test_fractional_agent_usage_marks_a_damaged_record(self, tmp_path):
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/in.py"),
+                    usage={
+                        "input_tokens": 2,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 3.5,
+                    },
+                ),
+                _result("read"),
+            ],
+        )
+
+        assert {
+            "code": "agent_transcript_parse_gap",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["usage"] is False
+        [entry] = result["agent_usage"]
+        assert entry["usage"]["output_tokens"] == 0
 
     def test_missing_scope_mapping_downgrades_reads_but_not_usage(
         self, tmp_path

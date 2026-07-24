@@ -944,10 +944,24 @@ def _empty_usage() -> dict[str, int]:
     }
 
 
-def _safe_token_count(value: object) -> int:
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-        return int(value)
-    return 0
+# Sentinel distinguishing "entry carries corrupted usage" from "entry has
+# no usage" (None) — a fractional, negative, or non-numeric token count is
+# damaged evidence, not a value to truncate into a fabricated exact total.
+_INVALID_USAGE: dict[str, int] = {}
+
+
+def _safe_token_count(value: object) -> int | None:
+    """Exact nonnegative integer token counts; None marks invalid evidence.
+
+    An absent field is a plain zero, but a fractional, negative, boolean,
+    or non-numeric present value is corruption or schema drift — flooring
+    it with int() would silently fabricate an exact total.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
 
 
 def _entry_usage(entry: dict[str, Any]) -> dict[str, int] | None:
@@ -958,7 +972,10 @@ def _entry_usage(entry: dict[str, Any]) -> dict[str, int] | None:
     raw = nested if isinstance(nested, dict) else entry.get("usage")
     if not isinstance(raw, dict):
         return None
-    usage = {field: _safe_token_count(raw.get(field)) for field in _USAGE_FIELDS}
+    counts = {field: _safe_token_count(raw.get(field)) for field in _USAGE_FIELDS}
+    if any(count is None for count in counts.values()):
+        return _INVALID_USAGE
+    usage = {field: count for field, count in counts.items() if count is not None}
     usage["effective_input_tokens"] = (
         usage["input_tokens"]
         + usage["cache_creation_input_tokens"]
@@ -974,9 +991,10 @@ def _add_usage(target: dict[str, int], addition: dict[str, int]) -> None:
 
 def _usage_summary(
     entries: Iterable[dict[str, Any]],
-) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
+) -> tuple[dict[str, int], dict[str, dict[str, int]], bool]:
     total = _empty_usage()
     by_model: dict[str, dict[str, int]] = {}
+    usage_valid = True
     # One assistant response split across records shares message.id; input and
     # cache fields repeat unchanged while output_tokens grows toward the final
     # cumulative count, so the LAST record per ID is the response's real usage.
@@ -985,6 +1003,9 @@ def _usage_summary(
     for entry in entries:
         usage = _entry_usage(entry)
         if usage is None:
+            continue
+        if usage is _INVALID_USAGE:
+            usage_valid = False
             continue
         message = entry.get("message")
         message_id = message.get("id") if isinstance(message, dict) else None
@@ -998,7 +1019,7 @@ def _usage_summary(
         if model:
             model_usage = by_model.setdefault(model, _empty_usage())
             _add_usage(model_usage, usage)
-    return total, dict(sorted(by_model.items()))
+    return total, dict(sorted(by_model.items())), usage_valid
 
 
 def _opaque_target(value: object) -> str:
@@ -1220,7 +1241,7 @@ def _analyze_entries(
     results = _tool_results(entries)
     call_counts = Counter(call["id"] for call in calls)
     result_by_id = _paired_results(calls, results)
-    usage, usage_by_model = _usage_summary(entries)
+    usage, usage_by_model, usage_valid = _usage_summary(entries)
 
     analyzed_calls: list[dict[str, Any]] = []
     # Malformed tool_use blocks were issued calls that can never be paired
@@ -1342,6 +1363,7 @@ def _analyze_entries(
     return {
         "usage": usage,
         "usage_by_model": usage_by_model,
+        "usage_valid": usage_valid,
         # Budget-utilization numerator: every issued call, including
         # duplicated-id, malformed, and unresolved ones — each spent budget.
         "tool_calls": len(calls) + malformed_calls,
@@ -1422,7 +1444,10 @@ def _analyze_orchestrator_entry_steps(
                 stages.setdefault(active, _empty_usage())
                 transition_index += 1
         usage = _entry_usage(entry)
-        if usage is None:
+        if usage is None or usage is _INVALID_USAGE:
+            # Invalid usage is excluded here exactly as in _usage_summary,
+            # keeping per-step totals consistent with the (downgraded) run
+            # totals.
             continue
         message = entry.get("message")
         message_id = message.get("id") if isinstance(message, dict) else None
@@ -1556,7 +1581,18 @@ def enrich_run_transcript(
         manifest, recognized
     )
     warnings: list[dict[str, str]] = []
-    main_data_complete = not main_parse_gap and not main_time_gap
+    main_analysis = _analyze_entries(main_entries, repo_path, [])
+    if not main_analysis["usage_valid"]:
+        # Corrupted token counts are damaged records — same channel as
+        # undecodable lines.
+        main_parse_gap = True
+    # A running manifest's window is still open: its transcript keeps
+    # growing through later steps, completions, and resume turns, so no
+    # observed family may claim completeness until the run settles.
+    run_settled = window[1] is not None and manifest.get("status") != "running"
+    main_data_complete = (
+        not main_parse_gap and not main_time_gap and run_settled
+    )
     expected_available = manifest_expected_available and main_data_complete
     if main_parse_gap:
         warnings.append({"code": "orchestrator_transcript_parse_gap"})
@@ -1571,7 +1607,6 @@ def enrich_run_transcript(
     )
     if not stage_timeline_complete:
         warnings.append({"code": "orchestrator_stage_timeline_invalid"})
-    main_analysis = _analyze_entries(main_entries, repo_path, [])
     total_usage = _empty_usage()
     _add_usage(total_usage, main_analysis["usage"])
     failures = [
@@ -1677,6 +1712,18 @@ def enrich_run_transcript(
             repo_path,
             agent_scope or [],
         )
+        if not analysis["usage_valid"] and dispatch["agent"] not in (
+            agent_transcript_parse_gaps
+        ):
+            # Corrupted token counts are damaged records — same channel as
+            # undecodable lines.
+            agent_transcript_parse_gaps.add(dispatch["agent"])
+            warnings.append(
+                {
+                    "code": "agent_transcript_parse_gap",
+                    "agent": dispatch["agent"],
+                }
+            )
         if analysis["unresolved_calls"]:
             unresolved_evidence.add(dispatch["agent"])
             warnings.append(
