@@ -2515,6 +2515,48 @@ class TestEnrichRunTranscript:
 
         assert {"code": "orchestrator_transcript_time_gap"} in result["warnings"]
 
+    def test_superseded_turn_parse_gap_does_not_degrade_the_run(
+        self, tmp_path
+    ):
+        """A malformed line in an older turn is discarded with that turn
+        when a later prompt supersedes it — like timestamp gaps."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        good = [
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "earlier work"},
+                },
+                -10,
+            ),
+        ]
+        tail = [
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "review this"},
+                },
+                -1,
+            ),
+            _at(_assistant(usage=_usage(1, 2)), 0),
+        ]
+        session = sessions / "superseded-parse.jsonl"
+        session.parent.mkdir(parents=True, exist_ok=True)
+        session.write_bytes(
+            b"\n".join(json.dumps(e).encode() for e in good)
+            + b'\n{"damaged": \xff\n'
+            + b"\n".join(json.dumps(e).encode() for e in tail)
+            + b"\n"
+        )
+        manifest = _manifest("superseded-parse", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2
+        assert result["warnings"] == []
+        assert result["completeness"]["usage"] is True
+
     def test_run_window_includes_the_opening_turn_before_started_at(
         self, tmp_path
     ):
@@ -3982,6 +4024,36 @@ class TestBudgetAndEvidenceAccounting:
         assert result["artifact_writes"]["complete"] is False
         [entry] = result["agent_usage"]
         assert entry["tool_calls"] == 1
+
+    def test_malformed_tool_use_blocks_count_as_unresolved_calls(
+        self, tmp_path
+    ):
+        """A tool_use block with a non-string id/name was an issued call
+        that can never be paired — it must enter the budget numerator and
+        flip the evidence families to partial, not vanish."""
+        malformed_call = {
+            "type": "tool_use",
+            "id": None,
+            "name": "Read",
+            "input": {"file_path": "src/a.py"},
+        }
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(malformed_call, usage=_usage(1, 2)),
+                _assistant(_call("ok", "Read", file_path="src/in.py")),
+                _result("ok"),
+            ],
+        )
+
+        assert {
+            "code": "agent_transcript_unresolved_calls",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["scope_comparable_reads"] is False
+        [entry] = result["agent_usage"]
+        assert entry["tool_calls"] == 2
+        assert result["observed_reads"]["all"] == ["src/in.py"]
 
     def test_duplicate_tool_call_ids_mark_agent_evidence_incomplete(
         self, tmp_path

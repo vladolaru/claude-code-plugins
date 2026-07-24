@@ -142,12 +142,15 @@ def _bounded_jsonl_entries(
     entries: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     pending_time_gap = False
+    pending_parse_gap = False
     in_window = False
     parse_gap = False
     time_gap = False
     try:
         # Binary like _read_jsonl: a bad UTF-8 byte must cost one line
-        # (parse_gap), not the run's entire transcript enrichment.
+        # (parse_gap), not the run's entire transcript enrichment. Like
+        # timestamp gaps, a damaged line belongs to the turn it appears in
+        # and is discarded when a later prompt supersedes that turn.
         with Path(path).open("rb") as stream:
             for line in stream:
                 if not line.strip():
@@ -155,10 +158,16 @@ def _bounded_jsonl_entries(
                 try:
                     value = json.loads(line)
                 except (json.JSONDecodeError, UnicodeDecodeError):
-                    parse_gap = True
+                    if in_window:
+                        parse_gap = True
+                    else:
+                        pending_parse_gap = True
                     continue
                 if not isinstance(value, dict):
-                    parse_gap = True
+                    if in_window:
+                        parse_gap = True
+                    else:
+                        pending_parse_gap = True
                     continue
                 timestamp = _aware_timestamp(value.get("timestamp"))
                 if timestamp is None:
@@ -178,6 +187,7 @@ def _bounded_jsonl_entries(
                     if _is_human_prompt(value):
                         pending = [value]
                         pending_time_gap = False
+                        pending_parse_gap = False
                     else:
                         pending.append(value)
                     continue
@@ -187,6 +197,8 @@ def _bounded_jsonl_entries(
                     pending = []
                     if pending_time_gap:
                         time_gap = True
+                    if pending_parse_gap:
+                        parse_gap = True
                 if (
                     ended_at is not None
                     and timestamp > ended_at
@@ -283,8 +295,17 @@ def _content_blocks(entry: dict[str, Any]) -> list[dict[str, Any]]:
     return [block for block in content if isinstance(block, dict)]
 
 
-def _tool_calls(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _tool_calls(
+    entries: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Return well-formed tool calls plus the count of malformed ones.
+
+    A tool_use block with a missing or non-string id/name cannot be paired
+    or classified, but it was still an issued call — callers accounting for
+    evidence completeness must count it as unresolved.
+    """
     calls: list[dict[str, Any]] = []
+    malformed = 0
     for index, entry in enumerate(entries):
         if entry.get("type") != "assistant":
             continue
@@ -295,6 +316,7 @@ def _tool_calls(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             name = block.get("name")
             tool_input = block.get("input")
             if not isinstance(tool_id, str) or not isinstance(name, str):
+                malformed += 1
                 continue
             calls.append(
                 {
@@ -304,7 +326,7 @@ def _tool_calls(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                     "input": tool_input if isinstance(tool_input, dict) else {},
                 }
             )
-    return calls
+    return calls, malformed
 
 
 def _tool_results(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -837,7 +859,7 @@ def _correlate_run_agent_entries(
 ) -> list[dict[str, Any]]:
     """Correlate only recognized dispatches belonging to one review run."""
     entries = list(entries)
-    calls = _tool_calls(entries)
+    calls, _ = _tool_calls(entries)
     results = _tool_results(entries)
     call_counts = Counter(call["id"] for call in calls)
     result_by_id = _paired_results(calls, results)
@@ -1194,14 +1216,16 @@ def _analyze_entries(
 ) -> dict[str, Any]:
     """Measure transcript entries without retaining prompts, bodies, or commands."""
     entries = list(entries)
-    calls = _tool_calls(entries)
+    calls, malformed_calls = _tool_calls(entries)
     results = _tool_results(entries)
     call_counts = Counter(call["id"] for call in calls)
     result_by_id = _paired_results(calls, results)
     usage, usage_by_model = _usage_summary(entries)
 
     analyzed_calls: list[dict[str, Any]] = []
-    unresolved_calls = 0
+    # Malformed tool_use blocks were issued calls that can never be paired
+    # or classified — unresolved evidence from the start.
+    unresolved_calls = malformed_calls
     for call in calls:
         if call_counts[call["id"]] != 1:
             # A repeated tool-use ID makes call/result pairing ambiguous:
@@ -1319,8 +1343,8 @@ def _analyze_entries(
         "usage": usage,
         "usage_by_model": usage_by_model,
         # Budget-utilization numerator: every issued call, including
-        # duplicated-id and unresolved ones — each spent budget.
-        "tool_calls": len(calls),
+        # duplicated-id, malformed, and unresolved ones — each spent budget.
+        "tool_calls": len(calls) + malformed_calls,
         "unresolved_calls": unresolved_calls,
         "tool_failures": failures,
         "artifact_writes": artifact_writes,
