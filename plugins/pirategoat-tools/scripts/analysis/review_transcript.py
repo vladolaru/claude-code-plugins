@@ -141,6 +141,7 @@ def _bounded_jsonl_entries(
     started_at, ended_at = window
     entries: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
+    pending_time_gap = False
     in_window = False
     parse_gap = False
     time_gap = False
@@ -162,13 +163,21 @@ def _bounded_jsonl_entries(
                 timestamp = _aware_timestamp(value.get("timestamp"))
                 if timestamp is None:
                     if value.get("type") in {"assistant", "user"}:
-                        time_gap = True
+                        # A gap belongs to the turn it appears in: inside the
+                        # window it damages the run's evidence; before the
+                        # window it is discarded with its turn if a later
+                        # prompt supersedes it.
+                        if in_window:
+                            time_gap = True
+                        else:
+                            pending_time_gap = True
                     continue
                 if timestamp < started_at:
                     # Buffer the turn in flight at started_at; each earlier
                     # human prompt starts a fresh (discarded) turn buffer.
                     if _is_human_prompt(value):
                         pending = [value]
+                        pending_time_gap = False
                     else:
                         pending.append(value)
                     continue
@@ -176,6 +185,8 @@ def _bounded_jsonl_entries(
                     in_window = True
                     entries.extend(pending)
                     pending = []
+                    if pending_time_gap:
+                        time_gap = True
                 if (
                     ended_at is not None
                     and timestamp > ended_at

@@ -2446,6 +2446,75 @@ class TestEnrichRunTranscript:
 
         assert result["usage"]["output_tokens"] == 2 + 400
 
+    def test_superseded_turn_time_gap_does_not_degrade_the_run(
+        self, tmp_path
+    ):
+        """A timestamp-less record in an older turn is discarded with that
+        turn when a later prompt supersedes it — the bounded entries hold
+        only current-run data, so availability must not go partial."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            # Older turn with a damaged (unparseable-timestamp) record.
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "earlier work"},
+                },
+                -10,
+            ),
+            {
+                "type": "assistant",
+                "message": {"role": "assistant"},
+                "timestamp": "not-a-time",
+            },
+            # The run's triggering prompt supersedes that turn entirely.
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "review this"},
+                },
+                -1,
+            ),
+            _at(_assistant(usage=_usage(1, 2)), 0),
+        ]
+        _write_jsonl(sessions / "superseded.jsonl", entries)
+        manifest = _manifest("superseded", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2
+        assert result["warnings"] == []
+        assert result["completeness"]["usage"] is True
+
+    def test_pending_turn_time_gap_still_degrades_when_turn_survives(
+        self, tmp_path
+    ):
+        """A gap inside the run's own triggering turn is run evidence."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "review this"},
+                },
+                -5,
+            ),
+            {
+                "type": "assistant",
+                "message": {"role": "assistant"},
+                "timestamp": "not-a-time",
+            },
+            _at(_assistant(usage=_usage(1, 2)), 0),
+        ]
+        _write_jsonl(sessions / "gap-in-trigger.jsonl", entries)
+        manifest = _manifest("gap-in-trigger", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert {"code": "orchestrator_transcript_time_gap"} in result["warnings"]
+
     def test_run_window_includes_the_opening_turn_before_started_at(
         self, tmp_path
     ):
