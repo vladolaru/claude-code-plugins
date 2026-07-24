@@ -4522,3 +4522,27 @@ class TestBudgetAndEvidenceAccounting:
 
         by_agent = result["artifact_writes"]["by_agent"]
         assert [item["agent"] for item in by_agent] == ["security-reviewer"]
+
+
+class TestScopeExemptRegistrySync:
+    """_SCOPE_EXEMPT_REVIEWERS restates a registry fact (domain: null).
+
+    Drift guard: a domainless reviewer added to agent_registry.json without
+    updating the frozenset would have every read misclassified as
+    out-of-scope against an empty scope mapping (the round-13 bug,
+    re-created by registry growth). Synthesis identities route to the
+    non-scope-comparable family instead and are excluded here.
+    """
+
+    def test_scope_exempt_matches_registry_domainless_reviewers(self):
+        registry = json.loads(
+            (PLUGIN_ROOT / "scripts" / "review" / "agent_registry.json")
+            .read_text(encoding="utf-8")
+        )
+        domainless = {
+            name
+            for name, config in registry["agents"].items()
+            if config.get("domain") is None
+        }
+        expected = domainless - _mod._NON_SCOPE_COMPARABLE_AGENTS
+        assert _mod._SCOPE_EXEMPT_REVIEWERS == expected
