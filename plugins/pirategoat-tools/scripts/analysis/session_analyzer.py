@@ -47,10 +47,10 @@ from collections import Counter, defaultdict
 from glob import glob
 from typing import Any
 
-# Sibling module in scripts/analysis — canonical structured-result
+# Sibling module in scripts/analysis — canonical tri-state result
 # classification shared with transcript enrichment.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from review_transcript import _structured_failure  # noqa: E402
+from review_transcript import _result_state  # noqa: E402
 
 # The canonical one-shot builder envelope mandated by bootstrap: four env
 # assignments (any order) followed by `python3 <<'PY'` on the first line.
@@ -205,10 +205,11 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     }
 
     # Builder heredocs synthesize a review record only when their paired
-    # tool result reports success — a failed save produced no artifacts,
-    # and a retry after failure must count once, not twice.
+    # tool result classifies as a terminal success — failed, nonterminal,
+    # and unclassifiable results persisted nothing, and a retry after
+    # failure must count once, not twice.
     pending_builder_outputs: dict[str, dict[str, Any]] = {}
-    tool_result_errors: dict[str, bool] = {}
+    tool_result_states: dict[str, str] = {}
 
     for entry in entries:
         msg = entry.get("message", {})
@@ -219,8 +220,9 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         content = msg.get("content", "")
 
         # Tool results — needed to confirm builder heredoc saves succeeded.
-        # Failures can surface as block-level is_error OR through structured
-        # toolUseResult fields (exitCode, status, interrupted, error); the
+        # Classified with review_transcript's canonical tri-state logic so
+        # nonterminal (status: "running") and unclassifiable structured
+        # payloads stay unresolved instead of counting as saves; the
         # entry-level structured payload applies when a lone result block
         # carries none, mirroring review_transcript's pairing.
         if role == "user" and isinstance(content, list):
@@ -238,10 +240,12 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                     and len(result_blocks) == 1
                 ):
                     structured = entry.get("toolUseResult")
-                tool_result_errors[block["tool_use_id"]] = (
-                    block.get("is_error") is True
-                    or _structured_failure(structured)
+                state, _category, _detector = _result_state(
+                    {"block": block, "structured": structured},
+                    "Bash",
+                    "builder_output_attempt",
                 )
+                tool_result_states[block["tool_use_id"]] = state
 
         # First user message = prompt
         if role == "user" and not result["prompt_content"]:
@@ -312,7 +316,7 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     # extra dispatch with duplicated findings.
     final_by_path: dict[str, dict[str, Any]] = {}
     for call_id, builder_output in pending_builder_outputs.items():
-        if tool_result_errors.get(call_id) is False:
+        if tool_result_states.get(call_id) == "success":
             final_by_path[builder_output["path"]] = builder_output
     result["write_outputs"].extend(final_by_path.values())
 

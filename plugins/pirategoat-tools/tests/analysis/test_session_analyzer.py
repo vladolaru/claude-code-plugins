@@ -686,6 +686,72 @@ class TestBashBuilderRecognition:
 
         assert len(data["write_outputs"]) == 1
 
+    @pytest.mark.parametrize(
+        "structured",
+        [
+            {"status": "running"},
+            {"interrupted": False},
+            {"weird": {"shape": 1}},
+        ],
+        ids=["nonterminal-status", "nonterminal-flag", "unclassifiable"],
+    )
+    def test_nonterminal_or_unclassifiable_result_does_not_count(
+        self, tmp_path, structured
+    ):
+        """Only a terminal success confirms the save persisted — nonterminal
+        and unrecognized structured payloads stay unresolved."""
+        log = tmp_path / "agent.jsonl"
+        result_entry = {
+            "type": "user",
+            "toolUseResult": structured,
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "builder-open",
+                        "content": "",
+                    }
+                ],
+            },
+        }
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-open"),
+            result_entry,
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+
+    def test_bare_legacy_result_still_confirms_the_save(self, tmp_path):
+        """A paired result with neither is_error nor structured data is the
+        legacy success signal — the canonical classifier preserves it."""
+        log = tmp_path / "agent.jsonl"
+        result_entry = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "builder-legacy",
+                        "content": "RECORDED COUNTS: ...",
+                    }
+                ],
+            },
+        }
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-legacy"),
+            result_entry,
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert len(data["write_outputs"]) == 1
+
     def test_heredoc_without_save_is_not_a_review_record(self):
         """add_issue() calls without builder.save() persisted nothing."""
         body = (
