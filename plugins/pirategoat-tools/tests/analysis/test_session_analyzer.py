@@ -631,6 +631,47 @@ class TestBashBuilderRecognition:
 
         assert data["write_outputs"] == []
 
+    @pytest.mark.parametrize(
+        "structured",
+        [
+            {"exitCode": 1},
+            {"interrupted": True},
+            {"status": "error"},
+            {"error": "ValueError: line must be a positive integer"},
+        ],
+        ids=["exit-code", "interrupted", "status", "error-field"],
+    )
+    def test_structured_failure_without_is_error_does_not_count(
+        self, tmp_path, structured
+    ):
+        """A builder result can omit block-level is_error while reporting
+        failure through structured toolUseResult fields — the save did not
+        persist and must not reconstruct."""
+        log = tmp_path / "agent.jsonl"
+        result_entry = {
+            "type": "user",
+            "toolUseResult": structured,
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "builder-structured",
+                        "content": "Traceback",
+                    }
+                ],
+            },
+        }
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-structured"),
+            result_entry,
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+
     def test_failed_then_retried_builder_heredoc_counts_once(self, tmp_path):
         log = tmp_path / "agent.jsonl"
         entries = [

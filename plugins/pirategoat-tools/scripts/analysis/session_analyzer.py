@@ -47,6 +47,11 @@ from collections import Counter, defaultdict
 from glob import glob
 from typing import Any
 
+# Sibling module in scripts/analysis — canonical structured-result
+# classification shared with transcript enrichment.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from review_transcript import _structured_failure  # noqa: E402
+
 # The canonical one-shot builder envelope mandated by bootstrap: four env
 # assignments (any order) followed by `python3 <<'PY'` on the first line.
 _BUILDER_ENV_NAMES = {
@@ -213,17 +218,30 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         role = msg.get("role", "")
         content = msg.get("content", "")
 
-        # Tool results — needed to confirm builder heredoc saves succeeded
+        # Tool results — needed to confirm builder heredoc saves succeeded.
+        # Failures can surface as block-level is_error OR through structured
+        # toolUseResult fields (exitCode, status, interrupted, error); the
+        # entry-level structured payload applies when a lone result block
+        # carries none, mirroring review_transcript's pairing.
         if role == "user" and isinstance(content, list):
-            for block in content:
+            result_blocks = [
+                block
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "tool_result"
+                and isinstance(block.get("tool_use_id"), str)
+            ]
+            for block in result_blocks:
+                structured = block.get("toolUseResult")
                 if (
-                    isinstance(block, dict)
-                    and block.get("type") == "tool_result"
-                    and isinstance(block.get("tool_use_id"), str)
+                    not isinstance(structured, (dict, list))
+                    and len(result_blocks) == 1
                 ):
-                    tool_result_errors[block["tool_use_id"]] = (
-                        block.get("is_error") is True
-                    )
+                    structured = entry.get("toolUseResult")
+                tool_result_errors[block["tool_use_id"]] = (
+                    block.get("is_error") is True
+                    or _structured_failure(structured)
+                )
 
         # First user message = prompt
         if role == "user" and not result["prompt_content"]:
