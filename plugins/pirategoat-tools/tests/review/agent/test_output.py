@@ -770,6 +770,60 @@ class TestAddUnreviewed:
         with pytest.raises(ValueError):
             b.add_unreviewed(bad)
 
+    def _arm_deferred_sidecar(self, tmp_path, monkeypatch, deferred):
+        """Simulate the bootstrap-written authoritative deferred set."""
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
+        (tmp_path / "sec-deferred-files.json").write_text(
+            json.dumps({"schema": 1, "deferred_files": deferred})
+        )
+
+    def test_declaration_in_deferred_set_is_accepted(
+        self, tmp_path, monkeypatch
+    ):
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/deferred.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("./src/deferred.py")  # normalized before matching
+        assert b.unreviewed == ["src/deferred.py"]
+
+    def test_declaration_outside_deferred_set_is_rejected(
+        self, tmp_path, monkeypatch
+    ):
+        """A well-formed but wrong path (typo, wrong root) must fail loudly
+        at write time — downstream it would silently count as a reviewed
+        claim for every genuinely deferred file."""
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/email.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="src/email.py"):
+            b.add_unreviewed("src/emails.py")
+
+    def test_empty_deferred_set_rejects_every_declaration(
+        self, tmp_path, monkeypatch
+    ):
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, [])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="no deferred files"):
+            b.add_unreviewed("src/a.py")
+
+    def test_missing_sidecar_falls_back_to_form_only(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        assert b.unreviewed == ["src/a.py"]
+
+    def test_malformed_sidecar_falls_back_to_form_only(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
+        (tmp_path / "sec-deferred-files.json").write_text("{not json")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        assert b.unreviewed == ["src/a.py"]
+
     def test_unreviewed_in_dict_output(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_unreviewed("src/a.py")

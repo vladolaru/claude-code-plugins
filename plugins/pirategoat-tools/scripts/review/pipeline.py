@@ -164,6 +164,7 @@ _STALE_ARTIFACTS = [
     "*-review.json",
     "*-review.md",
     "*-scope-summary*.json",
+    "*-deferred-files.json",
     "*.started",
     "reconciliation-context.json",
     "reconciliation-context.md",

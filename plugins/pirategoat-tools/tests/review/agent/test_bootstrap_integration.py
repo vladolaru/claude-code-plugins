@@ -146,6 +146,20 @@ class TestCategoryRepresentatives:
         assert expected_scope
         assert agent_start["scope"]["paths"] == expected_scope
 
+    def test_deferred_sidecar_backs_add_unreviewed_validation(self, tmp_path):
+        """Bootstrap persists the authoritative NOT DIFFED set so the
+        builder can reject declarations that match no deferred file."""
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        sidecar = tmp_path / "performance-deferred-files.json"
+        assert sidecar.is_file()
+        data = json.loads(sidecar.read_text())
+        assert sorted(data["deferred_files"]) == sorted(
+            extract_not_diffed_files(result.stdout)
+        )
+
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
         result = run_bootstrap("--agent", "php-tests-reviewer", "--output-dir", str(tmp_path))

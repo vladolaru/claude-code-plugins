@@ -109,6 +109,8 @@ class ReviewOutputBuilder:
         self.overall_confidence = 0.95
         self._not_applicable = False
         self._skip_reason = None
+        self._deferred_files_loaded = False
+        self._deferred_files = None
 
     def add_issue(
         self,
@@ -283,6 +285,35 @@ class ReviewOutputBuilder:
             "evidence": evidence.strip() if evidence and evidence.strip() else None,
         })
 
+    def _known_deferred_files(self) -> Optional[frozenset]:
+        """The bootstrap-written deferred set for this reviewer, or None.
+
+        Located through the canonical builder envelope's env vars. Absent
+        env vars or sidecar (manual builder use, older bootstrap, failed
+        fail-open write) means no authoritative set exists and
+        add_unreviewed() validation stays form-only.
+        """
+        if self._deferred_files_loaded:
+            return self._deferred_files
+        self._deferred_files_loaded = True
+        output_dir = os.environ.get("PIRATEGOAT_OUTPUT_DIR")
+        reviewer = os.environ.get("PIRATEGOAT_REVIEWER_NAME")
+        if not output_dir or not reviewer:
+            return None
+        sidecar = os.path.join(output_dir, f"{reviewer}-deferred-files.json")
+        try:
+            with open(sidecar, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        files = data.get("deferred_files") if isinstance(data, dict) else None
+        if not isinstance(files, list):
+            return None
+        self._deferred_files = frozenset(
+            p for p in files if isinstance(p, str)
+        )
+        return self._deferred_files
+
     def add_unreviewed(self, file: str):
         """Declare an in-scope file left unreviewed after budget exhaustion.
 
@@ -310,6 +341,23 @@ class ReviewOutputBuilder:
             raise ValueError(
                 "add_unreviewed requires a repository-relative path exactly "
                 f"as shown in the NOT DIFFED listing, got {file!r}."
+            )
+        # When bootstrap persisted the authoritative deferred set, a
+        # declaration outside it (typo, wrong repo root) is rejected at
+        # write time — form checks alone cannot catch a path that is merely
+        # wrong rather than malformed, and downstream it would silently
+        # count as a reviewed claim for every genuinely deferred file.
+        known = self._known_deferred_files()
+        if known is not None and path not in known:
+            valid = (
+                "Valid paths: " + ", ".join(sorted(known))
+                if known
+                else "This review has no deferred files, so nothing may be "
+                     "declared."
+            )
+            raise ValueError(
+                f"add_unreviewed({file!r}) matches no NOT DIFFED file of "
+                f"this review. {valid}"
             )
         if path not in self.unreviewed:
             self.unreviewed.append(path)

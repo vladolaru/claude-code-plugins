@@ -1495,6 +1495,21 @@ def main():
         dict.fromkeys([*scope_files_for_budget, *not_diffed_paths, *list_only_paths])
     )
 
+    # Persist the authoritative deferred set so ReviewOutputBuilder can
+    # verify add_unreviewed() declarations at write time — an unmatched
+    # declaration (typo, wrong root) would otherwise silently invert into a
+    # deferred-but-reviewed claim downstream. Written even when empty: with
+    # no deferred files, any declaration is wrong. Fail-open: without the
+    # sidecar the builder falls back to form-only validation.
+    deferred_sidecar = os.path.join(
+        output_dir, f"{derive_reviewer_name(args.agent)}-deferred-files.json"
+    )
+    try:
+        with open(deferred_sidecar, "w", encoding="utf-8") as f:
+            json.dump({"schema": 1, "deferred_files": not_diffed_paths}, f)
+    except OSError:
+        pass
+
     if scope_lines_for_budget > 0:
         review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
         budget_capped = budget_was_capped(scope_lines_for_budget)
