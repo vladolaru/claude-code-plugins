@@ -344,19 +344,16 @@ def extract_scope_files(scope_output: str) -> List[str]:
     return files
 
 
-def extract_not_diffed_files(scope_output: str) -> List[str]:
-    """Extract deferred in-scope file paths from === NOT DIFFED === sections.
-
-    These files ARE the agent's scope — their diffs were withheld only to fit
-    the context budget — so telemetry must record them alongside the inline
-    FILES entries, or coverage reports them as uncovered and transcript
-    analysis counts reading them as out-of-scope. Only lines carrying the
-    "path  (+N -M)" stats shape are files; the section's prose lines are not.
+def _extract_stat_shaped_files(scope_output: str, header_prefix: str) -> List[str]:
+    """Extract file paths from every section whose header starts with
+    ``header_prefix``. Only lines carrying the "path  (+N -M)" stats shape
+    are files; the sections' instruction prose lines are never parsed as
+    paths.
     """
     files = []
     in_section = False
     for line in scope_output.splitlines():
-        if line.startswith("=== NOT DIFFED"):
+        if line.startswith(header_prefix):
             in_section = True
             continue
         if in_section and line.startswith("==="):
@@ -367,6 +364,30 @@ def extract_not_diffed_files(scope_output: str) -> List[str]:
             if match:
                 files.append(match.group(1).strip())
     return files
+
+
+def extract_not_diffed_files(scope_output: str) -> List[str]:
+    """Extract deferred in-scope file paths from === NOT DIFFED === sections.
+
+    These files ARE the agent's scope — their diffs were withheld only to fit
+    the context budget — so telemetry must record them alongside the inline
+    FILES entries, or coverage reports them as uncovered and transcript
+    analysis counts reading them as out-of-scope.
+    """
+    return _extract_stat_shaped_files(scope_output, "=== NOT DIFFED")
+
+
+def extract_list_only_files(scope_output: str) -> List[str]:
+    """Extract lock/generated paths from === CHANGED (no diff ...) sections.
+
+    List-only files are in-scope changed files whose diffs scope.py withholds
+    as too large/noisy while still instructing the reviewer to inspect them
+    when relevant. Telemetry must carry them or coverage.by_agent omits a
+    legitimate scope path and a reviewer's read of it counts as out-of-scope.
+    Their lines stay out of budget sizing — extract_scope_line_count never
+    reads this section.
+    """
+    return _extract_stat_shaped_files(scope_output, "=== CHANGED (no diff")
 
 
 def extract_scope_line_count(scope_output: str) -> int:
@@ -1397,13 +1418,15 @@ def main():
     # for agents without domain scoping (domain=null).
     scope_files_for_budget = extract_scope_files(scope_output) if scope_output else []
     scope_lines_for_budget = extract_scope_line_count(scope_output) if scope_output else 0
-    # Deferred NOT DIFFED files are in-scope work too: telemetry must carry
-    # them or coverage marks them uncovered and reads of them count as
-    # out-of-scope. Kept out of scope_files_for_budget so inline-diff
-    # consumers (file history) keep their meaning.
+    # Deferred NOT DIFFED files and list-only CHANGED (no diff) files are
+    # in-scope work too: telemetry must carry them or coverage marks them
+    # uncovered and reads of them count as out-of-scope. Both are kept out
+    # of scope_files_for_budget so inline-diff consumers (file history) keep
+    # their meaning, and list-only lines never enter budget sizing.
     not_diffed_paths = extract_not_diffed_files(scope_output) if scope_output else []
+    list_only_paths = extract_list_only_files(scope_output) if scope_output else []
     telemetry_scope_paths = list(
-        dict.fromkeys([*scope_files_for_budget, *not_diffed_paths])
+        dict.fromkeys([*scope_files_for_budget, *not_diffed_paths, *list_only_paths])
     )
 
     if scope_lines_for_budget > 0:

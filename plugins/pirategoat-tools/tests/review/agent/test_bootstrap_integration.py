@@ -28,6 +28,7 @@ build_output = _mod.build_output
 derive_reviewer_name = _mod.derive_reviewer_name
 extract_scope_files = _mod.extract_scope_files
 extract_not_diffed_files = _mod.extract_not_diffed_files
+extract_list_only_files = _mod.extract_list_only_files
 
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 
@@ -129,12 +130,14 @@ class TestCategoryRepresentatives:
         )
 
         assert result.returncode == 0
-        # Telemetry scope covers the full in-scope set: inline FILES entries
-        # plus deferred NOT DIFFED paths (in-scope work whose diffs were
-        # withheld for context budget).
+        # Telemetry scope covers the full in-scope set: inline FILES entries,
+        # deferred NOT DIFFED paths (in-scope work whose diffs were withheld
+        # for context budget), and list-only CHANGED (no diff) paths the
+        # reviewer is told to inspect when relevant.
         expected_scope = sorted(set(
             extract_scope_files(result.stdout)
             + extract_not_diffed_files(result.stdout)
+            + extract_list_only_files(result.stdout)
         ))
         events = [json.loads(line) for line in telemetry_log.read_text().splitlines()]
         agent_start = next(

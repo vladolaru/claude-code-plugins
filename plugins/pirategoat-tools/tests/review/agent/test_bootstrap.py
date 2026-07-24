@@ -35,6 +35,7 @@ compute_review_budget = _mod.compute_review_budget
 budget_was_capped = _mod.budget_was_capped
 extract_scope_files = _mod.extract_scope_files
 extract_not_diffed_files = _mod.extract_not_diffed_files
+extract_list_only_files = _mod.extract_list_only_files
 extract_scope_line_count = _mod.extract_scope_line_count
 resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
@@ -592,6 +593,40 @@ class TestExtractScopeMultipleBlocks:
             "=== DIFFS ===\n"
         )
         assert extract_scope_line_count(scope) == 60
+
+    def test_extract_list_only_files_skips_section_prose(self):
+        """List-only files are in-scope (the section tells the reviewer to
+        inspect them), so telemetry must see them — while their stats stay
+        out of budget sizing and the inline FILES list."""
+        scope = (
+            "=== FILES ===\n"
+            "src/app.py  (+50 -10)\n"
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "These files changed but diffs are skipped (too large/noisy for inline review).\n"
+            "Use 'git diff base..head -- <file>' to inspect if relevant.\n"
+            "  package-lock.json  (+9000 -9000)\n"
+            "=== DIFFS ===\n"
+        )
+        assert extract_list_only_files(scope) == ["package-lock.json"]
+        assert extract_scope_files(scope) == ["src/app.py"]
+        assert extract_scope_line_count(scope) == 60
+
+    def test_extract_list_only_files_accumulates_across_secondary_scopes(self):
+        scope = (
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "  package-lock.json  (+9000 -9000)\n"
+            "=== SECONDARY SCOPE: config-ops ===\n"
+            "=== CHANGED (no diff — 1 lock/generated files) ===\n"
+            "  composer.lock  (+400 -400)\n"
+        )
+        assert extract_list_only_files(scope) == [
+            "package-lock.json",
+            "composer.lock",
+        ]
+
+    def test_extract_list_only_files_empty_without_section(self):
+        scope = "=== FILES ===\nsrc/a.py  (+5 -1)\n=== DIFFS ===\n"
+        assert extract_list_only_files(scope) == []
 
 
 class TestLoadAdditionalInstructions:
