@@ -295,8 +295,21 @@ class ReviewOutputBuilder:
         if not isinstance(file, str) or not file.strip():
             raise ValueError("add_unreviewed requires a non-empty file path.")
         # Normalize to the canonical repo-relative form scope.py emits, so
-        # "./src/x.php" and "src/x.php" declare the same coverage gap.
-        path = posixpath.normpath(file.strip())
+        # "./src/x.php", "src\\x.php", and "src/x.php" declare the same
+        # coverage gap. Forms that can never match a scope path are rejected
+        # loudly — an unmatched declaration would invert into a
+        # deferred-but-reviewed claim downstream.
+        path = posixpath.normpath(file.strip().replace("\\", "/"))
+        if (
+            path.startswith("/")
+            or path == ".."
+            or path.startswith("../")
+            or (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
+        ):
+            raise ValueError(
+                "add_unreviewed requires a repository-relative path exactly "
+                f"as shown in the NOT DIFFED listing, got {file!r}."
+            )
         if path not in self.unreviewed:
             self.unreviewed.append(path)
 

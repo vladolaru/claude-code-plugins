@@ -750,6 +750,22 @@ class TestAddUnreviewed:
         with pytest.raises(ValueError):
             b.add_unreviewed(bad)
 
+    def test_normalizes_backslash_separators(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src\\a.py")
+        assert b.unreviewed == ["src/a.py"]
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["/abs/a.py", "../outside.py", "..", "C:/win.py", "c:win.py"],
+    )
+    def test_rejects_non_repo_relative_paths(self, bad):
+        """Forms that can never match a canonical scope path must fail
+        loudly — an unmatched declaration inverts into a reviewed claim."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError):
+            b.add_unreviewed(bad)
+
     def test_unreviewed_in_dict_output(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_unreviewed("src/a.py")
