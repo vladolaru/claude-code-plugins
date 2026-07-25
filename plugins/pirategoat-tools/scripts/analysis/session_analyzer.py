@@ -134,15 +134,33 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     except SyntaxError:
         return None
 
+    # The builder persists its accumulated state at save(): only issues
+    # added BEFORE the final save call entered the saved JSON. An
+    # add_issue() after the last save executed but persisted nothing —
+    # collecting it would fabricate findings into the quality report.
+    # Source position approximates execution order exactly for the
+    # mandated straight-line heredoc.
+    final_save_pos: tuple[int, int] | None = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "save"
+        ):
+            pos = (node.lineno, node.col_offset)
+            if final_save_pos is None or pos > final_save_pos:
+                final_save_pos = pos
+
     issues: list[dict[str, Any]] = []
-    saw_save = False
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Attribute) and func.attr == "save":
-            saw_save = True
         if not (isinstance(func, ast.Attribute) and func.attr == "add_issue"):
+            continue
+        if final_save_pos is not None and (
+            node.lineno, node.col_offset
+        ) > final_save_pos:
             continue
         issue: dict[str, Any] = {}
         for name, arg in zip(_BUILDER_ISSUE_POSITIONAL, node.args):
@@ -164,7 +182,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     # findings must not be fabricated into a review record. (The save
     # target is env-pinned by the envelope and not statically resolvable,
     # so the call's presence is the verifiable signal.)
-    if not saw_save:
+    if final_save_pos is None:
         return None
 
     reviewer = env["PIRATEGOAT_REVIEWER_NAME"]

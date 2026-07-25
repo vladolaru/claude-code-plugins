@@ -585,6 +585,43 @@ class TestBashBuilderRecognition:
         [issue] = json.loads(record["content"])["issues"]
         assert issue["severity"] == "medium"
 
+    def test_issue_added_after_final_save_is_not_reconstructed(self):
+        """The builder persists its state at save(): an add_issue() after
+        the last save executed but entered no JSON — reconstructing it
+        would fabricate findings into the quality report."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="high", title="Persisted", file="a.php",\n'
+            '    description="d", recommendation="r", line=1)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+            'builder.add_issue(severity="critical", title="Never saved", file="b.php",\n'
+            '    description="d", recommendation="r", line=2)\n'
+        )
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        issues = json.loads(record["content"])["issues"]
+        assert [issue["title"] for issue in issues] == ["Persisted"]
+
+    def test_issues_before_intermediate_saves_all_reach_the_final_save(self):
+        """Builder state accumulates across saves: everything added before
+        the FINAL save is in the persisted JSON, including issues that
+        also went out with an earlier save."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="high", title="First", file="a.php",\n'
+            '    description="d", recommendation="r", line=1)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+            'builder.add_issue(severity="medium", title="Second", file="b.php",\n'
+            '    description="d", recommendation="r", line=2)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        issues = json.loads(record["content"])["issues"]
+        assert [issue["title"] for issue in issues] == ["First", "Second"]
+
     def test_non_builder_bash_is_not_recognized(self):
         assert _mod._builder_review_from_heredoc("git diff main..HEAD") is None
         assert (
