@@ -2206,6 +2206,53 @@ class TestMeasureRun:
             "disabled": 1,
         }
 
+    def test_step_10_rerun_supersedes_stale_critic_skip(self, tmp_path):
+        """The producer's skip decision is latest-wins (a rerun clears it),
+        but append-only telemetry keeps both step-10 events. The superseded
+        skip must not report "disabled" over the rerun's real verdict."""
+        manifest = _manifest()
+        manifest["steps"] = [
+            {
+                "event": "step",
+                "step": 10,
+                "title": "Decision Critic",
+                "decisions": {"critic_skipped": True},
+            },
+            {
+                "event": "step",
+                "step": 10,
+                "title": "Decision Critic",
+            },
+        ]
+        manifest["outcome"]["critic_verdict"] = "STAND"
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+        cohort = aggregate_cohort([measured])
+
+        assert measured["metric_availability"]["critic"] == "complete"
+        assert cohort["critic"]["verdicts"] == {"STAND": 1}
+
+    def test_latest_step_10_skip_still_disables_after_earlier_run(
+        self, tmp_path
+    ):
+        """Symmetric direction: when the LATEST step-10 event carries the
+        skip decision, it is authoritative regardless of earlier events."""
+        manifest = _manifest()
+        manifest["steps"] = [
+            {"event": "step", "step": 10, "title": "Decision Critic"},
+            {
+                "event": "step",
+                "step": 10,
+                "title": "Decision Critic",
+                "decisions": {"critic_skipped": True},
+            },
+        ]
+        manifest["outcome"]["critic_verdict"] = "unavailable"
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["metric_availability"]["critic"] == "disabled"
+
     def test_fixed_unavailable_critic_sentinel_is_retained_but_not_available(
         self, tmp_path
     ):

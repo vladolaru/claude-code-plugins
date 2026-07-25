@@ -600,12 +600,22 @@ def _pipeline_metric_availability(
     else:
         outcomes_state = "missing"
     steps = manifest.get("steps")
-    critic_skipped = isinstance(steps, list) and any(
-        isinstance(step, dict)
-        and isinstance(step.get("decisions"), dict)
-        and step["decisions"].get("critic_skipped") is True
-        for step in steps
-    )
+    # The producer's skip decision is latest-wins: a step-10 rerun (after
+    # the review verdict escalates past quick-mode approve/comment) clears
+    # the stale decision and appends a fresh step-10 event without one, but
+    # the append-only telemetry keeps both events. Only the final step-10
+    # event's decision is authoritative — any() would resurrect the
+    # superseded skip and report "disabled" over a real critic verdict.
+    critic_skipped = False
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, dict) or step.get("step") != 10:
+                continue
+            decisions = step.get("decisions")
+            critic_skipped = (
+                isinstance(decisions, dict)
+                and decisions.get("critic_skipped") is True
+            )
     critic_verdict = outcome.get("critic_verdict") if isinstance(outcome, dict) else None
     if critic_skipped:
         critic_state = "disabled"
