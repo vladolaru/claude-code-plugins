@@ -4262,6 +4262,58 @@ class TestBudgetAndEvidenceAccounting:
             item["agent"] for item in result["artifact_writes"]["by_agent"]
         ] == ["tests-mutation-reviewer"]
 
+    def test_damaged_scope_exempt_transcript_degrades_its_own_read_family(
+        self, tmp_path
+    ):
+        """A scope-exempt reviewer's reads route to non_scope_comparable, so
+        its damaged transcript must degrade THAT family — not report it
+        complete while downgrading scope-comparable reads it never feeds.
+        It stays a regular reviewer for builder metrics, so the artifact
+        family degrades as before."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "mutation"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call(
+                        "dispatch",
+                        "Agent",
+                        prompt=_agent_prompt(
+                            output_dir, agent="tests-mutation-reviewer"
+                        ),
+                    )
+                ),
+                _result("dispatch", structured={"agentId": "mutation-agent"}),
+            ],
+        )
+        # Dangling Read call: tool_use with no paired result — unresolved
+        # evidence for this agent.
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-mutation-agent.jsonl",
+            [
+                _assistant(
+                    _call("read", "Read", file_path="tests/test_a.py"),
+                    usage=_usage(1, 2),
+                ),
+            ],
+        )
+        manifest = _manifest(
+            session_id, tmp_path, output_dir,
+            started=["tests-mutation-reviewer"],
+        )
+        manifest["coverage"] = {"by_agent": {"tests-mutation-reviewer": []}}
+
+        result = enrich_run_transcript(
+            manifest, sessions, {"tests-mutation-reviewer"}
+        )
+
+        completeness = result["completeness"]
+        assert completeness["non_scope_comparable_reads"] is False
+        assert completeness["scope_comparable_reads"] is True
+        assert completeness["artifact_writes"] is False
+
     def test_running_manifest_caps_transcript_families_at_partial(
         self, tmp_path
     ):

@@ -61,6 +61,14 @@ _NON_SCOPE_COMPARABLE_AGENTS = frozenset(
 # compare against — but they remain regular reviewers for builder metrics
 # and the regular evidence-completeness family.
 _SCOPE_EXEMPT_REVIEWERS = frozenset({"tests-mutation-reviewer"})
+# The reads partition routes by THIS set, not by synthesis identity alone:
+# scope-exempt reviewers' self-discovered reads land in the
+# non-scope-comparable bucket. Read-family completeness must use the same
+# set as the routing, or a damaged scope-exempt transcript degrades the
+# scope-comparable family while its own bucket reports complete.
+_NON_SCOPE_COMPARABLE_READ_AGENTS = (
+    _NON_SCOPE_COMPARABLE_AGENTS | _SCOPE_EXEMPT_REVIEWERS
+)
 _OBSERVED_READS_SCHEMA_VERSION = 2
 
 
@@ -1738,8 +1746,7 @@ def enrich_run_transcript(
         agent_scope = _scope_for_agent(manifest, dispatch["agent"])
         if (
             agent_scope is None
-            and dispatch["agent"] not in _NON_SCOPE_COMPARABLE_AGENTS
-            and dispatch["agent"] not in _SCOPE_EXEMPT_REVIEWERS
+            and dispatch["agent"] not in _NON_SCOPE_COMPARABLE_READ_AGENTS
         ):
             missing_scope_evidence.add(dispatch["agent"])
             warnings.append(
@@ -1796,10 +1803,7 @@ def enrich_run_transcript(
             artifact_by_agent.append(
                 {"agent": dispatch["agent"], **analysis["artifact_writes"]}
             )
-        if (
-            dispatch["agent"] in _NON_SCOPE_COMPARABLE_AGENTS
-            or dispatch["agent"] in _SCOPE_EXEMPT_REVIEWERS
-        ):
+        if dispatch["agent"] in _NON_SCOPE_COMPARABLE_READ_AGENTS:
             # Scope-exempt reviewers have no scope to compare against —
             # partitioning their self-discovered reads would report every
             # legitimate read as out-of-scope.
@@ -1820,26 +1824,28 @@ def enrich_run_transcript(
     # was observed and classified (per actor family), and — for the reads
     # partition only — whether an authoritative scope mapping backed the
     # in/out-of-scope classification of each regular reviewer.
-    regular_transcripts_complete = (
-        expected_available
-        and not expected_invalid
-        and not any(
-            agent not in _NON_SCOPE_COMPARABLE_AGENTS
-            for agent in incomplete_read_agents
-        )
+    #
+    # Two family partitions of the same incomplete set, because scope-exempt
+    # reviewers straddle them: for builder/artifact metrics they are regular
+    # reviewers (synthesis identity is the split), while their reads route
+    # to the non-scope-comparable bucket (the read routing set is the
+    # split). Each completeness flag must partition by the same set its
+    # metric routes by.
+    evidence_observed = expected_available and not expected_invalid
+    regular_transcripts_complete = evidence_observed and not (
+        incomplete_read_agents - _NON_SCOPE_COMPARABLE_AGENTS
     )
-    synthesis_transcripts_complete = (
-        expected_available
-        and not expected_invalid
-        and not any(
-            agent in _NON_SCOPE_COMPARABLE_AGENTS
-            for agent in incomplete_read_agents
-        )
+    synthesis_transcripts_complete = evidence_observed and not (
+        incomplete_read_agents & _NON_SCOPE_COMPARABLE_AGENTS
     )
     scope_comparable_reads_complete = (
-        regular_transcripts_complete and not missing_scope_evidence
+        evidence_observed
+        and not (incomplete_read_agents - _NON_SCOPE_COMPARABLE_READ_AGENTS)
+        and not missing_scope_evidence
     )
-    non_scope_comparable_reads_complete = synthesis_transcripts_complete
+    non_scope_comparable_reads_complete = evidence_observed and not (
+        incomplete_read_agents & _NON_SCOPE_COMPARABLE_READ_AGENTS
+    )
     agent_data_complete = (
         regular_transcripts_complete and synthesis_transcripts_complete
     )
