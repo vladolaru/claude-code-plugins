@@ -2409,7 +2409,25 @@ def main():
                 config_changed = True
             if config_changed:
                 write_config(output_dir, config)
-            if args.session_id is not None and config.get("session_id") != args.session_id:
+            # Session identity follows the same interactive/bot split as
+            # quick: interactive reruns reuse output dirs and run-config.json
+            # survives cleanup, so the CLI is authoritative INCLUDING
+            # absence — an omitted --session-id means this run's session is
+            # unknown, and retaining the previous run's ID would correlate
+            # telemetry with the old Claude transcript. Bot runs pre-seed
+            # the ID in run-config.json and may omit the flag on reruns.
+            if config.get("interactive", True):
+                cli_session = args.session_id or ""
+                if config.get("session_id", "") != cli_session:
+                    if cli_session:
+                        config["session_id"] = cli_session
+                    else:
+                        config.pop("session_id", None)
+                    write_config(output_dir, config)
+            elif (
+                args.session_id is not None
+                and config.get("session_id") != args.session_id
+            ):
                 config["session_id"] = args.session_id
                 write_config(output_dir, config)
 

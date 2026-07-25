@@ -647,6 +647,27 @@ class TestCLIIntegration:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["session_id"] == "session-current"
 
+    def test_step_1_clears_stale_session_id_on_interactive_rerun(
+        self, tmp_path
+    ):
+        """Interactive output dirs are reused and run-config.json survives
+        cleanup: an omitted --session-id means this run's session is
+        unknown, and the previous run's ID must not correlate the new
+        telemetry with the old Claude transcript."""
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full",
+            "interactive": True,
+            "session_id": "session-stale",
+        }))
+
+        result = self._run(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path)
+        )
+
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert "session_id" not in config
+
     def test_step_1_uses_preseeded_session_id_when_cli_omits_it(self, tmp_path):
         (tmp_path / "run-config.json").write_text(json.dumps({
             "mode": "pr",
