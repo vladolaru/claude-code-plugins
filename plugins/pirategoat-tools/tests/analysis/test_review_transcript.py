@@ -3741,6 +3741,65 @@ def test_malformed_unrelated_or_wrong_run_calls_do_not_affect_expectations(tmp_p
 
 
 @pytest.mark.parametrize(
+    "bad_input",
+    [None, "not-an-object", ["src/a.py"], 7],
+    ids=["missing", "string", "list", "int"],
+)
+def test_non_object_tool_input_counts_as_unresolved_evidence(
+    tmp_path, bad_input
+):
+    """A tool_use with valid id/name but non-object input is a damaged
+    record (0 of 14,889 surveyed real blocks deviate): substituting {}
+    would let it pair and classify as success while its read path or
+    builder command silently vanished from the evidence."""
+    sessions = tmp_path / "sessions"
+    output_dir = tmp_path / "run"
+    broken_read = _call("read-1", "Read", file_path="src/a.py")
+    if bad_input is None:
+        broken_read.pop("input")
+    else:
+        broken_read["input"] = bad_input
+    _write_jsonl(
+        sessions / "broken-input.jsonl",
+        [_assistant(broken_read), _result("read-1")],
+    )
+
+    result = enrich_run_transcript(
+        _manifest("broken-input", tmp_path, output_dir, started=[]),
+        sessions,
+        {"review-reconciliator", "decision-reviewer"},
+    )
+
+    assert result["warnings"] == [
+        {"code": "orchestrator_transcript_unresolved_calls"}
+    ]
+    assert result["usage_complete"] is False
+
+
+def test_non_object_dispatch_input_stays_with_correlation(tmp_path):
+    """Dispatch anomalies belong to the correlation machinery — a damaged
+    Agent block must not collapse per-family isolation into whole-run
+    degradation."""
+    sessions = tmp_path / "sessions"
+    output_dir = tmp_path / "run"
+    broken_dispatch = _call("d-1", "Agent", prompt="x")
+    broken_dispatch["input"] = "not-an-object"
+    _write_jsonl(
+        sessions / "broken-dispatch-input.jsonl",
+        [_assistant(broken_dispatch)],
+    )
+
+    result = enrich_run_transcript(
+        _manifest("broken-dispatch-input", tmp_path, output_dir, started=[]),
+        sessions,
+        {"review-reconciliator", "decision-reviewer"},
+    )
+
+    assert result["warnings"] == []
+    assert result["correlation"]["expected"] == []
+
+
+@pytest.mark.parametrize(
     "agent",
     ["review-reconciliator", "decision-reviewer"],
 )

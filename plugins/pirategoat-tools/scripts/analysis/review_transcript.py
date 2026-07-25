@@ -317,11 +317,12 @@ def _tool_calls(
 ) -> tuple[list[dict[str, Any]], int]:
     """Return well-formed tool calls plus the count of malformed ones.
 
-    A tool_use block with a missing or non-string id/name cannot be paired
-    or classified, but it was still an issued call — callers accounting for
-    evidence completeness must count it as unresolved. Malformed Agent
-    dispatch blocks are excluded: dispatch anomalies belong to the
-    correlation machinery, which tracks them per actor family.
+    A tool_use block with a missing or non-string id/name — or a non-object
+    input — cannot be paired, classified, or measured, but it was still an
+    issued call: callers accounting for evidence completeness must count it
+    as unresolved. Malformed Agent dispatch blocks are excluded: dispatch
+    anomalies belong to the correlation machinery, which tracks them per
+    actor family.
     """
     calls: list[dict[str, Any]] = []
     malformed = 0
@@ -334,7 +335,17 @@ def _tool_calls(
             tool_id = block.get("id")
             name = block.get("name")
             tool_input = block.get("input")
-            if not isinstance(tool_id, str) or not isinstance(name, str):
+            # The harness always records ``input`` as an object (0 of
+            # 14,889 surveyed real blocks deviate), so a non-dict input is
+            # a damaged record like a non-string id/name. Substituting {}
+            # would let the call pair and classify as success while its
+            # read path or builder command silently vanished from the
+            # evidence — missing operation data reported as complete.
+            if (
+                not isinstance(tool_id, str)
+                or not isinstance(name, str)
+                or not isinstance(tool_input, dict)
+            ):
                 if name not in _DISPATCH_TOOL_NAMES:
                     malformed += 1
                 continue
@@ -343,7 +354,7 @@ def _tool_calls(
                     "index": index,
                     "id": tool_id,
                     "name": name,
-                    "input": tool_input if isinstance(tool_input, dict) else {},
+                    "input": tool_input,
                 }
             )
     return calls, malformed
