@@ -2963,6 +2963,70 @@ class TestAggregateInlineCoverage:
             "security-reviewer",
         ]
 
+    @pytest.mark.parametrize(
+        "declared",
+        [
+            ["src/deferrred.php"],                    # typo
+            ["/abs/src/deferred.php"],                # absolute
+            ["../outside/deferred.php"],              # traversal
+            ["src/deferred.php", "src/other.php"],    # one valid + one out-of-set
+        ],
+        ids=["typo", "absolute", "traversal", "mixed"],
+    )
+    def test_declaration_outside_deferred_set_fails_the_list_closed(
+        self, mod, tmp_path, declared
+    ):
+        """Output that bypassed builder validation can declare any string.
+        An entry outside the agent's own deferred set matches nothing, so
+        the whole list is unreliable — the agent can claim nothing and its
+        deferred files stay genuine gaps."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/deferred.php"],
+        )
+        self._write_review(
+            str(tmp_path), "security-review", unreviewed=declared
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_declared_unreviewed"] == {}
+
+    def test_declaring_a_deferred_file_covered_elsewhere_stays_valid(
+        self, mod, tmp_path
+    ):
+        """A declaration of an own-deferred file that another agent covered
+        inline is in the agent's deferred set and must not poison the list
+        — its other declarations still count."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/shared.php", "src/omitted.php"],
+        )
+        self._write_summary(
+            str(tmp_path), "code-reviewer-scope-summary.json",
+            ["src/shared.php"], [],
+        )
+        self._write_review(
+            str(tmp_path), "security-review",
+            unreviewed=["src/shared.php", "src/omitted.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        # shared.php was inline elsewhere — covered, not a gap.
+        assert "src/shared.php" not in cov["files_never_inline"]
+        # The declaration list stayed valid, so omitted.php is a declared gap.
+        assert cov["files_never_inline"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_declared_unreviewed"]["src/omitted.php"] == [
+            "security-reviewer",
+        ]
+
     def test_agent_without_output_cannot_claim_deferred_files(
         self, mod, tmp_path
     ):

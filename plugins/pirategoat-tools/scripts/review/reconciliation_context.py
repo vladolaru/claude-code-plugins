@@ -220,6 +220,7 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
     """
     inline: Dict[str, set] = {}
     skipped: Dict[str, set] = {}
+    deferred_by_agent: Dict[str, set] = {}
     agents_reporting = 0
     try:
         entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
@@ -244,6 +245,7 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
         for f_path in data.get("budget_exceeded_files") or []:
             if isinstance(f_path, str):
                 skipped.setdefault(f_path, set()).add(agent)
+                deferred_by_agent.setdefault(agent, set()).add(f_path)
     if not agents_reporting:
         return None
 
@@ -254,9 +256,20 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
     for f_path, agents in never_inline.items():
         for agent in agents:
             if agent not in unreviewed_by_agent:
-                unreviewed_by_agent[agent] = _load_agent_unreviewed(
-                    output_dir, agent
-                )
+                declared_list = _load_agent_unreviewed(output_dir, agent)
+                # Consumer-side mirror of the builder's deferred-set
+                # verification: output that bypassed the builder (or a
+                # failed sidecar write) can declare any string, and a
+                # declaration outside the agent's own deferred set — typo,
+                # absolute path, wrong root — matches nothing, flipping
+                # every real deferred file to deferred-but-reviewed. An
+                # out-of-set entry proves the list unreliable: fail it
+                # closed, the agent can claim nothing.
+                if declared_list is not None and not set(
+                    declared_list
+                ) <= deferred_by_agent.get(agent, set()):
+                    declared_list = None
+                unreviewed_by_agent[agent] = declared_list
             agent_unreviewed = unreviewed_by_agent[agent]
             if agent_unreviewed is None:
                 continue  # no output — the agent can neither claim nor declare
