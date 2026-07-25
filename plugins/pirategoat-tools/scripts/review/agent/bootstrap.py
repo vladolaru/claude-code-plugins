@@ -27,7 +27,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Import telemetry (parent directory script, best-effort)
 try:
