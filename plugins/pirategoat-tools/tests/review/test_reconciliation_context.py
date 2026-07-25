@@ -2914,6 +2914,33 @@ class TestAggregateInlineCoverage:
         assert cov["files_deferred_reviewed"] == {}
         assert cov["files_declared_unreviewed"] == {}
 
+    @pytest.mark.parametrize(
+        "bad_list",
+        [[42], [""], ["   "], [None], ["src/deferred.php", 7]],
+        ids=["int", "empty", "blank", "none", "mixed"],
+    )
+    def test_malformed_unreviewed_entry_fails_the_whole_list_closed(
+        self, mod, tmp_path, bad_list
+    ):
+        """One malformed entry poisons the list — silently dropping it
+        could leave [] (a full-review claim) where the agent tried to
+        declare a gap. The agent can claim nothing; files stay gaps."""
+        self._write_summary(
+            str(tmp_path), "security-reviewer-scope-summary.json",
+            [], ["src/deferred.php"],
+        )
+        self._write_review(
+            str(tmp_path), "security-review", unreviewed=bad_list
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [
+            "security-reviewer",
+        ]
+        assert cov["files_deferred_reviewed"] == {}
+        assert cov["files_declared_unreviewed"] == {}
+
     def test_canonical_null_unreviewed_still_claims_deferred_files(
         self, mod, tmp_path
     ):

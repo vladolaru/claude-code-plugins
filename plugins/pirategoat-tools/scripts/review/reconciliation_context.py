@@ -187,12 +187,16 @@ def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
     # Normalize declarations to the canonical repo-relative form the scope
     # sidecars use — "./src/x.php" and "src\\x.php" must match "src/x.php",
     # or an explicit declaration silently inverts into a
-    # deferred-but-reviewed claim.
-    return [
-        posixpath.normpath(item.strip().replace("\\", "/"))
-        for item in unreviewed
-        if isinstance(item, str) and item.strip()
-    ]
+    # deferred-but-reviewed claim. A malformed entry fails the whole list
+    # closed for the same reason the malformed field does: silently
+    # dropping it could leave [] — a claim that every deferred file was
+    # reviewed — where the agent tried to declare a gap.
+    cleaned = []
+    for item in unreviewed:
+        if not isinstance(item, str) or not item.strip():
+            return None
+        cleaned.append(posixpath.normpath(item.strip().replace("\\", "/")))
+    return cleaned
 
 
 def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
