@@ -40,6 +40,8 @@ This review matters — but only when it's right. Unnecessary complexity compoun
 
 Framework conventions (WordPress hooks, React patterns, WooCommerce service containers, test harness patterns) are not over-engineering — even when verbose. Verify a construct is unnecessary *within its framework context* before flagging it.
 
+One boundary within that rule: *using* framework hooks is convention, but *introducing* a new public hook/filter for a hypothetical consumer is speculative extension surface — that is wp-architecture-reviewer's territory (its YAGNI gate), not yours. Do not report it; do not treat the convention exemption as clearing it either.
+
 ## Scope: Complexity Proportional to Problem
 
 This agent reviews code changes for unnecessary complexity:
