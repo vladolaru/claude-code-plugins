@@ -63,11 +63,13 @@ _NON_SCOPE_COMPARABLE_AGENTS = frozenset(
 _SCOPE_EXEMPT_REVIEWERS = frozenset({"tests-mutation-reviewer"})
 # Producer-defined identity shape for repo-contributed reviewer instances:
 # plan_dispatch names every synthetic adapter dispatch f"repo-{id}-reviewer"
-# with a kebab-case alphanumeric id (review_config._valid_id), and the
-# "-reviewer" suffix is load-bearing. Instances are dynamic, so they can
-# never appear in the static registry set — recognition is by this shape.
-# The template "repo-reviewer-adapter" itself never acts as a reviewer.
-_REPO_REVIEWER_INSTANCE_RE = re.compile(r"repo-[A-Za-z0-9-]+-reviewer")
+# with a lowercase-ASCII-kebab id (review_config._valid_id — the same
+# producer agent-name contract telemetry and the metrics sanitizers
+# enforce), and the "-reviewer" suffix is load-bearing. Instances are
+# dynamic, so they can never appear in the static registry set —
+# recognition is by this shape. The template "repo-reviewer-adapter"
+# itself never acts as a reviewer.
+_REPO_REVIEWER_INSTANCE_RE = re.compile(r"repo-[a-z0-9-]+-reviewer")
 
 
 def _is_recognized_reviewer(name: str, recognized_agents: set[str]) -> bool:

@@ -112,6 +112,66 @@ class TestRules:
         result = mod.load_review_config(str(tmp_path))
         assert result["rules"] == []
 
+    @pytest.mark.parametrize(
+        "bad_id",
+        ["Payments", "plăți", "PAY-MENTS", "paym_ents", "-payments"],
+        ids=["uppercase", "non-ascii", "upper-kebab", "underscore", "dash-start"],
+    )
+    def test_non_contract_ids_dropped_with_diagnostic(
+        self, mod, tmp_path, bad_id
+    ):
+        """IDs become machine identifiers (repo-<id>-reviewer telemetry
+        names, filenames, shell tokens) and the measurement chain enforces
+        lowercase ASCII kebab throughout — an id accepted here but rejected
+        downstream would make a validly configured reviewer unmeasurable."""
+        _touch(tmp_path, "a.md")
+        _write_config(tmp_path, {"review": {"rules": [
+            {"id": bad_id, "path": "a.md"}
+        ]}})
+        result = mod.load_review_config(str(tmp_path))
+        assert result["rules"] == []
+        assert any("lowercase ASCII kebab" in d for d in result["diagnostics"])
+
+    def test_id_charset_matches_measurement_contract(self, mod):
+        """Drift guard: every id _valid_id accepts must yield a
+        repo-<id>-reviewer name that telemetry, the metrics sanitizers, and
+        transcript instance recognition all accept — widening one without
+        the others silently makes repo reviewers unmeasurable."""
+        import importlib.util as ilu
+        import sys
+
+        def _load(name, relpath):
+            spec = ilu.spec_from_file_location(
+                name, PLUGIN_ROOT / relpath
+            )
+            module = ilu.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+
+        telemetry = _load("rc_contract_telemetry", "scripts/review/telemetry.py")
+        sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "analysis"))
+        try:
+            contracts = _load(
+                "rc_contract_metrics",
+                "scripts/analysis/review_metrics/contracts.py",
+            )
+        finally:
+            sys.path.pop(0)
+        transcript = _load(
+            "rc_contract_transcript", "scripts/analysis/review_transcript.py"
+        )
+
+        for rid in ["payments", "a", "renewals-v2", "0-day"]:
+            assert mod._VALID_ID_RE.fullmatch(rid), rid
+            instance = f"repo-{rid}-reviewer"
+            assert telemetry.ReviewTelemetry._AGENT_NAME_RE.fullmatch(instance), instance
+            assert contracts._PRODUCER_AGENT_NAME_RE.fullmatch(instance), instance
+            assert transcript._REPO_REVIEWER_INSTANCE_RE.fullmatch(instance), instance
+        # The consumers' shared charset is [a-z0-9-]; _VALID_ID_RE must be a
+        # subset of it, proven by construction: its pattern draws only from
+        # that class.
+        assert mod._VALID_ID_RE.pattern == "[a-z0-9][a-z0-9-]*"
+
 
 class TestReviewers:
     def test_valid_reviewer_resolves(self, mod, tmp_path):

@@ -196,12 +196,25 @@ def _normalize_reviewer(raw, repo_path, defaults, seen_ids, diagnostics):
     }
 
 
+# IDs become machine identifiers downstream — repo-<id>-reviewer telemetry
+# names, output filenames, shell command tokens — and the whole measurement
+# chain enforces one producer agent-name contract: lowercase ASCII kebab
+# (telemetry._AGENT_NAME_RE, review_metrics contracts._PRODUCER_AGENT_NAME_RE,
+# transcript instance recognition). str.isalnum() would admit uppercase and
+# non-ASCII ids that every one of those consumers rejects, making a validly
+# configured reviewer unmeasurable. Human-facing names belong in 'label'.
+_VALID_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
 def _valid_id(value, kind, seen_ids, diagnostics):
     if not isinstance(value, str) or not value:
         diagnostics.append(f"{kind}: missing or non-string 'id'")
         return None
-    if not all(c.isalnum() or c == "-" for c in value):
-        diagnostics.append(f"{kind} '{value}': id must be kebab-case alphanumeric")
+    if not _VALID_ID_RE.fullmatch(value):
+        diagnostics.append(
+            f"{kind} '{value}': id must be lowercase ASCII kebab-case "
+            "(a-z, 0-9, '-'; put display names in 'label')"
+        )
         return None
     if value in seen_ids:
         diagnostics.append(f"{kind} '{value}': duplicate id, skipping")
