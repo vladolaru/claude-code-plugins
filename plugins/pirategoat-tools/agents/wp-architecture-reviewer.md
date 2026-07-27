@@ -96,11 +96,13 @@ Before reporting a finding, verify it doesn't fall into these known FP patterns:
 
 1. **Missing Hooks Where Genuine Need Exists** - Flag ONLY when: documented/obvious extension use case, public API boundary, user-facing value. Do NOT flag: internal methods, intermediate calculations, simple getters, new code without established patterns. Ask: "What would a plugin author actually DO with this hook?"
 
-2. **WPCS Violations** - Missing Yoda conditions, incorrect spacing, missing doc blocks, non-standard naming.
+2. **Speculative Extension Surface (YAGNI)** - The inverse of #1: NEW public hooks/filters introduced without a stated need or a named consumer. Once released, a public hook is a backwards-compatibility commitment (see BC Breaks above - removal requires deprecation), maintained nearly forever. For every hook the diff ADDS, ask: "Who asked for this, and what concrete consumer uses it?" If the PR states neither, flag it and recommend shipping without the hook until a real consumer appears. Do NOT flag: hooks with a documented use case or in-tree consumer, hooks mirroring an established pattern the codebase applies consistently (e.g., every sibling event already fires one).
 
-3. **Poor Hook Design** - Filters missing context parameters, actions missing relevant objects, inconsistent hook naming.
+3. **WPCS Violations** - Missing Yoda conditions, incorrect spacing, missing doc blocks, non-standard naming.
 
-4. **Missing Internationalization** - Hardcoded user-facing strings, missing text domain.
+4. **Poor Hook Design** - Filters missing context parameters, actions missing relevant objects, inconsistent hook naming.
+
+5. **Missing Internationalization** - Hardcoded user-facing strings, missing text domain.
 
 ### MEDIUM (Best practice)
 
@@ -134,6 +136,15 @@ Before reporting a finding, verify it doesn't fall into these known FP patterns:
 [] Would other plugins reasonably need to react?
 [] If YES to both: before/after action exists, passes objects, is documented?
 [] If internal/no use case: action NOT required
+```
+
+### For NEW Hooks Added by This Diff (YAGNI gate):
+```
+[] Does the PR state who asked for this hook or name a concrete consumer?
+[] Does an in-tree consumer or documented use case exist?
+[] Does it mirror an established pattern applied consistently nearby?
+[] If NO to all: flag as speculative extension surface — recommend shipping
+   without it (a released hook is a permanent BC commitment)
 ```
 
 ## Backwards Compatibility

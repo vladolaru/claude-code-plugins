@@ -5,6 +5,19 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.110.0] - 2026-07-27
+
+Closes a review blind spot around speculative extension surface and sharpens two structural lenses. Field feedback from WooCommerce Subscriptions reviews showed new hooks/filters being introduced without a stated need and maintained nearly forever afterward — while simplification-reviewer's framework-convention exemption actively excluded them from YAGNI review and wp-architecture-reviewer only checked for *missing* hooks, never unwarranted ones.
+
+### Added
+
+- **Speculative extension surface (YAGNI) check.** wp-architecture-reviewer now reviews every hook the diff ADDS as the inverse of its missing-hooks check: a new public hook with no stated need and no named consumer is flagged as a permanent backwards-compatibility commitment, with a "For NEW Hooks Added by This Diff" checklist gate. Hooks with documented use cases, in-tree consumers, or an established sibling pattern are exempt.
+- **Mixed abstraction levels smell.** architecture-reviewer flags methods that interleave high-level orchestration with low-level mechanics (SQL/string/array plumbing) and recommends extracting the low-level steps into named methods — with a concrete-symptom requirement (name the interleaving lines) so it cannot degrade into abstract refactoring notes.
+
+### Changed
+
+- simplification-reviewer's framework-convention exemption no longer implicitly clears new public hooks: using hooks is convention, introducing speculative ones is wp-architecture-reviewer's YAGNI territory (explicit boundary, no double-reporting).
+
 ## [1.109.0] - 2026-07-22
 
 Lets the repository under review contribute its own review knowledge and reviewers. General reviewers structurally miss repo-specific bug classes (runtime-environment assumptions, upstream-internals contracts, failure-path semantics, cross-flow blast radius) — knowledge that is regression-seeded and can only live with the code. A repository now declares that knowledge, and its own domain-expert lenses, in an optional `review` section of its `.pirategoat/config.json`, and pirategoat applies and dispatches them natively.

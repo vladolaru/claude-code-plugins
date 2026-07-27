@@ -105,6 +105,7 @@ Review the diffs provided in the script output.
 For each changed file, analyze:
 
 - **SOLID Violations:** Check each principle against the table above.
+- **Mixed Abstraction Levels:** A method that interleaves high-level orchestration (what happens) with low-level mechanics (SQL/query assembly, string building, array plumbing) hides its intent and resists testing and reuse. When the diff adds or grows such a method, recommend extracting the low-level steps into named private methods so the method reads at one level. Concrete symptom required: name the orchestration lines and the mechanics lines that interleave — this is not a license for abstract "consider refactoring" notes.
 - **Coupling Analysis:** Search for `new ClassName`, `instanceof`, `static::`, `global`. Red flags: scattered instantiation, type checks in business logic. Green flags: constructor injection, interface type hints.
 - **Design Pattern Opportunities:** Match code smells to patterns using routing table above.
 - **Architectural Code Smells:** God Object, Feature Envy, Shotgun Surgery, Divergent Change, Primitive Obsession, Long Parameter List.
