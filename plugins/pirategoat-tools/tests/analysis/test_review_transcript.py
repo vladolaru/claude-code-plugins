@@ -113,6 +113,23 @@ def _agent_prompt(output_dir: Path, agent: str = "security-reviewer") -> str:
     )
 
 
+def _adapter_prompt(
+    output_dir: Path,
+    instance: str | None = "repo-renewals-reviewer",
+) -> str:
+    """The exact adapter ref-mode command form step 6 emits (pipeline.py)."""
+    instance_part = f"--instance-name {instance} " if instance else ""
+    return (
+        "python3 /plugin/review/agent/bootstrap.py "
+        "--agent repo-reviewer-adapter "
+        f"{instance_part}"
+        "--repo-agent-ref .ai/agents/review/renewals.md "
+        "--adapter-label 'Renewals reviewer' "
+        "--execution inline --channel blocking --scope-domains code "
+        f'--range "base..head" --output-dir "{output_dir}"'
+    )
+
+
 def _builder_envelope(body: str | None, *, header: str | None = None) -> str:
     header = header or (
         "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
@@ -4320,6 +4337,110 @@ class TestBudgetAndEvidenceAccounting:
         assert [
             item["agent"] for item in result["artifact_writes"]["by_agent"]
         ] == ["tests-mutation-reviewer"]
+
+    def test_repo_reviewer_instance_dispatch_correlates_and_measures(
+        self, tmp_path
+    ):
+        """A repo-contributed reviewer dispatches through the adapter
+        template but acts under its repo-<id>-reviewer instance identity:
+        the step-6 adapter command must correlate on --instance-name, the
+        manifest's instance-named start must be recognized (not flip
+        expected_invalid, which would zero every completeness family), and
+        the instance measures as a scope-bearing regular reviewer."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        session_id = "adapter"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call(
+                        "dispatch",
+                        "Agent",
+                        prompt=_adapter_prompt(output_dir),
+                    )
+                ),
+                _result("dispatch", structured={"agentId": "adapter-agent"}),
+            ],
+        )
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-adapter-agent.jsonl",
+            [
+                _assistant(
+                    _call("read", "Read", file_path="src/in.py"),
+                    usage=_usage(1, 2),
+                ),
+                _result("read"),
+            ],
+        )
+        manifest = _manifest(
+            session_id, tmp_path, output_dir,
+            started=["repo-renewals-reviewer"],
+        )
+        manifest["coverage"] = {
+            "by_agent": {"repo-renewals-reviewer": ["src/in.py"]}
+        }
+
+        result = enrich_run_transcript(
+            manifest, sessions, {"repo-reviewer-adapter"}
+        )
+
+        assert result["correlation"]["expected"] == ["repo-renewals-reviewer"]
+        [usage_entry] = result["agent_usage"]
+        assert usage_entry["agent"] == "repo-renewals-reviewer"
+        assert usage_entry["available"] is True
+        assert result["observed_reads"]["in_scope"] == ["src/in.py"]
+        assert result["completeness"]["scope_comparable_reads"] is True
+        assert [
+            item["agent"] for item in result["artifact_writes"]["by_agent"]
+        ] == ["repo-renewals-reviewer"]
+
+    def test_adapter_dispatch_without_instance_name_is_unrecognized(
+        self, tmp_path
+    ):
+        """Bootstrap hard-fails ref-mode without --instance-name, so a
+        ref-bearing command lacking one is malformed producer output — it
+        must correlate to nothing, never to the shared template identity."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        _write_jsonl(
+            sessions / "no-instance.jsonl",
+            [
+                _assistant(
+                    _call(
+                        "dispatch",
+                        "Agent",
+                        prompt=_adapter_prompt(output_dir, instance=None),
+                    )
+                ),
+            ],
+        )
+
+        result = enrich_run_transcript(
+            _manifest("no-instance", tmp_path, output_dir, started=[]),
+            sessions,
+            {"repo-reviewer-adapter"},
+        )
+
+        assert result["correlation"]["expected"] == []
+
+    def test_non_shape_dynamic_agent_name_still_flips_invalid(self, tmp_path):
+        """Instance recognition is by the exact producer shape — an
+        arbitrary dynamic name in the manifest stays invalid evidence."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        _write_jsonl(sessions / "bad-name.jsonl", [_assistant()])
+
+        result = enrich_run_transcript(
+            _manifest(
+                "bad-name", tmp_path, output_dir, started=["repo-renewals"]
+            ),
+            sessions,
+            {"repo-reviewer-adapter"},
+        )
+
+        assert result["usage_complete"] is False
+        assert result["completeness"]["scope_comparable_reads"] is False
 
     def test_damaged_scope_exempt_transcript_degrades_its_own_read_family(
         self, tmp_path

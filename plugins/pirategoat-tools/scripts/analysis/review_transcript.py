@@ -61,6 +61,22 @@ _NON_SCOPE_COMPARABLE_AGENTS = frozenset(
 # compare against — but they remain regular reviewers for builder metrics
 # and the regular evidence-completeness family.
 _SCOPE_EXEMPT_REVIEWERS = frozenset({"tests-mutation-reviewer"})
+# Producer-defined identity shape for repo-contributed reviewer instances:
+# plan_dispatch names every synthetic adapter dispatch f"repo-{id}-reviewer"
+# with a kebab-case alphanumeric id (review_config._valid_id), and the
+# "-reviewer" suffix is load-bearing. Instances are dynamic, so they can
+# never appear in the static registry set — recognition is by this shape.
+# The template "repo-reviewer-adapter" itself never acts as a reviewer.
+_REPO_REVIEWER_INSTANCE_RE = re.compile(r"repo-[A-Za-z0-9-]+-reviewer")
+
+
+def _is_recognized_reviewer(name: str, recognized_agents: set[str]) -> bool:
+    """Registry/synthesis identity, or a valid repo-reviewer instance."""
+    return name in recognized_agents or bool(
+        _REPO_REVIEWER_INSTANCE_RE.fullmatch(name)
+    )
+
+
 # The reads partition routes by THIS set, not by synthesis identity alone:
 # scope-exempt reviewers' self-discovered reads land in the
 # non-scope-comparable bucket. Read-family completeness must use the same
@@ -731,7 +747,20 @@ def _valid_bootstrap_tokens(tokens: list[str]) -> bool:
     ):
         return False
 
-    allowed_options = {"--agent", "--range", "--output-dir"}
+    # The base reviewer form plus the adapter ref-mode form step 6 emits for
+    # repo-contributed reviewers (pipeline.py cmd_parts). Rejecting the
+    # adapter options would leave every repo-reviewer dispatch unrecognized.
+    allowed_options = {
+        "--agent",
+        "--range",
+        "--output-dir",
+        "--instance-name",
+        "--repo-agent-ref",
+        "--adapter-label",
+        "--execution",
+        "--channel",
+        "--scope-domains",
+    }
     index = script_index + 1
     while index < len(tokens):
         token = tokens[index]
@@ -813,6 +842,19 @@ def _recognized_identity(
         else None
     )
     if candidate is not None:
+        # Adapter ref-mode: bootstrap keys ref_mode on --repo-agent-ref,
+        # requires --instance-name, and takes its effective identity from it
+        # — mirror that exactly, or every repo-contributed reviewer
+        # collapses onto the shared template identity while telemetry
+        # records instance names. A ref without a valid instance name is
+        # malformed producer output: unrecognized, never the template.
+        if _extract_token_option(bootstrap_tokens, "--repo-agent-ref") is not None:
+            instance = _extract_token_option(bootstrap_tokens, "--instance-name")
+            if instance is None or not _REPO_REVIEWER_INSTANCE_RE.fullmatch(
+                instance
+            ):
+                return None
+            return instance
         return candidate if candidate in recognized_agents else None
 
     special_agents = {
@@ -1569,7 +1611,7 @@ def _expected_agents(
         if (
             not isinstance(name, str)
             or not _SAFE_ID.fullmatch(name)
-            or name not in recognized_agents
+            or not _is_recognized_reviewer(name, recognized_agents)
         ):
             invalid = True
             continue
