@@ -235,7 +235,13 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
         name = entry.name
         if "-scope-summary" not in name or not name.endswith(".json"):
             continue
-        agent = name.split("-scope-summary")[0]
+        # Last occurrence is the delimiter: filenames always END with
+        # "-scope-summary[-<domain>].json" and no domain contains the
+        # marker, while adapter instance names are repo-authored kebab ids
+        # that legally may ("repo-payments-scope-summary-contract-reviewer").
+        # A first-occurrence split would truncate such an agent name and
+        # misattribute its scope.
+        agent = name.rsplit("-scope-summary", 1)[0]
         try:
             with open(entry.path, "r", encoding="utf-8") as f:
                 data = json.load(f)

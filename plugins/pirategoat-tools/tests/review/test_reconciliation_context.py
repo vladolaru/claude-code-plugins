@@ -3034,8 +3034,12 @@ class TestAggregateInlineCoverage:
             # "reviewer" mid-string: a blanket replace() would corrupt the
             # stem to repo-review-quality-review.json and lose the output.
             "repo-reviewer-quality-reviewer",
+            # "scope-summary" mid-string (a legal kebab id): a
+            # first-occurrence filename split would truncate the agent to
+            # "repo-payments" and misattribute the scope.
+            "repo-payments-scope-summary-contract-reviewer",
         ],
-        ids=["plain", "midstring-reviewer"],
+        ids=["plain", "midstring-reviewer", "midstring-scope-summary"],
     )
     def test_adapter_instance_declarations_attribute_to_the_instance(
         self, mod, tmp_path, instance
