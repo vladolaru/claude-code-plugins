@@ -3027,6 +3027,39 @@ class TestAggregateInlineCoverage:
             "security-reviewer",
         ]
 
+    @pytest.mark.parametrize(
+        "instance",
+        [
+            "repo-renewals-reviewer",
+            # "reviewer" mid-string: a blanket replace() would corrupt the
+            # stem to repo-review-quality-review.json and lose the output.
+            "repo-reviewer-quality-reviewer",
+        ],
+        ids=["plain", "midstring-reviewer"],
+    )
+    def test_adapter_instance_declarations_attribute_to_the_instance(
+        self, mod, tmp_path, instance
+    ):
+        """Adapter instances write instance-named scope summaries and
+        <instance-stem>-review.json output; their declarations must
+        reconcile exactly like a native reviewer's."""
+        self._write_summary(
+            str(tmp_path), f"{instance}-scope-summary-code.json",
+            [], ["src/deferred.php"],
+        )
+        stem = instance[: -len("-reviewer")]
+        self._write_review(
+            str(tmp_path), f"{stem}-review",
+            unreviewed=["src/deferred.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_never_inline"]["src/deferred.php"] == [instance]
+        assert cov["files_declared_unreviewed"]["src/deferred.php"] == [
+            instance
+        ]
+
     def test_agent_without_output_cannot_claim_deferred_files(
         self, mod, tmp_path
     ):

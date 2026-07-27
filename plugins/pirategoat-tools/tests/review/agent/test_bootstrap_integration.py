@@ -146,6 +146,36 @@ class TestCategoryRepresentatives:
         assert expected_scope
         assert agent_start["scope"]["paths"] == expected_scope
 
+    def test_ref_mode_instance_writes_scope_summaries_and_sidecars(
+        self, tmp_path
+    ):
+        """Adapter ref-mode instances must leave the same per-agent scope
+        evidence as native reviewers — instance-named scope summaries (so
+        run-level coverage reconciliation sees adapter scopes) and an
+        instance-named deferred sidecar (so the builder's declaration
+        verification finds it via PIRATEGOAT_REVIEWER_NAME)."""
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+
+        assert result.returncode == 0
+        summary = tmp_path / "repo-renewals-reviewer-scope-summary-code.json"
+        assert summary.is_file()
+        data = json.loads(summary.read_text())
+        assert data["domain"] == "code"
+        assert isinstance(data["in_scope_stat_lines"], int)
+        # Identity chain: sidecar name matches what the builder derives
+        # from PIRATEGOAT_REVIEWER_NAME.
+        assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
+        assert (tmp_path / "repo-renewals-deferred-files.json").is_file()
+
     def test_deferred_sidecar_backs_add_unreviewed_validation(self, tmp_path):
         """Bootstrap persists the authoritative NOT DIFFED set so the
         builder can reject declarations that match no deferred file."""

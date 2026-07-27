@@ -1330,9 +1330,25 @@ def main():
         for dom in ref_domains:
             if dom not in _REVIEW_DOMAINS:
                 continue
+            # Per-instance, per-domain scope summaries: without them the
+            # run-level coverage reconciliation cannot see adapter scopes,
+            # so a file only ever covered by a repo-contributed reviewer
+            # would not count as covered. Instance-named so N instances
+            # never collide and the aggregator attributes the scope to the
+            # identity every other artifact uses.
+            dom_summary_out = (
+                os.path.join(
+                    args.output_dir,
+                    f"{effective_agent_name}-scope-summary-{dom}.json",
+                )
+                if args.output_dir else None
+            )
             _, dom_output = run_scope_discovery(
                 plugin_root, dom, [], args.range, output_dir=args.output_dir,
+                summary_json_out=dom_summary_out,
             )
+            if dom_summary_out:
+                scope_summary_paths.append(dom_summary_out)
             # Capture output dir / PR number from the first domain that actually
             # runs (not the first list position — it may have been skipped).
             if not captured_meta:

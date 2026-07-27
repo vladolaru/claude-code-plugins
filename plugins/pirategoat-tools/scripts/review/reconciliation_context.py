@@ -163,8 +163,13 @@ def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
     claim nothing. Returns the list of declared paths (possibly empty)
     otherwise; canonical null and an absent key mean "declared nothing".
     """
-    stem = agent.replace("-reviewer", "-review")
-    path = os.path.join(output_dir, f"{stem}.json")
+    # Review files are named derive_reviewer_name(agent) + "-review.json":
+    # only a trailing "-reviewer" is stripped. A blanket replace() would
+    # corrupt names carrying "reviewer" mid-string (adapter instances are
+    # "repo-<id>-reviewer", and <id> is repo-authored).
+    if agent.endswith("-reviewer"):
+        agent = agent[: -len("-reviewer")]
+    path = os.path.join(output_dir, f"{agent}-review.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
