@@ -569,6 +569,22 @@ class TestBashBuilderRecognition:
         assert positional_issue["file"] == "src/g.php"
         assert positional_issue["line"] == 7
 
+    def test_fully_positional_call_reconstructs_category_and_line(self):
+        """add_issue accepts category and line positionally after
+        recommendation — dropping them would restore the finding without
+        its line and exclude it from overlap scoring."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue("high", "T", "src/f.php", "d", "r", "xss", 42)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        [issue] = json.loads(record["content"])["issues"]
+        assert issue["category"] == "xss"
+        assert issue["line"] == 42
+
     def test_reconstruction_applies_severity_floor_promotion(self):
         """The builder lowercases severities and promotes to severity_floor;
         the reconstruction must match what was actually saved."""

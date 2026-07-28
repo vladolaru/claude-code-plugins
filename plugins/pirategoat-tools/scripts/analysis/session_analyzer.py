@@ -60,12 +60,16 @@ _BUILDER_ENV_NAMES = {
     "PIRATEGOAT_REVIEWER_NAME",
     "PIRATEGOAT_PR_ID",
 }
+# Must mirror ReviewOutputBuilder.add_issue()'s positional order exactly —
+# a parameter missing here is silently dropped from fully positional calls.
 _BUILDER_ISSUE_POSITIONAL = (
     "severity",
     "title",
     "file",
     "description",
     "recommendation",
+    "category",
+    "line",
 )
 # Mirrors ReviewOutputBuilder.add_issue severity normalization: severities
 # are lowercased and a severity_floor promotes lower severities to it. The
