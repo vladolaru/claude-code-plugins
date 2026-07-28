@@ -349,9 +349,21 @@ def _legacy_id(start: dict[str, Any], end: dict[str, Any], steps: list[dict[str,
 
 def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, Any] | None:
     events = _read_jsonl(path)
-    start = next((event for event in events if event.get("event") == "pipeline_start"), None)
-    if not isinstance(start, dict):
+    starts = [
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, dict) and event.get("event") == "pipeline_start"
+    ]
+    if not starts:
         return None
+    # One legacy file holds one run by construction; a second pipeline_start
+    # means concatenation or damage. Combining segments would assign one run
+    # ID the outcomes and lifecycle of OTHER runs — corrupt even under
+    # exact --run-id filtering — so only the first segment's events are
+    # reduced and the foreign tail is ignored.
+    boundary = starts[1] if len(starts) > 1 else len(events)
+    events = events[starts[0]:boundary]
+    start = events[0]
     end = next(
         (event for event in reversed(events) if event.get("event") == "pipeline_end"),
         {},

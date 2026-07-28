@@ -1248,6 +1248,28 @@ class TestLoadRuns:
         assert "PRIVATE TOOL BODY" not in serialized
         assert "snapshot" not in serialized
 
+    def test_concatenated_legacy_runs_reduce_to_the_first_segment(
+        self, tmp_path
+    ):
+        """One legacy file holds one run by construction — combining a
+        concatenated file's segments would assign one run ID the outcomes
+        and lifecycle of OTHER runs, corrupt even under exact --run-id
+        filtering. Only the first segment's events reduce."""
+        first = _legacy_events()
+        second = _legacy_events(run_id="legacy-2")
+        second[1]["agent"] = "security-reviewer"
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        _write_jsonl(tmp_path / "legacy.jsonl", first + second)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-1"
+        assert [
+            event["agent"] for event in run["agents"]["started"]
+        ] == ["code-reviewer"]
+        assert run["run"]["ended_at"] == "2026-07-18T10:01:00+00:00"
+        assert run["outcome"]["summary"].get("total_agent_issues") == 2
+
     def test_legacy_steps_carry_only_step_events(self, tmp_path):
         """The manifest contract's steps are step events only — a
         pipeline_end entry fails the transcript stage-timeline validator,
