@@ -67,6 +67,20 @@ def _init_git_repo(path):
     )
 
 
+def _add_commit(path, filename="second.txt"):
+    """Add one more commit so ranges like HEAD~1..HEAD resolve."""
+    (path / filename).write_text("more\n")
+    subprocess.run(
+        ["git", "add", filename], cwd=path, capture_output=True, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", f"Add {filename}"],
+        cwd=path,
+        capture_output=True,
+        check=True,
+    )
+
+
 class TestTelemetryIntegration:
     """Verify pipeline calls telemetry at each step."""
 
@@ -220,12 +234,17 @@ class TestTelemetryIntegration:
             },
         }))
         log_dir = tmp_path / "telemetry-logs"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
         current_head = subprocess.check_output(
-            ["git", "rev-parse", "--verify", "HEAD"], text=True
+            ["git", "rev-parse", "--verify", "HEAD"], cwd=repo, text=True
         ).strip()
 
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            result = self._run("--step", "1", "--output-dir", str(tmp_path))
+            result = self._run(
+                "--step", "1", "--output-dir", str(tmp_path), cwd=str(repo)
+            )
 
         assert result.returncode == 0
         log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
@@ -258,12 +277,18 @@ class TestTelemetryIntegration:
             },
         }))
         log_dir = tmp_path / "telemetry-logs"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
         expected_sha = subprocess.check_output(
-            ["git", "rev-parse", "--verify", "HEAD~1"], text=True
+            ["git", "rev-parse", "--verify", "HEAD~1"], cwd=repo, text=True
         ).strip()
 
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            result = self._run("--step", "1", "--output-dir", str(tmp_path))
+            result = self._run(
+                "--step", "1", "--output-dir", str(tmp_path), cwd=str(repo)
+            )
 
         assert result.returncode == 0
         log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
@@ -483,14 +508,22 @@ class TestStep8WaitingRouting:
 class TestStep5Orchestration:
     """Step 5 main() runs review/plan_dispatch.py and stores output in state."""
 
-    def _run(self, *args):
+    def _run(self, *args, cwd=None):
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+
+    def _make_repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
+        return repo
 
     def test_step_5_stores_dispatch_plan_summary(self, tmp_path):
         """Step 5 should store dispatch plan summary in state."""
+        repo = self._make_repo(tmp_path)
         self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+                   "--output-dir", str(tmp_path), cwd=str(repo))
         ctx = {
             "git": {"merge_base": "abc", "git_range": "abc..HEAD",
                     "changed_files": ["a.py"], "commit_count": 1},
@@ -498,7 +531,7 @@ class TestStep5Orchestration:
         }
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
         r = self._run("--step", "5", "--mode", "full",
-                       "--output-dir", str(tmp_path))
+                       "--output-dir", str(tmp_path), cwd=str(repo))
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert 5 in state["completed_steps"]
@@ -508,8 +541,9 @@ class TestStep5Orchestration:
         self, tmp_path
     ):
         """Step 5 keeps the deterministic plan unchanged for measurement."""
+        repo = self._make_repo(tmp_path)
         self._run("--step", "1", "--mode", "full",
-                  "--output-dir", str(tmp_path))
+                  "--output-dir", str(tmp_path), cwd=str(repo))
         ctx = {
             "git": {
                 "git_range": "HEAD~1..HEAD",
@@ -521,7 +555,8 @@ class TestStep5Orchestration:
         (tmp_path / "review-context.json").write_text(json.dumps(ctx))
 
         result = self._run(
-            "--step", "5", "--mode", "full", "--output-dir", str(tmp_path)
+            "--step", "5", "--mode", "full", "--output-dir", str(tmp_path),
+            cwd=str(repo),
         )
 
         assert result.returncode == 0
