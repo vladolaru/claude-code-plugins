@@ -2012,6 +2012,22 @@ class TestLoadRuns:
 
 
 class TestMeasureRun:
+    def test_partial_correlation_without_counts_renders_missing_glyphs(self):
+        """Sanitization omits absent/invalid correlation counts — the table
+        must show the missing glyph, not a fabricated "partial 0/0"."""
+        manifest = _manifest()
+        measured = measure_run(
+            manifest, Path("/nonexistent"), include_transcripts=False
+        )
+        cohort = aggregate_cohort([measured])
+        measured["metric_availability"]["transcript"] = "partial"
+        measured["transcript"] = {"correlation": {}}
+
+        table = format_table([measured], cohort)
+
+        assert "partial —/—" in table
+        assert "partial 0/0" not in table
+
     def test_running_coverage_snapshot_is_a_partial_observation(self):
         manifest = _running_manifest("running-coverage")
 

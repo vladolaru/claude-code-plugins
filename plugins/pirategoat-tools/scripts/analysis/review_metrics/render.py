@@ -103,9 +103,11 @@ def _table_row(run: dict[str, Any]) -> list[str]:
     transcript_state = metrics.get("transcript", "missing")
     correlation = transcript.get("correlation") if isinstance(transcript, dict) else None
     if isinstance(correlation, dict) and transcript_state == "partial":
+        # Sanitization omits absent/invalid counts — defaulting to 0 would
+        # render missing evidence as a measured "partial 0/0".
         transcript_state = (
-            f"partial {correlation.get('correlated_count', 0)}/"
-            f"{correlation.get('expected_count', 0)}"
+            f"partial {_format_count(correlation.get('correlated_count'))}/"
+            f"{_format_count(correlation.get('expected_count'))}"
         )
     return [
         str(identity.get("id") or "—"),
