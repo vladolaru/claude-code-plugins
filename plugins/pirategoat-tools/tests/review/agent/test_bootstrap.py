@@ -425,7 +425,7 @@ class TestBudgetWasCapped:
 class TestBudgetBriefingText:
     """The budget section must be honest about capping and push spend-down."""
 
-    def _output(self, scope_output="scope", budget=80, capped=False):
+    def _output(self, tmp_path, scope_output="scope", budget=80, capped=False):
         return build_output(
             agent_name="security-reviewer",
             plugin_root="/fake",
@@ -434,23 +434,23 @@ class TestBudgetBriefingText:
             domain_rules=None,
             scope_output=scope_output,
             exploration_scope=None,
-            output_dir="/tmp/test",
+            output_dir=str(tmp_path),
             pr_number="1",
             reviewer_name="security",
             review_budget=budget,
             budget_capped=capped,
         )
 
-    def test_uncapped_budget_claims_calibration(self):
-        output = self._output(budget=40, capped=False)
+    def test_uncapped_budget_claims_calibration(self, tmp_path):
+        output = self._output(tmp_path, budget=40, capped=False)
         assert "Calibrated to YOUR scope." in output
 
-    def test_capped_budget_does_not_claim_calibration(self):
-        output = self._output(budget=80, capped=True)
+    def test_capped_budget_does_not_claim_calibration(self, tmp_path):
+        output = self._output(tmp_path, budget=80, capped=True)
         assert "Calibrated to YOUR scope." not in output
         assert "effort floor" in output
 
-    def test_not_diffed_scope_gets_spend_down_instruction(self):
+    def test_not_diffed_scope_gets_spend_down_instruction(self, tmp_path):
         scope = (
             "=== FILES ===\n"
             "src/a.ts  (+10 -2)\n"
@@ -458,12 +458,12 @@ class TestBudgetBriefingText:
             "=== NOT DIFFED (budget exceeded, 258 files) ===\n"
             "  src/big.ts  (+862 -0)\n"
         )
-        output = self._output(scope_output=scope, budget=80, capped=True)
+        output = self._output(tmp_path, scope_output=scope, budget=80, capped=True)
         assert "258 in-scope files" in output
         assert "coverage gap, not efficiency" in output
 
-    def test_fully_diffed_scope_has_no_spend_down_instruction(self):
-        output = self._output(scope_output="=== FILES ===\nsrc/a.ts  (+10 -2)\n",
+    def test_fully_diffed_scope_has_no_spend_down_instruction(self, tmp_path):
+        output = self._output(tmp_path, scope_output="=== FILES ===\nsrc/a.ts  (+10 -2)\n",
                               budget=40, capped=False)
         assert "coverage gap, not efficiency" not in output
 
