@@ -357,13 +357,14 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
         {},
     )
     pipeline = start.get("pipeline") if isinstance(start.get("pipeline"), dict) else {}
+    # Step events only — the manifest contract this adapter reproduces
+    # (telemetry materializes only event=="step" into steps), and the
+    # transcript stage-timeline validator rejects any other entry. A
+    # pipeline_end record here made EVERY completed legacy run's timeline
+    # invalid, collapsing its usage attribution to unattributed. The end
+    # record's timestamp/summary flow through `end` directly.
     steps = _sanitize_steps(
-        [
-            event
-            for event in events
-            if isinstance(event.get("event"), str)
-            and event.get("event") in {"step", "pipeline_end"}
-        ]
+        [event for event in events if event.get("event") == "step"]
     )
     started = [
         _sanitize_agent_event(event, completed=False)

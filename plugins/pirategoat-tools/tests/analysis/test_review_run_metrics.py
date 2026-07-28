@@ -1248,6 +1248,25 @@ class TestLoadRuns:
         assert "PRIVATE TOOL BODY" not in serialized
         assert "snapshot" not in serialized
 
+    def test_legacy_steps_carry_only_step_events(self, tmp_path):
+        """The manifest contract's steps are step events only — a
+        pipeline_end entry fails the transcript stage-timeline validator,
+        flagging EVERY completed legacy run and collapsing its usage
+        attribution to unattributed."""
+        events = _legacy_events()
+        events.insert(1, {
+            "event": "step",
+            "step": 1,
+            "phase": "SETUP",
+            "title": "Init",
+            "timestamp": "2026-07-18T10:00:05+00:00",
+        })
+        _write_jsonl(tmp_path / "legacy.jsonl", events)
+
+        [run] = load_runs(tmp_path)
+
+        assert [entry.get("event") for entry in run["steps"]] == ["step"]
+
     def test_synthesizes_stable_opaque_legacy_id_without_path_leak(self, tmp_path):
         first = tmp_path / "personal-name-one.jsonl"
         second = tmp_path / "personal-name-two.jsonl"
