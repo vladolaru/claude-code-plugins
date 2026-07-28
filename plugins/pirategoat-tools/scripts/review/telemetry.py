@@ -10,6 +10,7 @@ Zero external dependencies (stdlib only).
 """
 
 import glob as glob_mod
+import hashlib
 import json
 import os
 import posixpath
@@ -326,6 +327,35 @@ class ReviewTelemetry:
         normalized = os.path.normpath(path).lstrip(os.sep)
         return cls._UNSAFE_RE.sub("-", normalized).strip("-")
 
+    # Longest sibling filename built from the prefix is the manifest:
+    # {prefix}-run{N}--{timestamp}-{nonce}.manifest.json — 74 bytes of fixed
+    # overhead at 6 run-number digits. Cap the prefix so every derived name
+    # stays under the common 255-byte filename component limit; an oversized
+    # prefix (deep worktree, long branch name) would otherwise make
+    # allocation raise ENAMETOOLONG, which the fail-open pipeline swallows
+    # into a run with no telemetry at all.
+    _PREFIX_MAX_BYTES = 180
+
+    @classmethod
+    def _cap_prefix(cls, prefix: str) -> str:
+        """Deterministically shorten oversized prefixes, keeping distinctness.
+
+        Same input → same output (so run numbering keeps grouping a run's
+        retries), and distinct long prefixes stay distinct via a digest of
+        the full original. Byte-aware: the legacy fallback prefix is not
+        ASCII-sanitized.
+        """
+        raw = prefix.encode("utf-8")
+        if len(raw) <= cls._PREFIX_MAX_BYTES:
+            return prefix
+        digest = hashlib.sha256(raw).hexdigest()[:8]
+        head = (
+            raw[: cls._PREFIX_MAX_BYTES - 9]
+            .decode("utf-8", "ignore")
+            .rstrip("-")
+        )
+        return f"{head}-{digest}"
+
     def _build_filename_prefix(self, mode: str, repo_path: str,
                                identifier: str) -> str:
         """Build the structured prefix for a telemetry log filename.
@@ -338,10 +368,12 @@ class ReviewTelemetry:
         if mode and repo_path:
             repo_slug = self.path_to_slug(repo_path)
             id_slug = self._UNSAFE_RE.sub("-", identifier).strip("-") if identifier else "branch"
-            return f"{mode}-{repo_slug}-{id_slug}"
+            return self._cap_prefix(f"{mode}-{repo_slug}-{id_slug}")
 
         # Fallback: use output_dir basename (legacy callers)
-        return os.path.basename(os.path.normpath(self.output_dir)) or "review"
+        return self._cap_prefix(
+            os.path.basename(os.path.normpath(self.output_dir)) or "review"
+        )
 
     def _next_run_number(self, prefix: str) -> int:
         """Count existing log files with the same prefix and return the next run number."""

@@ -181,6 +181,53 @@ class TestPathToSlug:
 # ── Structured filename ────────────────────────────────────────────
 
 
+class TestPrefixCapping:
+    """Oversized prefixes are capped so every derived filename fits the
+    common 255-byte component limit — an ENAMETOOLONG at allocation would
+    be swallowed by the fail-open pipeline into a run with no telemetry."""
+
+    def test_long_branch_name_still_allocates_telemetry(self, mod, tmp_path):
+        out = tmp_path / "output"
+        out.mkdir()
+        t = mod.ReviewTelemetry(str(out), log_dir=str(tmp_path / "logs"))
+        path = t.start(
+            mode="full",
+            repo_path="/ci/worktrees/" + "deep/" * 30 + "repo",
+            identifier="feature/" + "x" * 300,
+        )
+        assert os.path.isfile(path)
+        assert len(os.path.basename(path).encode("utf-8")) <= 255
+        manifest_path = t.manifest_path
+        assert os.path.isfile(manifest_path)
+        assert len(os.path.basename(manifest_path).encode("utf-8")) <= 255
+
+    def test_capping_is_deterministic_and_groups_run_numbers(
+        self, mod, tmp_path
+    ):
+        out = tmp_path / "output"
+        out.mkdir()
+        long_prefix = "full-" + "a" * 300
+        capped = mod.ReviewTelemetry._cap_prefix(long_prefix)
+        assert capped == mod.ReviewTelemetry._cap_prefix(long_prefix)
+        assert len(capped.encode("utf-8")) <= mod.ReviewTelemetry._PREFIX_MAX_BYTES
+
+    def test_distinct_long_prefixes_stay_distinct(self, mod):
+        base = "full-" + "a" * 300
+        assert mod.ReviewTelemetry._cap_prefix(base + "-one") != (
+            mod.ReviewTelemetry._cap_prefix(base + "-two")
+        )
+
+    def test_short_prefixes_are_untouched(self, mod):
+        assert mod.ReviewTelemetry._cap_prefix("pr-repo-42") == "pr-repo-42"
+
+    def test_capping_is_byte_safe_for_non_ascii_fallback(self, mod):
+        """The legacy fallback prefix is not ASCII-sanitized — truncation
+        must never split a multibyte character."""
+        capped = mod.ReviewTelemetry._cap_prefix("plăți-" + "ă" * 300)
+        assert len(capped.encode("utf-8")) <= mod.ReviewTelemetry._PREFIX_MAX_BYTES
+        capped.encode("utf-8").decode("utf-8")  # round-trips cleanly
+
+
 class TestStructuredFilename:
     """Telemetry log filenames use structured <mode>-<repo_slug>-<identifier>-run<N> format."""
 
