@@ -515,6 +515,35 @@ class TestCorrelateRunAgents:
             "legacy/subagents/agent-legacy-7.jsonl"
         )
 
+    def test_legacy_agent_id_anchors_to_the_final_trailer(self, tmp_path):
+        """Reviewer prose preceding the harness trailer may mention
+        "agentId: <anything>" — a first-match scan would retain the prose
+        token in the privacy-reduced report and correlate the wrong
+        transcript. Only the final line-anchored trailer counts."""
+        session = tmp_path / "legacy-prose.jsonl"
+        output_dir = tmp_path / "pr-review-2"
+        _write_jsonl(
+            session,
+            [
+                _assistant(_call("t1", "Task", prompt=_agent_prompt(output_dir))),
+                _result(
+                    "t1",
+                    "Finding: the log line shows agentId: merchant-123 inline.\n"
+                    "agentId: prose-456 appeared at a line start too.\n"
+                    "Done.\n"
+                    "agentId: agent-real (use SendMessage with to: "
+                    "'agent-real' to continue this agent)",
+                ),
+            ],
+        )
+
+        result = correlate_run_agents(session, output_dir, {"security-reviewer"})
+
+        assert result[0]["agent_id"] == "agent-real"
+        serialized = json.dumps(result)
+        assert "merchant-123" not in serialized
+        assert "prose-456" not in serialized
+
     def test_supports_tool_result_structured_data_embedded_on_block(self, tmp_path):
         session = tmp_path / "embedded.jsonl"
         output_dir = tmp_path / "pr-review-embedded"
@@ -1096,6 +1125,36 @@ class TestAnalyzeSubagent:
             "recovered": False,
         }
         assert command not in " ".join(_flatten_strings(result))
+
+    def test_recovery_matches_relative_and_absolute_forms_of_one_file(
+        self, tmp_path
+    ):
+        """A failed operation on a repo-relative path retried with the
+        equivalent absolute path is the SAME file operation — raw-string
+        hashing would report the failure as unrecovered."""
+        transcript = _write_jsonl(
+            tmp_path / "path-recovery.jsonl",
+            [
+                _assistant(_call("fail", "Read", file_path="src/a.py")),
+                _result(
+                    "fail",
+                    "<tool_use_error>File does not exist.</tool_use_error>",
+                    is_error=True,
+                ),
+                _assistant(
+                    _call(
+                        "retry", "Read",
+                        file_path=str(tmp_path / "src" / "a.py"),
+                    )
+                ),
+                _result("retry"),
+            ],
+        )
+
+        result = analyze_subagent(transcript, tmp_path, [])
+
+        [failure] = result["tool_failures"]
+        assert failure["recovered"] is True
 
     def test_structured_bash_result_controls_failure_and_corrected_body_recovery(
         self, tmp_path

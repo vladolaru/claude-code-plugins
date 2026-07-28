@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
 from collections import Counter
@@ -21,9 +22,15 @@ _USAGE_FIELDS = (
 )
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _SAFE_MODEL = re.compile(r"^claude-[a-z0-9][a-z0-9._-]{0,119}$")
+# The harness appends its trailer as a LINE-ANCHORED
+# "agentId: <id> (use SendMessage ...)" near the end of the result text
+# (verified against real transcripts). Anchor to line starts and take the
+# LAST match: reviewer prose preceding the trailer may mention
+# "agentId: <anything>", and a first-match scan would retain that prose
+# token in the privacy-reduced report and correlate the wrong transcript.
 _LEGACY_AGENT_ID = re.compile(
-    r"\bagentId\s*:\s*((?:agent-)?[A-Za-z0-9][A-Za-z0-9._:-]*)",
-    re.IGNORECASE,
+    r"^agentId\s*:\s*((?:agent-)?[A-Za-z0-9][A-Za-z0-9._:-]*)",
+    re.IGNORECASE | re.MULTILINE,
 )
 _FAILURE_SIGNATURES = (
     ("file has not been read yet", "write_requires_read"),
@@ -973,10 +980,10 @@ def _correlate_run_agent_entries(
         structured_dict = structured if isinstance(structured, dict) else {}
         agent_id = _normalized_agent_id(structured_dict.get("agentId"))
         if agent_id is None:
-            legacy_match = _LEGACY_AGENT_ID.search(_result_text(result))
+            legacy_matches = _LEGACY_AGENT_ID.findall(_result_text(result))
             agent_id = (
-                _normalized_agent_id(legacy_match.group(1))
-                if legacy_match
+                _normalized_agent_id(legacy_matches[-1])
+                if legacy_matches
                 else None
             )
         if agent_id is None:
@@ -1141,15 +1148,37 @@ def _is_bootstrap_builder_heredoc(command: object) -> bool:
     return len(set(names)) == 4 and set(names) == set(_BOOTSTRAP_BUILDER_ENV)
 
 
-def _operation(call: dict[str, Any]) -> tuple[str, str]:
+def _file_target(value: object, repo_root: str | Path) -> str:
+    """Hash a file path in canonical repo-relative form when possible.
+
+    A failed operation on a repo-relative path and its successful retry on
+    the equivalent absolute path (or "./"-prefixed form) must hash to the
+    same opaque target, or the recovery scan reports the failure as
+    unrecovered.
+    """
+    if isinstance(value, str) and value and "\x00" not in value:
+        candidate = os.path.normpath(value)
+        root = os.path.normpath(str(repo_root)) if str(repo_root) else ""
+        if root and os.path.isabs(candidate):
+            if candidate == root:
+                candidate = "."
+            elif candidate.startswith(root + os.sep):
+                candidate = os.path.relpath(candidate, root)
+        return _opaque_target(candidate)
+    return _opaque_target(value)
+
+
+def _operation(
+    call: dict[str, Any], repo_root: str | Path = ""
+) -> tuple[str, str]:
     name = call["name"]
     tool_input = call["input"]
     if name == "Write":
-        return "write", _opaque_target(tool_input.get("file_path"))
+        return "write", _file_target(tool_input.get("file_path"), repo_root)
     if name == "Read":
-        return "read", _opaque_target(tool_input.get("file_path"))
+        return "read", _file_target(tool_input.get("file_path"), repo_root)
     if name == "Edit":
-        return "edit", _opaque_target(tool_input.get("file_path"))
+        return "edit", _file_target(tool_input.get("file_path"), repo_root)
     if name == "Bash":
         command = tool_input.get("command")
         return (
@@ -1351,7 +1380,7 @@ def _analyze_entries(
             if call["name"] not in _DISPATCH_TOOL_NAMES:
                 unresolved_calls += 1
             continue
-        operation, target = _operation(call)
+        operation, target = _operation(call, repo_root)
         result = result_by_id.get(call["id"])
         state, category, detector = _result_state(
             result, call["name"], operation
