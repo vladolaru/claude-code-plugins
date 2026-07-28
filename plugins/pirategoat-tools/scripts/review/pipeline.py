@@ -354,9 +354,12 @@ def read_review_context(output_dir):
     path = os.path.join(output_dir, "review-context.json")
     try:
         with open(path) as f:
-            return json.load(f)
+            context = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
+    # A valid-JSON array/scalar would crash every context.get() consumer —
+    # degrade to the same empty fallback as malformed JSON.
+    return context if isinstance(context, dict) else {}
 
 
 def resolve_params(output_dir, cli_mode=None, cli_pr_number=None,

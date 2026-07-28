@@ -204,6 +204,17 @@ class TestStateManagement:
         config = mod.read_config(str(tmp_path))
         assert config.get("mode") is None
 
+    @pytest.mark.parametrize(
+        "payload", ['["a"]', '"scalar"', "7"], ids=["array", "string", "int"]
+    )
+    def test_read_review_context_rejects_non_dict_json(
+        self, mod, tmp_path, payload
+    ):
+        """Valid JSON that is not an object would crash every
+        context.get() consumer — degrade to the empty-dict fallback."""
+        (tmp_path / "review-context.json").write_text(payload)
+        assert mod.read_review_context(str(tmp_path)) == {}
+
     def test_state_persists_workspace_params(self, mod, tmp_path):
         state = mod.read_state(str(tmp_path))
         state["workspace"] = {"original_branch": "main", "stash_ref": "abc123"}
