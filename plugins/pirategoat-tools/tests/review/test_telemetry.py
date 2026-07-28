@@ -1439,6 +1439,33 @@ class TestRunManifest:
         assert added["model_tier"] == "opus"
         assert dispatch["agents"]["code-reviewer"]["change"] == "unchanged"
 
+    def test_repo_reviewer_model_override_reaches_dispatch_telemetry(
+        self, telemetry, output_dir
+    ):
+        """Adapter entries carry their explicit override under "model" (the
+        dispatch contract step 6 honors) and have no registry fallback —
+        without reading it, their requested tier is omitted."""
+        entry = {
+            "name": "repo-renewals-reviewer",
+            "domain": None,
+            "status": "DISPATCH",
+            "reason": "repo-declared reviewer applies",
+            "adapter": "repo-reviewer-adapter",
+            "model": "opus",
+        }
+        (output_dir / "dispatch-plan.initial.json").write_text(
+            json.dumps({"agents": [entry]})
+        )
+        (output_dir / "dispatch-plan.json").write_text(
+            json.dumps({"agents": [entry]})
+        )
+
+        telemetry.start(run_id="run-1")
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        dispatch = _read_manifest(telemetry)["dispatch"]
+        assert dispatch["agents"]["repo-renewals-reviewer"]["model_tier"] == "opus"
+
     @pytest.mark.parametrize("plan_name", ["initial", "final"])
     @pytest.mark.parametrize(
         "invalid_status",

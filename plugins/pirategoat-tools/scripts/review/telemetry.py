@@ -953,6 +953,13 @@ class ReviewTelemetry:
                 "model_tier": (
                     self._safe_dispatch_string(initial.get("model_tier"))
                     or self._safe_dispatch_string(final.get("model_tier"))
+                    # Repo-contributed reviewer entries carry their explicit
+                    # model override under "model" (the adapter dispatch
+                    # contract step 6 honors) and have no registry entry to
+                    # fall back to — without this their requested tier is
+                    # omitted from dispatch telemetry.
+                    or self._safe_dispatch_string(initial.get("model"))
+                    or self._safe_dispatch_string(final.get("model"))
                     or self._safe_dispatch_string(registry_agent.get("model_tier"))
                 ),
                 "adjustment_reason": self._safe_dispatch_string(
