@@ -569,6 +569,46 @@ class TestBashBuilderRecognition:
         assert positional_issue["file"] == "src/g.php"
         assert positional_issue["line"] == 7
 
+    def test_positional_tuple_mirrors_the_full_add_issue_signature(self):
+        """Drift guard: the tuple must cover EVERY positional parameter of
+        the real add_issue — a name missing from it is silently dropped
+        from fully positional calls (a dropped severity_floor records the
+        pre-floor severity)."""
+        import inspect
+
+        spec = importlib.util.spec_from_file_location(
+            "output_for_positional_contract",
+            PLUGIN_ROOT / "scripts" / "review" / "agent" / "output.py",
+        )
+        output_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(output_mod)
+
+        parameters = list(
+            inspect.signature(
+                output_mod.ReviewOutputBuilder.add_issue
+            ).parameters.values()
+        )[1:]  # drop self
+        positional = tuple(
+            parameter.name
+            for parameter in parameters
+            if parameter.kind == parameter.POSITIONAL_OR_KEYWORD
+        )
+        assert positional == _mod._BUILDER_ISSUE_POSITIONAL
+
+    def test_fully_positional_severity_floor_is_applied(self):
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue("low", "T", "src/f.php", "d", "r", "cat", 3,\n'
+            '    0.9, None, None, "high")\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        [issue] = json.loads(record["content"])["issues"]
+        assert issue["severity"] == "high"
+        assert issue["confidence"] == 0.9
+
     def test_fully_positional_call_reconstructs_category_and_line(self):
         """add_issue accepts category and line positionally after
         recommendation — dropping them would restore the finding without

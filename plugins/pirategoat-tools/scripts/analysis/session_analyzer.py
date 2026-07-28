@@ -60,8 +60,10 @@ _BUILDER_ENV_NAMES = {
     "PIRATEGOAT_REVIEWER_NAME",
     "PIRATEGOAT_PR_ID",
 }
-# Must mirror ReviewOutputBuilder.add_issue()'s positional order exactly —
-# a parameter missing here is silently dropped from fully positional calls.
+# Must mirror ReviewOutputBuilder.add_issue()'s FULL positional order — a
+# parameter missing here is silently dropped from fully positional calls
+# (a dropped severity_floor records the pre-floor severity). A contract
+# test derives the expected tuple from the real signature.
 _BUILDER_ISSUE_POSITIONAL = (
     "severity",
     "title",
@@ -70,6 +72,10 @@ _BUILDER_ISSUE_POSITIONAL = (
     "recommendation",
     "category",
     "line",
+    "confidence",
+    "behavior_evidence",
+    "source_cited",
+    "severity_floor",
 )
 # Mirrors ReviewOutputBuilder.add_issue severity normalization: severities
 # are lowercased and a severity_floor promotes lower severities to it. The
