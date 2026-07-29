@@ -359,15 +359,24 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
     # One legacy file holds one run by construction; a second pipeline_start
     # means concatenation or damage. Combining segments would assign one run
     # ID the outcomes and lifecycle of OTHER runs — corrupt even under
-    # exact --run-id filtering — so only the first segment's events are
-    # reduced and the foreign tail is ignored.
-    boundary = starts[1] if len(starts) > 1 else len(events)
-    events = events[starts[0]:boundary]
+    # exact --run-id filtering — so the first segment ends at whichever
+    # comes first: the next pipeline_start or the run's own pipeline_end.
+    # Stopping at the terminal event matters because the tolerant reader
+    # drops malformed lines: a damaged second pipeline_start would erase
+    # the start boundary and hand the first run the tail's outcomes.
+    first = starts[0]
+    boundary = len(events)
+    for index in range(first + 1, len(events)):
+        kind = events[index].get("event")
+        if kind == "pipeline_start":
+            boundary = index
+            break
+        if kind == "pipeline_end":
+            boundary = index + 1
+            break
+    events = events[first:boundary]
     start = events[0]
-    end = next(
-        (event for event in reversed(events) if event.get("event") == "pipeline_end"),
-        {},
-    )
+    end = events[-1] if events[-1].get("event") == "pipeline_end" else {}
     pipeline = start.get("pipeline") if isinstance(start.get("pipeline"), dict) else {}
     # Step events only — the manifest contract this adapter reproduces
     # (telemetry materializes only event=="step" into steps), and the

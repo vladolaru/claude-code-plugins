@@ -1270,6 +1270,32 @@ class TestLoadRuns:
         assert run["run"]["ended_at"] == "2026-07-18T10:01:00+00:00"
         assert run["outcome"]["summary"].get("total_agent_issues") == 2
 
+    def test_damaged_second_start_cannot_hand_the_first_run_the_tails_outcome(
+        self, tmp_path
+    ):
+        """The tolerant reader drops a malformed second pipeline_start, so
+        the segment must also stop at the run's own pipeline_end — else the
+        tail's summary, outcomes, and wall time attribute to the first run
+        even under exact --run-id filtering."""
+        first = _legacy_events()
+        second = _legacy_events(run_id="legacy-2")
+        second[1]["agent"] = "security-reviewer"
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        second[2]["timestamp"] = "2026-07-18T11:00:00+00:00"
+        lines = [json.dumps(event).encode("utf-8") for event in first]
+        lines.append(b'{"event": "pipeline_start", "x": "\xff"}')
+        lines.extend(json.dumps(event).encode("utf-8") for event in second[1:])
+        (tmp_path / "legacy.jsonl").write_bytes(b"\n".join(lines) + b"\n")
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-1"
+        assert [
+            event["agent"] for event in run["agents"]["started"]
+        ] == ["code-reviewer"]
+        assert run["run"]["ended_at"] == "2026-07-18T10:01:00+00:00"
+        assert run["outcome"]["summary"].get("total_agent_issues") == 2
+
     def test_legacy_steps_carry_only_step_events(self, tmp_path):
         """The manifest contract's steps are step events only — a
         pipeline_end entry fails the transcript stage-timeline validator,
