@@ -920,6 +920,41 @@ class TestBashBuilderRecognition:
         assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
 
 
+class TestStraightLineReconstruction:
+    """Reconstruction models execution by source position, which only holds
+    for the mandated straight-line heredoc — an add_issue() under
+    non-executed control flow would be collected as persisted, fabricating
+    findings. Non-straight-line bodies fail closed."""
+
+    @pytest.mark.parametrize(
+        "guard",
+        [
+            "if False:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "for _ in []:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "while False:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "def helper():\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "False and builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "try:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)\nexcept Exception:\n    pass",
+            "[builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1) for _ in []]",
+        ],
+        ids=[
+            "if-false", "empty-loop", "while-false", "function-def",
+            "short-circuit", "try-block", "comprehension",
+        ],
+    )
+    def test_control_flow_fails_reconstruction_closed(self, guard):
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue("high", "Real", "src/f.php", "d", "r", line=3)\n'
+            f"{guard}\n"
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        assert record is None
+
+
 class TestTextReportFindingCounts:
     """A save that parses as a review payload carries its exact issue list.
     The keyword heuristic estimated JSON findings by counting '"id"' — but

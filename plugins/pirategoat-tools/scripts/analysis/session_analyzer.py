@@ -121,6 +121,32 @@ def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
     return env
 
 
+# AST constructs that make source position diverge from execution order:
+# branches, loops, exception handlers, context managers, pattern matching,
+# function/class definitions (deferred bodies), lambdas, comprehensions,
+# and short-circuit/conditional expressions.
+_NON_STRAIGHT_LINE_NODES = (
+    ast.If,
+    ast.IfExp,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.Try,
+    ast.With,
+    ast.AsyncWith,
+    ast.Match,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Lambda,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.BoolOp,
+) + ((ast.TryStar,) if hasattr(ast, "TryStar") else ())
+
+
 def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     """Synthesize the review record a canonical builder heredoc would save.
 
@@ -142,6 +168,18 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     try:
         tree = ast.parse("\n".join(lines[1:end]))
     except SyntaxError:
+        return None
+
+    # Reconstruction models execution by SOURCE POSITION, which is only
+    # valid for the mandated straight-line heredoc. Any control flow or
+    # deferred/conditional evaluation (an add_issue() under `if False:`,
+    # inside a function body, behind `and`/`or` short-circuiting, in a
+    # comprehension) would let ast.walk() collect calls that never ran —
+    # fabricating findings. Fail closed: a non-straight-line body is not
+    # the canonical heredoc and reconstructs nothing.
+    if any(
+        isinstance(node, _NON_STRAIGHT_LINE_NODES) for node in ast.walk(tree)
+    ):
         return None
 
     # The builder persists its accumulated state at save(): only issues
