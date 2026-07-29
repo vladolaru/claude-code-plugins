@@ -607,10 +607,23 @@ def _pipeline_metric_availability(
     # the append-only telemetry keeps both events. Only the final step-10
     # event's decision is authoritative — any() would resurrect the
     # superseded skip and report "disabled" over a real critic verdict.
+    # Participation requires the producer step identity for THIS run
+    # (event="step" + matching run_id): a malformed {"step": 10} fragment
+    # or a foreign run's step-10 event must neither set nor RESET the
+    # decision — resetting would turn a deliberate skip into missing
+    # critic evidence.
+    run_id = manifest.get("run", {}).get("id") if isinstance(
+        manifest.get("run"), dict
+    ) else None
     critic_skipped = False
     if isinstance(steps, list):
         for step in steps:
-            if not isinstance(step, dict) or step.get("step") != 10:
+            if (
+                not isinstance(step, dict)
+                or step.get("step") != 10
+                or step.get("event") != "step"
+                or step.get("run_id") != run_id
+            ):
                 continue
             decisions = step.get("decisions")
             critic_skipped = (

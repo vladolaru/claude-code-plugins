@@ -2359,6 +2359,38 @@ class TestMeasureRun:
         assert measured["metric_availability"]["critic"] == "complete"
         assert cohort["critic"]["verdicts"] == {"STAND": 1}
 
+    @pytest.mark.parametrize(
+        "follower",
+        [
+            {"step": 10},
+            {"run_id": "run-2", "event": "step", "step": 10},
+        ],
+        ids=["malformed-fragment", "foreign-run"],
+    )
+    def test_foreign_or_malformed_step10_cannot_reset_a_deliberate_skip(
+        self, tmp_path, follower
+    ):
+        """Latest-wins selection must only consider producer-conformant
+        step events belonging to THIS run — a malformed {"step": 10}
+        fragment or another run's step-10 event after a valid skip would
+        reset it, turning a deliberate skip into missing critic evidence."""
+        manifest = _manifest()
+        manifest["steps"] = [
+            {
+                "run_id": "run-1",
+                "event": "step",
+                "step": 10,
+                "title": "Decision Critic",
+                "decisions": {"critic_skipped": True},
+            },
+            follower,
+        ]
+        manifest["outcome"]["critic_verdict"] = "unavailable"
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["metric_availability"]["critic"] == "disabled"
+
     def test_step_10_rerun_supersedes_stale_critic_skip(self, tmp_path):
         """The producer's skip decision is latest-wins (a rerun clears it),
         but append-only telemetry keeps both step-10 events. The superseded
