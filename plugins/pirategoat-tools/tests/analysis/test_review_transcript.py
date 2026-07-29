@@ -2025,12 +2025,37 @@ class TestAnalyzeSubagent:
                 },
                 _current_edit_result("/safe/edit.py"),
             ),
+            (
+                "Grep",
+                {"pattern": "API Error", "path": "/safe"},
+                {
+                    "mode": "content",
+                    "filenames": ["src/a.py"],
+                    "numFiles": 1,
+                    "content": "src/a.py:1:raise RuntimeError('API Error: retry')",
+                    "numLines": 1,
+                },
+            ),
+            (
+                "Glob",
+                {"pattern": "**/*.py", "path": "/safe"},
+                {
+                    "durationMs": 3,
+                    "filenames": ["src/API Error handling.py"],
+                    "numFiles": 1,
+                    "truncated": False,
+                },
+            ),
         ],
-        ids=["write", "edit"],
+        ids=["write", "edit", "grep", "glob"],
     )
-    def test_write_and_edit_signatures_override_structural_success(
+    def test_validated_shapes_are_success_despite_prose_signatures(
         self, tmp_path, tool_name, tool_input, structured
     ):
+        """A validated success-shaped payload beats the prose scan: result
+        text embeds arbitrary content (matched source lines, file bodies,
+        filenames), so an error string INSIDE that content must not turn a
+        successful call into a recorded tool failure."""
         transcript = _write_jsonl(
             tmp_path / f"shape-signature-{tool_name}.jsonl",
             [
@@ -2045,9 +2070,8 @@ class TestAnalyzeSubagent:
         )
 
         result = analyze_subagent(transcript, tmp_path, [])
-        assert result["tool_failures"][0]["category"] == "api_error"
-        if tool_name == "Write":
-            assert result["artifact_writes"]["builder_failures"] == 0
+        assert result["tool_failures"] == []
+        assert result["unresolved_calls"] == 0
 
     def test_nonterminal_status_prevents_tool_shape_success(self, tmp_path):
         target = str(tmp_path / "safe.py")

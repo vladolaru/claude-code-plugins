@@ -731,18 +731,18 @@ def _result_state(
         return "success", None, None
 
     nonterminal = _structured_nonterminal(structured)
-    shape_succeeded = not nonterminal and _tool_shape_succeeded(
-        structured, tool_name, operation
-    )
-    if shape_succeeded and tool_name == "Read":
+    if not nonterminal and _tool_shape_succeeded(structured, tool_name, operation):
+        # A validated success-shaped payload is authoritative. Result text
+        # embeds arbitrary content for every one of these tools — Read file
+        # bodies, Grep matched lines, Glob filenames, Write/Edit original
+        # file text — so signature-scanning it would flip successful calls
+        # into failures whenever the CONTENT mentions an error string.
         return "success", None, None
 
     lowered = _result_text(result).lower()
     for signature, category in _FAILURE_SIGNATURES:
         if signature in lowered:
             return "failure", category, "signature"
-    if shape_succeeded:
-        return "success", None, None
     if nonterminal:
         return "unknown", None, None
     if structured is not None:
