@@ -192,8 +192,19 @@ def _sanitize_steps(value: object) -> list[dict[str, Any]]:
                 args["thoughts_length"] = thoughts_length
         raw_decisions = item.get("decisions") if isinstance(item, dict) else None
         decisions: dict[str, bool] = {}
-        if isinstance(raw_decisions, dict) and isinstance(
-            raw_decisions.get("critic_skipped"), bool
+        # Decisions change what a run reports (a critic skip turns a real
+        # STAND/REVISE/ESCALATE verdict into "disabled"), so they are
+        # honored only on records carrying the producer's step identity —
+        # every producer step event stamps event="step" and a run_id (both
+        # shipped together with critic_skipped itself). A bare
+        # {"step": 10, "decisions": ...} fragment in a malformed sidecar is
+        # not producer evidence.
+        if (
+            isinstance(item, dict)
+            and item.get("event") == "step"
+            and _safe_run_id(item.get("run_id")) is not None
+            and isinstance(raw_decisions, dict)
+            and isinstance(raw_decisions.get("critic_skipped"), bool)
         ):
             decisions["critic_skipped"] = raw_decisions["critic_skipped"]
         if args:

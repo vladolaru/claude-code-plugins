@@ -2302,6 +2302,7 @@ class TestMeasureRun:
         manifest["outcome"]["summary"]["quick_mode"] = True
         manifest["steps"] = [
             {
+                "run_id": "run-1",
                 "event": "step",
                 "step": 10,
                 "title": "Decision Critic",
@@ -2323,6 +2324,41 @@ class TestMeasureRun:
             "disabled": 1,
         }
 
+    @pytest.mark.parametrize(
+        "fragment",
+        [
+            {"step": 10, "decisions": {"critic_skipped": True}},
+            {
+                "event": "step",
+                "step": 10,
+                "decisions": {"critic_skipped": True},
+            },
+            {
+                "run_id": "run-1",
+                "step": 10,
+                "decisions": {"critic_skipped": True},
+            },
+        ],
+        ids=["no-identity", "missing-run-id", "missing-event"],
+    )
+    def test_bare_step_fragment_cannot_disable_a_real_critic_verdict(
+        self, tmp_path, fragment
+    ):
+        """A malformed sidecar step carrying a skip decision but not the
+        producer's step identity (event="step" + run_id, both shipped
+        together with critic_skipped itself) is not producer evidence —
+        honoring it would turn a real STAND/REVISE/ESCALATE verdict into
+        "disabled"."""
+        manifest = _manifest()
+        manifest["steps"] = [fragment]
+        manifest["outcome"]["critic_verdict"] = "STAND"
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+        cohort = aggregate_cohort([measured])
+
+        assert measured["metric_availability"]["critic"] == "complete"
+        assert cohort["critic"]["verdicts"] == {"STAND": 1}
+
     def test_step_10_rerun_supersedes_stale_critic_skip(self, tmp_path):
         """The producer's skip decision is latest-wins (a rerun clears it),
         but append-only telemetry keeps both step-10 events. The superseded
@@ -2330,12 +2366,14 @@ class TestMeasureRun:
         manifest = _manifest()
         manifest["steps"] = [
             {
+                "run_id": "run-1",
                 "event": "step",
                 "step": 10,
                 "title": "Decision Critic",
                 "decisions": {"critic_skipped": True},
             },
             {
+                "run_id": "run-1",
                 "event": "step",
                 "step": 10,
                 "title": "Decision Critic",
@@ -2356,8 +2394,9 @@ class TestMeasureRun:
         skip decision, it is authoritative regardless of earlier events."""
         manifest = _manifest()
         manifest["steps"] = [
-            {"event": "step", "step": 10, "title": "Decision Critic"},
+            {"run_id": "run-1", "event": "step", "step": 10, "title": "Decision Critic"},
             {
+                "run_id": "run-1",
                 "event": "step",
                 "step": 10,
                 "title": "Decision Critic",
