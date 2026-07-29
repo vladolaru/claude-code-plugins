@@ -2522,6 +2522,103 @@ class TestEnrichRunTranscript:
 
         assert result["usage"]["output_tokens"] == 2 + 400
 
+    @pytest.mark.parametrize(
+        "synthetic_record",
+        [
+            {
+                "type": "user",
+                "isMeta": True,
+                "message": {
+                    "role": "user",
+                    "content": "<system-reminder>\nnote\n</system-reminder>",
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<session_digest>compacted context</session_digest>",
+                },
+            },
+        ],
+        ids=["is-meta-reminder", "session-digest"],
+    )
+    def test_synthetic_user_record_does_not_close_the_run_window(
+        self, tmp_path, synthetic_record
+    ):
+        """isMeta-flagged harness injections and legacy compaction digests
+        are not human turns — one arriving between ended_at and the final
+        presentation response must not close the window early."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(_assistant(usage=_usage(1, 2)), 50),
+            _at(synthetic_record, 62),
+            _at(_assistant(usage=_usage(3, 400)), 64),
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "new task"},
+                },
+                70,
+            ),
+            _at(_assistant(usage=_usage(100, 100)), 71),
+        ]
+        _write_jsonl(sessions / "synthetic-close.jsonl", entries)
+        manifest = _manifest("synthetic-close", tmp_path, output_dir, started=[])
+        manifest["run"]["ended_at"] = (
+            _TEST_TRANSCRIPT_START + timedelta(seconds=60)
+        ).isoformat()
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2 + 400
+
+    @pytest.mark.parametrize(
+        "synthetic_record",
+        [
+            {
+                "type": "user",
+                "isMeta": True,
+                "message": {
+                    "role": "user",
+                    "content": "<system-reminder>\nnote\n</system-reminder>",
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "<session_digest>compacted context</session_digest>",
+                },
+            },
+        ],
+        ids=["is-meta-reminder", "session-digest"],
+    )
+    def test_synthetic_user_record_does_not_reset_the_pending_turn(
+        self, tmp_path, synthetic_record
+    ):
+        """A synthetic record between the triggering prompt and started_at
+        must not start a fresh turn buffer — that would discard the opening
+        turn's usage and tool calls from the run's evidence."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(
+                {"type": "user", "message": {"role": "user", "content": "go"}},
+                -5,
+            ),
+            _at(_assistant(usage=_usage(1, 2)), -3),
+            _at(synthetic_record, -2),
+            _at(_assistant(usage=_usage(2, 3)), 0),
+        ]
+        _write_jsonl(sessions / "synthetic-open.jsonl", entries)
+        manifest = _manifest("synthetic-open", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2 + 3
+
     def test_superseded_turn_time_gap_does_not_degrade_the_run(
         self, tmp_path
     ):

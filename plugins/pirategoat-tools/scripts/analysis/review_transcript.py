@@ -253,15 +253,23 @@ def _bounded_jsonl_entries(
     return entries, parse_gap, time_gap
 
 
+# User-role text records the harness synthesizes without an isMeta flag:
+# <task-notification> when a background agent completes, <session_digest>
+# when legacy compaction folds prior context into the log.
+_SYNTHETIC_TEXT_PREFIXES = ("<task-notification>", "<session_digest")
+
+
 def _is_human_prompt(value: dict[str, Any]) -> bool:
     """Return whether an entry is a genuine human prompt.
 
-    User-role entries during an assistant turn carry tool_result blocks, and
-    the harness injects synthetic <task-notification> text records when a
-    background agent completes — neither is a human turn, so neither may
-    open or close a run's transcript window.
+    User-role entries during an assistant turn carry tool_result blocks,
+    harness-injected records (skill content, command caveats, system
+    reminders, hook feedback) carry ``isMeta: true``, and task
+    notifications and legacy session digests are recognizable only by
+    their leading text — none is a human turn, so none may open or close
+    a run's transcript window.
     """
-    if value.get("type") != "user":
+    if value.get("type") != "user" or value.get("isMeta") is True:
         return False
     message = value.get("message")
     content = message.get("content") if isinstance(message, dict) else None
@@ -284,7 +292,7 @@ def _is_human_prompt(value: dict[str, Any]) -> bool:
         texts
         and all(
             isinstance(text, str)
-            and text.lstrip().startswith("<task-notification>")
+            and text.lstrip().startswith(_SYNTHETIC_TEXT_PREFIXES)
             for text in texts
         )
     )
