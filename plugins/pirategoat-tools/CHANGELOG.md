@@ -5,6 +5,25 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.111.1] - 2026-07-29
+
+Closes an API contract review blind spot where a filter invocation could remain
+unchanged while the caller stopped preserving established processing of
+callback return values.
+
+### Fixed
+
+- **Return-side hook contracts.** api-contract-reviewer now compares
+  caller-side handling of filter return values before and after a diff,
+  including normalization, coercion, validation, and other observable
+  processing. Established runtime behavior remains contractual even when a
+  hook docblock omits it, and internal-refactoring dismissal now requires
+  evidence that the observable result is unchanged.
+- **Deterministic regression coverage.** A focused prompt-contract test
+  protects the returned-value comparison, concrete removed-normalization
+  example, undocumented established behavior rule, and evidence-backed
+  dismissal gate.
+
 ## [1.111.0] - 2026-07-29
 
 Adds first-class Codex installation and execution while preserving the

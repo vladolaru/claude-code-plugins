@@ -439,6 +439,39 @@ class TestNotApplicableCompletionContract:
         assert "severity floor" in critic
 
 
+class TestAPIContractReviewerReturnSideHooks:
+    """Regression guard for caller-side handling of filter return values."""
+
+    @staticmethod
+    def _prompt() -> str:
+        return (PLUGIN_ROOT / "agents/api-contract-reviewer.md").read_text().lower()
+
+    def test_compares_returned_value_handling_before_and_after_diff(self):
+        prompt = self._prompt()
+
+        assert "compare the caller's handling" in prompt
+        assert "returned value before and after the diff" in prompt
+
+    def test_includes_concrete_post_filter_processing_break(self):
+        prompt = self._prompt()
+
+        assert "apply_filters() remains present" in prompt
+        assert "removed normalization" in prompt
+        assert "hook-contract-break" in prompt
+
+    def test_treats_undocumented_established_runtime_behavior_as_contract(self):
+        prompt = self._prompt()
+
+        assert "established runtime behavior" in prompt
+        assert "even when the hook docblock does not document it" in prompt
+
+    def test_requires_evidence_before_internal_refactoring_dismissal(self):
+        prompt = self._prompt()
+
+        assert "concrete evidence" in prompt
+        assert "observable result is unchanged" in prompt
+
+
 class TestDismissalDisciplineContract:
     """Dismissal/mitigation verification must apply to ALL findings.
 

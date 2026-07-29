@@ -522,7 +522,7 @@
         "migration",
         "schema"
       ],
-      "focus": "API contract stability, backwards-incompatible changes, response shape drift, hook/filter contract breaks, missing deprecation — high value when modifying existing endpoints or public interfaces; lower for purely new additions",
+      "focus": "API contract stability, backwards-incompatible changes, response shape drift, hook/filter argument and caller-side return handling, established runtime contracts, missing deprecation - high value when modifying existing endpoints or public interfaces; lower for purely new additions",
       "model_tier": "sonnet",
       "file_history": true,
       "max_history_commits": 5
