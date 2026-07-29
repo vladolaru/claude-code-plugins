@@ -1586,8 +1586,13 @@ def main():
     # deferred-but-reviewed claim downstream. Written even when empty: with
     # no deferred files, any declaration is wrong. Fail-open: without the
     # sidecar the builder falls back to form-only validation.
+    # effective_agent_name, not args.agent: the builder locates this sidecar
+    # via PIRATEGOAT_REVIEWER_NAME, which is derived from the effective
+    # (per-instance) identity — and adapter ref-mode instances must not
+    # collide on one shared template-named file.
     deferred_sidecar = os.path.join(
-        output_dir, f"{derive_reviewer_name(args.agent)}-deferred-files.json"
+        output_dir,
+        f"{derive_reviewer_name(effective_agent_name)}-deferred-files.json",
     )
     try:
         with open(deferred_sidecar, "w", encoding="utf-8") as f:
@@ -1621,8 +1626,12 @@ def main():
     if ReviewTelemetry is not None:
         try:
             _t = ReviewTelemetry(output_dir)
+            # effective_agent_name: in adapter ref-mode N instances share one
+            # registry key — logging args.agent would collide their lifecycle
+            # events under one identity (reading as retries) and key scope
+            # coverage under a name no other artifact uses.
             _t.log_agent_start(
-                agent_name=args.agent,
+                agent_name=effective_agent_name,
                 domain=config.get("domain", ""),
                 # Ref-mode instances may be dispatched at an explicit model
                 # override from the repo's reviewer declaration; the static

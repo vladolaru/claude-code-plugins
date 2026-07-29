@@ -5326,10 +5326,16 @@ class TestScopeExemptRegistrySync:
             (PLUGIN_ROOT / "scripts" / "review" / "agent_registry.json")
             .read_text(encoding="utf-8")
         )
-        domainless = {
+        # dispatch_class "special" domainless entries are excluded: they are
+        # either synthesis identities (already in the non-scope-comparable
+        # set) or dispatch templates like repo-reviewer-adapter, whose
+        # per-instance executions run real domain scope discovery and appear
+        # under instance names — scope-BEARING regular reviewers, never the
+        # template identity itself.
+        expected = {
             name
             for name, config in registry["agents"].items()
             if config.get("domain") is None
+            and config.get("dispatch_class") != "special"
         }
-        expected = domainless - _mod._NON_SCOPE_COMPARABLE_AGENTS
         assert _mod._SCOPE_EXEMPT_REVIEWERS == expected
