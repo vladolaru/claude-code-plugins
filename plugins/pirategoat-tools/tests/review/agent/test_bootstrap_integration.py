@@ -1218,6 +1218,30 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert "DECLARED DOMAIN RULE MARKER" in result.stdout
 
+    def test_advisory_rule_injects_the_channel_contract(self, tmp_path):
+        """The channel exists only as rendered prose unless the reviewer is
+        told to propagate it — an untagged advisory-rule finding counts as
+        blocking in the verdict, letting an advisory rule gate the review."""
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "adv-rule", "ADVISORY BODY", channel="advisory",
+        )])
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        assert 'add_issue(..., channel="advisory")' in result.stdout
+
+    def test_blocking_only_rules_omit_the_channel_contract(self, tmp_path):
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "blk-rule", "BLOCKING BODY", channel="blocking",
+        )])
+        result = run_bootstrap(
+            "--agent", "performance-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        assert "BLOCKING BODY" in result.stdout
+        assert "CHANNEL CONTRACT" not in result.stdout
+
     def test_isolated_execution_is_refused(self, tmp_path):
         """An explicit isolation request must never silently widen into
         inline execution of the repo prompt — not even via override."""
