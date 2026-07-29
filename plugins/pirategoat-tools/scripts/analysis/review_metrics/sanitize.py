@@ -691,7 +691,11 @@ def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
         "change",
     )
     for name, decision in agents.items():
-        if _safe_string(name) is None or not isinstance(decision, dict):
+        if (
+            type(name) is not str
+            or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+            or not isinstance(decision, dict)
+        ):
             return None
         for status_name in ("initial_status", "final_status"):
             status = decision.get(status_name)
@@ -842,7 +846,8 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     for name, raw_paths in by_agent.items():
         paths = _strict_repo_read_paths(raw_paths)
         if (
-            _safe_string(name) is None
+            type(name) is not str
+            or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
             or paths is None
             or len(paths) != len(set(paths))
         ):

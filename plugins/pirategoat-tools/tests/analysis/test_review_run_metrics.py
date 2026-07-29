@@ -3283,6 +3283,39 @@ class TestMeasureRun:
         assert measured["coverage"] == manifest["coverage"]
         assert measured["metric_availability"]["coverage"] == "complete"
 
+    def test_prose_dispatch_agent_key_fails_the_dispatch_family_closed(
+        self, tmp_path
+    ):
+        """Manifest agent maps are producer-written kebab identities — a
+        malformed sidecar key like a display name with appended prose must
+        not become an authoritative agent nor be retained in JSON output."""
+        manifest = _manifest()
+        agents = manifest["dispatch"]["agents"]
+        agents["Security Reviewer | PRIVATE PROSE"] = agents.pop(
+            "security-reviewer"
+        )
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["dispatch"] is None
+        assert measured["metric_availability"]["dispatch"] == "missing"
+        assert "PRIVATE PROSE" not in json.dumps(measured)
+
+    def test_prose_coverage_agent_key_fails_the_coverage_family_closed(
+        self, tmp_path
+    ):
+        manifest = _manifest()
+        by_agent = manifest["coverage"]["by_agent"]
+        by_agent["Security Reviewer | PRIVATE PROSE"] = by_agent.pop(
+            "code-reviewer"
+        )
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["coverage"] is None
+        assert measured["metric_availability"]["coverage"] == "missing"
+        assert "PRIVATE PROSE" not in json.dumps(measured)
+
     def test_duplicate_assigned_path_cannot_report_two_hundred_percent_coverage(
         self, tmp_path
     ):
