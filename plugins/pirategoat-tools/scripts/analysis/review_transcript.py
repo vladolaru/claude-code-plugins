@@ -1157,7 +1157,7 @@ def _add_usage(target: dict[str, int], addition: dict[str, int]) -> None:
 
 def _usage_summary(
     entries: Iterable[dict[str, Any]],
-) -> tuple[dict[str, int], dict[str, dict[str, int]], bool]:
+) -> tuple[dict[str, int], dict[str, dict[str, int]], bool, bool]:
     total = _empty_usage()
     by_model: dict[str, dict[str, int]] = {}
     usage_valid = True
@@ -1185,7 +1185,11 @@ def _usage_summary(
         if model:
             model_usage = by_model.setdefault(model, _empty_usage())
             _add_usage(model_usage, usage)
-    return total, dict(sorted(by_model.items())), usage_valid
+    # usage_observed distinguishes a measured total from an absence of
+    # evidence: an empty transcript, or one whose assistant records all lack
+    # usage payloads, accumulates a "valid" zero that is not a measurement.
+    usage_observed = bool(keyed or unkeyed)
+    return total, dict(sorted(by_model.items())), usage_valid, usage_observed
 
 
 def _opaque_target(value: object) -> str:
@@ -1429,7 +1433,7 @@ def _analyze_entries(
     results = _tool_results(entries)
     call_counts = Counter(call["id"] for call in calls)
     result_by_id = _paired_results(calls, results)
-    usage, usage_by_model, usage_valid = _usage_summary(entries)
+    usage, usage_by_model, usage_valid, usage_observed = _usage_summary(entries)
 
     analyzed_calls: list[dict[str, Any]] = []
     # Malformed tool_use blocks were issued calls that can never be paired
@@ -1558,6 +1562,7 @@ def _analyze_entries(
         "usage": usage,
         "usage_by_model": usage_by_model,
         "usage_valid": usage_valid,
+        "usage_observed": usage_observed,
         # Budget-utilization numerator: every issued call, including
         # duplicated-id, malformed, and unresolved ones — each spent budget.
         "tool_calls": len(calls) + malformed_calls,
@@ -1931,6 +1936,20 @@ def enrich_run_transcript(
             warnings.append(
                 {
                     "code": "agent_transcript_parse_gap",
+                    "agent": dispatch["agent"],
+                }
+            )
+        if (
+            analysis["usage_valid"]
+            and not analysis["usage_observed"]
+            and dispatch["agent"] not in agent_transcript_parse_gaps
+        ):
+            # An expected agent transcript with zero usage-bearing assistant
+            # responses is absent evidence, not a measured zero-token run.
+            agent_transcript_parse_gaps.add(dispatch["agent"])
+            warnings.append(
+                {
+                    "code": "agent_transcript_usage_missing",
                     "agent": dispatch["agent"],
                 }
             )

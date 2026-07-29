@@ -3322,7 +3322,8 @@ class TestEnrichRunTranscript:
                             "read",
                             "Read",
                             file_path=str(repo / relative_path),
-                        )
+                        ),
+                        usage=_usage(1, 1),
                     ),
                     _result("read"),
                 ],
@@ -3428,7 +3429,8 @@ class TestEnrichRunTranscript:
                                 f"read-{index}",
                                 "Read",
                                 file_path=str(repo / relative_path),
-                            )
+                            ),
+                            usage=_usage(1, 1),
                         ),
                         _result(f"read-{index}"),
                     ]
@@ -3552,6 +3554,46 @@ class TestEnrichRunTranscript:
         assert agent_row["usage"]["output_tokens"] == 5
         assert result["tool_failures"] == []
         assert result["correlation"]["complete"] is True
+
+    def test_usage_less_agent_transcript_is_missing_evidence(self, tmp_path):
+        """An agent transcript whose assistant records carry no usage
+        payloads must degrade completeness, not report an exact zero-token
+        complete run."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        session_id = "usage-less-subagent"
+        call = _call("reviewer", "Agent", prompt=_agent_prompt(output_dir))
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(call),
+                _result("reviewer", structured={"agentId": "reviewer-id"}),
+            ],
+        )
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-reviewer-id.jsonl",
+            [
+                _assistant(
+                    _call("read", "Read", file_path=str(repo / "src/in.py"))
+                ),
+                _result("read"),
+            ],
+        )
+
+        result = enrich_run_transcript(
+            _manifest(session_id, repo, output_dir),
+            sessions,
+            {"security-reviewer"},
+        )
+
+        assert {
+            "code": "agent_transcript_usage_missing",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["agent_data"] is False
+        assert result["completeness"]["scope_comparable_reads"] is False
 
     def test_timestampless_agent_evidence_is_a_time_gap(self, tmp_path):
         """An assistant record without a usable timestamp cannot be bound to
