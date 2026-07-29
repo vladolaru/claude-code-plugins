@@ -272,50 +272,84 @@ def _path_inside_repo(path: str, repo_path: str) -> bool:
 # reviewer expansion — single source of truth so the two consumers never drift)
 # ---------------------------------------------------------------------------
 
-def _glob_to_regex(pattern: str) -> str:
-    """Translate a repo-relative glob to a regex.
+def _glob_tokens(pattern: str) -> list:
+    """Tokenize a repo-relative glob.
 
-    ``**`` matches any number of path segments (including none), ``*`` matches
-    within a segment (does not cross ``/``), ``?`` one non-slash char. Kept
-    deliberately conventional so ``includes/**`` and ``**/*.php`` behave the way
-    the rule authors expect.
+    ``**/`` matches any number of whole path segments (including none), ``**``
+    matches anything, ``*`` matches within a segment (does not cross ``/``),
+    ``?`` one non-slash char. Kept deliberately conventional so
+    ``includes/**`` and ``**/*.php`` behave the way the rule authors expect.
     """
-    i, out = 0, ["^"]
+    i, out = 0, []
     n = len(pattern)
     while i < n:
         if pattern[i:i + 3] == "**/":
-            out.append("(?:.*/)?")
+            out.append("**/")
             i += 3
         elif pattern[i:i + 2] == "**":
-            out.append(".*")
+            out.append("**")
             i += 2
-        elif pattern[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        elif pattern[i] == "?":
-            out.append("[^/]")
+        elif pattern[i] in ("*", "?"):
+            out.append(pattern[i])
             i += 1
         else:
-            out.append(re.escape(pattern[i]))
+            out.append(("lit", pattern[i]))
             i += 1
-    out.append("$")
-    return "".join(out)
+    return out
 
 
 def glob_match(pattern: str, path: str) -> bool:
     """True if ``path`` (repo-relative, forward slashes) matches ``pattern``.
 
-    Over-complex patterns (length or wildcard count beyond the caps) are treated
-    as non-matching to bound regex backtracking against semi-trusted input.
+    Matched with a dynamic program over (token, position) — worst case
+    O(len(pattern) * len(path)) against semi-trusted input. A regex
+    translation backtracks catastrophically here: interleaved ``*``
+    quantifiers took seconds on a nonmatching 100-char path with only six
+    stars, while the caps admit twenty and matching repeats across every
+    changed file. Over-complex patterns (length or wildcard count beyond
+    the caps) are still treated as non-matching to bound even linear cost.
     """
     if not pattern or not isinstance(path, str):
         return False
     if len(pattern) > _MAX_GLOB_LEN or pattern.count("*") > _MAX_GLOB_STARS:
         return False
-    try:
-        return bool(re.match(_glob_to_regex(pattern), path))
-    except re.error:
-        return False
+    m = len(path)
+    # prev[j] — the tokens consumed so far can match path[:j].
+    prev = [False] * (m + 1)
+    prev[0] = True
+    for token in _glob_tokens(pattern):
+        cur = [False] * (m + 1)
+        if token == "**":
+            reachable = False
+            for j in range(m + 1):
+                reachable = reachable or prev[j]
+                cur[j] = reachable
+        elif token == "**/":
+            # Zero segments (epsilon) or any prefix ending at a "/" boundary.
+            reachable = False
+            for j in range(m + 1):
+                cur[j] = prev[j] or (
+                    j > 0 and path[j - 1] == "/" and reachable
+                )
+                reachable = reachable or prev[j]
+        elif token == "*":
+            # Zero or more non-slash chars: a reachable start stays live
+            # until a "/" would have to be consumed.
+            reachable = False
+            for j in range(m + 1):
+                reachable = reachable or prev[j]
+                cur[j] = reachable
+                if j < m and path[j] == "/":
+                    reachable = False
+        elif token == "?":
+            for j in range(m):
+                cur[j + 1] = prev[j] and path[j] != "/"
+        else:
+            _, char = token
+            for j in range(m):
+                cur[j + 1] = prev[j] and path[j] == char
+        prev = cur
+    return prev[m]
 
 
 def any_glob_match(patterns, paths) -> bool:

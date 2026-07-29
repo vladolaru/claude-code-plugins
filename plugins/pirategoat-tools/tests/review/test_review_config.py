@@ -266,3 +266,40 @@ class TestSecurityHardening:
         assert mod.glob_match("includes/**/*.php", "includes/core/foo.php") is True
         assert mod.glob_match("**/*.php", "a.php") is True
         assert mod.glob_match("src/**", "src/a/b.js") is True
+
+    def test_interleaved_wildcards_match_in_linear_time(self, mod):
+        import time
+        # The caps admit 20 stars, but a regex translation catastrophically
+        # backtracks on far fewer: six interleaved '*' against a nonmatching
+        # 100-char path took seconds. The matcher must be non-backtracking.
+        patterns = [
+            "a*a*a*a*a*a*b",
+            "*a" * 10 + "b",
+            "**/a*a*a*a*a*b",
+        ]
+        t0 = time.perf_counter()
+        for pattern in patterns:
+            assert mod.glob_match(pattern, "a" * 100) is False
+        assert time.perf_counter() - t0 < 0.5
+
+    def test_glob_semantics_are_conventional(self, mod):
+        # The matcher rewrite must preserve the documented glob language:
+        # ** crosses segments, * and ? stay within one.
+        cases = [
+            ("docs/**", "docs/a/b.md", True),
+            ("docs/**", "docs", False),
+            ("**/*.php", "a/b/c.php", True),
+            ("**/*.php", "c.php", True),
+            ("**/*.php", "a/b/c.txt", False),
+            ("src/*.js", "src/a.js", True),
+            ("src/*.js", "src/a/b.js", False),
+            ("a?c", "abc", True),
+            ("a?c", "a/c", False),
+            ("src/**/test/*.py", "src/a/b/test/x.py", True),
+            ("src/**/test/*.py", "src/test/x.py", True),
+            ("a*b*c", "aXbYc", True),
+            ("a*b*c", "aXc", False),
+        ]
+        for pattern, path, expected in cases:
+            assert mod.glob_match(pattern, path) is expected, (pattern, path)
+
