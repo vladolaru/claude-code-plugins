@@ -122,11 +122,19 @@ def load_review_config(
             f"{config_relpath}: {_PROVENANCE_UNKNOWN_REASON}"
         )
         return result
-    changed = {
-        str(path).replace(os.sep, "/")
-        for path in changed_files
-        if isinstance(path, str) and path
-    }
+    changed = set()
+    for path in changed_files:
+        if not isinstance(path, str) or not path:
+            continue
+        # Git C-quotes names with non-ASCII or control bytes by default
+        # (core.quotePath), so the same file has two spellings depending on
+        # the producer. The gate must match either — an encoded entry that
+        # fails to match its decoded declaration would pass PR-controlled
+        # prompt text as trusted.
+        changed.add(path.replace(os.sep, "/"))
+        dequoted = _dequote_git_path(path)
+        if dequoted != path:
+            changed.add(dequoted.replace(os.sep, "/"))
     if config_relpath in changed:
         # The declarations themselves are PR-controlled: nothing they
         # declare can be trusted, including entries pointing at untouched
@@ -324,6 +332,46 @@ def _normalize_applies_to(raw) -> Dict[str, List[str]]:
         if isinstance(value, list):
             out[key] = [v for v in value if isinstance(v, str) and v]
     return out
+
+
+# Git C-quoting mnemonics (quote.c). Octal escapes are handled separately.
+_GIT_QUOTE_ESCAPES = {
+    "a": 0x07, "b": 0x08, "f": 0x0C, "n": 0x0A, "r": 0x0D,
+    "t": 0x09, "v": 0x0B, '"': 0x22, "\\": 0x5C,
+}
+
+
+def _dequote_git_path(path: str) -> str:
+    """Decode one Git C-quoted path (``"..."``) to its literal form.
+
+    Returns the input unchanged when it is not quoted or the quoting is
+    malformed — an undecodable entry can only fail to match, never widen
+    trust.
+    """
+    if len(path) < 2 or path[0] != '"' or path[-1] != '"':
+        return path
+    body = path[1:-1]
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            out.extend(ch.encode("utf-8", errors="surrogateescape"))
+            i += 1
+            continue
+        i += 1
+        if i >= len(body):
+            return path
+        nxt = body[i]
+        if nxt in _GIT_QUOTE_ESCAPES:
+            out.append(_GIT_QUOTE_ESCAPES[nxt])
+            i += 1
+        elif len(body) >= i + 3 and all(c in "01234567" for c in body[i:i + 3]):
+            out.append(int(body[i:i + 3], 8))
+            i += 3
+        else:
+            return path
+    return out.decode("utf-8", errors="surrogateescape")
 
 
 def _path_inside_repo(path: str, repo_path: str) -> bool:

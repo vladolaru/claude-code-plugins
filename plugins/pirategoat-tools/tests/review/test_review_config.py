@@ -366,3 +366,54 @@ class TestProvenanceGate:
         [entry] = result["untrusted"]
         assert entry["kind"] == "config"
         assert any("provenance unknown" in d for d in result["diagnostics"])
+
+    def test_git_quoted_changed_path_still_gates(self, mod, tmp_path):
+        """Git C-quotes names with non-ASCII bytes by default
+        (core.quotePath), so the changed list may carry the encoded
+        spelling while the declaration carries the decoded one. The gate
+        must match either — otherwise a PR-modified prompt with a
+        non-ASCII filename passes as trusted."""
+        _touch(tmp_path, "règles.md")
+        _write_config(tmp_path, {"review": {
+            "rules": [{"id": "r1", "path": "règles.md"}],
+        }})
+        quoted = '"r\\303\\250gles.md"'
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=[quoted]
+        )
+        assert result["rules"] == []
+        assert result["untrusted"][0]["kind"] == "rule"
+
+    def test_git_quoted_config_path_still_gates(self, mod, tmp_path):
+        self._config(tmp_path)
+        quoted = '".pirategoat/conf\\151g.json"'  # \151 = "i"
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=[quoted]
+        )
+        assert result["rules"] == []
+        assert result["reviewers"] == []
+        assert result["untrusted"][0]["kind"] == "config"
+
+class TestDequoteGitPath:
+    """Git C-quoting decoder used by the provenance gate."""
+
+    @pytest.mark.parametrize(
+        "quoted,expected",
+        [
+            ('"r\\303\\250gles.md"', "règles.md"),
+            ('"tab\\tname.md"', "tab\tname.md"),
+            ('"quote\\"name.md"', 'quote"name.md'),
+            ('"back\\\\slash.md"', "back\\slash.md"),
+            ("plain.md", "plain.md"),
+        ],
+    )
+    def test_decodes_quoted_forms(self, mod, quoted, expected):
+        assert mod._dequote_git_path(quoted) == expected
+
+    @pytest.mark.parametrize(
+        "malformed",
+        ['"unterminated', '"bad\\qescape"', '"trailing\\"', '"short\\41"'],
+    )
+    def test_malformed_quoting_passes_through_unchanged(self, mod, malformed):
+        # An undecodable entry can only fail to match — never widen trust.
+        assert mod._dequote_git_path(malformed) == malformed
