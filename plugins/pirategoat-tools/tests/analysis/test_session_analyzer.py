@@ -1052,6 +1052,80 @@ class TestSaveIntegrity:
         [record] = data["write_outputs"]
         assert "source" not in record
 
+    def test_failed_write_does_not_shadow_a_confirmed_builder_save(
+        self, tmp_path
+    ):
+        """A legacy Write that FAILED persisted nothing — letting it win
+        the by-path reduction would drop the confirmed builder record and
+        replace real findings with content that never reached disk."""
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
+            _write_tool_entry(
+                "/tmp/pr-review-42/security-review.json",
+                json.dumps({"reviewer": "security", "issues": []}),
+            ),
+            _tool_result_entry("write-1", is_error=True),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        [record] = data["write_outputs"]
+        assert record["source"] == "bash_builder_heredoc"
+
+    def test_write_without_a_paired_result_is_still_kept(self, tmp_path):
+        """Write records are literal transcript evidence; only a definite
+        failure refutes them. A truncated log missing the result must keep
+        the legacy keep-the-record behavior."""
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _write_tool_entry(
+                "/tmp/pr-review-42/security-review.json",
+                json.dumps({"reviewer": "security", "issues": []}),
+            ),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        [record] = data["write_outputs"]
+        assert record["path"] == "/tmp/pr-review-42/security-review.json"
+
+    def test_builder_id_shared_with_another_tool_call_stays_unresolved(
+        self, tmp_path
+    ):
+        """ID reuse must be counted across EVERY tool-use block: when a
+        builder Bash call shares an ID with an unrelated tool call, the
+        other call's successful result must not validate the heredoc and
+        fabricate a saved review."""
+        read_entry = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "shared",
+                        "name": "Read",
+                        "input": {"file_path": "/tmp/src/f.php"},
+                    }
+                ],
+            },
+        }
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            read_entry,
+            _bash_entry(_builder_heredoc(), tool_id="shared"),
+            _tool_result_entry("shared"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+
     def test_saves_to_distinct_artifacts_are_both_kept(self, tmp_path):
         log = tmp_path / "agent.jsonl"
         entries = [

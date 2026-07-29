@@ -236,16 +236,21 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     # tool result classifies as a terminal success — failed, nonterminal,
     # and unclassifiable results persisted nothing, and a retry after
     # failure must count once, not twice. Pairing is strict: exactly one
-    # call and one later result per tool ID. Reused IDs, duplicate
-    # results, or a result preceding its call (concatenated or damaged
-    # logs) would let a foreign success validate a dangling heredoc and
-    # fabricate findings, so ambiguous IDs stay unresolved (None poisons
-    # the ID). Entries are position-stamped to order calls and results.
-    pending_builder_outputs: dict[str, tuple[int, dict[str, Any]] | None] = {}
+    # call across EVERY tool-use block and one later result per tool ID.
+    # Reused IDs (including a builder Bash call sharing an ID with an
+    # unrelated tool call), duplicate results, or a result preceding its
+    # call (concatenated or damaged logs) would let a foreign success
+    # validate a dangling heredoc and fabricate findings, so ambiguous IDs
+    # stay unresolved. Entries are position-stamped to order calls and
+    # results.
+    pending_builder_outputs: dict[str, tuple[int, dict[str, Any]]] = {}
     tool_result_states: dict[str, tuple[int, str] | None] = {}
+    call_id_uses: Counter = Counter()
     # Every save (Write tool or confirmed builder heredoc) with its entry
-    # position, so cross-transport overwrites reduce in transcript order.
+    # position and — for Writes — the call ID, so failed Writes can be
+    # excluded and cross-transport overwrites reduce in transcript order.
     ordered_saves: list[tuple[int, dict[str, Any]]] = []
+    pending_write_saves: list[tuple[int, dict[str, Any], str | None]] = []
 
     for position, entry in enumerate(entries):
         msg = entry.get("message", {})
@@ -315,6 +320,9 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                     tool_input = block.get("input", {})
                     detail = _categorize_tool_call(tool_name, tool_input)
                     result["tool_calls"].append(detail)
+                    block_id = block.get("id")
+                    if isinstance(block_id, str):
+                        call_id_uses[block_id] += 1
 
                     if tool_name == "Read":
                         result["files_read"].append(tool_input.get("file_path", ""))
@@ -330,14 +338,12 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                         if builder_output is not None and isinstance(
                             block.get("id"), str
                         ):
-                            call_id = block["id"]
-                            if call_id in pending_builder_outputs:
-                                pending_builder_outputs[call_id] = None
-                            else:
-                                pending_builder_outputs[call_id] = (
-                                    position,
-                                    builder_output,
-                                )
+                            # ID uniqueness is enforced at merge time via
+                            # call_id_uses, which sees every tool-use block.
+                            pending_builder_outputs[block["id"]] = (
+                                position,
+                                builder_output,
+                            )
                     elif tool_name == "Grep":
                         result["grep_searches"].append({
                             "pattern": tool_input.get("pattern", ""),
@@ -347,10 +353,16 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                     elif tool_name == "Glob":
                         result["glob_searches"].append(tool_input.get("pattern", ""))
                     elif tool_name == "Write":
-                        ordered_saves.append((position, {
-                            "path": tool_input.get("file_path", ""),
-                            "content": tool_input.get("content", ""),
-                        }))
+                        pending_write_saves.append((
+                            position,
+                            {
+                                "path": tool_input.get("file_path", ""),
+                                "content": tool_input.get("content", ""),
+                            },
+                            block.get("id")
+                            if isinstance(block.get("id"), str)
+                            else None,
+                        ))
 
                 elif block.get("type") == "text":
                     result["final_texts"].append(block.get("text", ""))
@@ -358,10 +370,9 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         if role == "assistant" and isinstance(content, str):
             result["final_texts"].append(content)
 
-    for call_id, pending in pending_builder_outputs.items():
-        if pending is None:
+    for call_id, (call_position, builder_output) in pending_builder_outputs.items():
+        if call_id_uses[call_id] != 1:
             continue
-        call_position, builder_output = pending
         paired = tool_result_states.get(call_id)
         if (
             paired is not None
@@ -369,6 +380,24 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
             and paired[0] > call_position
         ):
             ordered_saves.append((call_position, builder_output))
+
+    # Write records are literal transcript evidence (the content is in the
+    # call itself), so the default is to keep them — but a Write whose own
+    # unambiguously paired result classifies as a definite failure persisted
+    # nothing, and letting it enter the by-path reduction would shadow a
+    # confirmed earlier save to the same artifact. Ambiguity (reused IDs,
+    # duplicate results, missing or unclassifiable results) keeps the
+    # legacy keep-the-record behavior.
+    for call_position, record, call_id in pending_write_saves:
+        if call_id is not None and call_id_uses[call_id] == 1:
+            paired = tool_result_states.get(call_id)
+            if (
+                paired is not None
+                and paired[1] == "failure"
+                and paired[0] > call_position
+            ):
+                continue
+        ordered_saves.append((call_position, record))
 
     # Saves to the same artifact overwrite each other regardless of
     # transport — a legacy Write followed by a corrected builder heredoc
