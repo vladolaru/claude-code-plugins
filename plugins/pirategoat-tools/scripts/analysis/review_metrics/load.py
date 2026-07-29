@@ -367,7 +367,10 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
     # first run the tail's outcomes. The foreign-run-ID cut covers the
     # remaining gap — when the first run never wrote a terminal event AND
     # the next start line was dropped, the tail's own run_id stamps (which
-    # every producer event carries) are what remains to reject it.
+    # every producer event carries) are what remains to reject it. That
+    # includes an UNSTAMPED first run (predating run IDs): no producer
+    # version mixes stamped and unstamped events within one run, so any
+    # stamped event after an unstamped start is foreign by construction.
     first = starts[0]
     first_run_id = _safe_run_id(events[first].get("run_id"))
     boundary = len(events)
@@ -375,11 +378,7 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
         event = events[index]
         kind = event.get("event")
         event_run_id = _safe_run_id(event.get("run_id"))
-        if (
-            first_run_id is not None
-            and event_run_id is not None
-            and event_run_id != first_run_id
-        ):
+        if event_run_id is not None and event_run_id != first_run_id:
             boundary = index
             break
         if kind == "pipeline_start":

@@ -1330,6 +1330,36 @@ class TestLoadRuns:
         ] == ["code-reviewer"]
         assert run["outcome"]["summary"].get("total_agent_issues") is None
 
+    def test_stamped_tail_cannot_complete_an_unstamped_legacy_run(
+        self, tmp_path
+    ):
+        """A first run predating run IDs has no stamp to compare against —
+        but no producer version mixes stamped and unstamped events within
+        one run, so ANY stamped event after an unstamped start is foreign
+        by construction and terminates the segment."""
+        first = _legacy_events(run_id=None)
+        del first[2]
+        second = _legacy_events(run_id="legacy-2")
+        second[1]["run_id"] = "legacy-2"
+        second[1]["agent"] = "security-reviewer"
+        second[2]["run_id"] = "legacy-2"
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        second[2]["timestamp"] = "2026-07-18T11:00:00+00:00"
+        lines = [json.dumps(event).encode("utf-8") for event in first]
+        lines.append(b'{"event": "pipeline_start", "x": "\xff"}')
+        lines.extend(json.dumps(event).encode("utf-8") for event in second[1:])
+        (tmp_path / "legacy.jsonl").write_bytes(b"\n".join(lines) + b"\n")
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"].startswith("legacy-")
+        assert run["status"] == "running"
+        assert run["run"]["ended_at"] is None
+        assert [
+            event["agent"] for event in run["agents"]["started"]
+        ] == ["code-reviewer"]
+        assert run["outcome"]["summary"].get("total_agent_issues") is None
+
     def test_legacy_steps_carry_only_step_events(self, tmp_path):
         """The manifest contract's steps are step events only — a
         pipeline_end entry fails the transcript stage-timeline validator,
