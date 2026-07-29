@@ -237,13 +237,19 @@ See [the docs](https://example.com) for details.
 
 ### For Markdown and Slack formats
 
-Write the formatted content to a temp file and pipe it to the clipboard:
+Write the formatted content to a temp file with the **Write tool**, then pipe
+that file to the clipboard. Do **not** embed the content in a shell heredoc: if
+the content contains a line equal to the heredoc delimiter (for example a
+literal `CLIPBOARD_EOF`), the heredoc ends early and the remaining lines run as
+shell commands. Copied content is arbitrary (PR text, code, conversation
+excerpts), so this is a real injection risk. The Write tool has no delimiter and
+is injection-safe for any content.
+
+1. Resolve `$TMPDIR` to its absolute value, then use the Write tool to write the
+   formatted content verbatim to `<TMPDIR>/clipboard-content.txt`.
+2. Copy it to the clipboard and clean up:
 
 ```bash
-mkdir -p "$TMPDIR"
-cat > "$TMPDIR/clipboard-content.txt" << 'CLIPBOARD_EOF'
-<formatted content here>
-CLIPBOARD_EOF
 pbcopy < "$TMPDIR/clipboard-content.txt"
 rm -f "$TMPDIR/clipboard-content.txt"
 ```
@@ -253,6 +259,9 @@ If `pbcopy` is unavailable (Linux), use `xclip -selection clipboard` instead.
 ### For P2/Gutenberg format
 
 `pbcopy` only sets plain text on the clipboard. Gutenberg needs `public.html` data to auto-convert to blocks. Use a Swift script to set both HTML and plain text simultaneously:
+
+First write the Swift helper. This heredoc is safe because its body is fixed
+text with no substituted content:
 
 ```bash
 mkdir -p "$TMPDIR"
@@ -272,17 +281,18 @@ pb.setString(html, forType: .html)
 pb.setString(plain, forType: .string)
 print("OK")
 SWIFT_EOF
+```
 
-# Write the HTML and plain text content to temp files
-cat > "$TMPDIR/clipboard-html.txt" << 'HTML_EOF'
-<HTML content here>
-HTML_EOF
+Now write the HTML and plain-text content with the **Write tool**, not a shell
+heredoc — the generated content is arbitrary and a line matching the delimiter
+would break out of the heredoc (see the injection note above):
 
-cat > "$TMPDIR/clipboard-plain.txt" << 'PLAIN_EOF'
-<plain text fallback here>
-PLAIN_EOF
+1. Write the HTML content verbatim to `<TMPDIR>/clipboard-html.txt`.
+2. Write the plain-text fallback verbatim to `<TMPDIR>/clipboard-plain.txt`.
 
-# Set both types on the clipboard
+Then set both clipboard types and clean up:
+
+```bash
 swift "$TMPDIR/set-clipboard.swift" "$TMPDIR/clipboard-html.txt" "$TMPDIR/clipboard-plain.txt"
 rm -f "$TMPDIR/set-clipboard.swift" "$TMPDIR/clipboard-html.txt" "$TMPDIR/clipboard-plain.txt"
 ```

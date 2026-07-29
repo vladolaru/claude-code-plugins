@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The shared skill description now carries the explicit-request contract
   instead of the Claude-only `disable-model-invocation` frontmatter field.
 
+### Fixed
+
+- The shared `prompt-engineer` skill is now surfaced into the Codex skill set.
+  The generated `optimize-prompt` adapter delegates to it, so without it Codex
+  could not resolve the skill the command depends on.
+
 ## [2.1.1] - 2026-03-28
 
 ### Fixed

@@ -104,6 +104,7 @@ Some phases use helper scripts bundled with this plugin. Derive the plugin root
 from `SKILL_DIR` by going two levels up:
 
 ```bash
+SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
 PLUGIN_ROOT="$SKILL_DIR/../.."
 ```
 
@@ -115,7 +116,8 @@ PLUGIN_ROOT="$SKILL_DIR/../.."
 
 2. **Fetch metadata** — Call `get_metadata` on the root node. If the response is >50K chars, save to file and parse with:
    ```bash
-   python3 $SKILL_DIR/../../scripts/figma/parse_nodes.py <saved-file> [--format tree|flat|json]
+   SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
+   python3 "$SKILL_DIR/../../scripts/figma/parse_nodes.py" <saved-file> [--format tree|flat|json]
    ```
 
 3. **Classify nodes** — From the parsed hierarchy, identify:
@@ -137,7 +139,8 @@ PLUGIN_ROOT="$SKILL_DIR/../.."
 
 2. **Parse each response** — If a response is >20K chars, save to file and parse with:
    ```bash
-   python3 $SKILL_DIR/../../scripts/figma/extract_specs.py <saved-file> [--tokens-file <tokens-cache>]
+   SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
+   python3 "$SKILL_DIR/../../scripts/figma/extract_specs.py" <saved-file> [--tokens-file <tokens-cache>]
    ```
 
 3. **Build token mapping** — If no `.claude/figma-config.json` exists, cross-reference Figma token names with the project's CSS variables/design tokens. Write the mapping to `.claude/tmp/figma-cache/token-mapping-<fileKey>.json`.

@@ -46,6 +46,7 @@ Use `SKILL_DIR`, resolved from the skill location shown by the current host, to
 locate the script:
 
 ```bash
+SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
 python3 "$SKILL_DIR/scripts/decision-critic.py" \
   --step-number <1-7> \
   --total-steps 7 \

@@ -944,8 +944,11 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     )
                 if codex_host:
                     actions.append(
-                        f"- Call `spawn_agent` with task name `{_codex_task_name(name)}` "
-                        "and no Claude model override."
+                        f"- Call `spawn_agent` with task name "
+                        f"`{_codex_task_name(agent_type)}` and no Claude model "
+                        "override. The instance identity travels in the "
+                        "`--instance-name` argument of the bootstrap command below, "
+                        "not the task name."
                     )
                     actions.append(
                         f"- {_codex_agent_instruction(agent_type)} Then run the exact "

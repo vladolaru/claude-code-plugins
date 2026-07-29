@@ -49,7 +49,8 @@ npm install -g svgo
 Run optimization WITHOUT `--cleanup` to generate and review results:
 
 ```bash
-"${CODEX_PLUGIN_ROOT}/scripts/optimize-images.sh" "${CODEX_SKILL_ARGUMENTS}" "" /tmp/img-optimize
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
+"${CODEX_PLUGIN_ROOT}/scripts/optimize-images.sh" "${CODEX_SKILL_ARGUMENTS}" "${CODEX_PLUGIN_ROOT}/scripts/svgo.config.mjs" /tmp/img-optimize
 ```
 
 Answer **N** when prompted. This preserves the temp directory.
@@ -64,12 +65,14 @@ Based on user's answer, run WITH `--cleanup`:
 
 **If user confirms YES:**
 ```bash
-echo "y" | "${CODEX_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "${CODEX_SKILL_ARGUMENTS}" "" /tmp/img-optimize
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
+echo "y" | "${CODEX_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "${CODEX_SKILL_ARGUMENTS}" "${CODEX_PLUGIN_ROOT}/scripts/svgo.config.mjs" /tmp/img-optimize
 ```
 
 **If user says NO:**
 ```bash
-echo "n" | "${CODEX_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "${CODEX_SKILL_ARGUMENTS}" "" /tmp/img-optimize
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
+echo "n" | "${CODEX_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "${CODEX_SKILL_ARGUMENTS}" "${CODEX_PLUGIN_ROOT}/scripts/svgo.config.mjs" /tmp/img-optimize
 ```
 
 Both commands clean up the temp directory. The `--cleanup` flag ensures cleanup happens regardless of yes/no.

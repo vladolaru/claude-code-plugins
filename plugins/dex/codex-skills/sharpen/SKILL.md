@@ -82,6 +82,7 @@ If "Not now", stop here. If "Yes", create directories with `mkdir -p` and contin
 If sub-agents were dispatched in this session (via Task tool), run the analyzer:
 
 ```bash
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
 python3 ${CODEX_PLUGIN_ROOT}/scripts/analyze-subagents.py --project-dir $(git rev-parse --show-toplevel)
 ```
 

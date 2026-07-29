@@ -154,7 +154,7 @@ Knowledge capture system — turns lessons, patterns, decisions, and research in
 |---|---|
 | `commands/` | 7 commands: `/dex:grok`, `/dex:learn`, `/dex:pattern`, `/dex:research`, `/dex:sharpen`, `/dex:init`, `/dex:status` |
 | `skills/` | 1 shared skill (`knowledge-capture`) |
-| `codex-skills/` | 7 generated Codex command adapters |
+| `codex-skills/` | 7 generated Codex command adapters + the surfaced `knowledge-capture` skill |
 | `scripts/` | `analyze-subagents.py` — subagent dispatch analysis tool |
 | `tests/` | Plugin structure tests, subagent analyzer tests, fixtures |
 
@@ -167,7 +167,7 @@ Systematic prompt optimization with evidence-grounded technique recommendations 
 | Directory | Contents |
 |---|---|
 | `skills/` | 1 shared skill (`prompt-engineer`) |
-| `codex-skills/` | 1 generated Codex command adapter |
+| `codex-skills/` | 1 generated Codex command adapter + the surfaced `prompt-engineer` skill |
 | `commands/` | 1 command (`/optimize-prompt`) |
 
 **Dev notes:** Simple prompts stay simple (triage filters out low-complexity cases). Works on any prompt format (SKILL.md, agent definitions, slash commands, CLAUDE.md, API prompts). No external dependencies.

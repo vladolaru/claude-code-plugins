@@ -63,6 +63,7 @@ mkdir -p "$OUTPUT_DIR"
 **Run Step 1:**
 
 ```bash
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
 python3 ${CODEX_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --host codex \
   --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" [--quick]

@@ -355,6 +355,7 @@ for all script references:
 # PLUGIN_ROOT = base directory minus "skills/analyzing-cc-sessions"
 # Example: if base dir is ~/.claude/plugins/cache/.../pirategoat-tools/1.43.3/skills/analyzing-cc-sessions
 # then PLUGIN_ROOT is ~/.claude/plugins/cache/.../pirategoat-tools/1.43.3
+SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
 PLUGIN_ROOT="$SKILL_DIR/../.."
 ```
 
@@ -368,6 +369,7 @@ PLUGIN_ROOT="$SKILL_DIR/../.."
 
 ```bash
 # Derive plugin root from SKILL_DIR
+SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
 PLUGIN_ROOT="$SKILL_DIR/../.."
 
 # Analyze specific agent type across recent sessions

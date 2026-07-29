@@ -18,6 +18,16 @@
 - User confirmation guidance is host-neutral so the shared knowledge-capture
   workflow can use the input mechanism available in Claude Code or Codex.
 
+### Fixed
+
+- The shared `knowledge-capture` skill is now surfaced into the Codex skill
+  set. Every `/dex:*` command delegates host discovery (CLAUDE.md/`.claude`
+  vs AGENTS.md/`.ai`) to it, so without it Codex would fall back to
+  Claude-specific paths; surfacing it lets Codex resolve the active knowledge
+  directory and instructions file correctly.
+- The generated `sharpen` adapter assigns `CODEX_PLUGIN_ROOT` in its shell
+  example instead of referencing the unexported variable.
+
 ## [1.5.3] - 2026-03-02
 
 ### Fixed

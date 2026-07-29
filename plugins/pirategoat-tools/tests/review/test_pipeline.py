@@ -611,6 +611,42 @@ class TestStep6DispatchAgents:
         assert tok[tok.index("--repo-agent-ref") + 1] == ".ai/agents/review/renewals.md"
         assert tok[tok.index("--scope-domains") + 1] == "wp-architecture,architecture"
 
+    def test_codex_adapter_spawn_uses_adapter_task_not_instance_name(self, mod, tmp_path):
+        """Codex spawn_agent targets the installed generic adapter task, while the
+        synthetic instance name only travels in the bootstrap --instance-name arg."""
+        import shlex
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [
+                {
+                    "name": "repo-renewals-reviewer",
+                    "adapter": "repo-reviewer-adapter",
+                    "ref": ".ai/agents/review/renewals.md",
+                    "label": "Renewals Expert",
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "scope_domains": ["architecture"],
+                },
+            ],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(
+            6, "full", state, ctx, config=config, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+        # spawn_agent task name is the generic adapter, not the instance name.
+        assert "task name `repo_reviewer_adapter`" in text
+        assert "task name `repo_renewals_reviewer`" not in text
+        # Instance identity is preserved only in the bootstrap command.
+        cmd_line = next(
+            line for line in g["actions"]
+            if "bootstrap.py" in line and "--repo-agent-ref" in line
+        )
+        tok = shlex.split(cmd_line)
+        assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
+
     def test_adapter_command_escapes_repo_controlled_strings(self, mod, tmp_path):
         """A malicious repo-supplied label/ref cannot inject shell commands."""
         import shlex

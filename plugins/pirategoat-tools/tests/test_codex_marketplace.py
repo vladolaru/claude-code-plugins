@@ -97,6 +97,37 @@ def test_every_claude_command_has_generated_codex_skill():
             ).exists()
 
 
+def test_command_referenced_shared_skills_are_surfaced_to_codex():
+    """A shared skill a command depends on is generated into codex-skills/ so
+    Codex (which only loads codex-skills/) can resolve the delegated reference."""
+    cases = [
+        ("dex", "knowledge-capture", "./skills/knowledge-capture"),
+        ("prompt-engineer", "prompt-engineer", "./skills/prompt-engineer"),
+    ]
+    for plugin_name, skill_name, source_ref in cases:
+        plugin_root = REPO_ROOT / "plugins" / plugin_name
+        surfaced = plugin_root / "codex-skills" / skill_name / "SKILL.md"
+        assert surfaced.is_file(), surfaced
+        text = surfaced.read_text()
+        assert GENERATED_MARKER in text
+        assert f"Source: {source_ref}" in text
+        # Canonical frontmatter is preserved verbatim.
+        assert f"name: {skill_name}" in text
+        # The canonical skill remains the single source of truth.
+        assert (plugin_root / "skills" / skill_name / "SKILL.md").is_file()
+
+
+def test_unreferenced_shared_skills_are_not_surfaced_to_codex():
+    """pirategoat's shared skills are not referenced by its command bodies, so
+    they must not be pulled into Codex — surfacing is dependency-scoped."""
+    codex_skills = REPO_ROOT / "plugins" / "pirategoat-tools" / "codex-skills"
+    generated = {p.name for p in codex_skills.iterdir() if p.is_dir()}
+    # Only the seven review/utility command adapters, no shared skills.
+    assert "testing-patterns" not in generated
+    assert "software-architecture" not in generated
+    assert "using-figma" not in generated
+
+
 def test_review_command_adapters_select_codex_host():
     plugin_root = REPO_ROOT / "plugins" / "pirategoat-tools"
     for command_name in ("pr-review", "full-code-review", "code-review"):

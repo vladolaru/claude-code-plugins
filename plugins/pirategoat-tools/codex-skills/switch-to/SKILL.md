@@ -69,12 +69,13 @@ STOP. Tell the user: "This PR belongs to `<pr_owner>/<pr_repo>` but you're in `<
 
 **Check if PR is from a fork** - compare `HEAD_OWNER` against the CWD repo owner. If different, this is a fork PR:
 
-```bash
-# Check if fork remote already exists
-git remote get-url <HEAD_OWNER> 2>/dev/null
+`<HEAD_OWNER>` and `<HEAD_REPO>` come from PR metadata (attacker-influenceable
+on fork PRs) - treat them as data, quote them, and add the remote only when it
+is missing so a re-run does not fail on an existing remote:
 
-# If the remote doesn't exist, add it
-git remote add <HEAD_OWNER> https://github.com/<HEAD_OWNER>/<HEAD_REPO>.git
+```bash
+git remote get-url <HEAD_OWNER> >/dev/null 2>&1 || \
+  git remote add <HEAD_OWNER> "https://github.com/<HEAD_OWNER>/<HEAD_REPO>.git"
 ```
 
 Set `REMOTE_NAME` = `<HEAD_OWNER>` for fork PRs, or `origin` for same-repo PRs.
@@ -117,9 +118,11 @@ the host's user-input mechanism:
 
 Handle the user's choice:
 
-- **Stash changes:**
+- **Stash changes:** include untracked files so the stash covers everything the
+  dirty summary counted (a plain `git stash push` leaves untracked files behind,
+  and they would follow you onto the target branch):
   ```bash
-  git stash push -m "switch-to: stashed from <CURRENT_BRANCH> before switching to <TARGET_BRANCH>"
+  git stash push --include-untracked -m "switch-to: stashed from <CURRENT_BRANCH> before switching to <TARGET_BRANCH>"
   ```
   Store `STASHED = true`. Proceed to **Step 4**.
 

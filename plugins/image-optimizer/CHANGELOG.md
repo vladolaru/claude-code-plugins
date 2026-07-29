@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `$image-optimizer:optimize-images` command adapter derived from the
   canonical Claude Code command.
 
+### Fixed
+
+- The optimize workflow now passes the bundled `svgo.config.mjs` to the
+  script instead of an empty config argument, so SVGs are optimized with the
+  documented `multipass`/`viewBox`-preserving settings rather than svgo's
+  defaults (which strip `viewBox`).
+
 ## [1.1.0] - 2025-12-11
 
 ### Changed

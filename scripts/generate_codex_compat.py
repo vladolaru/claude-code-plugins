@@ -16,7 +16,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CLAUDE_MARKETPLACE_PATH = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 CODEX_MARKETPLACE_PATH = REPO_ROOT / ".agents" / "plugins" / "marketplace.json"
 GENERATED_MARKER = "GENERATED FILE - DO NOT EDIT"
-GENERATED_SKILL_SOURCE_PREFIX = "<!-- Source: ./commands/"
+GENERATED_SKILL_SOURCE_PREFIXES = (
+    "<!-- Source: ./commands/",
+    "<!-- Source: ./skills/",
+)
 
 CATEGORY_MAP = {
     "development-tools": "Developer Tools",
@@ -219,6 +222,63 @@ def rewrite_same_plugin_commands(
     return body
 
 
+CODEX_PLUGIN_ROOT_ASSIGN = (
+    'CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the '
+    'directory containing this SKILL.md>"'
+)
+
+
+def inject_codex_plugin_root(body: str) -> str:
+    """Make generated shell examples self-contained.
+
+    Codex does not export ``CODEX_PLUGIN_ROOT`` into the shell, so any ``bash``
+    block that references it must assign it first. Prepend an explicit
+    assignment to every shell fence that uses ``${CODEX_PLUGIN_ROOT}`` without
+    already assigning it. Non-shell fences and their contents pass through
+    unchanged.
+    """
+    lines = body.split("\n")
+    result: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        fence_lang = (
+            stripped[3:].strip().lower() if stripped.startswith("```") else None
+        )
+        if fence_lang:
+            block: list[str] = []
+            j = i + 1
+            while j < n and lines[j].strip() != "```":
+                block.append(lines[j])
+                j += 1
+            uses_root = any("${CODEX_PLUGIN_ROOT}" in b for b in block)
+            assigns_root = any(
+                b.lstrip().startswith("CODEX_PLUGIN_ROOT=") for b in block
+            )
+            if (
+                fence_lang in ("bash", "sh", "shell")
+                and uses_root
+                and not assigns_root
+            ):
+                indent = ""
+                for b in block:
+                    if b.strip():
+                        indent = b[: len(b) - len(b.lstrip())]
+                        break
+                block = [indent + CODEX_PLUGIN_ROOT_ASSIGN] + block
+            result.append(line)
+            result.extend(block)
+            if j < n:
+                result.append(lines[j])
+            i = j + 1
+            continue
+        result.append(line)
+        i += 1
+    return "\n".join(result)
+
+
 def translate_command_body(
     body: str,
     *,
@@ -240,6 +300,8 @@ def translate_command_body(
             "scripts/review/pipeline.py \\\n",
             "scripts/review/pipeline.py \\\n  --host codex \\\n",
         )
+
+    body = inject_codex_plugin_root(body)
 
     return body.rstrip() + "\n"
 
@@ -287,6 +349,42 @@ def render_command_skill(
         "## Canonical Workflow\n\n"
         f"{translated}"
     )
+
+
+def render_shared_skill(
+    *,
+    plugin_name: str,
+    skill_ref: str,
+    skill_path: Path,
+    command_stems: list[str],
+) -> str:
+    """Surface a canonical shared skill to Codex.
+
+    Codex only loads skills under ``codex-skills/``, so a shared skill that a
+    command depends on (references by name) is unavailable there unless it is
+    generated into that tree. The skill's own frontmatter is preserved verbatim
+    (it may use YAML block scalars); only the body is host-translated.
+    """
+    text = normalize_text(skill_path.read_text())
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end == -1:
+            raise ValueError(f"{skill_path}: unterminated frontmatter")
+        frontmatter = text[: end + 5]
+        body = text[end + 5 :]
+    else:
+        frontmatter = ""
+        body = text
+
+    translated = translate_command_body(
+        body,
+        plugin_name=plugin_name,
+        command_stems=command_stems,
+    )
+    marker = f"<!-- {GENERATED_MARKER} -->\n<!-- Source: {skill_ref} -->\n"
+    if frontmatter:
+        return f"{frontmatter}\n{marker}\n{translated}"
+    return f"{marker}\n{translated}"
 
 
 def render_openai_yaml(plugin_name: str, command_stem: str, description: str) -> str:
@@ -359,6 +457,36 @@ def expected_files(canonical: dict) -> list[ExpectedFile]:
                 ]
             )
 
+        # Surface shared skills a command depends on (references by name).
+        # Codex only loads codex-skills/, so a command that delegates to a
+        # canonical skills/ skill would otherwise have no access to it.
+        skill_refs = plugin.get("skills", [])
+        if skill_refs and command_refs:
+            command_blob = "\n".join(
+                (plugin_root / ref.removeprefix("./")).read_text()
+                for ref in command_refs
+            )
+            for skill_ref in skill_refs:
+                skill_name = Path(skill_ref).name
+                if skill_name not in command_blob:
+                    continue
+                skill_md = plugin_root / skill_ref.removeprefix("./") / "SKILL.md"
+                if not skill_md.is_file():
+                    raise ValueError(
+                        f"{plugin['name']}: skill does not exist: {skill_ref}"
+                    )
+                files.append(
+                    ExpectedFile(
+                        plugin_root / "codex-skills" / skill_name / "SKILL.md",
+                        render_shared_skill(
+                            plugin_name=plugin["name"],
+                            skill_ref=skill_ref,
+                            skill_path=skill_md,
+                            command_stems=command_stems,
+                        ),
+                    )
+                )
+
     return files
 
 
@@ -382,7 +510,7 @@ def stale_generated_skill_dirs(expected: list[ExpectedFile]) -> list[Path]:
                 continue
             if (
                 GENERATED_MARKER in head
-                and GENERATED_SKILL_SOURCE_PREFIX in head
+                and any(prefix in head for prefix in GENERATED_SKILL_SOURCE_PREFIXES)
                 and skill_path.parent not in expected_skills
             ):
                 stale.append(skill_path.parent)

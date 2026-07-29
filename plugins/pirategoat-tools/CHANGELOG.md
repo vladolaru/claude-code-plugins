@@ -31,6 +31,32 @@ existing Claude Code workflows as the canonical authoring surface.
 - Review pipeline stop and dispatch instructions adapt to the selected host
   while retaining Claude Code as the default for existing invocations.
 
+### Fixed
+
+- **`copy-as` clipboard injection.** Clipboard content is now written with the
+  Write tool instead of a shell heredoc, so copied text containing the heredoc
+  delimiter can no longer terminate it early and execute the remainder as shell.
+- **`code-review` mode.** The pipeline invocation now passes a computed `MODE`
+  (full/reset switches to `full`) instead of hardcoding `--mode incremental`,
+  so full/reset runs actually request a full review.
+- **`pr-update` artifact discovery.** Optional PR-template discovery is guarded
+  so an empty template directory no longer runs `cat` with no argument, and the
+  review-artifact paths match the repo-qualified directories the review
+  commands actually produce.
+- **`switch-to` git safety.** The fork remote is added idempotently (no failure
+  when it already exists), and stashing includes untracked files so the dirty
+  summary and the stash agree.
+- **`iterative-review` worktree safety.** The loop stops for user confirmation
+  before committing a dirty worktree rather than blanket-committing unrelated
+  edits or secrets into history.
+- **Self-contained Codex review adapters.** Generated shell examples that use
+  `CODEX_PLUGIN_ROOT` now assign it first (Codex does not export it), and Codex
+  repo-reviewer dispatch spawns the installed generic adapter task instead of
+  the synthetic per-instance name.
+- **Self-contained `SKILL_DIR` examples.** Runnable snippets in the
+  `using-figma`, `analyzing-cc-sessions`, and `decision-critic` skills assign
+  `SKILL_DIR` before use.
+
 ## [1.110.0] - 2026-07-27
 
 Closes a review blind spot around speculative extension surface and sharpens two structural lenses. Field feedback from WooCommerce Subscriptions reviews showed new hooks/filters being introduced without a stated need and maintained nearly forever afterward — while simplification-reviewer's framework-convention exemption actively excluded them from YAGNI review and wp-architecture-reviewer only checked for *missing* hooks, never unwarranted ones.

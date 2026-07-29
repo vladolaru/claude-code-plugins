@@ -42,6 +42,20 @@ adapters live in same-named directories under `codex-skills/` and are marked
 them outside the top-level `skills/` directory prevents Claude Code from
 discovering each canonical command a second time.
 
+The generator also surfaces **shared skills that a command depends on**. When a
+command body references a `skills/<name>` skill by name, the generator emits a
+host-translated copy at `codex-skills/<name>/SKILL.md` (source-marked
+`./skills/<name>`), because Codex only loads `codex-skills/`, not the canonical
+`skills/` tree. Skills no command references (e.g. pirategoat's reference
+library) are not surfaced. Fix such skills in `skills/`, never in the generated
+copy.
+
+Because Codex does not export `CODEX_PLUGIN_ROOT` into the shell, the generator
+prepends an explicit `CODEX_PLUGIN_ROOT="…"` assignment to any generated `bash`
+block that references it. Keep canonical commands using `${CLAUDE_PLUGIN_ROOT}`
+(which Claude Code exports) and let the generator handle the Codex form; do not
+hand-assign it in canonical commands.
+
 The review pipeline defaults to Claude Code behavior and persists
 `--host codex` when selected by a generated adapter. Codex briefings dispatch native
 parallel subagents and tell each one to read the canonical `agents/*.md`

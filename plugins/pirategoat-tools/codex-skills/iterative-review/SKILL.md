@@ -58,14 +58,32 @@ mkdir -p "$OUTPUT_DIR"
 **Resolve the scripts directory:**
 
 ```bash
+CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
 SCRIPTS_DIR="${CODEX_PLUGIN_ROOT}/scripts"
 ```
 
-**Ensure all changes are committed:**
+**Ensure the worktree is in a reviewable state:**
 
-Run `git status`. If there are uncommitted changes, commit them with semantic
-commit messages before proceeding. The review script blocks on uncommitted
-changes - Codex only reviews committed code (merge_base..HEAD).
+Codex only reviews committed code (`merge_base..HEAD`), so uncommitted changes
+must be committed first. Do **not** blanket-commit the worktree yourself - it may
+hold unrelated edits, secrets, or debris that should not enter history:
+
+```bash
+git status --porcelain
+```
+
+If there are uncommitted changes, STOP and get the user's decision before
+committing anything:
+
+1. Show the user what is uncommitted.
+2. Ask whether to commit it (and which changes), or to let them stage/commit or
+   stash themselves.
+3. Commit only what the user confirms, with semantic commit messages. If the
+   user declines, STOP - do not proceed with a dirty tree.
+
+Proceed only once the changes under review are committed. (The per-finding fixes
+this loop makes and commits in later rounds are the intended purpose of the
+command the user invoked - those do not need per-commit reconfirmation.)
 
 **Compute merge base:**
 

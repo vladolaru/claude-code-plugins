@@ -78,8 +78,10 @@ git diff --name-status ${BASE_REF}..HEAD
 # Priority 1: .github directory (most common)
 cat .github/PULL_REQUEST_TEMPLATE.md 2>/dev/null || \
 cat .github/pull_request_template.md 2>/dev/null || \
-# Priority 2: .github/PULL_REQUEST_TEMPLATE/ directory (use first file found)
-ls .github/PULL_REQUEST_TEMPLATE/*.md 2>/dev/null | head -1 | xargs cat 2>/dev/null || \
+# Priority 2: .github/PULL_REQUEST_TEMPLATE/ directory (use first file found).
+# Guard with a conditional so an empty directory does not run `cat` with no
+# argument (which would read stdin and stall / falsely short-circuit the chain).
+{ tmpl=$(ls .github/PULL_REQUEST_TEMPLATE/*.md 2>/dev/null | head -1); [ -n "$tmpl" ] && cat "$tmpl"; } || \
 # Priority 3: repo root
 cat PULL_REQUEST_TEMPLATE.md 2>/dev/null || \
 # Priority 4: docs/
@@ -109,12 +111,20 @@ Skip "Deferred Work" if nothing was deferred.
 
 **Skip this step for small PRs** - the diff tells the story.
 
-For medium and large PRs, check these locations:
+For medium and large PRs, check these locations. The review commands write to
+**repo-qualified** directories, so derive the same prefix the producers use
+before looking - otherwise the artifacts are silently missed:
+
+```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+SAFE_REPO_PATH=$(echo "${REPO_ROOT#/}" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
+SAFE_BRANCH=$(git branch --show-current | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
+```
 
 | Location | What | Relevance Check |
 |----------|------|-----------------|
-| `/tmp/branch-review-<branch>/review-findings.md` | Review findings | Matches this branch? |
-| `/tmp/pr-review-<PR#>/review-findings.md` | PR review findings | PR number matches? |
+| `/tmp/branch-review-${SAFE_REPO_PATH}-${SAFE_BRANCH}/review-findings.md` | `$pirategoat-tools:full-code-review` or `$pirategoat-tools:code-review` findings | Same repo + branch? |
+| `/tmp/pr-review-${SAFE_REPO_PATH}-${PR_NUMBER}/review-findings.md` | `$pirategoat-tools:pr-review` findings | Same repo + PR number? |
 | `~/.claude/plans/*.md` | Implementation plans | References this branch's files? |
 | `.claude/docs/plans/*.md` | Project-level plans | Date and content match? |
 | `.claude/reviews/*.md` | Code review output | References this branch? |
