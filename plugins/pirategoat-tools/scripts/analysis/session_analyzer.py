@@ -235,11 +235,19 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     # Builder heredocs synthesize a review record only when their paired
     # tool result classifies as a terminal success — failed, nonterminal,
     # and unclassifiable results persisted nothing, and a retry after
-    # failure must count once, not twice.
-    pending_builder_outputs: dict[str, dict[str, Any]] = {}
-    tool_result_states: dict[str, str] = {}
+    # failure must count once, not twice. Pairing is strict: exactly one
+    # call and one later result per tool ID. Reused IDs, duplicate
+    # results, or a result preceding its call (concatenated or damaged
+    # logs) would let a foreign success validate a dangling heredoc and
+    # fabricate findings, so ambiguous IDs stay unresolved (None poisons
+    # the ID). Entries are position-stamped to order calls and results.
+    pending_builder_outputs: dict[str, tuple[int, dict[str, Any]] | None] = {}
+    tool_result_states: dict[str, tuple[int, str] | None] = {}
+    # Every save (Write tool or confirmed builder heredoc) with its entry
+    # position, so cross-transport overwrites reduce in transcript order.
+    ordered_saves: list[tuple[int, dict[str, Any]]] = []
 
-    for entry in entries:
+    for position, entry in enumerate(entries):
         msg = entry.get("message", {})
         if isinstance(msg, str):
             continue
@@ -273,7 +281,11 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                     "Bash",
                     "builder_output_attempt",
                 )
-                tool_result_states[block["tool_use_id"]] = state
+                result_id = block["tool_use_id"]
+                if result_id in tool_result_states:
+                    tool_result_states[result_id] = None
+                else:
+                    tool_result_states[result_id] = (position, state)
 
         # First user message = prompt
         if role == "user" and not result["prompt_content"]:
@@ -318,7 +330,14 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                         if builder_output is not None and isinstance(
                             block.get("id"), str
                         ):
-                            pending_builder_outputs[block["id"]] = builder_output
+                            call_id = block["id"]
+                            if call_id in pending_builder_outputs:
+                                pending_builder_outputs[call_id] = None
+                            else:
+                                pending_builder_outputs[call_id] = (
+                                    position,
+                                    builder_output,
+                                )
                     elif tool_name == "Grep":
                         result["grep_searches"].append({
                             "pattern": tool_input.get("pattern", ""),
@@ -328,10 +347,10 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
                     elif tool_name == "Glob":
                         result["glob_searches"].append(tool_input.get("pattern", ""))
                     elif tool_name == "Write":
-                        result["write_outputs"].append({
+                        ordered_saves.append((position, {
                             "path": tool_input.get("file_path", ""),
                             "content": tool_input.get("content", ""),
-                        })
+                        }))
 
                 elif block.get("type") == "text":
                     result["final_texts"].append(block.get("text", ""))
@@ -339,14 +358,33 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
         if role == "assistant" and isinstance(content, str):
             result["final_texts"].append(content)
 
-    # Successful saves to the same artifact overwrite each other — a
-    # corrected rerun must count once, as its final content, not as an
-    # extra dispatch with duplicated findings.
-    final_by_path: dict[str, dict[str, Any]] = {}
-    for call_id, builder_output in pending_builder_outputs.items():
-        if tool_result_states.get(call_id) == "success":
-            final_by_path[builder_output["path"]] = builder_output
-    result["write_outputs"].extend(final_by_path.values())
+    for call_id, pending in pending_builder_outputs.items():
+        if pending is None:
+            continue
+        call_position, builder_output = pending
+        paired = tool_result_states.get(call_id)
+        if (
+            paired is not None
+            and paired[1] == "success"
+            and paired[0] > call_position
+        ):
+            ordered_saves.append((call_position, builder_output))
+
+    # Saves to the same artifact overwrite each other regardless of
+    # transport — a legacy Write followed by a corrected builder heredoc
+    # (or vice versa) must count once, as its final content, not as an
+    # extra dispatch with duplicated findings. Pathless records carry no
+    # artifact identity and are kept as-is.
+    ordered_saves.sort(key=lambda item: item[0])
+    last_by_path: dict[str, int] = {}
+    for index, (_position, record) in enumerate(ordered_saves):
+        if record.get("path"):
+            last_by_path[record["path"]] = index
+    result["write_outputs"] = [
+        record
+        for index, (_position, record) in enumerate(ordered_saves)
+        if not record.get("path") or last_by_path[record["path"]] == index
+    ]
 
     return result
 

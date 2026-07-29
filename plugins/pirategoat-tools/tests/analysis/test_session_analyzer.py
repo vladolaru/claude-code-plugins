@@ -918,3 +918,124 @@ class TestBashBuilderRecognition:
         assert agent_record["agent_name"] == "security"
         assert agent_record["total_findings"] == 2
         assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
+
+
+def _write_tool_entry(path, content, tool_id="write-1"):
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": "Write",
+                    "input": {"file_path": path, "content": content},
+                }
+            ],
+        },
+    }
+
+
+class TestSaveIntegrity:
+    """Concatenated or damaged logs can reuse tool IDs, duplicate results,
+    or invert call/result order — a foreign success must never validate a
+    dangling builder heredoc, and the same artifact saved through both
+    transports must count once."""
+
+    def test_reused_call_id_stays_unresolved(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="reused"),
+            _bash_entry(_builder_heredoc(), tool_id="reused"),
+            _tool_result_entry("reused"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+
+    def test_duplicate_results_stay_unresolved(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="doubled"),
+            _tool_result_entry("doubled", is_error=True),
+            _tool_result_entry("doubled"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+
+    def test_result_preceding_its_call_does_not_confirm_the_save(
+        self, tmp_path
+    ):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _tool_result_entry("inverted"),
+            _bash_entry(_builder_heredoc(), tool_id="inverted"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == []
+
+    def test_legacy_write_then_builder_correction_counts_once(self, tmp_path):
+        """An agent that first writes <reviewer>-review.json through the
+        legacy Write transport and then corrects it through the builder
+        heredoc overwrote one artifact — quality reports must see the
+        final content only, not two dispatches with both finding sets."""
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _write_tool_entry(
+                "/tmp/pr-review-42/security-review.json",
+                json.dumps({"reviewer": "security", "issues": []}),
+            ),
+            _tool_result_entry("write-1"),
+            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        [record] = data["write_outputs"]
+        assert record["source"] == "bash_builder_heredoc"
+
+    def test_builder_then_legacy_write_keeps_the_later_write(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
+            _write_tool_entry(
+                "/tmp/pr-review-42/security-review.json",
+                json.dumps({"reviewer": "security", "issues": []}),
+            ),
+            _tool_result_entry("write-1"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        [record] = data["write_outputs"]
+        assert "source" not in record
+
+    def test_saves_to_distinct_artifacts_are_both_kept(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _write_tool_entry("/tmp/pr-review-42/notes.md", "notes"),
+            _tool_result_entry("write-1"),
+            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert [record["path"] for record in data["write_outputs"]] == [
+            "/tmp/pr-review-42/notes.md",
+            "/tmp/pr-review-42/security-review.json",
+        ]
