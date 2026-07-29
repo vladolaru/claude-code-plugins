@@ -1297,6 +1297,39 @@ class TestLoadRuns:
         assert run["run"]["ended_at"] == "2026-07-18T10:01:00+00:00"
         assert run["outcome"]["summary"].get("total_agent_issues") == 2
 
+    def test_foreign_terminal_event_cannot_complete_a_run_missing_its_end(
+        self, tmp_path
+    ):
+        """When the first run never wrote a terminal event AND the second
+        run's pipeline_start line is damaged (dropped by the tolerant
+        reader), the tail's own run_id stamps — which every producer event
+        carries — are what remains to reject its pipeline_end. Accepting it
+        would mark the first run complete with the later run's summary and
+        lifecycle."""
+        first = _legacy_events()
+        del first[2]
+        first[1]["run_id"] = "legacy-1"
+        second = _legacy_events(run_id="legacy-2")
+        second[1]["run_id"] = "legacy-2"
+        second[1]["agent"] = "security-reviewer"
+        second[2]["run_id"] = "legacy-2"
+        second[2]["summary"] = {"total_duration_ms": 5, "total_agent_issues": 9}
+        second[2]["timestamp"] = "2026-07-18T11:00:00+00:00"
+        lines = [json.dumps(event).encode("utf-8") for event in first]
+        lines.append(b'{"event": "pipeline_start", "x": "\xff"}')
+        lines.extend(json.dumps(event).encode("utf-8") for event in second[1:])
+        (tmp_path / "legacy.jsonl").write_bytes(b"\n".join(lines) + b"\n")
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-1"
+        assert run["status"] == "running"
+        assert run["run"]["ended_at"] is None
+        assert [
+            event["agent"] for event in run["agents"]["started"]
+        ] == ["code-reviewer"]
+        assert run["outcome"]["summary"].get("total_agent_issues") is None
+
     def test_legacy_steps_carry_only_step_events(self, tmp_path):
         """The manifest contract's steps are step events only — a
         pipeline_end entry fails the transcript stage-timeline validator,

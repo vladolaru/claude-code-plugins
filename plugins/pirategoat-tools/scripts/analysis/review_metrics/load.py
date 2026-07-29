@@ -360,14 +360,28 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
     # means concatenation or damage. Combining segments would assign one run
     # ID the outcomes and lifecycle of OTHER runs — corrupt even under
     # exact --run-id filtering — so the first segment ends at whichever
-    # comes first: the next pipeline_start or the run's own pipeline_end.
-    # Stopping at the terminal event matters because the tolerant reader
-    # drops malformed lines: a damaged second pipeline_start would erase
-    # the start boundary and hand the first run the tail's outcomes.
+    # comes first: the next pipeline_start, an event stamped with a foreign
+    # run ID, or the run's own pipeline_end. Stopping at the terminal event
+    # matters because the tolerant reader drops malformed lines: a damaged
+    # second pipeline_start would erase the start boundary and hand the
+    # first run the tail's outcomes. The foreign-run-ID cut covers the
+    # remaining gap — when the first run never wrote a terminal event AND
+    # the next start line was dropped, the tail's own run_id stamps (which
+    # every producer event carries) are what remains to reject it.
     first = starts[0]
+    first_run_id = _safe_run_id(events[first].get("run_id"))
     boundary = len(events)
     for index in range(first + 1, len(events)):
-        kind = events[index].get("event")
+        event = events[index]
+        kind = event.get("event")
+        event_run_id = _safe_run_id(event.get("run_id"))
+        if (
+            first_run_id is not None
+            and event_run_id is not None
+            and event_run_id != first_run_id
+        ):
+            boundary = index
+            break
         if kind == "pipeline_start":
             boundary = index
             break
