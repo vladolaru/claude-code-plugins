@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/grok.md
+interface:
+  display_name: "Grok"
+  short_description: "Capture knowledge from the current conversation - auto-classifies as learning."
+  default_prompt: "Use $dex:grok."
+policy:
+  allow_implicit_invocation: false

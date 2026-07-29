@@ -1,10 +1,10 @@
 # AGENTS.md
 
-You maintain a Claude Code plugin marketplace. This file is your operating manual — follow it when working on any plugin in this repo.
+You maintain a dual-host Claude Code and Codex plugin marketplace. This file is your operating manual - follow it when working on any plugin in this repo.
 
 ## Repository Overview
 
-This is **vladolaru-claude-code-plugins** - Vlad Olaru's personal Claude Code plugin marketplace featuring specialized plugins for development workflows, WordPress backend development, and AI-powered tools.
+This is **vladolaru-claude-code-plugins** - Vlad Olaru's personal Claude Code and Codex plugin marketplace featuring specialized plugins for development workflows, WordPress backend development, and AI-powered tools.
 
 ## Development Model
 
@@ -22,12 +22,18 @@ No agent carries context between sessions — every agent reads the code cold. T
 
 ```text
 vladolaru-claude-code-plugins/
+├── .agents/
+│   └── plugins/
+│       └── marketplace.json      # Generated Codex marketplace
 ├── .claude-plugin/
-│   └── marketplace.json          # Plugin registry
+│   └── marketplace.json          # Canonical marketplace registry
 ├── CLAUDE.md                     # Claude Code shim -> @AGENTS.md
 ├── AGENTS.md                     # Canonical shared instructions
 ├── plugins/
 │   └── plugin-name/
+│       ├── .codex-plugin/
+│       │   └── plugin.json       # Generated Codex manifest
+│       ├── codex-skills/         # Generated command adapters (optional)
 │       ├── CHANGELOG.md          # Version history
 │       ├── agents/               # Subagent definitions (optional)
 │       │   └── agent-name.md
@@ -37,9 +43,38 @@ vladolaru-claude-code-plugins/
 │       │   └── skill-name/
 │       │       └── SKILL.md
 │       └── scripts/              # Helper scripts (optional)
+├── scripts/
+│   └── generate_codex_compat.py  # Deterministic host adapter generator
 ├── LICENSE
 └── README.md
 ```
+
+### Dual-Host Source Policy
+
+Claude Code marketplace entries and command files are the canonical source.
+Codex packaging is generated deterministically:
+
+| Canonical source | Generated Codex output |
+|---|---|
+| `.claude-plugin/marketplace.json` | `.agents/plugins/marketplace.json` and each `.codex-plugin/plugin.json` |
+| `plugins/*/commands/*.md` | `plugins/*/codex-skills/<command>/SKILL.md` and `agents/openai.yaml` |
+
+Never hand-edit files marked `GENERATED FILE - DO NOT EDIT`. After changing a
+plugin entry or command, run:
+
+```bash
+python3 scripts/generate_codex_compat.py
+python3 scripts/generate_codex_compat.py --check
+```
+
+Shared skills, scripts, hooks, and agent definitions remain canonical files
+used directly by both hosts. Use `$SKILL_DIR` in shared skill prose and define
+it as the directory containing the current `SKILL.md`. Host adapters resolve
+the actual absolute path.
+
+Codex command adapters use explicit invocation by default. Do not copy Claude
+model names into Codex configuration. The pirategoat review pipeline passes
+canonical reviewer definitions to native Codex subagents at runtime.
 
 ### Skills Specification
 
@@ -47,13 +82,13 @@ All skills must have a `SKILL.md` file with YAML frontmatter:
 
 - **Required frontmatter fields**:
   - `name` - hyphen-case, lowercase alphanumeric + hyphens
-  - `description` - when Claude should use this skill
+  - `description` - when the host should use this skill
 - **Optional frontmatter fields**:
   - `license`
   - `metadata` - custom key-value pairs
 - **Body**: Markdown instructions, examples, and guidelines
 
-### Agent Model Routing
+### Claude Code Agent Model Routing
 
 Subagents can run on a different model than the parent session. A Sonnet parent can dispatch Opus subagents (and vice versa) — there is no restriction on upgrading or downgrading.
 
@@ -75,6 +110,9 @@ Subagents can run on a different model than the parent session. A Sonnet parent 
 
 **Full reference:** See the [Claude Code subagents documentation](https://code.claude.com/docs/en/sub-agents) for the complete specification — all frontmatter fields, tool restrictions, permission modes, hooks, MCP server scoping, persistent memory, and example subagents.
 
+These model labels are Claude Code routing metadata. Codex review adapters
+intentionally omit them and use the current Codex subagent configuration.
+
 ### Accessing Claude Code Documentation
 
 Claude Code docs live at `https://code.claude.com/docs/en/`. Every page has a `.md` variant that returns raw markdown — much more efficient for agent consumption via `WebFetch` than the HTML page.
@@ -93,12 +131,13 @@ Claude Code docs live at `https://code.claude.com/docs/en/`. Every page has a `.
 
 ### pirategoat-tools
 
-Code review orchestration with 34 agents (28 domain reviewers, 2 pipeline, 2 cross-validators, 2 utility), 21 skills, and 7 commands covering security, architecture, testing, WordPress, WooCommerce regression invariants, accessibility, API contracts, data privacy, concurrency, code clarity, documentation drift, reference integrity, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
+Code review orchestration with 34 agents (28 domain reviewers, 2 pipeline, 2 cross-validators, 2 utility), 21 shared skills, 7 commands, and 7 generated Codex command adapters covering security, architecture, testing, WordPress, WooCommerce regression invariants, accessibility, API contracts, data privacy, concurrency, code clarity, documentation drift, reference integrity, and more. Has its own `CLAUDE.md` and `AGENTS.md` with pipeline architecture, agent registry reference, and development workflows.
 
 | Directory | Contents |
 |---|---|
 | `agents/` | 34 agent definitions (28 reviewers, 2 pipeline, 2 cross-validators, 2 utility) + 2 shared protocols in `agents/shared/` |
-| `skills/` | 21 reference skills (testing patterns, software architecture, WordPress, browser interaction, Figma, PR creation, etc.) |
+| `skills/` | 21 shared reference skills |
+| `codex-skills/` | 7 generated Codex command adapters |
 | `commands/` | 7 slash commands (`/pr-review`, `/full-code-review`, `/code-review`, `/iterative-review`, `/pr-update`, `/copy-as`, `/switch-to`) |
 | `scripts/` | Domain packages: `review/` (pipeline, plan_dispatch, context, telemetry, agents_status, critic, workspace_setup, agent_registry.json + `agent/` bootstrap, scope, output, diff_noise_filter), `hosts/` (host_context CLI, repo-signaled advisory chain for upstream runtime-hosts/library-deps, standalone resolver helpers, ensure_installed CLI for per-repo lockfile-hashed install caching, ecosystem_cache CLI for machine-wide WordPress/WooCommerce source cache management), `linear/` (pipeline, events), `figma/` (spec extraction, node parsing), `analysis/` (session analyzer, metrics), `iterative_review/` (multi-round independent review — Codex primary, Claude Code fallback) |
 | `schemas/` | TypeScript type definitions for structured review output |
@@ -114,7 +153,8 @@ Knowledge capture system — turns lessons, patterns, decisions, and research in
 | Directory | Contents |
 |---|---|
 | `commands/` | 7 commands: `/dex:grok`, `/dex:learn`, `/dex:pattern`, `/dex:research`, `/dex:sharpen`, `/dex:init`, `/dex:status` |
-| `skills/` | 1 skill (`knowledge-capture`) — core logic shared by all commands |
+| `skills/` | 1 shared skill (`knowledge-capture`) |
+| `codex-skills/` | 7 generated Codex command adapters + the surfaced `knowledge-capture` skill |
 | `scripts/` | `analyze-subagents.py` — subagent dispatch analysis tool |
 | `tests/` | Plugin structure tests, subagent analyzer tests, fixtures |
 
@@ -126,7 +166,8 @@ Systematic prompt optimization with evidence-grounded technique recommendations 
 
 | Directory | Contents |
 |---|---|
-| `skills/` | 1 skill (`prompt-engineer`) — 5-phase workflow: Triage → Analysis → Selection → Optimization → Verification |
+| `skills/` | 1 shared skill (`prompt-engineer`) |
+| `codex-skills/` | 1 generated Codex command adapter + the surfaced `prompt-engineer` skill |
 | `commands/` | 1 command (`/optimize-prompt`) |
 
 **Dev notes:** Simple prompts stay simple (triage filters out low-complexity cases). Works on any prompt format (SKILL.md, agent definitions, slash commands, CLAUDE.md, API prompts). No external dependencies.
@@ -138,12 +179,15 @@ Lossless image optimization for PNG, JPEG, GIF, SVG with before/after review and
 | Directory | Contents |
 |---|---|
 | `commands/` | 1 command (`/optimize-images`) |
+| `codex-skills/` | 1 generated Codex command adapter |
 
 **Dev notes:** Requires `imageoptim-cli` (macOS only, via npm) for raster images and/or `svgo` (cross-platform, via npm) for SVGs. At least one must be installed.
 
 ### yoloing-safe
 
-YOLO mode safety net — PreToolUse hook that blocks destructive commands, asks confirmation on risky operations, and nudges toward safer alternatives. Has its own `CLAUDE.md` and `AGENTS.md` with detailed development instructions.
+YOLO mode safety net - PreToolUse hook that blocks destructive commands and
+gates risky operations with host-aware behavior. Has its own `CLAUDE.md` and
+`AGENTS.md` with detailed development instructions.
 
 | File/Directory | Contents |
 |---|---|
@@ -157,7 +201,8 @@ YOLO mode safety net — PreToolUse hook that blocks destructive commands, asks 
 
 ### caffeinate-claude
 
-Keeps your Mac awake during Claude Code sessions using macOS `caffeinate`. Supports multiple tabs, handles crashes gracefully.
+Keeps your Mac awake during Claude Code and Codex sessions using macOS
+`caffeinate`. Supports multiple tabs and handles crashes gracefully.
 
 | File/Directory | Contents |
 |---|---|
@@ -172,6 +217,7 @@ Keeps your Mac awake during Claude Code sessions using macOS `caffeinate`. Suppo
 3. Register in `.claude-plugin/marketplace.json` — follow the structure of existing entries
 4. Update the [Plugin Inventory](#plugin-inventory) section in this file with counts and contents
 5. Update `README.md` directory tree with the new plugin entry
+6. Run `python3 scripts/generate_codex_compat.py` to create the Codex manifest and marketplace entry
 
 ## Adding Commands, Skills, or Agents to Existing Plugins
 
@@ -183,6 +229,7 @@ Keeps your Mac awake during Claude Code sessions using macOS `caffeinate`. Suppo
 | 2 | Plugin's `README.md` | Update count + add to the relevant table |
 | 3 | This file → [Plugin Inventory](#plugin-inventory) | Update summary count + contents row for the plugin |
 | 4 | Root `README.md` | Update count in directory tree |
+| 5 | Generated Codex adapters | Run `python3 scripts/generate_codex_compat.py` and commit the output |
 
 Skipping these updates causes stale counts that mislead future agents and humans.
 
@@ -233,6 +280,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `commands/pr-update.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` |
 | `commands/switch-to.md` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` |
 | `.claude-plugin/marketplace.json` | `pytest plugins/pirategoat-tools/tests/commands/test_commands.py -v` (validates command registration, agent cross-refs) |
+| Any marketplace entry, command, or dual-host adapter | `pytest plugins/pirategoat-tools/tests/test_codex_marketplace.py -v` |
+| `scripts/generate_codex_compat.py` | `pytest plugins/pirategoat-tools/tests/test_codex_marketplace.py -v` |
 
 **Run all tests:** `pytest plugins/pirategoat-tools/tests/ -v 2>&1 | tail -30`
 
@@ -284,8 +333,9 @@ Since this repository may contain multiple plugins with independent version cycl
 
 1. Update the plugin's `CHANGELOG.md` (Keep a Changelog format)
 2. Bump `version` in `.claude-plugin/marketplace.json`
-3. Commit, then tag: `<plugin-name>/vX.Y.Z`
-4. Optionally create a GitHub Release with `gh release create`
+3. Run `python3 scripts/generate_codex_compat.py` to synchronize the Codex manifest
+4. Commit, then tag: `<plugin-name>/vX.Y.Z`
+5. Optionally create a GitHub Release with `gh release create`
 
 ## AI Artifacts
 

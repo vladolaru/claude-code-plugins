@@ -1,0 +1,339 @@
+---
+name: copy-as
+description: "Copy content to clipboard formatted for the target destination (markdown by default, Slack mrkdwn or P2/Gutenberg HTML when specified)"
+---
+
+<!-- GENERATED FILE - DO NOT EDIT -->
+<!-- Source: ./commands/copy-as.md -->
+
+## Codex Host Adapter
+
+This skill is generated from the canonical Claude Code command named above. To execute it in Codex:
+
+1. Treat the text supplied after the skill mention as the invocation arguments. Substitute that exact text for `${CODEX_SKILL_ARGUMENTS}` before executing shell commands.
+2. Resolve `CODEX_PLUGIN_ROOT` to the absolute plugin root. The loaded skill directory is `<plugin-root>/codex-skills/<skill-name>`, so the plugin root is two directories above the directory containing this `SKILL.md`.
+3. Assign both variables explicitly in any shell call that uses them. Codex does not export these instruction variables automatically.
+4. Use Codex's available user-input and subagent tools when the workflow requests them.
+5. Follow the canonical workflow below without skipping its gates or artifact checks.
+
+## Canonical Workflow
+
+
+You are a format-aware clipboard tool. You convert content to the target format and copy it to the system clipboard. Do what is asked; nothing more, nothing less.
+
+## Step 1: Identify Target Format, Then Extract Content
+
+**Arguments:** `${CODEX_SKILL_ARGUMENTS}`
+
+Before extracting content, determine the target format - it controls how you process everything downstream.
+
+**Target format** - scan arguments for a destination keyword:
+- `slack` or `for slack` or `mrkdwn` → Slack mrkdwn
+- `p2` or `for p2` or `gutenberg` or `wordpress` → P2/Gutenberg HTML
+- `markdown`, `md`, or nothing specified → Standard markdown (default)
+
+**Content source** - one of:
+- Inline text in the arguments
+- A conversation reference (e.g., "the summary above", "that code block")
+- A file path to read
+
+If the content reference is ambiguous, ask the user to clarify.
+
+## Step 2: Prepare Content
+
+Extract the content. If it comes from a file, read it. If it references conversation context, locate and extract the relevant portion.
+
+**Default to human-readable form.** Unless the user explicitly asks for raw output (JSON, code, logs, tool output), extract the prose or structured representation that a person would read - not the underlying data. If both exist (e.g., a summary and a JSON payload), copy the summary.
+
+### PR descriptions, review comments, and similar dual-audience content
+
+**Exception to the default above.** PR content serves two audiences with different needs: human reviewers who need a quick scannable recap, and future AI sessions that benefit from rich context. Human reviewers won't read walls of text; AI sessions need detail to work effectively. Serve both by structuring content:
+
+**1. Lead with a human recap** - 3-5 short bullets covering what changed, why, and anything the reviewer should pay attention to. This is the part a human actually reads. Keep it under ~100 words.
+
+**2. Follow with detailed context** - Below a `---` separator (or a `<details>` block), include the richer description: implementation approach, trade-offs, affected areas, test coverage notes. This section serves future AI sessions and thorough reviewers.
+
+**3. Use the recap + details structure for anything over ~150 words.** Unseparated walls of prose signal AI slop - reviewers skip the entire thing.
+
+#### Verification: Before/After Example
+
+**Source content (verbose PR description):**
+
+> This PR refactors the payment gateway integration to use the new WooCommerce Checkout API. The previous implementation relied on legacy hooks that were deprecated in WC 8.0. The refactor touches three main areas: the gateway class, the checkout block integration, and the settings page. The gateway class now implements PaymentMethodInterface instead of extending the legacy abstract class. This required updating the process_payment method signature and moving saved payment method handling into a separate trait. The checkout block integration was rewritten to use the new registerPaymentMethod API.
+
+<example type="INCORRECT">
+## Summary
+
+This PR refactors the payment gateway integration to use the new WooCommerce Checkout API. The previous implementation relied on legacy hooks that were deprecated in WC 8.0. The refactor touches three main areas: the gateway class, the checkout block integration, and the settings page. The gateway class now implements PaymentMethodInterface instead of extending the legacy abstract class. This required updating the process_payment method signature and moving saved payment method handling into a separate trait. The checkout block integration was rewritten to use the new registerPaymentMethod API.
+</example>
+
+<example type="CORRECT">
+## Summary
+
+- Migrate payment gateway from legacy hooks to WC Checkout API
+- Replace deprecated abstract class with PaymentMethodInterface
+- Rewrite checkout block integration for registerPaymentMethod API
+
+---
+
+<details><summary>Context for reviewers and future sessions</summary>
+
+The previous implementation relied on legacy hooks deprecated in WC 8.0. Three areas affected:
+
+**Gateway class** - Now implements PaymentMethodInterface. process_payment signature updated; saved payment method handling extracted to a separate trait.
+
+**Checkout block** - Rewritten for registerPaymentMethod API.
+
+**Settings page** - Updated to reflect new gateway configuration options.
+
+</details>
+</example>
+
+The INCORRECT example dumps everything into one undifferentiated block. The CORRECT example gives humans a 3-bullet recap they'll actually read, then tucks rich context into a collapsible section for AI and thorough reviewers.
+
+#### PR review comments specifically
+
+Write as a fellow engineer talking to a peer. The PR author knows their own PR - strip anything obvious from context.
+
+**Tone and address:**
+- Use the author's name when known: "Hey Maria, ..." or "Sam - ..."
+- Assume good faith; they're trying their best - respond in kind
+- Acknowledge their intent or effort before raising a concern
+- Frame suggestions collaboratively: "What if we...?" not "You should..."
+- Say what's genuinely good, plainly - don't bury it in qualifications
+- Write in active voice; own your perspective
+
+**What to omit:**
+
+- **Omit the PR number** - you're already on the PR page.
+- **Omit the verdict** (approve / request changes) - that's a separate GitHub action, not prose.
+- **Omit restating what the PR does** - the author wrote it. Jump straight into observations, questions, or suggestions.
+- **Omit filler** like "Great work!", "Thanks for this PR!", "Overall this looks good." Say something substantive or say nothing.
+- **Omit your review methodology** - "11 specialist agents", "browser testing with live Stripe data", review tool names, agent counts - these are internal process. The reader cares about findings, not how you found them.
+- **Omit finding IDs and internal references** - no "F1", "F3+F4", "F9". These are machine artifacts. Use descriptive headings instead ("No test covers the overrides mechanic").
+- **Omit label-like prefixes** - no "Verdict:", "Approach:", "Suggestion:". Write in prose. Instead of "Suggestion: add a test", write "Worth adding a test that..."
+- **Always pair line numbers with a file name** - "at `use-auto-refresh.ts:215`" not just "at line 215". A bare line number is meaningless without context; use a relative path when the file could be ambiguous.
+
+The voice is direct, specific, and trusting. Point out what matters; skip the ceremony. A human reviewer doesn't number their findings or explain their process - they just say what they noticed.
+
+Strip tool artifacts (Read output line numbers, tool wrappers) so the clipboard contains clean, ready-to-paste content.
+
+Do not introduce hard line breaks. Output each paragraph, list item, or heading as a single continuous line - paste targets handle their own reflowing.
+
+## Step 3: Format for Target
+
+### Standard Markdown (default)
+
+Pass content through unchanged. Only fix broken formatting (unclosed code fences, malformed links). Preserve the author's structure, wording, and style exactly.
+
+### Slack mrkdwn
+
+**RULE 0: Apply every rule in the checklist below.** Skipping a transformation produces broken formatting in Slack. Process the content top-to-bottom, applying each rule. Content inside inline code (`` ` ``) and fenced code blocks (`` ``` ``) is protected - leave it verbatim.
+
+<conversion_checklist>
+
+**1. Bold** - `**text**` → `*text*` (single asterisks)
+
+**2. Italic** - `*text*` → `_text_` (underscores only)
+
+**3. Bold+italic** - `***text***` → `*text*` (default to bold - Slack can't combine reliably)
+
+**4. Strikethrough** - `~~text~~` → `~text~` (single tildes)
+
+**5. Links** - `[text](url)` → `<url|text>` (URL first, pipe separator, angle brackets)
+
+**6. Images** - `![alt](url)` → `<url|alt>` (convert to link - inline images unsupported)
+
+**7. Headings** - `# Heading` through `######` → `*Heading*` (bold text, blank line before for separation)
+
+**8. Code blocks** - Strip language identifier from opening fence: ` ```python ` → ` ``` `
+
+**9. Lists** - `* item` → `• item` (replace `*` bullets with `•` to avoid bold conflict). Keep `- item` and `1. item` as-is. Strip checkbox syntax: `- [ ] task` → `- task`, `- [x] done` → `- done`.
+
+**10. Tables** - Convert to preformatted code block with space-aligned columns:
+
+````
+```
+Column A   Column B   Column C
+value 1    value 2    value 3
+```
+````
+
+**11. Blockquotes** - Keep `>` for single-level. Flatten `>>` and deeper to `>`.
+
+**12. Horizontal rules** - Remove `---`, `***`, `___`. Use a blank line for separation.
+
+**13. Special characters in prose** (outside code spans/blocks):
+- `&` → `&amp;`
+- `<` → `&lt;`
+- `>` (not blockquote) → `&gt;`
+
+**14. HTML tags** - Strip entirely.
+
+</conversion_checklist>
+
+#### Verification: Before/After Example
+
+**Standard markdown input:**
+```markdown
+## Summary
+
+Fixed the **auth bug** where `admin` users got ~~blocked~~.
+See [the docs](https://example.com) for details.
+```
+
+**Correct Slack mrkdwn output:**
+```
+*Summary*
+
+Fixed the *auth bug* where `admin` users got ~blocked~.
+See <https://example.com|the docs> for details.
+```
+
+Verify your output matches this transformation pattern before copying.
+
+### P2/Gutenberg HTML
+
+P2 uses the WordPress Gutenberg block editor for both posts and comments. Gutenberg accepts HTML on paste and auto-converts to blocks - but only when the clipboard contains `public.html` data. Plain text markdown requires Cmd+Shift+V and produces inferior results.
+
+**Convert markdown to clean, semantic HTML.** Map each markdown element to its Gutenberg-compatible HTML equivalent:
+
+<p2_conversion_rules>
+
+**1. Headings** - `## Heading` → `<h2>Heading</h2>` (use matching heading level, h2-h6)
+
+**2. Paragraphs** - Consecutive lines of text → `<p>text</p>` (blank line = new paragraph)
+
+**3. Bold** - `**text**` → `<strong>text</strong>`
+
+**4. Italic** - `*text*` → `<em>text</em>`
+
+**5. Bold+italic** - `***text***` → `<strong><em>text</em></strong>`
+
+**6. Strikethrough** - `~~text~~` → `<s>text</s>`
+
+**7. Inline code** - `` `code` `` → `<code>code</code>`
+
+**8. Code blocks** - Fenced blocks → `<pre><code>content</code></pre>` (strip language identifier - Gutenberg assigns syntax highlighting separately)
+
+**9. Links** - `[text](url)` → `<a href="url">text</a>`
+
+**10. Images** - `![alt](url)` → `<img src="url" alt="alt" />`
+
+**11. Unordered lists** - `- item` or `* item` → `<ul><li>item</li></ul>`
+
+**12. Ordered lists** - `1. item` → `<ol><li>item</li></ol>`
+
+**13. Blockquotes** - `> text` → `<blockquote><p>text</p></blockquote>`
+
+**14. Horizontal rules** - `---` → `<hr />`
+
+**15. Tables** - Convert to HTML table: `<table><thead><tr><th>...</th></tr></thead><tbody><tr><td>...</td></tr></tbody></table>`
+
+</p2_conversion_rules>
+
+**Also generate a plain text fallback** - strip all HTML tags to produce a readable plain text version. This ensures paste works everywhere, not just Gutenberg.
+
+#### Verification: Before/After Example
+
+**Standard markdown input:**
+```markdown
+## Summary
+
+Fixed the **auth bug** where `admin` users got ~~blocked~~.
+See [the docs](https://example.com) for details.
+```
+
+**Correct P2 HTML output:**
+```html
+<h2>Summary</h2>
+<p>Fixed the <strong>auth bug</strong> where <code>admin</code> users got <s>blocked</s>. See <a href="https://example.com">the docs</a> for details.</p>
+```
+
+## Step 4: Copy to Clipboard
+
+### For Markdown and Slack formats
+
+Write the formatted content to a temp file with the **Write tool**, then pipe
+that file to the clipboard. Do **not** embed the content in a shell heredoc: if
+the content contains a line equal to the heredoc delimiter (for example a
+literal `CLIPBOARD_EOF`), the heredoc ends early and the remaining lines run as
+shell commands. Copied content is arbitrary (PR text, code, conversation
+excerpts), so this is a real injection risk. The Write tool has no delimiter and
+is injection-safe for any content.
+
+1. Resolve `$TMPDIR` to its absolute value, then use the Write tool to write the
+   formatted content verbatim to `<TMPDIR>/clipboard-content.txt`.
+2. Copy it to the clipboard and clean up:
+
+```bash
+pbcopy < "$TMPDIR/clipboard-content.txt"
+rm -f "$TMPDIR/clipboard-content.txt"
+```
+
+If `pbcopy` is unavailable (Linux), use `xclip -selection clipboard` instead.
+
+### For P2/Gutenberg format
+
+`pbcopy` only sets plain text on the clipboard. Gutenberg needs `public.html` data to auto-convert to blocks. Use a Swift script to set both HTML and plain text simultaneously:
+
+First write the Swift helper. This heredoc is safe because its body is fixed
+text with no substituted content:
+
+```bash
+mkdir -p "$TMPDIR"
+cat > "$TMPDIR/set-clipboard.swift" << 'SWIFT_EOF'
+import AppKit
+
+// Read HTML from first argument, plain text from second
+let htmlPath = CommandLine.arguments[1]
+let plainPath = CommandLine.arguments[2]
+
+let html = try! String(contentsOfFile: htmlPath, encoding: .utf8)
+let plain = try! String(contentsOfFile: plainPath, encoding: .utf8)
+
+let pb = NSPasteboard.general
+pb.clearContents()
+pb.setString(html, forType: .html)
+pb.setString(plain, forType: .string)
+print("OK")
+SWIFT_EOF
+```
+
+Now write the HTML and plain-text content with the **Write tool**, not a shell
+heredoc - the generated content is arbitrary and a line matching the delimiter
+would break out of the heredoc (see the injection note above):
+
+1. Write the HTML content verbatim to `<TMPDIR>/clipboard-html.txt`.
+2. Write the plain-text fallback verbatim to `<TMPDIR>/clipboard-plain.txt`.
+
+Then set both clipboard types and clean up:
+
+```bash
+swift "$TMPDIR/set-clipboard.swift" "$TMPDIR/clipboard-html.txt" "$TMPDIR/clipboard-plain.txt"
+rm -f "$TMPDIR/set-clipboard.swift" "$TMPDIR/clipboard-html.txt" "$TMPDIR/clipboard-plain.txt"
+```
+
+If Swift is unavailable (Linux), publish the HTML target with `xclip` (Gutenberg
+reads `text/html`):
+
+```bash
+xclip -selection clipboard -t text/html < "$TMPDIR/clipboard-html.txt"
+```
+
+`xclip` owns one selection target at a time, so a client requesting `text/plain`
+will not receive the fallback from that call. When a plain-text paste target is
+also needed, publish the fallback separately (this replaces the HTML target, so
+choose the one the paste destination needs):
+
+```bash
+xclip -selection clipboard < "$TMPDIR/clipboard-plain.txt"
+```
+
+## Step 5: Report
+
+Tell the user:
+- What was copied (brief summary or first few lines)
+- Which format was applied (markdown, Slack mrkdwn, or P2 HTML)
+- Approximate length (line count or character count)
+- For P2 format: confirm both HTML and plain text were set on clipboard - user can Cmd+V in P2 directly

@@ -1,0 +1,108 @@
+---
+name: pattern
+description: "Capture a reusable pattern from the current conversation - approaches, conventions, anti-patterns"
+---
+
+<!-- GENERATED FILE - DO NOT EDIT -->
+<!-- Source: ./commands/pattern.md -->
+
+## Codex Host Adapter
+
+This skill is generated from the canonical Claude Code command named above. To execute it in Codex:
+
+1. Treat the text supplied after the skill mention as the invocation arguments. Substitute that exact text for `${CODEX_SKILL_ARGUMENTS}` before executing shell commands.
+2. Resolve `CODEX_PLUGIN_ROOT` to the absolute plugin root. The loaded skill directory is `<plugin-root>/codex-skills/<skill-name>`, so the plugin root is two directories above the directory containing this `SKILL.md`.
+3. Assign both variables explicitly in any shell call that uses them. Codex does not export these instruction variables automatically.
+4. Use Codex's available user-input and subagent tools when the workflow requests them.
+5. Follow the canonical workflow below without skipping its gates or artifact checks.
+
+## Canonical Workflow
+
+
+# $dex:pattern
+
+Capture a reusable pattern from the current conversation. Self-contained - extracts from chat history. Optional focus hint narrows what to extract.
+
+## Step 1: Discover Project Infrastructure
+
+Follow the **Project Discovery** steps from the `knowledge-capture` skill.
+
+If `.claude/docs/` does not exist, use the host's user-input mechanism:
+
+**Question:** "No knowledge directory found. Create it?"
+**Options:**
+- **Yes, create `.claude/docs/`** - scaffolds `learnings/`, `patterns/`, `decisions/`, `research/`
+- **Not now** - abort capture
+
+If "Not now", stop here. If "Yes", create directories with `mkdir -p` and continue.
+
+## Step 2: Extract Pattern from Conversation
+
+Run the `<pre_extraction_analysis>` from the `knowledge-capture` skill on the relevant conversation exchange. If `${CODEX_SKILL_ARGUMENTS}` contains a focus hint, narrow extraction to that topic.
+
+If the conversation contains nothing extractable as a pattern (no reusable approach, convention, or anti-pattern), say so briefly and stop. Do not fabricate knowledge.
+
+Following the **Knowledge Extraction from Conversation** guidance in the `knowledge-capture` skill:
+
+1. Identify the reusable approach - what's the pattern an agent should follow?
+2. Draft a **title** as a short pattern name (e.g., "Use factory pattern for test fixtures")
+3. Draft the **Pattern** section - the reusable approach in concrete terms: what to do, when, and how, in 2-4 sentences
+4. Draft **When to apply** - observable signals that indicate this pattern is needed (what you'd see in code, errors, or task requirements)
+5. Draft **Alternatives** - conditions where a different approach works better, naming the preferred alternative for each (e.g., "When the dataset is small, prefer a simple array lookup instead")
+6. Identify a **Reference implementation** if one exists in the codebase - direct `file:line` reference (e.g., `src/gateway.php:45-60`)
+7. Identify 3-5 **tags** from the technical domain
+8. Determine the filename: `YYYY-MM-DD-slug.md`
+
+Verify the draft passes the `<extraction_quality_checklist>` from the `knowledge-capture` skill before presenting to the user.
+
+Include Alternatives - a pattern without boundaries will be misapplied.
+
+## Step 3: Confirm with User
+
+Use the host's user-input mechanism:
+
+**Question:** "Capture this pattern?"
+
+Show exactly these fields in the question description:
+> **Title:** [drafted title]
+> **Pattern:** [1-2 sentence pattern description]
+> **Applies when:** [1-sentence trigger summary]
+> **File:** `.claude/docs/patterns/YYYY-MM-DD-slug.md`
+
+**Options:**
+- **Accept** - write the document immediately
+- **Edit** - let user provide corrections via free text
+- **Skip** - abort capture
+
+If "Edit", apply the user's corrections and confirm again. If "Skip", stop here.
+
+## Step 4: Write the Document
+
+Write the pattern to `.claude/docs/patterns/YYYY-MM-DD-slug.md` using the **Pattern Format** from the `knowledge-capture` skill.
+
+Report:
+```
+Captured: .claude/docs/patterns/YYYY-MM-DD-slug.md
+```
+
+## Step 5: Suggest Promotion
+
+Patterns are reusable conventions - without promotion to CLAUDE.md, agents won't discover them. Always offer promotion.
+
+Use the host's user-input mechanism:
+
+**Question:** "Promote to CLAUDE.md so agents discover this pattern?"
+**Options:**
+- **Yes, add to CLAUDE.md (Recommended)** - promote using the promotion flow from the `knowledge-capture` skill
+- **No, just keep the doc** - pattern stays in `.claude/docs/patterns/` only
+
+## Step 6: Promote (If Selected)
+
+Follow the **CLAUDE.md Promotion** flow from the `knowledge-capture` skill:
+
+1. Count CLAUDE.md lines and check budget
+2. Draft a one-liner + link
+3. Auto-place in the most relevant section
+4. Report success with new line count
+
+After promotion (or skipping it), stop. This command captures one pattern per invocation.

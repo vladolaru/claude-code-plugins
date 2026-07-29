@@ -1,0 +1,40 @@
+{
+  "name": "dex",
+  "version": "1.6.0",
+  "description": "Frictionless knowledge capture that compounds engineering work. Captures learnings, patterns, decisions, and research from conversations into agent-first documents, with optional promotion to CLAUDE.md or AGENTS.md.",
+  "author": {
+    "name": "Vlad Olaru",
+    "url": "https://github.com/vladolaru"
+  },
+  "homepage": "https://github.com/vladolaru/claude-code-plugins",
+  "repository": "https://github.com/vladolaru/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-capture",
+    "compound-engineering",
+    "learnings",
+    "patterns",
+    "decisions",
+    "research",
+    "claude-md",
+    "agents-md"
+  ],
+  "skills": "./codex-skills/",
+  "interface": {
+    "displayName": "DEX",
+    "shortDescription": "Frictionless knowledge capture that compounds engineering work. Captures learnings, patterns, decisions, and research.",
+    "longDescription": "Frictionless knowledge capture that compounds engineering work. Captures learnings, patterns, decisions, and research from conversations into agent-first documents, with optional promotion to CLAUDE.md or AGENTS.md.",
+    "developerName": "Vlad Olaru",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/vladolaru/claude-code-plugins",
+    "defaultPrompt": [
+      "Use $dex:grok.",
+      "Use $dex:init.",
+      "Use $dex:learn."
+    ]
+  }
+}

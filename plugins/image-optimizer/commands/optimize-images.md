@@ -33,7 +33,7 @@ npm install -g svgo
 Run optimization WITHOUT `--cleanup` to generate and review results:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/optimize-images.sh" "$ARGUMENTS" "" /tmp/img-optimize
+"${CLAUDE_PLUGIN_ROOT}/scripts/optimize-images.sh" "$ARGUMENTS" "${CLAUDE_PLUGIN_ROOT}/scripts/svgo.config.mjs" /tmp/img-optimize
 ```
 
 Answer **N** when prompted. This preserves the temp directory.
@@ -48,12 +48,12 @@ Based on user's answer, run WITH `--cleanup`:
 
 **If user confirms YES:**
 ```bash
-echo "y" | "${CLAUDE_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "$ARGUMENTS" "" /tmp/img-optimize
+echo "y" | "${CLAUDE_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "$ARGUMENTS" "${CLAUDE_PLUGIN_ROOT}/scripts/svgo.config.mjs" /tmp/img-optimize
 ```
 
 **If user says NO:**
 ```bash
-echo "n" | "${CLAUDE_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "$ARGUMENTS" "" /tmp/img-optimize
+echo "n" | "${CLAUDE_PLUGIN_ROOT}/scripts/optimize-images.sh" --cleanup "$ARGUMENTS" "${CLAUDE_PLUGIN_ROOT}/scripts/svgo.config.mjs" /tmp/img-optimize
 ```
 
 Both commands clean up the temp directory. The `--cleanup` flag ensures cleanup happens regardless of yes/no.

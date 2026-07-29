@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/optimize-images.md
+interface:
+  display_name: "Optimize Images"
+  short_description: "Losslessly optimize images (PNG, JPEG, GIF, SVG) with review and confirmation."
+  default_prompt: "Use $image-optimizer:optimize-images."
+policy:
+  allow_implicit_invocation: false

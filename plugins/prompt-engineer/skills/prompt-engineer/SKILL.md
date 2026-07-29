@@ -1,8 +1,14 @@
 ---
 name: prompt-engineer
-description: Optimize system prompts for Claude Code agents using proven prompt engineering patterns. Use when users request prompt improvement, optimization, or refinement for agent workflows, tool instructions, or system behaviors.
-disable-model-invocation: true
+description: Use only when the user explicitly requests prompt improvement, optimization, or refinement for agent workflows, tool instructions, or system behaviors. Applies proven prompt engineering patterns across Claude Code and Codex prompts.
 ---
+
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
 
 # Prompt Optimizer
 
@@ -40,7 +46,7 @@ Before ANY analysis, read the appropriate pattern reference(s). Each reference c
 ### Single-Turn Reference (Always Read)
 
 ```
-${CLAUDE_SKILL_DIR}/references/prompt-engineering-single-turn.md
+$SKILL_DIR/references/prompt-engineering-single-turn.md
 ```
 
 This contains the complete catalog of single-turn patterns, including:
@@ -53,7 +59,7 @@ This contains the complete catalog of single-turn patterns, including:
 ### Multi-Turn Reference (Conditional)
 
 ```
-${CLAUDE_SKILL_DIR}/references/prompt-engineering-multi-turn.md
+$SKILL_DIR/references/prompt-engineering-multi-turn.md
 ```
 
 **Read when the prompt involves:**
@@ -66,7 +72,7 @@ ${CLAUDE_SKILL_DIR}/references/prompt-engineering-multi-turn.md
 ### Subagent Orchestration Reference (Conditional)
 
 ```
-${CLAUDE_SKILL_DIR}/references/prompt-engineering-subagents.md
+$SKILL_DIR/references/prompt-engineering-subagents.md
 ```
 
 **Read when the prompt involves:**
@@ -83,7 +89,7 @@ ${CLAUDE_SKILL_DIR}/references/prompt-engineering-subagents.md
 ### Human-in-the-Loop Reference (Conditional)
 
 ```
-${CLAUDE_SKILL_DIR}/references/prompt-engineering-hitl.md
+$SKILL_DIR/references/prompt-engineering-hitl.md
 ```
 
 **Read when the prompt involves:**
@@ -98,7 +104,7 @@ ${CLAUDE_SKILL_DIR}/references/prompt-engineering-hitl.md
 ### Compression Reference (Conditional)
 
 ```
-${CLAUDE_SKILL_DIR}/references/prompt-engineering-compression.md
+$SKILL_DIR/references/prompt-engineering-compression.md
 ```
 
 **Read when:**

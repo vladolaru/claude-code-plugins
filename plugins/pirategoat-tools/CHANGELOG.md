@@ -5,6 +5,67 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.111.0] - 2026-07-29
+
+Adds first-class Codex installation and execution while preserving the
+existing Claude Code workflows as the canonical authoring surface.
+
+### Added
+
+- **Generated Codex packaging.** The repository generator creates the Codex
+  plugin manifest and seven explicit command-skill adapters from the canonical
+  marketplace entry and command files.
+- **Native Codex review orchestration.** The review pipeline persists a host
+  selection and emits Codex briefings that dispatch parallel subagents,
+  reconciliation, and decision criticism with native Codex agent tools.
+  Reviewer names are normalized to Codex-safe task identifiers while the
+  canonical hyphenated names remain unchanged everywhere else.
+- **Shared reviewer definitions.** Codex subagents load the same canonical
+  reviewer Markdown files as Claude Code instead of maintaining a second
+  prompt tree. Briefings explicitly treat YAML frontmatter as Claude Code
+  packaging metadata and do not translate model or tool labels.
+
+### Changed
+
+- Shared skill resource paths now use a host-neutral `SKILL_DIR` convention.
+- Review pipeline stop and dispatch instructions adapt to the selected host
+  while retaining Claude Code as the default for existing invocations.
+
+### Fixed
+
+- **`copy-as` clipboard injection.** Clipboard content is now written with the
+  Write tool instead of a shell heredoc, so copied text containing the heredoc
+  delimiter can no longer terminate it early and execute the remainder as shell.
+- **`code-review` mode.** The pipeline invocation now passes a computed `MODE`
+  (full/reset switches to `full`) instead of hardcoding `--mode incremental`,
+  so full/reset runs actually request a full review.
+- **`pr-update` artifact discovery.** Optional PR-template discovery is guarded
+  so an empty template directory no longer runs `cat` with no argument, and the
+  review-artifact paths match the repo-qualified directories the review
+  commands actually produce.
+- **`switch-to` git safety.** The fork remote is pointed at this PR's fork
+  whether or not a remote of that name already exists (`set-url` when present,
+  `add` when missing), so a stale same-named remote can't make the checkout
+  fetch the wrong repository; stashing includes untracked files so the dirty
+  summary and the stash agree.
+- **`iterative-review` worktree safety.** The loop stops for user confirmation
+  before committing a dirty worktree rather than blanket-committing unrelated
+  edits or secrets into history.
+- **Self-contained Codex review adapters.** Generated shell examples that use
+  `CODEX_PLUGIN_ROOT` now assign it first (Codex does not export it), and Codex
+  repo-reviewer dispatch spawns the installed generic adapter task instead of
+  the synthetic per-instance name.
+- **Self-contained `SKILL_DIR` examples.** Runnable snippets in the
+  `using-figma`, `analyzing-cc-sessions`, and `decision-critic` skills assign
+  `SKILL_DIR` before use.
+- **`copy-as` Linux fallback.** The `xclip` guidance now documents publishing
+  both the HTML and plain-text targets (xclip owns one selection target at a
+  time) instead of only `text/html`.
+- **Codex generator robustness.** `$ARGUMENTS` substitution is word-boundary
+  matched so `$ARGUMENTS_LIST`-style names are not corrupted, and the
+  `--host codex` injection now fails loudly if a pipeline-invoking command stops
+  matching the expected pattern instead of silently dropping the flag.
+
 ## [1.110.0] - 2026-07-27
 
 Closes a review blind spot around speculative extension surface and sharpens two structural lenses. Field feedback from WooCommerce Subscriptions reviews showed new hooks/filters being introduced without a stated need and maintained nearly forever afterward — while simplification-reviewer's framework-convention exemption actively excluded them from YAGNI review and wp-architecture-reviewer only checked for *missing* hooks, never unwarranted ones.

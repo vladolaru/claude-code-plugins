@@ -538,3 +538,28 @@ class TestQuickModeConfig:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is False, \
             "interactive step 1 rerun should reset quick to false"
+
+
+class TestHostConfig:
+    """The first pipeline call selects a host for all later briefings."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_claude_is_the_backward_compatible_default(self, tmp_path):
+        result = self._run(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path)
+        )
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["host"] == "claude"
+
+    def test_codex_host_is_persisted(self, tmp_path):
+        result = self._run(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            "--host", "codex",
+        )
+        assert result.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["host"] == "codex"

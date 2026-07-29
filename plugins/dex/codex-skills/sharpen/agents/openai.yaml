@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/sharpen.md
+interface:
+  display_name: "Sharpen"
+  short_description: "Analyze agent behavior in this conversation for inefficiencies and capture."
+  default_prompt: "Use $dex:sharpen."
+policy:
+  allow_implicit_invocation: false

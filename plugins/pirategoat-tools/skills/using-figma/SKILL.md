@@ -3,6 +3,13 @@ name: using-figma
 description: Use when implementing UI from Figma designs, comparing implementations against Figma, performing design gap analysis, or planning Figma-based frontend work. Triggers on Figma URLs, node IDs, design-to-code tasks, requests to match a design, or Figma MCP setup and troubleshooting. Requires a working Figma MCP server.
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # Using Figma for Implementation
 
 You are a design-to-code specialist. Your job: translate Figma designs into production code with high fidelity by building a structured specification before writing any code.
@@ -93,10 +100,12 @@ Backtrack: Phase 4 → Phase 3 (fidelity gap found). Planning sessions: Phase 3 
 
 ### Plugin Scripts
 
-Some phases use helper scripts bundled with this plugin. Derive the plugin root from the skill base directory (provided by Claude Code on skill load — go two levels up):
+Some phases use helper scripts bundled with this plugin. Derive the plugin root
+from `SKILL_DIR` by going two levels up:
 
 ```bash
-PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
+SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
+PLUGIN_ROOT="$SKILL_DIR/../.."
 ```
 
 ### Phase 0: Survey
@@ -107,7 +116,8 @@ PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
 
 2. **Fetch metadata** — Call `get_metadata` on the root node. If the response is >50K chars, save to file and parse with:
    ```bash
-   python3 ${CLAUDE_SKILL_DIR}/../../scripts/figma/parse_nodes.py <saved-file> [--format tree|flat|json]
+   SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
+   python3 "$SKILL_DIR/../../scripts/figma/parse_nodes.py" <saved-file> [--format tree|flat|json]
    ```
 
 3. **Classify nodes** — From the parsed hierarchy, identify:
@@ -129,12 +139,13 @@ PLUGIN_ROOT="${CLAUDE_SKILL_DIR}/../.."
 
 2. **Parse each response** — If a response is >20K chars, save to file and parse with:
    ```bash
-   python3 ${CLAUDE_SKILL_DIR}/../../scripts/figma/extract_specs.py <saved-file> [--tokens-file <tokens-cache>]
+   SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
+   python3 "$SKILL_DIR/../../scripts/figma/extract_specs.py" <saved-file> [--tokens-file <tokens-cache>]
    ```
 
 3. **Build token mapping** — If no `.claude/figma-config.json` exists, cross-reference Figma token names with the project's CSS variables/design tokens. Write the mapping to `.claude/tmp/figma-cache/token-mapping-<fileKey>.json`.
 
-4. **Write Design Specification Document** — Create `.claude/tmp/figma-specs/<feature-name>.md` using the template in `${CLAUDE_SKILL_DIR}/references/design-spec-template.md`. This document is the source of truth for implementation — NOT the raw Figma responses.
+4. **Write Design Specification Document** - Create `.claude/tmp/figma-specs/<feature-name>.md` using the template in `$SKILL_DIR/references/design-spec-template.md`. This document is the source of truth for implementation - NOT the raw Figma responses.
 
 **Output:** Design Specification Document with normalized spacing, typography, colors, and component structure using project tokens.
 
@@ -302,4 +313,3 @@ Truncated responses, empty results, and connection errors are expected — Figma
 | **Screenshot Guessing** | Pixel values guessed from image, wrong | Always pair screenshot with design context |
 | **Cascade Batching** | Figma + Chrome calls batched, cascade failure | Separate tool providers into own batches |
 | **Reactive Figma** | No survey, issues discovered one-by-one by user | Survey phase mandatory (Phase 0) |
-

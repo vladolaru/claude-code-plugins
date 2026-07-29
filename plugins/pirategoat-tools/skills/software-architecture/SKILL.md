@@ -3,6 +3,13 @@ name: software-architecture
 description: Use when facing tight coupling, rigid designs, unclear responsibilities, hard-to-test code, or choosing between design patterns — diagnoses code smells and routes to the right pattern from GoF, SOLID, hexagonal architecture, and composable designs
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # Software Architect
 
 You are a software architect advising on design decisions. Given a concrete problem — tight coupling, rigid designs, unclear responsibilities, or hard-to-test code — you diagnose the root cause, recommend the right pattern, and guide implementation.
@@ -36,14 +43,14 @@ Read ONLY the specified sections from the reference file. Do NOT read full files
 
 | Code Smell / Symptom | Reference File | Sections to Read |
 |---------------------|---------------|-----------------|
-| Switch/if-else chains on types | `${CLAUDE_SKILL_DIR}/patterns/behavioral/strategy.md` | `## Quick Reference` + `## When to Use` + `## When NOT to Use` + `## Common Mistakes` |
-| Direct instantiation of dependencies | `${CLAUDE_SKILL_DIR}/patterns/creational/dependency-injection.md` | `## The Core Problem` + `## Dependency Injection - The Solution` |
-| Complex object creation, long constructor | `${CLAUDE_SKILL_DIR}/patterns/creational/factory.md` | `## Overview` + `## The Problem` + `## Factory Method` (first 100L) |
-| Business logic mixed with infrastructure | `${CLAUDE_SKILL_DIR}/patterns/architectural/hexagonal-architecture.md` | `## Overview` + `## When to Use Hexagonal Architecture` + `## Structure` (first 100L) |
-| Deep inheritance hierarchy, rigid hierarchy | `${CLAUDE_SKILL_DIR}/patterns/structural/decorator.md` | `## Intent` + `## Problem` + `## Solution` + `## When to Use` |
-| Complex subsystem exposed to clients | `${CLAUDE_SKILL_DIR}/patterns/structural/facade.md` | `## The Core Problem` + `## What is Facade?` + `## When to Use Facade` |
-| Algorithm steps fixed, details vary | `${CLAUDE_SKILL_DIR}/patterns/behavioral/template-method.md` | `## Intent` + `## Motivation` + `## When to Use Template Method` |
-| Need to encapsulate requests for undo/queue | `${CLAUDE_SKILL_DIR}/patterns/behavioral/command.md` | `## Overview` + `## When to Use` + `## When NOT to Use` |
+| Switch/if-else chains on types | `$SKILL_DIR/patterns/behavioral/strategy.md` | `## Quick Reference` + `## When to Use` + `## When NOT to Use` + `## Common Mistakes` |
+| Direct instantiation of dependencies | `$SKILL_DIR/patterns/creational/dependency-injection.md` | `## The Core Problem` + `## Dependency Injection - The Solution` |
+| Complex object creation, long constructor | `$SKILL_DIR/patterns/creational/factory.md` | `## Overview` + `## The Problem` + `## Factory Method` (first 100L) |
+| Business logic mixed with infrastructure | `$SKILL_DIR/patterns/architectural/hexagonal-architecture.md` | `## Overview` + `## When to Use Hexagonal Architecture` + `## Structure` (first 100L) |
+| Deep inheritance hierarchy, rigid hierarchy | `$SKILL_DIR/patterns/structural/decorator.md` | `## Intent` + `## Problem` + `## Solution` + `## When to Use` |
+| Complex subsystem exposed to clients | `$SKILL_DIR/patterns/structural/facade.md` | `## The Core Problem` + `## What is Facade?` + `## When to Use Facade` |
+| Algorithm steps fixed, details vary | `$SKILL_DIR/patterns/behavioral/template-method.md` | `## Intent` + `## Motivation` + `## When to Use Template Method` |
+| Need to encapsulate requests for undo/queue | `$SKILL_DIR/patterns/behavioral/command.md` | `## Overview` + `## When to Use` + `## When NOT to Use` |
 
 ### Quick Fixes (No Reference Needed)
 

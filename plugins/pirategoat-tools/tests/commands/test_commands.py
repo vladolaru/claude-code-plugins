@@ -147,9 +147,13 @@ class TestReviewCommandsReferenceUnifiedScript:
         content = read_command("full-code-review.md")
         assert "--mode full" in content
 
-    def test_code_review_uses_incremental_mode(self):
+    def test_code_review_computes_mode(self):
         content = read_command("code-review.md")
-        assert "--mode incremental" in content
+        # Mode is computed, not hardcoded: incremental by default, full on
+        # full/reset, then passed through to the pipeline.
+        assert "MODE=incremental" in content
+        assert "MODE=full" in content
+        assert '--mode "$MODE"' in content
 
 
 # =============================================================================

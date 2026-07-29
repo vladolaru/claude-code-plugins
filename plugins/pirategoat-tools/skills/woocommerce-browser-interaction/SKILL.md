@@ -15,7 +15,7 @@ Browser automation for WooCommerce debugging, verification, and testing.
 
 ## Required Setup Before Browser Use
 
-**Get site URL first.** Use `AskUserQuestion`:
+**Get site URL first.** Ask using the current host's input mechanism:
 
 ```
 Question: "What is the WordPress site URL?"
@@ -196,7 +196,8 @@ Detect page type from URL or body class:
    - Run: git rev-parse --show-toplevel
    - Read README.md at repo root and check if it mentions WooCommerce
    - Applies to: core repo, WooPayments, extensions, themes, any WooCommerce-related project
-2. CONFIRM: If CWD is not WooCommerce-related, use AskUserQuestion:
+2. CONFIRM: If CWD is not WooCommerce-related, ask using the current host's
+   input mechanism:
    - Question: "What is the path to your local WooCommerce-related repository?"
    - Header: "Repo Path"
    - Do NOT guess or search filesystem
@@ -208,7 +209,8 @@ Detect page type from URL or body class:
 5. WAIT: Ensure build completes before refreshing browser
 ```
 
-**If no build docs found:** Ask user for build command via AskUserQuestion.
+**If no build docs found:** Ask the user for the build command using the
+current host's input mechanism.
 
 ---
 

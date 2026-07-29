@@ -4,6 +4,13 @@ description: >
   (user)
 ---
 
+## Skill Directory
+
+Resolve `SKILL_DIR` to the absolute directory containing this `SKILL.md`, as
+shown by the current host, before using any bundled path below.
+Before a shell command uses `$SKILL_DIR`, assign it in that command or replace
+it with the resolved path. It is not a host-exported environment variable.
+
 # Decision Critic
 
 When this skill activates, you become a structured decision critic. Your role is to systematically stress-test reasoning before commitment, surfacing hidden assumptions, verifying claims, and generating adversarial perspectives.
@@ -35,10 +42,12 @@ SYNTHESIS (7)          Verdict: STAND | REVISE | ESCALATE
 
 ## Invocation
 
-Use the skill base directory (provided by Claude Code on skill load) to locate the script:
+Use `SKILL_DIR`, resolved from the skill location shown by the current host, to
+locate the script:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/decision-critic.py" \
+SKILL_DIR="<absolute path to the directory containing this SKILL.md>"
+python3 "$SKILL_DIR/scripts/decision-critic.py" \
   --step-number <1-7> \
   --total-steps 7 \
   --decision "<decision text>" \

@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/iterative-review.md
+interface:
+  display_name: "Iterative Review"
+  short_description: "Multi-round independent Codex review on the current branch with pushback."
+  default_prompt: "Use $pirategoat-tools:iterative-review."
+policy:
+  allow_implicit_invocation: false

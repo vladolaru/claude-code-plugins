@@ -1,0 +1,6 @@
+interface:
+  display_name: "Prompt Engineer"
+  short_description: "Evidence-grounded prompt optimization"
+  default_prompt: "Use $prompt-engineer:prompt-engineer to optimize this prompt."
+policy:
+  allow_implicit_invocation: false

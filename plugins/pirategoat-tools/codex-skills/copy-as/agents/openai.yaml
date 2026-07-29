@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/copy-as.md
+interface:
+  display_name: "Copy As"
+  short_description: "Copy content to clipboard formatted for the target destination (markdown by."
+  default_prompt: "Use $pirategoat-tools:copy-as."
+policy:
+  allow_implicit_invocation: false

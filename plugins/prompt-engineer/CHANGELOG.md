@@ -5,6 +5,29 @@ All notable changes to the prompt-engineer plugin will be documented in this fil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-07-23
+
+### Added
+
+- Codex plugin packaging and a generated `$prompt-engineer:optimize-prompt`
+  command adapter.
+- Codex metadata that disables implicit invocation of both the shared skill
+  and the generated command adapter.
+
+### Changed
+
+- Reference paths use the host-neutral `SKILL_DIR` convention.
+- The shared skill description now carries the explicit-request contract
+  instead of the Claude-only `disable-model-invocation` frontmatter field.
+
+### Fixed
+
+- The shared `prompt-engineer` skill is now surfaced into the Codex skill set.
+  The generated `optimize-prompt` adapter delegates to it, so without it Codex
+  could not resolve the skill the command depends on. The skill's five
+  `references/*.md` files (which it reads via `$SKILL_DIR`) are packaged with
+  the surfaced copy so the required reads succeed on Codex.
+
 ## [2.1.1] - 2026-03-28
 
 ### Fixed

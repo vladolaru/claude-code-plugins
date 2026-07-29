@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/full-code-review.md
+interface:
+  display_name: "Full Code Review"
+  short_description: "Run a full multi-agent code review on the current branch's changes (no PR."
+  default_prompt: "Use $pirategoat-tools:full-code-review."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,35 @@
+{
+  "name": "image-optimizer",
+  "version": "1.2.0",
+  "description": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
+  "author": {
+    "name": "Vlad Olaru",
+    "url": "https://github.com/vladolaru"
+  },
+  "homepage": "https://github.com/vladolaru/claude-code-plugins",
+  "repository": "https://github.com/vladolaru/claude-code-plugins",
+  "license": "MIT",
+  "keywords": [
+    "image-optimization",
+    "imageoptim",
+    "svgo",
+    "compression",
+    "lossless"
+  ],
+  "skills": "./codex-skills/",
+  "interface": {
+    "displayName": "Image Optimizer",
+    "shortDescription": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
+    "longDescription": "Lossless image optimization (PNG, JPEG, GIF, SVG) using imageoptim-cli and svgo with review/confirm workflow.",
+    "developerName": "Vlad Olaru",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/vladolaru/claude-code-plugins",
+    "defaultPrompt": [
+      "Use $image-optimizer:optimize-images."
+    ]
+  }
+}

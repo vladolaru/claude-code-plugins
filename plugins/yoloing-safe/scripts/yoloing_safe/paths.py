@@ -26,6 +26,14 @@ _SED_SCRIPT_OPTIONS = {"-e", "-f", "--expression", "--file"}
 _AWK_SCRIPT_OPTIONS = {"-f", "--file"}
 _FIND_PRE_EXPR_OPTIONS = {"-H", "-L", "-P"}
 _RE_REMOTE_PATH = re.compile(r"^\S+@\S+:\S+$")
+_RE_APPLY_PATCH_TARGET = re.compile(
+    r"^\*\*\* (?:Add|Update|Delete) File: (?P<path>.+?)\s*$",
+    re.MULTILINE,
+)
+_RE_APPLY_PATCH_MOVE_TARGET = re.compile(
+    r"^\*\*\* Move to: (?P<path>.+?)\s*$",
+    re.MULTILINE,
+)
 
 _NON_FILE_COMMANDS = frozenset({
     "echo", "printf", "export", "set", "unset", "test",
@@ -60,6 +68,28 @@ _INTERPRETER_WRITE_PATH_PATTERNS = [
         re.DOTALL,
     ),
 ]
+
+
+def extract_apply_patch_paths(patch):
+    """Extract every source and destination path from a Codex patch."""
+    if not isinstance(patch, str):
+        return []
+    paths = [
+        match.group("path")
+        for pattern in (_RE_APPLY_PATCH_TARGET, _RE_APPLY_PATCH_MOVE_TARGET)
+        for match in pattern.finditer(patch)
+    ]
+    return list(dict.fromkeys(paths))
+
+
+def resolve_tool_path(file_path, tool_input):
+    """Resolve a tool-supplied path against its cwd when one is provided."""
+    cwd = os.getcwd()
+    if isinstance(tool_input, dict):
+        supplied_cwd = tool_input.get("cwd")
+        if isinstance(supplied_cwd, str) and supplied_cwd:
+            cwd = supplied_cwd
+    return _resolve_candidate_path(file_path, cwd) or file_path
 
 
 def _resolve_candidate_path(path_token, cwd):

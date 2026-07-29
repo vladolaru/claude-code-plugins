@@ -36,21 +36,24 @@ SAFE_BRANCH=$(git branch --show-current | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
 SAFE_REPO_PATH=$(echo "${REPO_ROOT#/}" | tr '/' '-' | tr -c 'a-zA-Z0-9._-' '-')
 OUTPUT_DIR="/tmp/branch-review-${SAFE_REPO_PATH}-${SAFE_BRANCH}"
 mkdir -p "$OUTPUT_DIR"
+
+# Default review mode; full/reset switches it to a clean full review below.
+MODE=incremental
 ```
 
 **Handle full/reset mode:**
 
-If `$ARGUMENTS` is `full` or `reset`:
+If `$ARGUMENTS` is `full` or `reset`, delete the baseline and switch to full mode:
 ```bash
 rm -f "${OUTPUT_DIR}/.branch-review-baseline.json"
+MODE=full
 ```
-Then use `--mode full` instead of `--mode incremental`.
 
 **Run Step 1:**
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
-  --step 1 --mode incremental --output-dir "$OUTPUT_DIR"
+  --step 1 --mode "$MODE" --output-dir "$OUTPUT_DIR"
 ```
 
 If an explicit git range was provided, add `--git-range "<RANGE>"`.

@@ -533,6 +533,38 @@ class TestStep6DispatchAgents:
         assert "Agent tool" in text or "Agent" in text
         assert "Task tool" not in text
 
+    def test_codex_dispatch_uses_spawn_agent_and_canonical_reviewer(self, mod, tmp_path):
+        """Codex dispatch reads the canonical reviewer instead of copying it."""
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(
+            6, "full", state, ctx, config=config, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+
+        assert "spawn_agent" in text
+        assert "agents/code-reviewer.md" in text
+        assert "agents/security-reviewer.md" in text
+        assert "task name `code_reviewer`" in text
+        assert "task name `security_reviewer`" in text
+        assert "Claude Code packaging metadata" in text
+        assert "Agent tool" not in text
+
+    def test_codex_task_names_follow_host_schema(self, mod):
+        assert mod._codex_task_name("security-reviewer") == "security_reviewer"
+        assert mod._codex_task_name("Repo Reviewer/v2") == "repo_reviewer_v2"
+        assert mod._codex_task_name("42-check") == "reviewer_42_check"
+
+    def test_claude_remains_default_dispatch_host(self, mod, tmp_path):
+        state = self._make_state_with_agents()
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+
+        assert "Agent tool" in text
+        assert "spawn_agent" not in text
+
     def test_references_status_check(self, mod, tmp_path):
         """Should reference agents_status.py for monitoring."""
         state = self._make_state_with_agents()
@@ -578,6 +610,42 @@ class TestStep6DispatchAgents:
         assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
         assert tok[tok.index("--repo-agent-ref") + 1] == ".ai/agents/review/renewals.md"
         assert tok[tok.index("--scope-domains") + 1] == "wp-architecture,architecture"
+
+    def test_codex_adapter_spawn_uses_adapter_task_not_instance_name(self, mod, tmp_path):
+        """Codex spawn_agent targets the installed generic adapter task, while the
+        synthetic instance name only travels in the bootstrap --instance-name arg."""
+        import shlex
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [
+                {
+                    "name": "repo-renewals-reviewer",
+                    "adapter": "repo-reviewer-adapter",
+                    "ref": ".ai/agents/review/renewals.md",
+                    "label": "Renewals Expert",
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "scope_domains": ["architecture"],
+                },
+            ],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(
+            6, "full", state, ctx, config=config, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+        # spawn_agent task name is the generic adapter, not the instance name.
+        assert "task name `repo_reviewer_adapter`" in text
+        assert "task name `repo_renewals_reviewer`" not in text
+        # Instance identity is preserved only in the bootstrap command.
+        cmd_line = next(
+            line for line in g["actions"]
+            if "bootstrap.py" in line and "--repo-agent-ref" in line
+        )
+        tok = shlex.split(cmd_line)
+        assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
 
     def test_adapter_command_escapes_repo_controlled_strings(self, mod, tmp_path):
         """A malicious repo-supplied label/ref cannot inject shell commands."""
@@ -733,6 +801,22 @@ class TestStep8Reconcile:
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
         assert "review-reconciliator" in text
+
+    def test_codex_reconciliator_uses_canonical_agent_definition(self, mod, tmp_path):
+        state = self._make_state_with_agents(change_purpose_exists=True)
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(
+            8, "pr", state, ctx, config=config, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+
+        assert "spawn_agent" in text
+        assert "agents/review-reconciliator.md" in text
+        assert "task name `review_reconciliator`" in text
+        assert "interrupt_agent" in text
+        assert "`code_reviewer`" in text
+        assert "TaskStop" not in text
 
     def test_presents_agent_completion_summary(self, mod, tmp_path):
         """Should show which agents completed, missing, failed."""
@@ -1144,6 +1228,19 @@ class TestStep10DecisionCritic:
         g = mod.get_step_guidance(10, "pr", state, ctx)
         text = "\n".join(g["actions"])
         assert "decision-reviewer" in text
+
+    def test_codex_critic_uses_canonical_agent_definition(self, mod, tmp_path):
+        state = {"completed_steps": []}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(
+            10, "pr", state, {}, config=config, output_dir=str(tmp_path)
+        )
+        text = "\n".join(g["actions"])
+
+        assert "spawn_agent" in text
+        assert "agents/decision-reviewer.md" in text
+        assert "task name `decision_reviewer`" in text
+
 
     def test_reviews_report_not_findings(self, mod, tmp_path):
         """Critic should review review-report.md (all modes now)."""

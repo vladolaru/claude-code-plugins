@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/learn.md
+interface:
+  display_name: "Learn"
+  short_description: "Capture a learning from the current conversation - discoveries, fixes."
+  default_prompt: "Use $dex:learn."
+policy:
+  allow_implicit_invocation: false

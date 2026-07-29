@@ -1,0 +1,8 @@
+# GENERATED FILE - DO NOT EDIT
+# Source: ./commands/pr-review.md
+interface:
+  display_name: "Pr Review"
+  short_description: "End-to-end PR review - gathers context, dispatches all review agents."
+  default_prompt: "Use $pirategoat-tools:pr-review."
+policy:
+  allow_implicit_invocation: false
