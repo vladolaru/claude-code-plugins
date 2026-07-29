@@ -128,6 +128,56 @@ def test_unreferenced_shared_skills_are_not_surfaced_to_codex():
     assert "using-figma" not in generated
 
 
+def _load_generator():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("generate_codex_compat", GENERATOR)
+    module = importlib.util.module_from_spec(spec)
+    # Register before exec so the module's dataclass string annotations resolve.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_arguments_substitution_respects_word_boundary():
+    """`$ARGUMENTS` is rewritten but `$ARGUMENTS_LIST` (a longer name) is not."""
+    gen = _load_generator()
+    out = gen.translate_command_body(
+        "run $ARGUMENTS then read $ARGUMENTS_LIST\n",
+        plugin_name="example",
+        command_stems=[],
+    )
+    assert "${CODEX_SKILL_ARGUMENTS}" in out
+    assert "$ARGUMENTS_LIST" in out
+    assert "${CODEX_SKILL_ARGUMENTS}_LIST" not in out
+
+
+def test_pipeline_injection_fails_loudly_on_pattern_drift():
+    """A pirategoat command that calls the pipeline but no longer matches the
+    injection pattern must raise, not silently drop `--host codex`."""
+    import pytest
+
+    gen = _load_generator()
+    with pytest.raises(ValueError, match="host codex"):
+        gen.translate_command_body(
+            "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py --step 1\n",
+            plugin_name="pirategoat-tools",
+            command_stems=[],
+        )
+
+
+def test_pipeline_injection_skips_non_pipeline_commands():
+    """Pirategoat commands that never call the pipeline (copy-as, switch-to)
+    legitimately lack the pattern and must not raise."""
+    gen = _load_generator()
+    out = gen.translate_command_body(
+        "Copy content to the clipboard. No pipeline here.\n",
+        plugin_name="pirategoat-tools",
+        command_stems=[],
+    )
+    assert "clipboard" in out
+
+
 def test_review_command_adapters_select_codex_host():
     plugin_root = REPO_ROOT / "plugins" / "pirategoat-tools"
     for command_name in ("pr-review", "full-code-review", "code-review"):

@@ -297,7 +297,21 @@ swift "$TMPDIR/set-clipboard.swift" "$TMPDIR/clipboard-html.txt" "$TMPDIR/clipbo
 rm -f "$TMPDIR/set-clipboard.swift" "$TMPDIR/clipboard-html.txt" "$TMPDIR/clipboard-plain.txt"
 ```
 
-If Swift is unavailable (Linux), fall back to `xclip`: `xclip -selection clipboard -t text/html < html-file`.
+If Swift is unavailable (Linux), publish the HTML target with `xclip` (Gutenberg
+reads `text/html`):
+
+```bash
+xclip -selection clipboard -t text/html < "$TMPDIR/clipboard-html.txt"
+```
+
+`xclip` owns one selection target at a time, so a client requesting `text/plain`
+will not receive the fallback from that call. When a plain-text paste target is
+also needed, publish the fallback separately (this replaces the HTML target, so
+choose the one the paste destination needs):
+
+```bash
+xclip -selection clipboard < "$TMPDIR/clipboard-plain.txt"
+```
 
 ## Step 5: Report
 

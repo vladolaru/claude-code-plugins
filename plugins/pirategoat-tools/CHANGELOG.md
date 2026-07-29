@@ -56,6 +56,13 @@ existing Claude Code workflows as the canonical authoring surface.
 - **Self-contained `SKILL_DIR` examples.** Runnable snippets in the
   `using-figma`, `analyzing-cc-sessions`, and `decision-critic` skills assign
   `SKILL_DIR` before use.
+- **`copy-as` Linux fallback.** The `xclip` guidance now documents publishing
+  both the HTML and plain-text targets (xclip owns one selection target at a
+  time) instead of only `text/html`.
+- **Codex generator robustness.** `$ARGUMENTS` substitution is word-boundary
+  matched so `$ARGUMENTS_LIST`-style names are not corrupted, and the
+  `--host codex` injection now fails loudly if a pipeline-invoking command stops
+  matching the expected pattern instead of silently dropping the flag.
 
 ## [1.110.0] - 2026-07-27
 

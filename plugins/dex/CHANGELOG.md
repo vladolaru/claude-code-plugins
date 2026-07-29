@@ -27,6 +27,9 @@
   directory and instructions file correctly.
 - The generated `sharpen` adapter assigns `CODEX_PLUGIN_ROOT` in its shell
   example instead of referencing the unexported variable.
+- Project discovery now recognizes a direct root `AGENTS.md` (a Codex-only
+  project with no `CLAUDE.md`), resolving `ai_dir` to `.ai` instead of treating
+  the knowledge infrastructure as missing.
 
 ## [1.5.3] - 2026-03-02
 

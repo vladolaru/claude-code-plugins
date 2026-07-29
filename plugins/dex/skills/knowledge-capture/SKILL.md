@@ -16,11 +16,14 @@ Discover the project's knowledge infrastructure fresh on every invocation. Scan 
 ### Discovery Steps
 
 1. **Find the project root:** Run `git rev-parse --show-toplevel`
-2. **Find CLAUDE.md:** Check in order, use the first found:
+2. **Find the instructions file:** Check in order, use the first found:
    - `<root>/CLAUDE.md`
    - `<root>/.claude/CLAUDE.md`
+   - `<root>/AGENTS.md` — a direct AGENTS.md project (e.g. a Codex-only repo
+     with no CLAUDE.md). Use it as the instructions file with `ai_dir` = `.ai`,
+     then skip the CLAUDE.md indirection in step 3a.
 3. **Resolve instructions file and `ai_dir`:**
-   a. Check whether CLAUDE.md redirects to AGENTS.md:
+   a. If a CLAUDE.md was found, check whether it redirects to AGENTS.md:
       - **Symlink:** Run `readlink <claude_md_path>`. If the target filename is `AGENTS.md`, use the symlink target.
       - **Include directive:** Read the file content. If the entire content is a single `@AGENTS.md` line (with optional whitespace/newlines), find the referenced AGENTS.md relative to CLAUDE.md's directory.
       - If no indirection is detected, continue using CLAUDE.md.

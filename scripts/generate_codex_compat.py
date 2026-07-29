@@ -287,7 +287,9 @@ def translate_command_body(
 ) -> str:
     body = normalize_text(body)
     body = body.replace("${CLAUDE_PLUGIN_ROOT}", "${CODEX_PLUGIN_ROOT}")
-    body = body.replace("$ARGUMENTS", "${CODEX_SKILL_ARGUMENTS}")
+    # Word-boundary match so `$ARGUMENTS_LIST` etc. are not rewritten to
+    # `${CODEX_SKILL_ARGUMENTS}_LIST`.
+    body = re.sub(r"\$ARGUMENTS\b", "${CODEX_SKILL_ARGUMENTS}", body)
     body = body.replace("AskUserQuestion", "the host's user-input mechanism")
     body = rewrite_same_plugin_commands(
         body,
@@ -296,10 +298,22 @@ def translate_command_body(
     )
 
     if plugin_name == "pirategoat-tools":
-        body = body.replace(
-            "scripts/review/pipeline.py \\\n",
+        pattern = "scripts/review/pipeline.py \\\n"
+        injected = body.replace(
+            pattern,
             "scripts/review/pipeline.py \\\n  --host codex \\\n",
         )
+        # Fail loudly if a command that invokes the pipeline no longer matches
+        # the injection pattern (e.g. reformatted continuation) — otherwise the
+        # adapter would silently drop `--host codex`. Commands that never call
+        # the pipeline (copy-as, switch-to, ...) legitimately lack the pattern.
+        if injected == body and "scripts/review/pipeline.py" in body:
+            raise ValueError(
+                f"{plugin_name}: pipeline.py invocation found but the "
+                "'--host codex' injection pattern did not match; the command "
+                "body may have been reformatted."
+            )
+        body = injected
 
     body = inject_codex_plugin_root(body)
 
