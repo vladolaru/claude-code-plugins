@@ -394,6 +394,52 @@ class TestProvenanceGate:
         assert result["reviewers"] == []
         assert result["untrusted"][0]["kind"] == "config"
 
+    def test_symlinked_declaration_gates_on_the_target(self, mod, tmp_path):
+        """Git reports a change against the symlink's TARGET path, while
+        the declaration names the symlink. Trust must cover both — a PR
+        modifying the target would otherwise inject changed prompt text
+        through an untouched-looking declaration."""
+        _touch(tmp_path, "docs/target.md")
+        (tmp_path / "rule-link.md").symlink_to(tmp_path / "docs" / "target.md")
+        _write_config(tmp_path, {"review": {
+            "rules": [{"id": "r1", "path": "rule-link.md"}],
+        }})
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["docs/target.md"]
+        )
+        assert result["rules"] == []
+        assert result["untrusted"][0]["kind"] == "rule"
+
+    def test_symlinked_config_gates_on_the_target(self, mod, tmp_path):
+        real_config = tmp_path / "docs" / "real-config.json"
+        real_config.parent.mkdir(parents=True, exist_ok=True)
+        _touch(tmp_path, "rule.md")
+        real_config.write_text(json.dumps({"review": {
+            "rules": [{"id": "r1", "path": "rule.md"}],
+        }}))
+        config_path = tmp_path / ".pirategoat" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.symlink_to(real_config)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["docs/real-config.json"]
+        )
+        assert result["rules"] == []
+        [entry] = result["untrusted"]
+        assert entry["kind"] == "config"
+
+    def test_untouched_symlinked_declaration_stays_trusted(self, mod, tmp_path):
+        _touch(tmp_path, "docs/target.md")
+        (tmp_path / "rule-link.md").symlink_to(tmp_path / "docs" / "target.md")
+        _write_config(tmp_path, {"review": {
+            "rules": [{"id": "r1", "path": "rule-link.md"}],
+        }})
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["src/app.php"]
+        )
+        assert [r["id"] for r in result["rules"]] == ["r1"]
+        assert result["untrusted"] == []
+
+
 class TestDequoteGitPath:
     """Git C-quoting decoder used by the provenance gate."""
 

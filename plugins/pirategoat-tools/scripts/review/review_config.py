@@ -135,7 +135,8 @@ def load_review_config(
         dequoted = _dequote_git_path(path)
         if dequoted != path:
             changed.add(dequoted.replace(os.sep, "/"))
-    if config_relpath in changed:
+    repo_real = os.path.realpath(repo_path)
+    if changed & _provenance_rel_paths(config_relpath, config_path, repo_real):
         # The declarations themselves are PR-controlled: nothing they
         # declare can be trusted, including entries pointing at untouched
         # files.
@@ -161,7 +162,10 @@ def load_review_config(
 
     def _gate(entry, kind, file_field):
         rel_path = str(entry.get(file_field, "")).replace(os.sep, "/")
-        if rel_path not in changed:
+        identities = _provenance_rel_paths(
+            rel_path, entry.get("resolved_path") or "", repo_real
+        )
+        if not identities & changed:
             return entry
         result["untrusted"].append(
             {"kind": kind, "id": entry.get("id"), "path": rel_path,
@@ -372,6 +376,20 @@ def _dequote_git_path(path: str) -> str:
         else:
             return path
     return out.decode("utf-8", errors="surrogateescape")
+
+
+def _provenance_rel_paths(declared_rel: str, abs_path: str, repo_real: str) -> set:
+    """Repo-relative identities of one declaration file for the provenance gate.
+
+    The declared relative path plus the symlink-resolved target's relative
+    path: Git reports a change against the TARGET, so a declaration reached
+    through an in-repo symlink must be gated on both spellings.
+    """
+    identities = {declared_rel}
+    if abs_path:
+        real = os.path.realpath(abs_path)
+        identities.add(os.path.relpath(real, repo_real).replace(os.sep, "/"))
+    return identities
 
 
 def _path_inside_repo(path: str, repo_path: str) -> bool:
