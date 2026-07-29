@@ -920,6 +920,35 @@ class TestBashBuilderRecognition:
         assert agent_record["findings_by_severity"] == {"high": 1, "medium": 1}
 
 
+class TestTextReportFindingCounts:
+    """A save that parses as a review payload carries its exact issue list.
+    The keyword heuristic estimated JSON findings by counting '"id"' — but
+    the builder-heredoc reconstruction omits ids entirely, so a canonical
+    one-finding save rendered as ~0 findings."""
+
+    def test_reconstructed_builder_save_counts_issues_exactly(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _bash_entry(_builder_heredoc(), tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+        data = _mod.parse_subagent_log(str(log))
+        # A prose save has no exact structure — it keeps the heuristic,
+        # displayed as approximate.
+        data["write_outputs"].append({
+            "path": "/tmp/pr-review-42/security-review.md",
+            "content": "## Finding A\n",
+        })
+        meta = {"session_id": "session-1234", "date": "2026-07-29"}
+
+        report = _mod.format_text_report([(meta, data)], "security-reviewer")
+
+        assert ", 2 findings)" in report
+        assert ", ~0 findings)" not in report
+        assert ", ~1 findings)" in report
+
+
 def _write_tool_entry(path, content, tool_id="write-1"):
     return {
         "type": "assistant",

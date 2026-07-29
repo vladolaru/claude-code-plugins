@@ -586,9 +586,19 @@ def format_text_report(dispatches: list[tuple[dict, dict]], agent_name: str | No
         if data["write_outputs"]:
             for wo in data["write_outputs"]:
                 content = wo["content"]
-                finding_count = content.count("## Finding") + content.count("### PAT-") + content.count('"id"')
+                # A save that parses as a review payload carries its exact
+                # issue list — count it directly. The keyword heuristic is
+                # only for prose saves; applied to JSON it miscounts (the
+                # builder-heredoc reconstruction has no "id" keys at all,
+                # so a real one-finding save would render as ~0 findings).
+                review_json = _parse_review_write_output(wo)
+                if review_json is not None:
+                    count_display = f"{len(review_json['issues'])} findings"
+                else:
+                    finding_count = content.count("## Finding") + content.count("### PAT-") + content.count('"id"')
+                    count_display = f"~{finding_count} findings"
                 lines.append(
-                    f"Output: {wo['path'][-60:]} ({len(content):,} chars, ~{finding_count} findings)"
+                    f"Output: {wo['path'][-60:]} ({len(content):,} chars, {count_display})"
                 )
         elif data["final_texts"]:
             last = data["final_texts"][-1]
