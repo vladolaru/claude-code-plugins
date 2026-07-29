@@ -1889,11 +1889,20 @@ def enrich_run_transcript(
             )
             continue
         seen_paths.add(resolved)
-        entries, parse_gap = _read_jsonl(transcript)
+        # The manifest run window bounds subagent evidence exactly like the
+        # orchestrator transcript: a resumed agent appends later turns to the
+        # same file, and reading them would let historical run metrics absorb
+        # post-run usage, reads, and failures.
+        entries, parse_gap, time_gap = _bounded_jsonl_entries(transcript, window)
         if parse_gap:
             agent_transcript_parse_gaps.add(dispatch["agent"])
             warnings.append(
                 {"code": "agent_transcript_parse_gap", "agent": dispatch["agent"]}
+            )
+        if time_gap:
+            agent_transcript_parse_gaps.add(dispatch["agent"])
+            warnings.append(
+                {"code": "agent_transcript_time_gap", "agent": dispatch["agent"]}
             )
 
         agent_scope = _scope_for_agent(manifest, dispatch["agent"])

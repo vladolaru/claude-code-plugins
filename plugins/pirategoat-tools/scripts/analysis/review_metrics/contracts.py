@@ -87,6 +87,7 @@ _FIXED_WARNING_CODES = {
     "agent_transcript_missing",
     "duplicate_transcript_ignored",
     "agent_transcript_parse_gap",
+    "agent_transcript_time_gap",
     "agent_transcript_unresolved_calls",
     "agent_scope_evidence_missing",
 }

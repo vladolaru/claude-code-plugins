@@ -3474,6 +3474,136 @@ class TestEnrichRunTranscript:
             + result["observed_reads"]["non_scope_comparable"]
         )
 
+    def test_subagent_resume_after_run_end_is_excluded(self, tmp_path):
+        """A subagent resumed after the manifest's ended_at appends later
+        turns to the same transcript file. The run window must bound that
+        evidence — otherwise historical run metrics absorb post-run usage,
+        reads, and failures and change over time."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        session_id = "resumed-subagent"
+        call = _call("reviewer", "Agent", prompt=_agent_prompt(output_dir))
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(call),
+                _result("reviewer", structured={"agentId": "reviewer-id"}),
+            ],
+        )
+        resume_at = 2 * 3600  # one hour past ended_at
+        _write_jsonl(
+            sessions / session_id / "subagents" / "agent-reviewer-id.jsonl",
+            [
+                _at(
+                    _assistant(
+                        _call(
+                            "in-run",
+                            "Read",
+                            file_path=str(repo / "src/in.py"),
+                        ),
+                        usage=_usage(10, 5),
+                    ),
+                    10,
+                ),
+                _at(_result("in-run"), 11),
+                # Resume prompt: a genuine user turn past the window's end
+                # closes it, exactly like the orchestrator transcript.
+                _at(
+                    {
+                        "type": "user",
+                        "message": {"role": "user", "content": "keep going"},
+                    },
+                    resume_at,
+                ),
+                _at(
+                    _assistant(
+                        _call(
+                            "post-run",
+                            "Read",
+                            file_path=str(repo / "src/post-run.py"),
+                        ),
+                        usage=_usage(1000, 500),
+                    ),
+                    resume_at + 1,
+                ),
+                _at(
+                    _result(
+                        "post-run", "API Error: resumed failure", is_error=True
+                    ),
+                    resume_at + 2,
+                ),
+            ],
+        )
+
+        result = enrich_run_transcript(
+            _manifest(session_id, repo, output_dir),
+            sessions,
+            {"security-reviewer"},
+        )
+
+        assert result["observed_reads"]["all"] == ["src/in.py"]
+        agent_row = next(
+            row
+            for row in result["agent_usage"]
+            if row["agent"] == "security-reviewer"
+        )
+        assert agent_row["usage"]["output_tokens"] == 5
+        assert result["tool_failures"] == []
+        assert result["correlation"]["complete"] is True
+
+    def test_timestampless_agent_evidence_is_a_time_gap(self, tmp_path):
+        """An assistant record without a usable timestamp cannot be bound to
+        the run window — that is damaged evidence for the agent's family."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        session_id = "timestampless-subagent"
+        call = _call("reviewer", "Agent", prompt=_agent_prompt(output_dir))
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(call),
+                _result("reviewer", structured={"agentId": "reviewer-id"}),
+            ],
+        )
+        transcript = (
+            sessions / session_id / "subagents" / "agent-reviewer-id.jsonl"
+        )
+        _write_jsonl(
+            transcript,
+            [
+                _assistant(
+                    _call("read", "Read", file_path=str(repo / "src/in.py")),
+                    usage=_usage(10, 5),
+                ),
+                _result("read"),
+            ],
+        )
+        stray = dict(
+            _assistant(
+                _call("late", "Read", file_path=str(repo / "src/late.py")),
+                usage=_usage(1, 1),
+            )
+        )
+        stray.pop("timestamp", None)
+        with transcript.open("a") as stream:
+            stream.write(json.dumps(stray) + "\n")
+
+        result = enrich_run_transcript(
+            _manifest(session_id, repo, output_dir),
+            sessions,
+            {"security-reviewer"},
+        )
+
+        assert {
+            "code": "agent_transcript_time_gap",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["agent_data"] is False
+
     def test_retry_and_partial_synthesis_reads_remain_private_and_separate(
         self, tmp_path
     ):
