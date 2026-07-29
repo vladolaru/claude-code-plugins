@@ -1173,6 +1173,51 @@ class TestRepoRuleAndRefModeSelection:
             cmd, capture_output=True, text=True, timeout=120, cwd=str(repo)
         )
 
+    def test_rule_targeting_the_instance_name_reaches_the_adapter(
+        self, tmp_path
+    ):
+        """In ref-mode args.agent is always "repo-reviewer-adapter" — rule
+        selection must key on the synthetic instance name."""
+        ref = tmp_path / "r.md"
+        ref.write_text("Review renewals.")
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "renewals-rule", "RENEWALS INSTANCE RULE MARKER",
+            applies_to={
+                "agents": ["repo-renewals-reviewer"],
+                "domains": [], "paths": [],
+            },
+        )])
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+        assert result.returncode == 0
+        assert "RENEWALS INSTANCE RULE MARKER" in result.stdout
+
+    def test_rule_targeting_a_declared_scope_domain_reaches_the_adapter(
+        self, tmp_path
+    ):
+        """The adapter's registry domain is null — rule selection must use
+        the parsed --scope-domains, not the registry-derived list."""
+        ref = tmp_path / "r.md"
+        ref.write_text("Review renewals.")
+        self._write_review_context(tmp_path, rules=[self._rule(
+            tmp_path, "code-rule", "DECLARED DOMAIN RULE MARKER",
+            applies_to={"agents": [], "domains": ["code"], "paths": []},
+        )])
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+        assert result.returncode == 0
+        assert "DECLARED DOMAIN RULE MARKER" in result.stdout
+
     def test_isolated_execution_is_refused(self, tmp_path):
         """An explicit isolation request must never silently widen into
         inline execution of the repo prompt — not even via override."""
@@ -1188,6 +1233,35 @@ class TestRepoRuleAndRefModeSelection:
         )
         assert result.returncode == 1
         assert "Isolated execution is not implemented" in result.stdout
+
+    def test_path_rule_matches_a_budget_deferred_file(self, tmp_path):
+        """A rule about a NOT DIFFED file applies precisely when the
+        reviewer must inspect that file — selection must see the complete
+        in-scope set, not only the inline diff list."""
+        repo = tmp_path / "repo"
+        self._make_repo(repo, {
+            "alpha.php": "<?php\n" + "\n".join(
+                f"echo {i};" for i in range(3000)
+            ) + "\n",
+            "deferred_target.php": "<?php\n" + "\n".join(
+                f"print({i});" for i in range(2500)
+            ) + "\n",
+        })
+        outdir = tmp_path / "out"
+        outdir.mkdir()
+        self._write_review_context(outdir, rules=[self._rule(
+            outdir, "deferred-rule", "DEFERRED FILE RULE MARKER",
+            applies_to={
+                "agents": [], "domains": [],
+                "paths": ["deferred_target.php"],
+            },
+        )])
+        result = self._run_in_repo(
+            repo, "--agent", "code-reviewer", "--output-dir", str(outdir)
+        )
+        assert result.returncode == 0
+        assert "deferred_target.php" in extract_not_diffed_files(result.stdout)
+        assert "DEFERRED FILE RULE MARKER" in result.stdout
 
     def test_ref_mode_path_declaration_scopes_the_matching_file(
         self, tmp_path

@@ -1667,14 +1667,23 @@ def main():
     host_context = load_host_context(output_dir)
 
     # Load repo-contributed review rules and select the ones applicable to this
-    # agent (by agent name, domain, or a changed file in its scope).
+    # agent (by agent name, domain, or a changed file in its scope). Selection
+    # keys on the EFFECTIVE identity: in adapter ref-mode args.agent is always
+    # "repo-reviewer-adapter" with a null registry domain, so rules targeting
+    # the synthetic instance name or its declared scope domains would never
+    # match. Path rules match against the COMPLETE in-scope set (inline +
+    # deferred NOT DIFFED + list-only) — a rule about a budget-deferred file
+    # applies precisely when the reviewer must inspect that file.
     review_config = load_repo_review_config(output_dir)
     agent_domains = [
         d for d in [config.get("domain"), *config.get("secondary_domains", [])] if d
     ]
     repo_review_rules = render_repo_review_rules_section(
         select_repo_rules(
-            review_config, args.agent, agent_domains, scope_files_for_budget
+            review_config,
+            effective_agent_name,
+            ref_domains if ref_mode else agent_domains,
+            telemetry_scope_paths,
         )
     )
 
