@@ -1803,3 +1803,85 @@ class TestNotDiffedWorkQueueFraming:
         assert "ARE IN YOUR SCOPE" in text
         assert "work queue" in text
         assert "selectively" not in text
+
+
+class TestIncludePathRescue:
+    """Repo-contributed reviewers declare applicability by path glob
+    (applies_to.paths); those files are the reviewer's scope even when no
+    domain's extension filter recognizes them — otherwise a reviewer
+    dispatched FOR docs/** receives a scope that excludes the very file
+    that triggered dispatch."""
+
+    def _make_repo(self, tmp_path, feature_files):
+        def _git(*args):
+            subprocess.run(
+                ["git"] + list(args),
+                cwd=tmp_path, capture_output=True, text=True, check=True,
+            )
+        _git("init", "-b", "main")
+        _git("config", "user.email", "t@t.com")
+        _git("config", "user.name", "T")
+        _git("config", "commit.gpgsign", "false")
+        (tmp_path / "README.txt").write_text("base\n")
+        _git("add", ".")
+        _git("commit", "-m", "initial")
+        _git("checkout", "-b", "feature")
+        for relpath, content in feature_files.items():
+            target = tmp_path / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        _git("add", ".")
+        _git("commit", "-m", "feature")
+
+    def _scope(self, repo, include_path):
+        args = argparse.Namespace(
+            domain="code",
+            range="main..HEAD",
+            format="json",
+            max_lines=2000,
+            base_ref_only=False,
+            summary=False,
+            output_dir=None,
+            no_merge_base=True,
+            no_semantic_filter=False,
+            include_path=include_path,
+        )
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(repo)
+            return review_scope.build_scope(args)
+        finally:
+            os.chdir(saved_cwd)
+
+    def test_glob_matched_file_joins_the_domain_scope(self, tmp_path):
+        self._make_repo(tmp_path, {
+            "docs/guide.md": "# guide\n",
+            "app.php": "<?php echo 1;\n",
+        })
+        scope = self._scope(tmp_path, ["docs/**"])
+        assert "docs/guide.md" in scope["files"]
+        assert "app.php" in scope["files"]
+
+    def test_without_the_flag_non_domain_files_stay_excluded(self, tmp_path):
+        self._make_repo(tmp_path, {
+            "docs/guide.md": "# guide\n",
+            "app.php": "<?php echo 1;\n",
+        })
+        scope = self._scope(tmp_path, None)
+        assert "docs/guide.md" not in scope["files"]
+
+    def test_pure_path_scope_escapes_no_domain_files(self, tmp_path):
+        self._make_repo(tmp_path, {"docs/guide.md": "# guide\n"})
+        without = self._scope(tmp_path, None)
+        assert without["status"] == "NO_DOMAIN_FILES"
+        with_flag = self._scope(tmp_path, ["docs/**"])
+        assert with_flag["status"] != "NO_DOMAIN_FILES"
+        assert with_flag["files"] == ["docs/guide.md"]
+
+    def test_nonmatching_globs_change_nothing(self, tmp_path):
+        self._make_repo(tmp_path, {
+            "docs/guide.md": "# guide\n",
+            "app.php": "<?php echo 1;\n",
+        })
+        scope = self._scope(tmp_path, ["config/**"])
+        assert scope["files"] == ["app.php"]

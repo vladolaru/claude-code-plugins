@@ -32,6 +32,21 @@ from typing import Dict, List, Optional, Tuple
 # Semantic filter — content-level noise removal from diffs
 # =============================================================================
 
+def _load_glob_match():
+    """Lazy-load glob_match from review_config.py (the single source of truth
+    for repo-reviewer applicability globs — path scoping must match dispatch
+    gating exactly, or a reviewer dispatched for a path never receives it)."""
+    import importlib.util as _ilu
+    _rc_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "review_config.py",
+    )
+    _rc_spec = _ilu.spec_from_file_location("_scope_review_config", _rc_path)
+    _rc_mod = _ilu.module_from_spec(_rc_spec)
+    _rc_spec.loader.exec_module(_rc_mod)
+    return _rc_mod.glob_match
+
+
 def _load_semantic_filter():
     """Lazy-load filter_diff from diff_noise_filter.py (sibling script)."""
     import importlib.util as _ilu
@@ -1080,6 +1095,27 @@ def build_scope(args: argparse.Namespace) -> dict:
 
     # Step 4: Apply domain filter
     domain_matched, domain_excluded = filter_domain(after_noise, args.domain)
+
+    # Step 4.5: Path-scope rescue. Repo-contributed reviewers may declare
+    # applicability by path glob (applies_to.paths); those files are the
+    # reviewer's scope even when no domain's extension filter recognizes
+    # them — without this, a reviewer dispatched FOR docs/** receives a
+    # scope that excludes the very file that triggered dispatch and exits
+    # NO_DOMAIN_FILES. Rescue applies after noise filtering, like domains.
+    include_paths = [p for p in (getattr(args, "include_path", None) or []) if p]
+    if include_paths and domain_excluded:
+        _glob_match = _load_glob_match()
+        rescued_by_path = [
+            f for f in domain_excluded
+            if any(_glob_match(p, f) for p in include_paths)
+        ]
+        if rescued_by_path:
+            rescued_by_path_set = set(rescued_by_path)
+            domain_matched.extend(rescued_by_path)
+            domain_excluded = [
+                f for f in domain_excluded if f not in rescued_by_path_set
+            ]
+
     if not domain_matched:
         return {
             "status": "NO_DOMAIN_FILES",
@@ -1539,6 +1575,18 @@ def main():
         "--summary-json-out",
         default=None,
         help="Write a machine-readable scope summary JSON (admitted/skipped files) to this path. Fail-open.",
+    )
+    parser.add_argument(
+        "--include-path",
+        action="append",
+        default=None,
+        metavar="GLOB",
+        help=(
+            "Additionally include changed files matching this repo-relative "
+            "glob, regardless of the domain's extension filter. Repeatable. "
+            "Used to scope repo-contributed reviewers by their declared "
+            "applies_to.paths."
+        ),
     )
 
     args = parser.parse_args()

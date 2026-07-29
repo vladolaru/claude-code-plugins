@@ -639,6 +639,23 @@ def load_repo_review_config(output_dir: str) -> Optional[dict]:
     return data.get("review_config")
 
 
+def find_repo_reviewer_declaration(review_config, instance_name):
+    """Return the repo reviewer declaration behind an adapter instance name.
+
+    Matches by reconstructing the synthetic name plan_dispatch derives
+    (``repo-<id>-reviewer``) — exact comparison, never suffix parsing, since
+    repo-authored ids may themselves contain "-reviewer" mid-string.
+    """
+    if not isinstance(review_config, dict) or not instance_name:
+        return None
+    for reviewer in review_config.get("reviewers") or []:
+        if not isinstance(reviewer, dict):
+            continue
+        if f"repo-{reviewer.get('id')}-reviewer" == instance_name:
+            return reviewer
+    return None
+
+
 def select_repo_rules(review_config, agent_name, agent_domains, scope_files):
     """Return the repo rules applicable to the agent currently bootstrapping."""
     if not isinstance(review_config, dict):
@@ -1344,6 +1361,25 @@ def main():
         ref_domains = [d.strip() for d in (args.scope_domains or "").split(",") if d.strip()]
         if not ref_domains:
             ref_domains = ["code"]
+        # Path-declared applicability participates in scope: a reviewer
+        # dispatched because applies_to.paths matched (e.g. docs/**) must
+        # receive those files even when no declared domain's extension
+        # filter covers them — otherwise the dispatch gate and the scope
+        # disagree and the adapter exits NO_DOMAIN_FILES on the very file
+        # that triggered it. The globs come from the same normalized
+        # review_config plan_dispatch gated on. Passed to the first
+        # executed domain run only, so glob files are not duplicated
+        # across secondary scope sections or double-counted in budgets.
+        ref_include_flags: List[str] = []
+        ref_declaration = find_repo_reviewer_declaration(
+            load_repo_review_config(args.output_dir), args.instance_name
+        )
+        if ref_declaration:
+            for pattern in (
+                (ref_declaration.get("applies_to") or {}).get("paths") or []
+            ):
+                if isinstance(pattern, str) and pattern:
+                    ref_include_flags += ["--include-path", pattern]
         scope_status = "NO_DOMAIN_FILES"
         captured_meta = False
         for dom in ref_domains:
@@ -1362,8 +1398,10 @@ def main():
                 )
                 if args.output_dir else None
             )
+            dom_extra_flags, ref_include_flags = ref_include_flags, []
             _, dom_output = run_scope_discovery(
-                plugin_root, dom, [], args.range, output_dir=args.output_dir,
+                plugin_root, dom, dom_extra_flags, args.range,
+                output_dir=args.output_dir,
                 summary_json_out=dom_summary_out,
             )
             if dom_summary_out:

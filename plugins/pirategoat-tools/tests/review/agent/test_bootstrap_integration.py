@@ -1189,6 +1189,39 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 1
         assert "Isolated execution is not implemented" in result.stdout
 
+    def test_ref_mode_path_declaration_scopes_the_matching_file(
+        self, tmp_path
+    ):
+        """A reviewer dispatched because applies_to.paths matched must
+        receive those files in scope even when no declared domain's
+        extension filter covers them."""
+        repo = tmp_path / "repo"
+        self._make_repo(repo, {
+            "docs/guide.md": "# guide\n",
+            "app.php": "<?php echo 1;\n",
+        })
+        outdir = tmp_path / "out"
+        outdir.mkdir()
+        ref = outdir / "docs-expert.md"
+        ref.write_text("Review the docs.")
+        self._write_review_context(outdir, reviewers=[{
+            "id": "docs-expert", "label": "Docs Expert",
+            "ref": "docs-expert.md", "resolved_ref": str(ref),
+            "applies_to": {
+                "agents": [], "domains": [], "paths": ["docs/**"],
+            },
+            "channel": "blocking", "execution": "inline", "model": None,
+        }])
+        result = self._run_in_repo(
+            repo, "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-docs-expert-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(outdir),
+        )
+        assert result.returncode == 0
+        assert "docs/guide.md" in extract_scope_files(result.stdout)
+
 
 class TestOutputFilenameConsistency:
     """Output filenames from ReviewOutputBuilder.save() match bootstrap expectations."""
