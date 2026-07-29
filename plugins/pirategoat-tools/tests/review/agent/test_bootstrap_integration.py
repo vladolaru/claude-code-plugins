@@ -176,6 +176,72 @@ class TestCategoryRepresentatives:
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
         assert (tmp_path / "repo-renewals-deferred-files.json").is_file()
 
+    def test_ref_mode_agent_start_records_the_dispatched_model_tier(
+        self, tmp_path
+    ):
+        """A repo reviewer dispatched with an explicit model override must
+        log that tier — the static adapter tier ("inherit") would make the
+        durable manifest report conflicting models for one agent identity
+        (the dispatch projection carries the override)."""
+        telemetry_log = tmp_path / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema_version": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--model-tier", "opus",
+            "--output-dir", str(tmp_path),
+        )
+
+        assert result.returncode == 0
+        events = [
+            json.loads(line)
+            for line in telemetry_log.read_text().splitlines()
+        ]
+        agent_start = next(
+            event for event in events if event.get("event") == "agent_start"
+        )
+        assert agent_start["agent"] == "repo-renewals-reviewer"
+        assert agent_start["model_tier"] == "opus"
+
+    def test_native_agent_start_keeps_the_registry_model_tier(self, tmp_path):
+        """Outside ref-mode the registry is the single source of truth for
+        the tier — a stray --model-tier flag must not override it."""
+        telemetry_log = tmp_path / "review.jsonl"
+        telemetry_log.write_text(json.dumps({
+            "schema_version": 1,
+            "run_id": "run-1",
+            "event": "pipeline_start",
+            "pipeline": {"repo_path": _get_fixture_repo()},
+        }) + "\n")
+        (tmp_path / ".telemetry-log-path").write_text(str(telemetry_log))
+
+        result = run_bootstrap(
+            "--agent", "performance-reviewer",
+            "--model-tier", "opus",
+            "--output-dir", str(tmp_path),
+        )
+
+        assert result.returncode == 0
+        events = [
+            json.loads(line)
+            for line in telemetry_log.read_text().splitlines()
+        ]
+        agent_start = next(
+            event for event in events if event.get("event") == "agent_start"
+        )
+        assert agent_start["model_tier"] == "sonnet"
+
     def test_deferred_sidecar_backs_add_unreviewed_validation(self, tmp_path):
         """Bootstrap persists the authoritative NOT DIFFED set so the
         builder can reject declarations that match no deferred file."""

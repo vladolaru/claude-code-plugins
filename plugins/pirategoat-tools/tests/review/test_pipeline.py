@@ -632,6 +632,9 @@ class TestStep6DispatchAgents:
         assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
         assert tok[tok.index("--repo-agent-ref") + 1] == ".ai/agents/review/renewals.md"
         assert tok[tok.index("--scope-domains") + 1] == "wp-architecture,architecture"
+        # The dispatched tier reaches bootstrap so lifecycle telemetry
+        # records it — not the adapter registry's static tier.
+        assert tok[tok.index("--model-tier") + 1] == "sonnet"
 
     def test_codex_adapter_spawn_uses_adapter_task_not_instance_name(self, mod, tmp_path):
         """Codex spawn_agent targets the installed generic adapter task, while the
@@ -722,6 +725,7 @@ class TestStep6DispatchAgents:
         assert tokens[tokens.index("--channel") + 1] == "blocking"
         assert tokens[tokens.index("--execution") + 1] == "inline"
         assert tokens[tokens.index("--adapter-label") + 1] == "repo-x-reviewer"
+        assert tokens[tokens.index("--model-tier") + 1] == ""
         assert "None" not in tokens
 
     def test_step6_recomputes_dispatch_plan_summary(self, mod, tmp_path):

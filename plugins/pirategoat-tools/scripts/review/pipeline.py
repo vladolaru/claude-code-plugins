@@ -1049,6 +1049,11 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     "--execution", agent.get("execution") or "inline",
                     "--channel", agent.get("channel") or "blocking",
                     "--scope-domains", scope_domains,
+                    # The tier actually dispatched for this instance (the
+                    # model hint below) — telemetry must record it, not the
+                    # adapter registry's static tier, or the manifest holds
+                    # conflicting models for one agent.
+                    "--model-tier", agent.get("model") or "",
                     "--range", git_range,
                     "--output-dir", od,
                 ]

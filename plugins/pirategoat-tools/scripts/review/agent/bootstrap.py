@@ -1242,6 +1242,14 @@ def main():
         choices=["blocking", "advisory"],
         help="Channel to tag the repo reviewer's findings with (adapter ref-mode).",
     )
+    parser.add_argument(
+        "--model-tier",
+        default=None,
+        help=(
+            "Model tier this instance was dispatched with (adapter ref-mode). "
+            "Recorded in telemetry instead of the adapter registry's static tier."
+        ),
+    )
     args = parser.parse_args()
 
     # Adapter ref-mode is active when a repo reviewer ref is supplied.
@@ -1555,7 +1563,14 @@ def main():
             _t.log_agent_start(
                 agent_name=args.agent,
                 domain=config.get("domain", ""),
-                model_tier=config.get("model_tier", ""),
+                # Ref-mode instances may be dispatched at an explicit model
+                # override from the repo's reviewer declaration; the static
+                # adapter tier would then contradict the dispatch projection
+                # for the same agent identity in one manifest.
+                model_tier=(
+                    (args.model_tier if ref_mode else None)
+                    or config.get("model_tier", "")
+                ),
                 scope_files=len(telemetry_scope_paths),
                 scope_lines=scope_lines_for_budget,
                 budget_target=review_budget,
