@@ -3701,9 +3701,10 @@ class TestRepoReviewerExpansion:
 
     def test_no_review_config_yields_nothing(self):
         dispatch = []
-        signals = expand_repo_reviewers(None, {}, [], dispatch)
+        signals, warnings = expand_repo_reviewers(None, {}, [], dispatch)
         assert dispatch == []
         assert signals == []
+        assert warnings == []
 
     def test_applicable_reviewer_dispatches(self):
         dispatch = []
@@ -3711,7 +3712,7 @@ class TestRepoReviewerExpansion:
                "ref": ".ai/agents/review/renewals.md",
                "applies_to": {"domains": ["security"]},
                "channel": "blocking", "execution": "inline", "model": "sonnet"}
-        signals = expand_repo_reviewers(
+        signals, _warnings = expand_repo_reviewers(
             _review_ctx([rev]), {"security": 3}, ["includes/foo.php"], dispatch
         )
         assert len(dispatch) == 1
@@ -3771,10 +3772,11 @@ class TestRepoReviewerExpansion:
         assert dispatch[0]["status"] == "SKIPPED"
         assert "isolated execution is not implemented" in dispatch[0]["reason"]
 
-    def test_untrusted_exclusions_surface_as_signals(self):
+    def test_untrusted_exclusions_surface_as_warnings(self):
         """Provenance-gated entries are hard-excluded at config
         normalization, so nothing remains to dispatch — the exclusion must
-        still be LOUD in the step-5 signals."""
+        still be LOUD, and warnings are the only channel the step-5
+        briefing renders (agent_signals never reach the orchestrator)."""
         ctx = {"review_config": {
             "rules": [], "reviewers": [],
             "untrusted": [{
@@ -3783,11 +3785,30 @@ class TestRepoReviewerExpansion:
             }],
         }}
         dispatch = []
-        signals = expand_repo_reviewers(ctx, {}, [], dispatch)
+        signals, warnings = expand_repo_reviewers(ctx, {}, [], dispatch)
         assert dispatch == []
+        assert signals == []
         assert any(
-            "UNTRUSTED reviewer 'evil'" in signal for signal in signals
+            "UNTRUSTED reviewer 'evil'" in warning for warning in warnings
         )
+
+    def test_untrusted_warnings_reach_the_rendered_plan_warnings(self, registry):
+        """build_dispatch_plan must carry provenance exclusions in its
+        ``warnings`` array — the field pipeline step 5 renders with ⚠️."""
+        ctx = {"review_config": {
+            "rules": [], "reviewers": [],
+            "untrusted": [{
+                "kind": "config", "id": None, "path": ".pirategoat/config.json",
+                "reason": "defined or modified within the reviewed range",
+            }],
+        }}
+        plan = build_dispatch_plan(
+            mode="pr", git_range="base..head", output_dir="/tmp/out",
+            changed_files=["includes/foo.php"], registry=registry,
+            commit_messages="", diffstat={}, review_context=ctx,
+        )
+        assert any("UNTRUSTED config" in w for w in plan["warnings"])
+        assert not any("UNTRUSTED" in s for s in plan["agent_signals"])
 
     def test_scope_domains_fallback_to_code(self):
         dispatch = []

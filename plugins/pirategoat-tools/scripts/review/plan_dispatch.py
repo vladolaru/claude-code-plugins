@@ -1827,23 +1827,26 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
     All such entries target the generic ``repo-reviewer-adapter`` body but carry a
     distinct ``ref``/``channel``/``execution``/``model``/``scope_domains``.
     Applicability gates dispatch like a conditional agent. Appended in place to
-    ``dispatch_list``; returns the human-readable signal strings.
+    ``dispatch_list``; returns ``(signals, warnings)`` — human-readable
+    per-reviewer signal strings plus provenance-exclusion warnings.
     """
     signals: List[str] = []
+    warnings: List[str] = []
     review_config = (review_context or {}).get("review_config") or {}
     # Provenance-gated entries never become dispatchable (the exclusion is
     # hard, enforced at config normalization) — but the gate must be LOUD:
-    # surface each exclusion as a step-5 signal even when nothing remains
-    # to dispatch.
+    # each exclusion goes into the plan's warnings, the only channel the
+    # step-5 briefing actually renders, even when nothing remains to
+    # dispatch.
     for entry in review_config.get("untrusted") or []:
         label = entry.get("id") or entry.get("path") or entry.get("kind")
-        signals.append(
+        warnings.append(
             f"repo review config: UNTRUSTED {entry.get('kind')} "
             f"'{label}' — {entry.get('reason')}"
         )
     reviewers = review_config.get("reviewers") or []
     if not reviewers:
-        return signals
+        return signals, warnings
 
     domains_with_files = {d for d, c in domain_counts.items() if c > 0}
     for rev in reviewers:
@@ -1888,7 +1891,7 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
             "reason": reason,
         })
         signals.append(f"{name}: STATUS={status} ({reason})")
-    return signals
+    return signals, warnings
 
 
 def build_dispatch_plan(
@@ -2005,7 +2008,7 @@ def build_dispatch_plan(
 
     # Repo-contributed reviewers: expand each declared reviewer into a synthetic
     # dispatch entry targeting the generic adapter, gated by applicability.
-    repo_signals = expand_repo_reviewers(
+    repo_signals, repo_warnings = expand_repo_reviewers(
         review_context, domain_counts, clean_files, dispatch_list
     )
     agent_signals.extend(repo_signals)
@@ -2023,7 +2026,7 @@ def build_dispatch_plan(
         "unrecognized_source": unrecognized_source,
     }
 
-    warnings = []
+    warnings = list(repo_warnings)
     if unrecognized_source:
         shown = ", ".join(unrecognized_source[:10])
         if len(unrecognized_source) > 10:
