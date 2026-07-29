@@ -1871,7 +1871,12 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
         dispatch_list.append({
             "name": name,
             "adapter": REPO_REVIEWER_ADAPTER,
-            "ref": rev.get("ref"),
+            # The validated ABSOLUTE path: bootstrap resolves a relative ref
+            # against its own invocation directory, so a review launched from
+            # a repo subdirectory would report the valid prompt missing and
+            # the adapter would write an empty result. The repo-relative form
+            # stays available under "ref" semantics only via review_config.
+            "ref": rev.get("resolved_ref") or rev.get("ref"),
             "label": rev.get("label", rev["id"]),
             "channel": rev.get("channel", "blocking"),
             "execution": rev.get("execution", "inline"),

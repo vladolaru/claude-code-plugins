@@ -3743,6 +3743,21 @@ class TestRepoReviewerExpansion:
         assert dispatch[0]["status"] == "DISPATCH"
         assert dispatch[0]["channel"] == "advisory"
 
+    def test_resolved_ref_is_preferred_over_root_relative_ref(self):
+        """Bootstrap resolves a relative ref against its own invocation
+        directory — from a repo subdirectory the valid prompt would report
+        missing and the adapter would write an empty result. The dispatch
+        entry must carry the already-validated absolute path."""
+        dispatch = []
+        rev = {"id": "renewals", "label": "R", "ref": ".ai/r.md",
+               "resolved_ref": "/repo/.ai/r.md",
+               "applies_to": {"domains": ["security"]},
+               "channel": "blocking", "execution": "inline", "model": None}
+        expand_repo_reviewers(
+            _review_ctx([rev]), {"security": 1}, ["a.php"], dispatch
+        )
+        assert dispatch[0]["ref"] == "/repo/.ai/r.md"
+
     def test_isolated_execution_is_refused_not_dispatched(self):
         """An explicit isolation request must never silently widen into
         inline execution of the repo prompt."""
