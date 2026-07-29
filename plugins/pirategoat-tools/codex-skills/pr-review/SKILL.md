@@ -66,7 +66,8 @@ mkdir -p "$OUTPUT_DIR"
 CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory containing this SKILL.md>"
 python3 ${CODEX_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --host codex \
-  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" [--quick]
+  --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" \
+  --session-id "${CLAUDE_SESSION_ID}" [--quick]
 ```
 
 Add `--quick` only if the user indicated they want a quick review.
