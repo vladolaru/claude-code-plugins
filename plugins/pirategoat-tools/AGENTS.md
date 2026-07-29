@@ -230,17 +230,31 @@ carries the normalized result into `review-context.json` under `review_config`
    scoped diff, and normalizes findings via `ReviewOutputBuilder`.
 
 **Load-bearing invariants** (break these and findings silently vanish or collide):
-- The synthetic name MUST end in `-reviewer` — reconciliation maps `-reviewer`→`-review` to
-  find `repo-<id>-review.json`.
+- The synthetic name MUST end in `-reviewer`, and every downstream site maps agent names to
+  review-file stems by stripping ONLY the trailing `-reviewer` (never a blanket replace —
+  repo ids may carry "reviewer" mid-string, e.g. `api-reviewer-v2`).
 - Ref-mode derives the reviewer name and `.started` marker from `--instance-name`, not the
   shared adapter key, so N adapter instances never clobber one output file.
 - **Advisory channel:** a reviewer/rule with `"channel": "advisory"` produces findings that
   are listed but NEVER gate the verdict. `add_issue(..., channel="advisory")` is skipped in
   `_calculate_verdict`. Native agents never set `channel`, so this is backward-compatible;
-  `reconciliation_context.py` surfaces it and the reconciliator preserves it.
+  `reconciliation_context.py` surfaces it and the reconciliator preserves it. Bootstrap's
+  rules render instructs native reviewers to tag advisory-rule-derived findings.
+- **Provenance gate (security boundary):** the adapter EXECUTES repo prompt text with real
+  tools, so `load_review_config` excludes any rule/reviewer whose defining file — or
+  `.pirategoat/config.json` itself — is added or modified within the reviewed range
+  (PR-controlled text is not repo-owner-approved content). Exclusions are hard (never
+  dispatchable, reported under `untrusted` and surfaced as step-5 signals), and an unknown
+  changed-file set fails closed. To test an unmerged reviewer deliberately, dispatch the
+  adapter manually via bootstrap ref-mode.
+- **Path scoping:** a reviewer whose `applies_to.paths` matched dispatches AND receives
+  those files in scope — bootstrap ref-mode passes the declared globs to scope.py as
+  `--include-path` so the dispatch gate and the scope never disagree.
 
 **Execution:** inline only in v1 (the adapter reads and runs the repo prompt in-context).
-`isolated` (headless CLI, different model family) is reserved behind the `--execution` flag.
+`isolated` is NOT implemented: plan_dispatch refuses to dispatch it and bootstrap exits
+with an error — an explicit isolation request must never silently widen into inline
+execution.
 
 ## Output Contract
 
