@@ -3150,3 +3150,28 @@ class TestInlineCoverageMarkdown:
         assert "## Deferred Files Reviewed From The NOT DIFFED Queue" in md
         assert "`src/deferred.php` (claimed by: security-reviewer)" in md
         assert "not proof of read" in md
+
+
+class TestReviewStem:
+    """Review files are named by TERMINAL-suffix derivation only — a
+    blanket replace corrupts repo reviewer ids carrying "reviewer"
+    mid-string (e.g. "api-reviewer-v2") and silently excludes their valid
+    blocking output."""
+
+    def test_only_the_terminal_reviewer_suffix_is_stripped(self, mod):
+        assert mod._review_stem("security-reviewer") == "security-review"
+        assert mod._review_stem(
+            "repo-api-reviewer-v2-reviewer"
+        ) == "repo-api-reviewer-v2-review"
+
+    def test_mid_string_reviewer_id_output_is_loaded(self, mod, tmp_path):
+        (tmp_path / "repo-api-reviewer-v2-review.json").write_text(json.dumps({
+            "reviewer": "repo-api-reviewer-v2",
+            "issues": [],
+            "verdict": "approve",
+        }))
+        findings = mod.load_agent_findings(
+            str(tmp_path),
+            dispatched_agents=["repo-api-reviewer-v2-reviewer"],
+        )
+        assert "repo-api-reviewer-v2-review" in findings

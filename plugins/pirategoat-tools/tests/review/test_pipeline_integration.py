@@ -1239,3 +1239,40 @@ class TestQuickModeDispatch:
             "wp-architecture-reviewer should DISPATCH when keywords match, "
             f"got {dispatch_map['wp-architecture-reviewer']['status']}"
         )
+
+
+class TestStep8ReviewFileStems:
+    """Step 8's completion check must map agent names to review files by
+    terminal-suffix derivation only — a blanket replace looked for
+    repo-api-review-v2-review.json and silently excluded valid output."""
+
+    def test_mid_string_reviewer_name_counts_as_completed(
+        self, mod, tmp_path, monkeypatch
+    ):
+        plan = {"agents": [{
+            "name": "repo-api-reviewer-v2-reviewer",
+            "status": "DISPATCH",
+            "reason": "repo reviewer applicable",
+        }]}
+        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        (tmp_path / "repo-api-reviewer-v2-review.json").write_text(
+            json.dumps({"reviewer": "repo-api-reviewer-v2", "issues": []})
+        )
+        fake_done = subprocess.CompletedProcess(
+            [], returncode=0, stdout="", stderr=""
+        )
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: fake_done)
+
+        def fake_run_subprocess(cmd, timeout=None, **kwargs):
+            (tmp_path / "reconciliation-context.md").write_text("ctx")
+            return ("", True)
+
+        monkeypatch.setattr(mod, "_run_subprocess", fake_run_subprocess)
+        state = {"resolved_params": {"git_range": "base..head"}}
+
+        mod._orchestrate_step(
+            8, "full", {}, state,
+            {"git": {"git_range": "base..head"}}, str(tmp_path),
+        )
+
+        assert state["agents"]["completed"] == ["repo-api-reviewer-v2-reviewer"]

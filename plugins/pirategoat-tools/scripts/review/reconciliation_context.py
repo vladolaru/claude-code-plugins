@@ -155,6 +155,21 @@ def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
     return host_context.get("banner")
 
 
+def _review_stem(agent: str) -> str:
+    """Map an agent name to its review-file stem.
+
+    Review files are named derive_reviewer_name(agent) + "-review.json":
+    only a TRAILING "-reviewer" becomes "-review". A blanket replace()
+    would corrupt names carrying "reviewer" mid-string (adapter instances
+    are "repo-<id>-reviewer", and <id> is repo-authored — e.g.
+    "api-reviewer-v2" yields "repo-api-reviewer-v2-reviewer", whose stem
+    is "repo-api-reviewer-v2-review").
+    """
+    if agent.endswith("-reviewer"):
+        return f"{agent[: -len('-reviewer')]}-review"
+    return agent
+
+
 def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
     """Read one agent's declared-unreviewed paths from its review JSON.
 
@@ -163,13 +178,7 @@ def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
     claim nothing. Returns the list of declared paths (possibly empty)
     otherwise; canonical null and an absent key mean "declared nothing".
     """
-    # Review files are named derive_reviewer_name(agent) + "-review.json":
-    # only a trailing "-reviewer" is stripped. A blanket replace() would
-    # corrupt names carrying "reviewer" mid-string (adapter instances are
-    # "repo-<id>-reviewer", and <id> is repo-authored).
-    if agent.endswith("-reviewer"):
-        agent = agent[: -len("-reviewer")]
-    path = os.path.join(output_dir, f"{agent}-review.json")
+    path = os.path.join(output_dir, f"{_review_stem(agent)}.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -342,7 +351,7 @@ def load_agent_findings(
     allowed_stems: Optional[frozenset] = None
     if dispatched_agents is not None:
         allowed_stems = frozenset(
-            name.replace("-reviewer", "-review") for name in dispatched_agents
+            _review_stem(name) for name in dispatched_agents
         )
 
     for entry in sorted(output_path.iterdir()):
@@ -1588,7 +1597,7 @@ def main() -> int:
         # that were dispatched but failed to produce output.
         if dispatched_agents is not None:
             context["dispatched_agents"] = [
-                name.replace("-reviewer", "-review") for name in dispatched_agents
+                _review_stem(name) for name in dispatched_agents
             ]
 
         # Write to output directory

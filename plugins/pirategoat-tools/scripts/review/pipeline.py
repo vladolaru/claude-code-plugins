@@ -2165,7 +2165,13 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 review_files = []
                 completed = []
                 for name in dispatched_names:
-                    review_file = os.path.join(output_dir, f"{name.replace('-reviewer', '-review')}.json")
+                    # Only a trailing "-reviewer" maps to "-review" — repo
+                    # reviewer ids may carry "reviewer" mid-string.
+                    stem = (
+                        f"{name[: -len('-reviewer')]}-review"
+                        if name.endswith("-reviewer") else name
+                    )
+                    review_file = os.path.join(output_dir, f"{stem}.json")
                     if os.path.isfile(review_file):
                         completed.append(name)
                         review_files.append(review_file)
