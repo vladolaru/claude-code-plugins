@@ -45,10 +45,11 @@ discovering each canonical command a second time.
 The generator also surfaces **shared skills that a command depends on**. When a
 command body references a `skills/<name>` skill by name, the generator emits a
 host-translated copy at `codex-skills/<name>/SKILL.md` (source-marked
-`./skills/<name>`), because Codex only loads `codex-skills/`, not the canonical
-`skills/` tree. Skills no command references (e.g. pirategoat's reference
-library) are not surfaced. Fix such skills in `skills/`, never in the generated
-copy.
+`./skills/<name>`) plus verbatim copies of the skill's sibling assets (e.g.
+`references/`) it reads via `$SKILL_DIR`, because Codex only loads
+`codex-skills/`, not the canonical `skills/` tree. Skills no command references
+(e.g. pirategoat's reference library) are not surfaced. Fix such skills in
+`skills/`, never in the generated copy.
 
 Because Codex does not export `CODEX_PLUGIN_ROOT` into the shell, the generator
 prepends an explicit `CODEX_PLUGIN_ROOT="…"` assignment to any generated `bash`

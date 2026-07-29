@@ -43,8 +43,10 @@ existing Claude Code workflows as the canonical authoring surface.
   so an empty template directory no longer runs `cat` with no argument, and the
   review-artifact paths match the repo-qualified directories the review
   commands actually produce.
-- **`switch-to` git safety.** The fork remote is added idempotently (no failure
-  when it already exists), and stashing includes untracked files so the dirty
+- **`switch-to` git safety.** The fork remote is pointed at this PR's fork
+  whether or not a remote of that name already exists (`set-url` when present,
+  `add` when missing), so a stale same-named remote can't make the checkout
+  fetch the wrong repository; stashing includes untracked files so the dirty
   summary and the stash agree.
 - **`iterative-review` worktree safety.** The loop stops for user confirmation
   before committing a dirty worktree rather than blanket-committing unrelated

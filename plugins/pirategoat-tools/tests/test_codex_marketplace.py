@@ -117,6 +117,26 @@ def test_command_referenced_shared_skills_are_surfaced_to_codex():
         assert (plugin_root / "skills" / skill_name / "SKILL.md").is_file()
 
 
+def test_surfaced_skill_includes_reference_assets():
+    """A surfaced skill's sibling assets (files it reads via $SKILL_DIR) are
+    copied alongside SKILL.md, so Codex reads don't fail on missing files."""
+    refs = (
+        REPO_ROOT / "plugins" / "prompt-engineer" / "codex-skills"
+        / "prompt-engineer" / "references"
+    )
+    assert refs.is_dir()
+    surfaced = {p.name for p in refs.glob("*.md")}
+    canonical = {
+        p.name
+        for p in (
+            REPO_ROOT / "plugins" / "prompt-engineer" / "skills"
+            / "prompt-engineer" / "references"
+        ).glob("*.md")
+    }
+    assert surfaced == canonical
+    assert "prompt-engineering-single-turn.md" in surfaced
+
+
 def test_unreferenced_shared_skills_are_not_surfaced_to_codex():
     """pirategoat's shared skills are not referenced by its command bodies, so
     they must not be pulled into Codex — surfacing is dependency-scoped."""

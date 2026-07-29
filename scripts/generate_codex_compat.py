@@ -484,14 +484,16 @@ def expected_files(canonical: dict) -> list[ExpectedFile]:
                 skill_name = Path(skill_ref).name
                 if skill_name not in command_blob:
                     continue
-                skill_md = plugin_root / skill_ref.removeprefix("./") / "SKILL.md"
+                skill_dir = plugin_root / skill_ref.removeprefix("./")
+                skill_md = skill_dir / "SKILL.md"
                 if not skill_md.is_file():
                     raise ValueError(
                         f"{plugin['name']}: skill does not exist: {skill_ref}"
                     )
+                codex_skill_dir = plugin_root / "codex-skills" / skill_name
                 files.append(
                     ExpectedFile(
-                        plugin_root / "codex-skills" / skill_name / "SKILL.md",
+                        codex_skill_dir / "SKILL.md",
                         render_shared_skill(
                             plugin_name=plugin["name"],
                             skill_ref=skill_ref,
@@ -500,6 +502,17 @@ def expected_files(canonical: dict) -> list[ExpectedFile]:
                         ),
                     )
                 )
+                # Copy sibling assets the skill reads via `$SKILL_DIR`
+                # (references/, etc.) — Codex only has the codex-skills/ copy.
+                for asset in sorted(skill_dir.rglob("*")):
+                    if not asset.is_file() or asset.name == "SKILL.md":
+                        continue
+                    files.append(
+                        ExpectedFile(
+                            codex_skill_dir / asset.relative_to(skill_dir),
+                            normalize_text(asset.read_text()),
+                        )
+                    )
 
     return files
 

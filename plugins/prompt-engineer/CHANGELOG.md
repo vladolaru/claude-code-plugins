@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The shared `prompt-engineer` skill is now surfaced into the Codex skill set.
   The generated `optimize-prompt` adapter delegates to it, so without it Codex
-  could not resolve the skill the command depends on.
+  could not resolve the skill the command depends on. The skill's five
+  `references/*.md` files (which it reads via `$SKILL_DIR`) are packaged with
+  the surfaced copy so the required reads succeed on Codex.
 
 ## [2.1.1] - 2026-03-28
 
