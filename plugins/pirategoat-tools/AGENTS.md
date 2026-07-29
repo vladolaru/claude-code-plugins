@@ -243,10 +243,13 @@ carries the normalized result into `review-context.json` under `review_config`
 - **Provenance gate (security boundary):** the adapter EXECUTES repo prompt text with real
   tools, so `load_review_config` excludes any rule/reviewer whose defining file — or
   `.pirategoat/config.json` itself — is added or modified within the reviewed range
-  (PR-controlled text is not repo-owner-approved content). Exclusions are hard (never
-  dispatchable, reported under `untrusted` and surfaced as step-5 signals), and an unknown
-  changed-file set fails closed. To test an unmerged reviewer deliberately, dispatch the
-  adapter manually via bootstrap ref-mode.
+  (PR-controlled text is not repo-owner-approved content). The changed-file match covers
+  both spellings of Git-C-quoted names AND each declaration's symlink-resolved target,
+  so neither encoding nor an in-repo symlink can slip PR text past the gate. Exclusions
+  are hard (never dispatchable, reported under `untrusted` and carried in the plan's
+  `warnings` — the only channel the step-5 briefing renders), and an unknown changed-file
+  set fails closed. To test an unmerged reviewer deliberately, dispatch the adapter
+  manually via bootstrap ref-mode.
 - **Path scoping:** a reviewer whose `applies_to.paths` matched dispatches AND receives
   those files in scope — bootstrap ref-mode passes the declared globs to scope.py as
   `--include-path` so the dispatch gate and the scope never disagree.
