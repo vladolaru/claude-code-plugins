@@ -126,6 +126,7 @@ def _adapter_prompt(
         "--repo-agent-ref .ai/agents/review/renewals.md "
         "--adapter-label 'Renewals reviewer' "
         "--execution inline --channel blocking --scope-domains code "
+        "--model-tier '' "
         f'--range "base..head" --output-dir "{output_dir}"'
     )
 
@@ -5058,6 +5059,60 @@ class TestBudgetAndEvidenceAccounting:
 
         by_agent = result["artifact_writes"]["by_agent"]
         assert [item["agent"] for item in by_agent] == ["security-reviewer"]
+
+
+class TestBootstrapCommandRecognition:
+    """The canonical bootstrap-option allowlist must accept every command
+    form step 6 actually emits — a rejected command leaves the dispatch
+    uncorrelated and its usage, read, and builder metrics incomplete."""
+
+    def test_adapter_command_with_model_tier_is_recognized(self, tmp_path):
+        tokens = _mod._reviewer_bootstrap_tokens(
+            "python3 /plugin/review/agent/bootstrap.py "
+            "--agent repo-reviewer-adapter "
+            "--instance-name repo-renewals-reviewer "
+            "--repo-agent-ref .ai/r.md --adapter-label 'R' "
+            "--execution inline --channel blocking --scope-domains code "
+            "--model-tier opus "
+            f'--range "base..head" --output-dir "{tmp_path}"'
+        )
+        assert tokens is not None
+        assert "--model-tier" in tokens
+
+    def test_step6_emitted_adapter_command_is_recognized(
+        self, tmp_path, pipeline_mod
+    ):
+        """DRIFT GUARD: parse the adapter command pipeline step 6 actually
+        generates, not a hand-written replica — a flag added to cmd_parts
+        without an allowlist update must fail here, not in production
+        correlation."""
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [{
+                "name": "repo-renewals-reviewer",
+                "adapter": "repo-reviewer-adapter",
+                "ref": ".ai/agents/review/renewals.md",
+                "label": "Renewals Expert",
+                "channel": "blocking",
+                "execution": "inline",
+                "model": "opus",
+                "scope_domains": ["code"],
+            }],
+        }
+        guidance = pipeline_mod.get_step_guidance(
+            6, "full", state, {"git": {"git_range": "abc..HEAD"}},
+            output_dir=str(tmp_path),
+        )
+        command = next(
+            line for line in guidance["actions"]
+            if "bootstrap.py" in line and "--repo-agent-ref" in line
+        )
+        tokens = _mod._reviewer_bootstrap_tokens(command)
+        assert tokens is not None
+        assert tokens[tokens.index("--instance-name") + 1] == (
+            "repo-renewals-reviewer"
+        )
 
 
 class TestScopeExemptRegistrySync:

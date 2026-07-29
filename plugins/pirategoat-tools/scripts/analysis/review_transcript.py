@@ -837,6 +837,7 @@ def _valid_bootstrap_tokens(tokens: list[str]) -> bool:
         "--execution",
         "--channel",
         "--scope-domains",
+        "--model-tier",
     }
     index = script_index + 1
     while index < len(tokens):
