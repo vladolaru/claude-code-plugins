@@ -32,18 +32,19 @@ from .load import _is_duplicate_conflict, _read_json
 
 
 def _load_transcript_module():
-    try:
-        from review_transcript import enrich_run_transcript  # type: ignore
-
-        return enrich_run_transcript
-    except ImportError:
-        path = Path(__file__).resolve().parents[1] / "review_transcript.py"
-        module = _load_exact_path_module(
-            "review_transcript",
-            path,
-            "review transcript parser unavailable",
-        )
-        return module.enrich_run_transcript
+    # Always load the adjacent parser by exact path, like the telemetry and
+    # dispatch-status contracts. An ambient `import review_transcript`
+    # would pick up whatever another checkout or version already put on
+    # sys.path/sys.modules in a long-lived process — an incompatible module
+    # disables transcript metrics; a compatible stale one silently measures
+    # with different semantics.
+    path = Path(__file__).resolve().parents[1] / "review_transcript.py"
+    module = _load_exact_path_module(
+        "review_transcript",
+        path,
+        "review transcript parser unavailable",
+    )
+    return module.enrich_run_transcript
 
 
 def _recognized_agents(registry_path: str | Path) -> set[str] | None:

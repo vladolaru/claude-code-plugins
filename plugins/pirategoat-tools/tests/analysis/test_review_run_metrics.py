@@ -7,6 +7,7 @@ import importlib.util
 import json
 import re
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -4171,6 +4172,26 @@ class TestLifecycleMeasurement:
 
 
 class TestTranscriptFamilyAvailability:
+    def test_transcript_parser_loads_adjacent_module_despite_sys_modules(self):
+        """In a long-lived process another checkout or version may already
+        occupy sys.modules['review_transcript'] — the loader must bypass it
+        and read the exact adjacent file, or transcript metrics silently
+        run with foreign semantics."""
+        foreign = types.ModuleType("review_transcript")
+        foreign.enrich_run_transcript = lambda *args, **kwargs: "FOREIGN"
+        original = sys.modules.get("review_transcript")
+        sys.modules["review_transcript"] = foreign
+        try:
+            enrich = measure._load_transcript_module()
+        finally:
+            if original is None:
+                sys.modules.pop("review_transcript", None)
+            else:
+                sys.modules["review_transcript"] = original
+
+        assert enrich is not foreign.enrich_run_transcript
+        assert callable(enrich)
+
     FAMILIES = (
         "usage",
         "orchestrator_usage",
