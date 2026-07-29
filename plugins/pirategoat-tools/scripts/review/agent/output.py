@@ -541,11 +541,18 @@ class ReviewOutputBuilder:
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         md_path = os.path.join(output_dir, f"{self.reviewer}-review.md")
 
-        with open(json_path, 'w') as f:
-            f.write(self.to_json())
-
         with open(md_path, 'w') as f:
             f.write(self.to_markdown())
+
+        # The review JSON is the readiness signal agents_status.py polls, and
+        # the pipeline may finalize the telemetry manifest the moment every
+        # agent looks finished. Completion must therefore be durable BEFORE
+        # the JSON becomes visible: stage it, log agent_complete, then
+        # publish atomically — otherwise a finalize racing this save records
+        # the agent permanently incomplete.
+        staged_json_path = json_path + ".tmp"
+        with open(staged_json_path, 'w') as f:
+            f.write(self.to_json())
 
         # Telemetry: log agent completion (best-effort)
         # Use full agent name (reviewer + "-reviewer") to match the
@@ -571,6 +578,7 @@ class ReviewOutputBuilder:
             output['summary']['total_issues'],
             output['summary']['by_severity'],
         )
+        os.replace(staged_json_path, json_path)
 
         return {'json': json_path, 'markdown': md_path}
 

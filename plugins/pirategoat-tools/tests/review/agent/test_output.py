@@ -583,6 +583,37 @@ class TestSave:
             assert "RECORDED ISSUES: 0" in out
             assert "VERDICT: approve" in out
 
+    def test_completion_telemetry_precedes_the_readiness_artifact(
+        self, monkeypatch
+    ):
+        """The review JSON is the readiness signal agents_status.py polls;
+        the pipeline may finalize the telemetry manifest as soon as it
+        appears. agent_complete must therefore be durable BEFORE the JSON
+        exists, or a racing finalize records the agent permanently
+        incomplete."""
+        import review.agent.output as output_mod
+
+        seen = {}
+
+        def _record(output_dir, reviewer, verdict, issue_count, severities):
+            seen["json_visible_at_telemetry"] = os.path.isfile(
+                os.path.join(output_dir, "security-review.json")
+            )
+            seen["reviewer"] = reviewer
+
+        monkeypatch.setattr(
+            output_mod, "_log_agent_complete_telemetry", _record
+        )
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.save(d)
+            assert seen["json_visible_at_telemetry"] is False
+            assert seen["reviewer"] == "security-reviewer"
+            assert os.path.isfile(os.path.join(d, "security-review.json"))
+            assert not os.path.exists(
+                os.path.join(d, "security-review.json.tmp")
+            )
+
 
 # =============================================================================
 # TestFileScopedIssues
