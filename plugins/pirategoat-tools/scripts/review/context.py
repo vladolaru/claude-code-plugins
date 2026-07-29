@@ -633,11 +633,19 @@ def _fill_review_config(ctx, repo_path):
     Overwritten each run (like host_context) so repo-relative rule/reviewer
     paths resolve against the current checkout. Best-effort: absence or a
     malformed file yields the neutral empty config, never an error.
+
+    The reviewed range's changed files are the PROVENANCE GATE: rules and
+    reviewers whose defining files sit inside the range are PR-controlled
+    text and are excluded (reported under ``untrusted``). When the changed
+    set is unavailable the loader fails closed.
     """
     if _REVIEW_CONFIG_LOADER is None:
         ctx["review_config"] = None
         return
-    ctx["review_config"] = _REVIEW_CONFIG_LOADER(repo_path)
+    changed_files = ctx.get("git", {}).get("changed_files")
+    if not isinstance(changed_files, list):
+        changed_files = None
+    ctx["review_config"] = _REVIEW_CONFIG_LOADER(repo_path, changed_files)
 
 
 # ---------------------------------------------------------------------------

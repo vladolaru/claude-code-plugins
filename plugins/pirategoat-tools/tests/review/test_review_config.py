@@ -38,7 +38,7 @@ def _touch(repo: Path, relpath: str):
 
 class TestAbsence:
     def test_no_config_file(self, mod, tmp_path):
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
         assert result["reviewers"] == []
         assert result["diagnostics"] == []
@@ -46,14 +46,14 @@ class TestAbsence:
 
     def test_config_without_review_section(self, mod, tmp_path):
         _write_config(tmp_path, {"hosts": {"runtime": []}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
         assert result["reviewers"] == []
 
     def test_malformed_json_does_not_raise(self, mod, tmp_path):
         (tmp_path / ".pirategoat").mkdir()
         (tmp_path / ".pirategoat" / "config.json").write_text("{not json")
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
         assert any("parse error" in d for d in result["diagnostics"])
 
@@ -65,7 +65,7 @@ class TestRules:
             {"id": "runtime-env", "path": ".ai/rules/review/runtime.md",
              "applies_to": {"domains": ["wp-architecture"], "paths": ["**/*.php"]}}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert len(result["rules"]) == 1
         rule = result["rules"][0]
         assert rule["id"] == "runtime-env"
@@ -79,7 +79,7 @@ class TestRules:
         _write_config(tmp_path, {"review": {"rules": [
             {"id": "ghost", "path": ".ai/rules/nope.md"}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
         assert any("ghost" in d and "not found" in d for d in result["diagnostics"])
 
@@ -89,7 +89,7 @@ class TestRules:
         _write_config(tmp_path, {"review": {"rules": [
             {"id": "escape", "path": "../outside.md"}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
         assert any("escape" in d and "escapes" in d for d in result["diagnostics"])
 
@@ -100,7 +100,7 @@ class TestRules:
             {"id": "dup", "path": "a.md"},
             {"id": "dup", "path": "b.md"},
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert len(result["rules"]) == 1
         assert any("duplicate" in d for d in result["diagnostics"])
 
@@ -109,7 +109,7 @@ class TestRules:
         _write_config(tmp_path, {"review": {"rules": [
             {"id": "Bad Id!", "path": "a.md"}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
 
     @pytest.mark.parametrize(
@@ -128,7 +128,7 @@ class TestRules:
         _write_config(tmp_path, {"review": {"rules": [
             {"id": bad_id, "path": "a.md"}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["rules"] == []
         assert any("lowercase ASCII kebab" in d for d in result["diagnostics"])
 
@@ -184,7 +184,7 @@ class TestReviewers:
                  "applies_to": {"paths": ["includes/**"]},
                  "channel": "blocking", "model": "sonnet"}
             ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert len(result["reviewers"]) == 1
         rev = result["reviewers"][0]
         assert rev["id"] == "renewals"
@@ -200,7 +200,7 @@ class TestReviewers:
         _write_config(tmp_path, {"review": {"reviewers": [
             {"id": "lens-a", "ref": "r.md"}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["reviewers"][0]["label"] == "lens-a"
 
     def test_advisory_channel_and_default_execution(self, mod, tmp_path):
@@ -209,7 +209,7 @@ class TestReviewers:
             "defaults": {"execution": "isolated"},
             "reviewers": [{"id": "adv", "ref": "r.md", "channel": "advisory"}]
         }})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         rev = result["reviewers"][0]
         assert rev["channel"] == "advisory"
         assert rev["execution"] == "isolated"  # inherits default
@@ -219,7 +219,7 @@ class TestReviewers:
         _write_config(tmp_path, {"review": {"reviewers": [
             {"id": "x", "ref": "r.md", "channel": "nonsense"}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["reviewers"][0]["channel"] == "blocking"
         assert any("invalid channel" in d for d in result["diagnostics"])
 
@@ -227,7 +227,7 @@ class TestReviewers:
         _write_config(tmp_path, {"review": {"reviewers": [
             {"id": "noref"}
         ]}})
-        result = mod.load_review_config(str(tmp_path))
+        result = mod.load_review_config(str(tmp_path), changed_files=[])
         assert result["reviewers"] == []
 
 
@@ -244,7 +244,7 @@ class TestSecurityHardening:
             link.symlink_to(outside)
         except (OSError, NotImplementedError):
             pytest.skip("symlinks not supported on this platform")
-        result = mod.load_review_config(str(repo))
+        result = mod.load_review_config(str(repo), changed_files=[])
         assert result["rules"] == []
         assert result["reviewers"] == []
 
@@ -303,3 +303,66 @@ class TestSecurityHardening:
         for pattern, path, expected in cases:
             assert mod.glob_match(pattern, path) is expected, (pattern, path)
 
+
+class TestProvenanceGate:
+    """Rules are injected into reviewer prompts and reviewer refs are
+    EXECUTED as the adapter's task — an entry whose defining file lies
+    inside the reviewed range is PR-controlled text, not repo-owner-approved
+    content, and must be excluded loudly."""
+
+    def _config(self, tmp_path):
+        _touch(tmp_path, "rule.md")
+        _touch(tmp_path, "reviewer.md")
+        _write_config(tmp_path, {"review": {
+            "rules": [{"id": "r1", "path": "rule.md"}],
+            "reviewers": [{"id": "x", "ref": "reviewer.md"}],
+        }})
+
+    def test_untouched_entries_are_trusted(self, mod, tmp_path):
+        self._config(tmp_path)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["src/app.php"]
+        )
+        assert [r["id"] for r in result["rules"]] == ["r1"]
+        assert [r["id"] for r in result["reviewers"]] == ["x"]
+        assert result["untrusted"] == []
+
+    def test_reviewer_ref_in_range_is_excluded(self, mod, tmp_path):
+        self._config(tmp_path)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["reviewer.md", "src/app.php"]
+        )
+        assert result["reviewers"] == []
+        assert [r["id"] for r in result["rules"]] == ["r1"]
+        [entry] = result["untrusted"]
+        assert entry["kind"] == "reviewer"
+        assert entry["id"] == "x"
+        assert any("untrusted until merged" in d for d in result["diagnostics"])
+
+    def test_rule_path_in_range_is_excluded(self, mod, tmp_path):
+        self._config(tmp_path)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["rule.md"]
+        )
+        assert result["rules"] == []
+        assert [r["id"] for r in result["reviewers"]] == ["x"]
+        assert result["untrusted"][0]["kind"] == "rule"
+
+    def test_config_in_range_excludes_everything(self, mod, tmp_path):
+        self._config(tmp_path)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=[".pirategoat/config.json"]
+        )
+        assert result["rules"] == []
+        assert result["reviewers"] == []
+        [entry] = result["untrusted"]
+        assert entry["kind"] == "config"
+
+    def test_unknown_provenance_fails_closed(self, mod, tmp_path):
+        self._config(tmp_path)
+        result = mod.load_review_config(str(tmp_path))
+        assert result["rules"] == []
+        assert result["reviewers"] == []
+        [entry] = result["untrusted"]
+        assert entry["kind"] == "config"
+        assert any("provenance unknown" in d for d in result["diagnostics"])

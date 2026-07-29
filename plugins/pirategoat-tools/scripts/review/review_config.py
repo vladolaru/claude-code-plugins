@@ -48,15 +48,40 @@ def empty_config() -> Dict[str, Any]:
         "defaults": {"execution": DEFAULT_EXECUTION, "channel": DEFAULT_CHANNEL},
         "rules": [],
         "reviewers": [],
+        "untrusted": [],
         "diagnostics": [],
     }
 
 
-def load_review_config(repo_path: str) -> Dict[str, Any]:
+_UNTRUSTED_REASON = (
+    "defined or modified within the reviewed range — untrusted until merged. "
+    "To test a new reviewer deliberately, dispatch the adapter manually via "
+    "bootstrap ref-mode (--repo-agent-ref)."
+)
+_PROVENANCE_UNKNOWN_REASON = (
+    "provenance unknown (no changed-file set for the reviewed range) — "
+    "repo-contributed rules and reviewers fail closed."
+)
+
+
+def load_review_config(
+    repo_path: str, changed_files: Any = None
+) -> Dict[str, Any]:
     """Read + validate the ``review`` section of ``.pirategoat/config.json``.
 
     Returns a normalized dict (always the :func:`empty_config` shape) so callers
     never branch on absence. Never raises for repo-provided input.
+
+    ``changed_files`` is the PROVENANCE GATE: the repo-relative paths changed
+    within the reviewed range. Rules are injected into reviewer prompts and
+    reviewer refs are EXECUTED as the adapter's task, so an entry whose
+    defining file (or the config itself) lies inside the reviewed range is
+    PR-controlled text, not repo-owner-approved content — it is excluded and
+    reported under ``untrusted``. ``None`` means provenance is unknown and the
+    gate fails closed. Pass an empty list when the range is known to touch no
+    files. The gate is enforced here, at the single normalization choke point,
+    so no downstream consumer (plan_dispatch expansion, bootstrap rule
+    injection) can drift around it.
     """
     result = empty_config()
     config_path = os.path.join(repo_path, CONFIG_RELPATH)
@@ -87,6 +112,32 @@ def load_review_config(repo_path: str) -> Dict[str, Any]:
         )
         return result
 
+    config_relpath = CONFIG_RELPATH.replace(os.sep, "/")
+    if changed_files is None:
+        result["untrusted"].append(
+            {"kind": "config", "id": None, "path": config_relpath,
+             "reason": _PROVENANCE_UNKNOWN_REASON}
+        )
+        result["diagnostics"].append(
+            f"{config_relpath}: {_PROVENANCE_UNKNOWN_REASON}"
+        )
+        return result
+    changed = {
+        str(path).replace(os.sep, "/")
+        for path in changed_files
+        if isinstance(path, str) and path
+    }
+    if config_relpath in changed:
+        # The declarations themselves are PR-controlled: nothing they
+        # declare can be trusted, including entries pointing at untouched
+        # files.
+        result["untrusted"].append(
+            {"kind": "config", "id": None, "path": config_relpath,
+             "reason": _UNTRUSTED_REASON}
+        )
+        result["diagnostics"].append(f"{config_relpath}: {_UNTRUSTED_REASON}")
+        return result
+
     defaults = review.get("defaults")
     if isinstance(defaults, dict):
         execution = defaults.get("execution")
@@ -100,8 +151,23 @@ def load_review_config(repo_path: str) -> Dict[str, Any]:
     seen_rule_ids: set = set()
     seen_reviewer_ids: set = set()
 
+    def _gate(entry, kind, file_field):
+        rel_path = str(entry.get(file_field, "")).replace(os.sep, "/")
+        if rel_path not in changed:
+            return entry
+        result["untrusted"].append(
+            {"kind": kind, "id": entry.get("id"), "path": rel_path,
+             "reason": _UNTRUSTED_REASON}
+        )
+        diagnostics.append(
+            f"{kind} '{entry.get('id')}': {rel_path}: {_UNTRUSTED_REASON}"
+        )
+        return None
+
     for raw in _as_list(review.get("rules")):
         entry = _normalize_rule(raw, repo_path, result["defaults"], seen_rule_ids, diagnostics)
+        if entry is not None:
+            entry = _gate(entry, "rule", "path")
         if entry is not None:
             result["rules"].append(entry)
 
@@ -109,6 +175,8 @@ def load_review_config(repo_path: str) -> Dict[str, Any]:
         entry = _normalize_reviewer(
             raw, repo_path, result["defaults"], seen_reviewer_ids, diagnostics
         )
+        if entry is not None:
+            entry = _gate(entry, "reviewer", "ref")
         if entry is not None:
             result["reviewers"].append(entry)
 

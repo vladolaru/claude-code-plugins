@@ -520,7 +520,14 @@ def test_fill_review_config_populates_context(tmp_path, monkeypatch):
     outdir.mkdir()
     (outdir / "review-context.json").write_text(json.dumps({
         "version": 1,
-        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
+        # changed_files is the provenance the loader gates on: known, and
+        # not touching the config or rule file, so the rule is trusted.
+        "git": {
+            "merge_base": "abc",
+            "head_ref": "HEAD",
+            "git_range": "abc..HEAD",
+            "changed_files": ["src/app.php"],
+        },
     }))
 
     _insert_scripts_onto_path()

@@ -3743,6 +3743,37 @@ class TestRepoReviewerExpansion:
         assert dispatch[0]["status"] == "DISPATCH"
         assert dispatch[0]["channel"] == "advisory"
 
+    def test_isolated_execution_is_refused_not_dispatched(self):
+        """An explicit isolation request must never silently widen into
+        inline execution of the repo prompt."""
+        dispatch = []
+        rev = {"id": "iso", "label": "Iso", "ref": "r.md",
+               "applies_to": {"domains": ["security"]},
+               "channel": "blocking", "execution": "isolated", "model": None}
+        expand_repo_reviewers(
+            _review_ctx([rev]), {"security": 1}, ["a.php"], dispatch
+        )
+        assert dispatch[0]["status"] == "SKIPPED"
+        assert "isolated execution is not implemented" in dispatch[0]["reason"]
+
+    def test_untrusted_exclusions_surface_as_signals(self):
+        """Provenance-gated entries are hard-excluded at config
+        normalization, so nothing remains to dispatch — the exclusion must
+        still be LOUD in the step-5 signals."""
+        ctx = {"review_config": {
+            "rules": [], "reviewers": [],
+            "untrusted": [{
+                "kind": "reviewer", "id": "evil", "path": ".ai/evil.md",
+                "reason": "defined or modified within the reviewed range",
+            }],
+        }}
+        dispatch = []
+        signals = expand_repo_reviewers(ctx, {}, [], dispatch)
+        assert dispatch == []
+        assert any(
+            "UNTRUSTED reviewer 'evil'" in signal for signal in signals
+        )
+
     def test_scope_domains_fallback_to_code(self):
         dispatch = []
         rev = {"id": "any", "label": "Any", "ref": "r.md",

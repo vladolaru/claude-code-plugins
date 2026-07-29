@@ -1831,6 +1831,16 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
     """
     signals: List[str] = []
     review_config = (review_context or {}).get("review_config") or {}
+    # Provenance-gated entries never become dispatchable (the exclusion is
+    # hard, enforced at config normalization) — but the gate must be LOUD:
+    # surface each exclusion as a step-5 signal even when nothing remains
+    # to dispatch.
+    for entry in review_config.get("untrusted") or []:
+        label = entry.get("id") or entry.get("path") or entry.get("kind")
+        signals.append(
+            f"repo review config: UNTRUSTED {entry.get('kind')} "
+            f"'{label}' — {entry.get('reason')}"
+        )
     reviewers = review_config.get("reviewers") or []
     if not reviewers:
         return signals
@@ -1844,7 +1854,15 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
         # broad "code" domain when it declares none), filtered to real domains.
         declared = [d for d in (applies or {}).get("domains", []) if d in DOMAIN_CATALOG]
         scope_domains = declared or ["code"]
-        if applicable:
+        if rev.get("execution") == "isolated":
+            # An explicit isolation request must never silently WIDEN into
+            # inline execution — refuse until isolated execution exists.
+            status = "SKIPPED"
+            reason = (
+                "isolated execution is not implemented — refusing the "
+                "inline fallback"
+            )
+        elif applicable:
             status = "DISPATCH"
             reason = "repo reviewer applicable to this diff"
         else:

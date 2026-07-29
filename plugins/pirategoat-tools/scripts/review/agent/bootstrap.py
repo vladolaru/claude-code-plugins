@@ -1260,6 +1260,17 @@ def main():
             "Adapter ref-mode requires --instance-name.",
         ))
         sys.exit(1)
+    if ref_mode and args.execution == "isolated":
+        # Defense in depth behind plan_dispatch's refusal: an explicit
+        # isolation request must never silently widen into inline
+        # execution of the repo prompt — not even via a dispatch override.
+        print(build_error_output(
+            args.instance_name or args.agent,
+            "Isolated execution is not implemented. Refusing to run the "
+            "repo reviewer prompt inline against an explicit isolation "
+            "request.",
+        ))
+        sys.exit(1)
     # Identity used for per-instance artifacts (started marker, scoped-diff file,
     # output file names). In ref-mode the adapter shares one registry key across
     # N instances, so uniqueness must come from --instance-name.

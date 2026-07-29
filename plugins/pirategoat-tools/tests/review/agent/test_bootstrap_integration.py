@@ -1111,6 +1111,85 @@ class TestDynamicDispatchRisk:
         assert "DYNAMIC_DISPATCH_RISK:" not in output
 
 
+class TestRepoRuleAndRefModeSelection:
+    """Repo rules must reach the reviewers they target (effective identity,
+    complete scope), adapter instances must receive their declared path
+    scope, and an explicit isolation request must never run inline."""
+
+    @staticmethod
+    def _write_review_context(output_dir: Path, rules=None, reviewers=None):
+        (output_dir / "review-context.json").write_text(json.dumps({
+            "review_config": {
+                "rules": rules or [],
+                "reviewers": reviewers or [],
+            }
+        }))
+
+    @staticmethod
+    def _rule(rule_dir: Path, rule_id, body, applies_to=None, channel="blocking"):
+        rule_file = rule_dir / f"{rule_id}.md"
+        rule_file.write_text(body)
+        return {
+            "id": rule_id,
+            "path": f"{rule_id}.md",
+            "resolved_path": str(rule_file),
+            "applies_to": applies_to
+            or {"agents": [], "domains": [], "paths": []},
+            "channel": channel,
+        }
+
+    @staticmethod
+    def _make_repo(repo: Path, feature_files):
+        repo.mkdir()
+
+        def _git(*git_args):
+            subprocess.run(
+                ["git"] + list(git_args),
+                cwd=repo, capture_output=True, text=True, check=True,
+            )
+
+        _git("init", "-b", "main")
+        _git("config", "user.email", "t@t.com")
+        _git("config", "user.name", "T")
+        _git("config", "commit.gpgsign", "false")
+        (repo / "base.txt").write_text("base\n")
+        _git("add", ".")
+        _git("commit", "-m", "initial")
+        for relpath, content in feature_files.items():
+            target = repo / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        _git("add", ".")
+        _git("commit", "-m", "feature")
+
+    @staticmethod
+    def _run_in_repo(repo: Path, *args):
+        cmd = (
+            [sys.executable, str(BOOTSTRAP_SCRIPT)]
+            + list(args)
+            + ["--range", "HEAD~1..HEAD"]
+        )
+        return subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120, cwd=str(repo)
+        )
+
+    def test_isolated_execution_is_refused(self, tmp_path):
+        """An explicit isolation request must never silently widen into
+        inline execution of the repo prompt — not even via override."""
+        ref = tmp_path / "r.md"
+        ref.write_text("Review renewals.")
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--execution", "isolated",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+        )
+        assert result.returncode == 1
+        assert "Isolated execution is not implemented" in result.stdout
+
+
 class TestOutputFilenameConsistency:
     """Output filenames from ReviewOutputBuilder.save() match bootstrap expectations."""
 
