@@ -577,7 +577,7 @@ def _read_shape_succeeded(structured: object) -> bool:
 
 
 def _write_shape_succeeded(structured: object) -> bool:
-    expected = {
+    required = {
         "type",
         "content",
         "filePath",
@@ -585,7 +585,14 @@ def _write_shape_succeeded(structured: object) -> bool:
         "structuredPatch",
         "userModified",
     }
-    if not isinstance(structured, dict) or set(structured) != expected:
+    # memdirStamped is a known metadata flag current successful Write
+    # results carry alongside the normal fields.
+    allowed = required | {"memdirStamped"}
+    if not isinstance(structured, dict) or not required <= set(structured) <= allowed:
+        return False
+    if "memdirStamped" in structured and not isinstance(
+        structured["memdirStamped"], bool
+    ):
         return False
     original = structured.get("originalFile")
     patch = structured.get("structuredPatch")
@@ -643,6 +650,55 @@ def _edit_shape_succeeded(structured: object) -> bool:
     )
 
 
+def _grep_shape_succeeded(structured: object) -> bool:
+    # Legacy Grep results omit is_error; the structured payload is the
+    # success signal. Key sets are mode-specific: content mode carries the
+    # matched text, count mode a match total, files_with_matches only the
+    # file list. Zero matches is still a successful call.
+    if not isinstance(structured, dict):
+        return False
+    mode = structured.get("mode")
+    base = {"mode", "filenames", "numFiles"}
+    if mode == "content":
+        required = base | {"content", "numLines"}
+        allowed = required | {"appliedLimit", "appliedOffset"}
+    elif mode == "count":
+        required = allowed = base | {"content", "numMatches"}
+    elif mode == "files_with_matches":
+        required = allowed = base
+    else:
+        return False
+    if not required <= set(structured) <= allowed:
+        return False
+    filenames = structured.get("filenames")
+    return (
+        isinstance(filenames, list)
+        and all(isinstance(name, str) for name in filenames)
+        and ("content" not in required or isinstance(structured.get("content"), str))
+        and all(
+            _safe_int(structured[key])
+            for key in set(structured)
+            & {"numFiles", "numLines", "numMatches", "appliedLimit", "appliedOffset"}
+        )
+    )
+
+
+def _glob_shape_succeeded(structured: object) -> bool:
+    # Legacy Glob results omit is_error; the structured payload is the
+    # success signal. An empty file list is still a successful call.
+    expected = {"durationMs", "filenames", "numFiles", "truncated"}
+    if not isinstance(structured, dict) or set(structured) != expected:
+        return False
+    filenames = structured.get("filenames")
+    return (
+        isinstance(filenames, list)
+        and all(isinstance(name, str) for name in filenames)
+        and _safe_int(structured.get("numFiles"))
+        and _safe_int(structured.get("durationMs"))
+        and isinstance(structured.get("truncated"), bool)
+    )
+
+
 def _tool_shape_succeeded(
     structured: object, tool_name: str | None, operation: str | None
 ) -> bool:
@@ -652,6 +708,10 @@ def _tool_shape_succeeded(
         return _write_shape_succeeded(structured)
     if tool_name == "Edit" and operation == "edit":
         return _edit_shape_succeeded(structured)
+    if tool_name == "Grep" and operation == "grep":
+        return _grep_shape_succeeded(structured)
+    if tool_name == "Glob" and operation == "glob":
+        return _glob_shape_succeeded(structured)
     return False
 
 

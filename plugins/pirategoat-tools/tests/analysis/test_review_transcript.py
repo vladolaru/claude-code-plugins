@@ -1833,6 +1833,154 @@ class TestAnalyzeSubagent:
             assert result["artifact_writes"]["builder_successes"] == 0
             assert result["artifact_writes"]["first_builder_attempt_succeeded"] is None
 
+    def test_write_shape_accepts_memdir_stamped_metadata(self):
+        """Current successful Write results carry memdirStamped alongside
+        the normal fields — rejecting it marks one ordinary write unknown
+        and downgrades completeness-dependent metrics."""
+        structured = _current_write_result("/safe/out.json") | {
+            "memdirStamped": True
+        }
+        assert result_state(
+            {"block": {"content": "ordinary result"}, "structured": structured},
+            "Write",
+            "write",
+        )[0] == "success"
+
+    def test_write_shape_rejects_non_boolean_memdir_stamped(self):
+        structured = _current_write_result("/safe/out.json") | {
+            "memdirStamped": "yes"
+        }
+        assert result_state(
+            {"block": {"content": "ordinary result"}, "structured": structured},
+            "Write",
+            "write",
+        )[0] == "unknown"
+
+    @pytest.mark.parametrize(
+        "tool_name,structured",
+        [
+            (
+                "Grep",
+                {
+                    "mode": "content",
+                    "filenames": ["src/a.py"],
+                    "numFiles": 1,
+                    "content": "src/a.py:1:match",
+                    "numLines": 1,
+                },
+            ),
+            (
+                "Grep",
+                {
+                    "mode": "content",
+                    "filenames": [],
+                    "numFiles": 0,
+                    "content": "",
+                    "numLines": 0,
+                    "appliedLimit": 100,
+                },
+            ),
+            (
+                "Grep",
+                {"mode": "files_with_matches", "filenames": ["a.py"], "numFiles": 1},
+            ),
+            (
+                "Grep",
+                {
+                    "mode": "count",
+                    "filenames": ["a.py"],
+                    "numFiles": 1,
+                    "content": "a.py:2",
+                    "numMatches": 2,
+                },
+            ),
+            (
+                "Glob",
+                {
+                    "durationMs": 5,
+                    "filenames": [],
+                    "numFiles": 0,
+                    "truncated": False,
+                },
+            ),
+        ],
+        ids=[
+            "grep-content",
+            "grep-content-zero-matches",
+            "grep-files-with-matches",
+            "grep-count",
+            "glob-empty",
+        ],
+    )
+    def test_legacy_grep_and_glob_success_payloads_resolve_success(
+        self, tool_name, structured
+    ):
+        """Older transcripts omit is_error on successful Grep/Glob calls —
+        the structured payload is the success signal, and zero matches is
+        still a successful call."""
+        assert result_state(
+            {"block": {"content": "ordinary result"}, "structured": structured},
+            tool_name,
+            tool_name.lower(),
+        )[0] == "success"
+
+    @pytest.mark.parametrize(
+        "tool_name,structured",
+        [
+            (
+                "Grep",
+                {"mode": "regex", "filenames": [], "numFiles": 0},
+            ),
+            (
+                "Grep",
+                {
+                    "mode": "content",
+                    "filenames": [],
+                    "numFiles": 0,
+                    "content": "",
+                    "numLines": 0,
+                    "unexpected": 1,
+                },
+            ),
+            (
+                "Grep",
+                {
+                    "mode": "files_with_matches",
+                    "filenames": "a.py",
+                    "numFiles": 1,
+                },
+            ),
+            (
+                "Glob",
+                {"durationMs": 5, "filenames": [], "numFiles": 0},
+            ),
+            (
+                "Glob",
+                {
+                    "durationMs": 5,
+                    "filenames": [],
+                    "numFiles": 0,
+                    "truncated": "no",
+                },
+            ),
+        ],
+        ids=[
+            "grep-unknown-mode",
+            "grep-unexpected-key",
+            "grep-filenames-not-list",
+            "glob-missing-truncated",
+            "glob-truncated-wrong-type",
+        ],
+    )
+    def test_near_miss_grep_and_glob_shapes_remain_unknown(
+        self, tool_name, structured
+    ):
+        assert result_state(
+            {"block": {"content": "ordinary result"}, "structured": structured},
+            tool_name,
+            tool_name.lower(),
+        )[0] == "unknown"
+
     def test_unknown_tool_cannot_reuse_read_success_shape(self, tmp_path):
         transcript = _write_jsonl(
             tmp_path / "unknown-tool-shape.jsonl",
