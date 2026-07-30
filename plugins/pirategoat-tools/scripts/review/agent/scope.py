@@ -1112,6 +1112,7 @@ def build_scope(args: argparse.Namespace) -> dict:
     # scope that excludes the very file that triggered dispatch and exits
     # NO_DOMAIN_FILES. Rescue applies after noise filtering, like domains.
     include_paths = [p for p in (getattr(args, "include_path", None) or []) if p]
+    rescued_by_path_set: set = set()
     if include_paths and domain_excluded:
         _glob_match = _load_glob_match()
         rescued_by_path = [
@@ -1253,8 +1254,16 @@ def build_scope(args: argparse.Namespace) -> dict:
             # Apply semantic filtering to reduce noise (docblocks, comments,
             # formatting). Prose files are exempt — the filter's comment
             # heuristics would strip their content (see
-            # _SEMANTIC_FILTER_EXEMPT_RE).
-            if use_semantic_filter and not _SEMANTIC_FILTER_EXEMPT_RE.search(filepath):
+            # _SEMANTIC_FILTER_EXEMPT_RE). Path-rescued files are exempt
+            # too: they are here precisely because the domain's language
+            # recognition did NOT match them (extensionless docs/README,
+            # unknown formats), so the filter's heuristics have no basis —
+            # fail open to full content.
+            if (
+                use_semantic_filter
+                and not _SEMANTIC_FILTER_EXEMPT_RE.search(filepath)
+                and filepath not in rescued_by_path_set
+            ):
                 diff_text = apply_semantic_filter(diff_text)
 
             diff_lines = count_diff_lines(diff_text)

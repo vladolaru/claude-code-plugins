@@ -823,6 +823,48 @@ class TestSemanticFilterIntegration:
         assert "+* new bullet content" in diff
         assert "+# New Heading" in diff
 
+    def test_path_rescued_extensionless_file_keeps_its_content(self, tmp_path):
+        """Path-rescued files are here precisely because the domain's
+        language recognition did NOT match them (extensionless docs/README,
+        unknown formats) — the filter's comment heuristics have no basis
+        and must not run on them."""
+        def _mock(cmd, check=True, capture_stderr=True):
+            cmd_str = " ".join(cmd)
+            if "rev-parse --git-dir" in cmd_str:
+                return ".git"
+            if "rev-parse" in cmd_str:
+                return "abc123"
+            if "--name-only" in cmd_str:
+                return "docs/README"
+            if "--numstat" in cmd_str:
+                return "2\t2\tdocs/README"
+            if "merge-base" in cmd_str:
+                return "abc123"
+            if "rev-list --count" in cmd_str:
+                return "0"
+            if "diff" in cmd_str and "--" in cmd_str:
+                return (
+                    "--- a/docs/README\n+++ b/docs/README\n"
+                    "@@ -1,2 +1,2 @@\n"
+                    "-* old bullet content\n"
+                    "+* new bullet content\n"
+                )
+            return ""
+
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = _mock
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=False,
+                include_path=["docs/**"],
+            )
+            scope = review_scope.build_scope(args)
+        diff = scope["diffs"]["docs/README"]
+        assert "+* new bullet content" in diff
+        assert "-* old bullet content" in diff
+
     @staticmethod
     def _mock_git_prose_commands(cmd, check=True, capture_stderr=True):
         """Mock git commands for a Markdown-only change."""
