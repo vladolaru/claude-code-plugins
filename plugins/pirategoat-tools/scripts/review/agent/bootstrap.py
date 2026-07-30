@@ -1394,6 +1394,7 @@ def main():
                     ref_include_flags += ["--include-path", pattern]
         scope_status = "NO_DOMAIN_FILES"
         captured_meta = False
+        error_outputs = []
         for dom in ref_domains:
             if dom not in _REVIEW_DOMAINS:
                 continue
@@ -1411,7 +1412,7 @@ def main():
                 if args.output_dir else None
             )
             dom_extra_flags, ref_include_flags = ref_include_flags, []
-            _, dom_output = run_scope_discovery(
+            dom_rc, dom_output = run_scope_discovery(
                 plugin_root, dom, dom_extra_flags, args.range,
                 output_dir=args.output_dir,
                 summary_json_out=dom_summary_out,
@@ -1432,8 +1433,24 @@ def main():
                 else:
                     scope_output = dom_output
                 scope_status = "OK"
+            elif dom_rc not in (0, 2):
+                # rc=2 means no changes, which is still structured output
+                # (same contract as the primary-domain path).
+                error_outputs.append(f"[{dom}] {dom_output}")
         if not scope_output:
-            scope_output = "(No files matched the repo reviewer's declared domains)"
+            if error_outputs:
+                # Every declared domain that ran failed (bad range, git
+                # error, timeout). Reporting NO_DOMAIN_FILES here would
+                # convert an infrastructure failure into a clean
+                # not-applicable exit — the repo reviewer must fail loudly
+                # instead.
+                scope_status = "ERROR"
+                scope_output = (
+                    "Scope discovery failed for the declared domains:\n"
+                    + "\n".join(error_outputs)
+                )
+            else:
+                scope_output = "(No files matched the repo reviewer's declared domains)"
         if not pr_number:
             pr_number = load_pr_number_from_context(output_dir)
     elif config["domain"] is not None:

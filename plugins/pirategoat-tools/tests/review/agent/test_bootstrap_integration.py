@@ -176,6 +176,30 @@ class TestCategoryRepresentatives:
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
         assert (tmp_path / "repo-renewals-deferred-files.json").is_file()
 
+    def test_ref_mode_scope_failure_is_an_error_not_a_clean_exit(
+        self, tmp_path
+    ):
+        """When every declared ref-mode domain fails scope discovery (bad
+        range, git error, timeout), the adapter must report the
+        infrastructure failure — a NO_DOMAIN_FILES exit would let the repo
+        reviewer emit a clean not-applicable result for a run that never
+        inspected anything."""
+        ref = tmp_path / "renewals.md"
+        ref.write_text("Review renewals logic end to end.")
+
+        result = run_bootstrap(
+            "--agent", "repo-reviewer-adapter",
+            "--repo-agent-ref", str(ref),
+            "--instance-name", "repo-renewals-reviewer",
+            "--scope-domains", "code",
+            "--output-dir", str(tmp_path),
+            "--range", "no-such-ref..HEAD",
+        )
+
+        assert result.returncode == 1
+        assert "STATUS: ERROR" in result.stdout
+        assert "No files matched" not in result.stdout
+
     def test_ref_mode_agent_start_records_the_dispatched_model_tier(
         self, tmp_path
     ):
