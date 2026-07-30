@@ -642,6 +642,49 @@ class TestSave:
             assert os.path.isfile(os.path.join(d, "security-review.json"))
             assert not list(Path(d).glob("*.tmp"))
 
+    def test_overlapping_saves_publish_a_consistent_artifact_pair(
+        self, monkeypatch
+    ):
+        """The JSON and Markdown describe the same findings; interleaved
+        overlapping saves must not leave one execution's JSON next to the
+        other execution's Markdown. One execution owns the published pair."""
+        import review.agent.output as output_mod
+
+        def _distinct_builder(marker):
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.add_issue(
+                severity="low",
+                category="test",
+                title=f"Finding from execution {marker}",
+                description="d",
+                file="src/f.py",
+                line=1,
+                recommendation="r",
+            )
+            return b
+
+        with tempfile.TemporaryDirectory() as d:
+            raced = []
+
+            def _finish_a_retry_first(*args):
+                if not raced:
+                    raced.append(True)
+                    _distinct_builder("B").save(d)
+
+            monkeypatch.setattr(
+                output_mod,
+                "_log_agent_complete_telemetry",
+                _finish_a_retry_first,
+            )
+            _distinct_builder("A").save(d)
+
+            with open(os.path.join(d, "security-review.json")) as f:
+                json_title = json.load(f)["issues"][0]["title"]
+            md_text = Path(d, "security-review.md").read_text()
+            assert json_title in md_text
+            other = "B" if json_title.endswith("A") else "A"
+            assert f"Finding from execution {other}" not in md_text
+
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
         """Unique staging names never self-overwrite the way the old fixed
         name did, so a save that dies before publishing must clean up its

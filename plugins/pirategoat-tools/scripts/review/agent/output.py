@@ -20,11 +20,17 @@ Usage:
     markdown_output = builder.to_markdown()
 """
 
+import contextlib
 import json
 import os
 import posixpath
 import sys
 import uuid
+
+try:
+    import fcntl
+except ImportError:  # non-POSIX host — publish without the pair lock
+    fcntl = None
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
@@ -541,21 +547,22 @@ class ReviewOutputBuilder:
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         md_path = os.path.join(output_dir, f"{self.reviewer}-review.md")
 
-        with open(md_path, 'w') as f:
-            f.write(self.to_markdown())
-
         # The review JSON is the readiness signal agents_status.py polls, and
         # the pipeline may finalize the telemetry manifest the moment every
         # agent looks finished. Completion must therefore be durable BEFORE
         # the JSON becomes visible: stage it, log agent_complete, then
         # publish atomically — otherwise a finalize racing this save records
         # the agent permanently incomplete.
-        # The staging name carries a nonce because the lifecycle supports
+        # The staging names carry a nonce because the lifecycle supports
         # overlapping executions of the same reviewer (retry before the
         # prior invocation finishes): a shared staging file would let one
-        # execution's os.replace() consume the other's staged JSON.
-        staged_json_path = f"{json_path}.{uuid.uuid4().hex}.tmp"
+        # execution's os.replace() consume the other's staged artifact.
+        nonce = uuid.uuid4().hex
+        staged_json_path = f"{json_path}.{nonce}.tmp"
+        staged_md_path = f"{md_path}.{nonce}.tmp"
         try:
+            with open(staged_md_path, 'w') as f:
+                f.write(self.to_markdown())
             with open(staged_json_path, 'w') as f:
                 f.write(self.to_json())
 
@@ -583,14 +590,31 @@ class ReviewOutputBuilder:
                 output['summary']['total_issues'],
                 output['summary']['by_severity'],
             )
-            os.replace(staged_json_path, json_path)
+            # Publish Markdown and JSON as one pair under an exclusive lock
+            # so a single execution owns both artifacts — without it,
+            # overlapping saves can interleave their publishes and leave the
+            # final JSON and Markdown describing different findings. Markdown
+            # goes first so the JSON readiness signal never precedes its
+            # companion. The lock is the output directory's own fd (no lock
+            # file to leave behind; flock auto-releases if the process dies);
+            # where flock is unavailable (non-POSIX) the publishes still
+            # happen back-to-back.
+            with contextlib.ExitStack() as stack:
+                if fcntl is not None:
+                    lock_fd = os.open(output_dir, os.O_RDONLY)
+                    stack.callback(os.close, lock_fd)
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                os.replace(staged_md_path, md_path)
+                os.replace(staged_json_path, json_path)
         finally:
             # Unique staging names never self-overwrite, so a failed save
-            # must remove its orphan (replace already consumed it on success).
-            try:
-                os.unlink(staged_json_path)
-            except FileNotFoundError:
-                pass
+            # must remove its orphans (replace already consumed them on
+            # success).
+            for staged in (staged_md_path, staged_json_path):
+                try:
+                    os.unlink(staged)
+                except FileNotFoundError:
+                    pass
 
         return {'json': json_path, 'markdown': md_path}
 
