@@ -465,6 +465,18 @@ class TestAPIContractReviewerReturnSideHooks:
         assert "established runtime behavior" in prompt
         assert "even when the hook docblock does not document it" in prompt
 
+    def test_accepts_established_behavior_evidence_without_direct_consumer_code(self):
+        prompt = self._prompt()
+
+        assert (
+            "pre-diff implementation or tests can establish changed observable "
+            "behavior without direct consumer code"
+        ) in prompt
+        assert (
+            "when implementation and test evidence are absent, require existing "
+            "consumer code"
+        ) in prompt
+
     def test_requires_evidence_before_internal_refactoring_dismissal(self):
         prompt = self._prompt()
 

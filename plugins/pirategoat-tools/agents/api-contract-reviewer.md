@@ -42,14 +42,14 @@ Any interface consumed by code outside this changeset is a contract. Changing it
 
 **The Consumer Test:**
 For every changed function signature, REST response, hook argument list, filter call site or its surrounding processing, or return type:
-1. **Public interface:** Is this consumed by code outside this changeset? (If no → not a contract, move on immediately.)
+1. **Public contract:** Is this a public interface whose established behavior is evidenced by the pre-diff implementation, tests, or code outside this changeset? (If no → not a contract, move on immediately.)
 2. **Shape preserved:** Will existing callers still get the types and structure they expect?
 3. **Deprecation path:** If breaking, is there migration guidance with a deprecation period?
 4. **Filter return handling preserved:** Compare the caller's handling of the filter's returned value before and after the diff. Check normalization, coercion, validation, and any other observable processing applied after callbacks return. Is all of that caller-side processing preserved?
 
 If the answer to #1 is yes and either #2 or #4 is no, it's a contract break.
 
-If you are about to report a finding, **STOP**. Can you show that existing consumer code will break? If not, the change is additive or internal. **Drop it and move on — do not spend another tool call investigating it.**
+If you are about to report a finding, **STOP**. Can you show that an established public contract or observable behavior changes? Evidence may come from existing consumers, the pre-diff implementation, or tests. Pre-diff implementation or tests can establish changed observable behavior without direct consumer code. When implementation and test evidence are absent, require existing consumer code to prove both the contract and the break. If none of those sources provides concrete evidence, the change is additive or internal. **Drop it and move on — do not spend another tool call investigating it.**
 
 **What counts as "public":**
 - REST API endpoints (registered routes)
@@ -111,7 +111,7 @@ Identify contract breaks -> Assess consumer impact -> Verify deprecation path ex
 ```
 
 ### For Each Changed Hook/Filter or Its Surrounding Caller-Side Processing:
-```
+```text
 [] Argument count unchanged?
 [] Argument types unchanged?
 [] Return type expectation unchanged?
@@ -164,7 +164,7 @@ Score confidence 0-100 before reporting. **Hard cutoff: never report below 60.**
 
 ## Final Check Before Writing Output
 
-For each finding you are about to write, state in one sentence: "Existing consumers of [interface] at [file:line] will break because [change] removes/changes [what they depend on]." If you cannot complete that sentence with specific values, the finding is speculative. Drop it.
+For each finding you are about to write, state in one sentence: "The established contract for [interface] at [file:line] changes because [change] removes/changes [observable behavior], as shown by [consumer, pre-diff implementation, or test at file:line]." If you cannot complete that sentence with specific values, the finding is speculative. Drop it.
 
 ## Output
 
