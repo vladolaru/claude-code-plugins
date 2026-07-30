@@ -610,9 +610,55 @@ class TestSave:
             assert seen["json_visible_at_telemetry"] is False
             assert seen["reviewer"] == "security-reviewer"
             assert os.path.isfile(os.path.join(d, "security-review.json"))
-            assert not os.path.exists(
-                os.path.join(d, "security-review.json.tmp")
+            assert not list(Path(d).glob("*.tmp"))
+
+    def test_overlapping_saves_of_the_same_reviewer_do_not_collide(
+        self, monkeypatch
+    ):
+        """The lifecycle supports retrying a reviewer before its prior
+        invocation finishes, so two saves for the same reviewer can be
+        in flight at once. A shared staging name lets the faster save's
+        os.replace() consume the slower save's staged JSON, crashing it
+        with FileNotFoundError."""
+        import review.agent.output as output_mod
+
+        with tempfile.TemporaryDirectory() as d:
+            raced = []
+
+            def _finish_a_retry_first(*args):
+                # Fires inside the outer save between staging and publish —
+                # the widest overlap window. Only the first (outer) save
+                # races; the nested retry's own telemetry call is a no-op.
+                if not raced:
+                    raced.append(True)
+                    ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+
+            monkeypatch.setattr(
+                output_mod,
+                "_log_agent_complete_telemetry",
+                _finish_a_retry_first,
             )
+            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            assert os.path.isfile(os.path.join(d, "security-review.json"))
+            assert not list(Path(d).glob("*.tmp"))
+
+    def test_failed_save_removes_its_staged_file(self, monkeypatch):
+        """Unique staging names never self-overwrite the way the old fixed
+        name did, so a save that dies before publishing must clean up its
+        own orphan."""
+        import review.agent.output as output_mod
+
+        def _boom(*args):
+            raise RuntimeError("telemetry backend exploded")
+
+        monkeypatch.setattr(
+            output_mod, "_log_agent_complete_telemetry", _boom
+        )
+        with tempfile.TemporaryDirectory() as d:
+            with pytest.raises(RuntimeError):
+                ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            assert not os.path.exists(os.path.join(d, "security-review.json"))
+            assert not list(Path(d).glob("*.tmp"))
 
 
 # =============================================================================
