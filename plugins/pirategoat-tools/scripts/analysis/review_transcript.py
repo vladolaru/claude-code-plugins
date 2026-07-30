@@ -1789,10 +1789,18 @@ def enrich_run_transcript(
     # growing through later steps, completions, and resume turns, so no
     # observed family may claim completeness until the run settles.
     run_settled = window[1] is not None and manifest.get("status") != "running"
+    # The main session drove the pipeline, so its bounded window must
+    # contain usage-bearing assistant responses. An empty located file or
+    # usage-less records is absent evidence — reporting it complete would
+    # put exact zero-token totals into complete-cohort denominators.
+    main_usage_missing = (
+        main_analysis["usage_valid"] and not main_analysis["usage_observed"]
+    )
     main_data_complete = (
         not main_parse_gap
         and not main_time_gap
         and not main_analysis["unresolved_calls"]
+        and not main_usage_missing
         and run_settled
     )
     expected_available = manifest_expected_available and main_data_complete
@@ -1800,6 +1808,10 @@ def enrich_run_transcript(
         warnings.append({"code": "orchestrator_transcript_parse_gap"})
     if main_time_gap:
         warnings.append({"code": "orchestrator_transcript_time_gap"})
+    if run_settled and main_usage_missing and not main_parse_gap:
+        # Suppressed under a parse gap — damaged lines already explain the
+        # absence. Unsettled runs may simply not have assistant turns yet.
+        warnings.append({"code": "orchestrator_transcript_usage_missing"})
     if main_analysis["unresolved_calls"]:
         # Same contract as subagents: a call resolving to neither success
         # nor failure is incomplete evidence, not a complete transcript.

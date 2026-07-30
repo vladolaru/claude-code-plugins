@@ -3273,7 +3273,7 @@ class TestEnrichRunTranscript:
             [
                 _assistant(
                     _call("main-read", "Read", file_path=str(repo / "src/main.py"))
-                ),
+                , usage=_usage(1, 1)),
                 _result("main-read"),
             ],
         )
@@ -3322,7 +3322,7 @@ class TestEnrichRunTranscript:
         }
         main_entries = []
         for family, (call, agent_id, _relative_path) in dispatches.items():
-            main_entries.append(_assistant(call))
+            main_entries.append(_assistant(call, usage=_usage(1, 1)))
             if family != incomplete_family or incomplete_mode != "uncorrelated":
                 main_entries.append(
                     _result(call["id"], structured={"agentId": agent_id})
@@ -3427,7 +3427,7 @@ class TestEnrichRunTranscript:
         for call, agent_id in dispatches:
             main_entries.extend(
                 [
-                    _assistant(call),
+                    _assistant(call, usage=_usage(1, 1)),
                     _result(call["id"], structured={"agentId": agent_id}),
                 ]
             )
@@ -3514,7 +3514,7 @@ class TestEnrichRunTranscript:
         _write_jsonl(
             sessions / f"{session_id}.jsonl",
             [
-                _assistant(call),
+                _assistant(call, usage=_usage(1, 1)),
                 _result("reviewer", structured={"agentId": "reviewer-id"}),
             ],
         )
@@ -3619,6 +3619,63 @@ class TestEnrichRunTranscript:
         assert result["completeness"]["agent_data"] is False
         assert result["completeness"]["scope_comparable_reads"] is False
 
+    def test_usage_less_main_transcript_is_missing_evidence(self, tmp_path):
+        """A settled run whose bounded main-session records carry no usage
+        payloads has absent orchestrator evidence — reporting it complete
+        would put exact zero-token totals into complete-cohort
+        denominators."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        session_id = "usage-less-main"
+        _write_jsonl(
+            sessions / f"{session_id}.jsonl",
+            [
+                _assistant(
+                    _call(
+                        "main-read",
+                        "Read",
+                        file_path=str(repo / "src/main.py"),
+                    )
+                ),
+                _result("main-read"),
+            ],
+        )
+
+        result = enrich_run_transcript(
+            _manifest(session_id, repo, output_dir, started=[]),
+            sessions,
+            set(),
+        )
+
+        assert {
+            "code": "orchestrator_transcript_usage_missing"
+        } in result["warnings"]
+        assert result["completeness"]["orchestrator_data"] is False
+        assert result["completeness"]["usage"] is False
+
+    def test_empty_main_transcript_is_missing_evidence(self, tmp_path):
+        """An empty located main-session file parses cleanly but proves
+        nothing — it must not yield a complete run with zero totals."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        session_id = "empty-main"
+        _write_jsonl(sessions / f"{session_id}.jsonl", [])
+
+        result = enrich_run_transcript(
+            _manifest(session_id, repo, output_dir, started=[]),
+            sessions,
+            set(),
+        )
+
+        assert {
+            "code": "orchestrator_transcript_usage_missing"
+        } in result["warnings"]
+        assert result["completeness"]["usage"] is False
+
     def test_timestampless_agent_evidence_is_a_time_gap(self, tmp_path):
         """An assistant record without a usable timestamp cannot be bound to
         the run window — that is damaged evidence for the agent's family."""
@@ -3685,7 +3742,7 @@ class TestEnrichRunTranscript:
                 _assistant(
                     _special_agent_call("first", output_dir, "critic"),
                     _special_agent_call("second", output_dir, "critic"),
-                ),
+                 usage=_usage(1, 1)),
                 _result("first", structured={"agentId": "critic-first"}),
                 _result("second", structured={"agentId": "critic-second"}),
             ],
@@ -3841,7 +3898,7 @@ class TestEnrichRunTranscript:
         secret = "PRIVATE_SECRET_SENTINEL"
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
-        _write_jsonl(sessions / "session-invalid.jsonl", [_assistant()])
+        _write_jsonl(sessions / "session-invalid.jsonl", [_assistant(usage=_usage(1, 1))])
 
         result = enrich_run_transcript(
             _manifest(
@@ -3976,7 +4033,7 @@ class TestEnrichRunTranscript:
         _write_jsonl(
             main,
             [
-                _assistant(_call("a1", "Agent", prompt=_agent_prompt(output_dir))),
+                _assistant(_call("a1", "Agent", prompt=_agent_prompt(output_dir)), usage=_usage(1, 1)),
                 _result("a1", structured={"agentId": "gap"}),
             ],
         )
@@ -4140,7 +4197,7 @@ def test_synthesis_call_without_result_is_an_expected_missing_dispatch(
     output_dir = tmp_path / "run"
     _write_jsonl(
         sessions / "synthesis-missing.jsonl",
-        [_assistant(_special_agent_call("synthesis", output_dir, agent))],
+        [_assistant(_special_agent_call("synthesis", output_dir, agent), usage=_usage(1, 1))],
     )
 
     result = enrich_run_transcript(
@@ -4237,7 +4294,7 @@ def test_malformed_unrelated_or_wrong_run_calls_do_not_affect_expectations(tmp_p
     unrelated.pop("id")
     _write_jsonl(
         sessions / "malformed-unrelated.jsonl",
-        [_assistant(wrong_run, unknown_identity, unrelated)],
+        [_assistant(wrong_run, unknown_identity, unrelated, usage=_usage(1, 1))],
     )
 
     result = enrich_run_transcript(
@@ -4279,7 +4336,7 @@ def test_non_object_tool_input_counts_as_unresolved_evidence(
         broken_read["input"] = bad_input
     _write_jsonl(
         sessions / "broken-input.jsonl",
-        [_assistant(broken_read), _result("read-1")],
+        [_assistant(broken_read, usage=_usage(1, 1)), _result("read-1")],
     )
 
     result = enrich_run_transcript(
@@ -4304,7 +4361,7 @@ def test_non_object_dispatch_input_stays_with_correlation(tmp_path):
     broken_dispatch["input"] = "not-an-object"
     _write_jsonl(
         sessions / "broken-dispatch-input.jsonl",
-        [_assistant(broken_dispatch)],
+        [_assistant(broken_dispatch, usage=_usage(1, 1))],
     )
 
     result = enrich_run_transcript(
@@ -4329,7 +4386,7 @@ def test_resolved_synthesis_call_is_complete_and_counted(tmp_path, agent):
     _write_jsonl(
         sessions / f"{session_id}.jsonl",
         [
-            _assistant(_special_agent_call("synthesis", output_dir, agent)),
+            _assistant(_special_agent_call("synthesis", output_dir, agent), usage=_usage(1, 1)),
             _result("synthesis", structured={"agentId": agent_id}),
         ],
     )
@@ -4457,7 +4514,7 @@ def test_manifest_and_main_call_observations_merge_without_double_counting(tmp_p
                 _special_agent_call(
                     "reconciler", output_dir, "review-reconciliator"
                 ),
-            ),
+             usage=_usage(1, 1)),
             _result("reviewer", structured={"agentId": "reviewer-id"}),
             _result("reconciler", structured={"agentId": "reconciler-id"}),
         ],
@@ -4497,7 +4554,7 @@ def test_multiple_retry_calls_are_counted_as_distinct_dispatches(tmp_path):
             _assistant(
                 _call("first", "Agent", prompt=_agent_prompt(output_dir)),
                 _call("second", "Agent", prompt=_agent_prompt(output_dir)),
-            ),
+             usage=_usage(1, 1)),
             _result("first", structured={"agentId": "first-id"}),
             _result("second", structured={"agentId": "second-id"}),
         ],
@@ -4548,7 +4605,8 @@ class TestBudgetAndEvidenceAccounting:
             sessions / f"{session_id}.jsonl",
             [
                 _assistant(
-                    _call("dispatch", "Agent", prompt=_agent_prompt(output_dir))
+                    _call("dispatch", "Agent", prompt=_agent_prompt(output_dir)),
+                    usage=_usage(1, 1),
                 ),
                 _result("dispatch", structured={"agentId": "reviewer-agent"}),
             ],
@@ -4805,7 +4863,7 @@ class TestBudgetAndEvidenceAccounting:
                             output_dir, agent="tests-mutation-reviewer"
                         ),
                     )
-                ),
+                , usage=_usage(1, 1)),
                 _result("dispatch", structured={"agentId": "mutation-agent"}),
             ],
         )
@@ -4860,7 +4918,7 @@ class TestBudgetAndEvidenceAccounting:
                         "Agent",
                         prompt=_adapter_prompt(output_dir),
                     )
-                ),
+                , usage=_usage(1, 1)),
                 _result("dispatch", structured={"agentId": "adapter-agent"}),
             ],
         )
@@ -4965,7 +5023,7 @@ class TestBudgetAndEvidenceAccounting:
                             output_dir, agent="tests-mutation-reviewer"
                         ),
                     )
-                ),
+                , usage=_usage(1, 1)),
                 _result("dispatch", structured={"agentId": "mutation-agent"}),
             ],
         )
@@ -5089,7 +5147,7 @@ class TestBudgetAndEvidenceAccounting:
             [
                 _assistant(
                     _call("dispatch", "Agent", prompt=_agent_prompt(output_dir))
-                ),
+                , usage=_usage(1, 1)),
                 _result("dispatch", structured={"agentId": "reviewer-agent"}),
             ],
         )
@@ -5134,11 +5192,11 @@ class TestBudgetAndEvidenceAccounting:
             [
                 _assistant(
                     _call("dispatch", "Agent", prompt=_agent_prompt(output_dir))
-                ),
+                , usage=_usage(1, 1)),
                 _result("dispatch", structured={"agentId": "reviewer-agent"}),
                 _assistant(
                     _special_agent_call("judge", output_dir, "critic")
-                ),
+                , usage=_usage(1, 1)),
                 _result("judge", structured={"agentId": "critic-agent"}),
             ],
         )
@@ -5184,7 +5242,7 @@ class TestBudgetAndEvidenceAccounting:
                     _special_agent_call(
                         "reconcile", output_dir, "review-reconciliator"
                     )
-                ),
+                , usage=_usage(1, 1)),
                 _result("reconcile", structured={"agentId": "reconciler-agent"}),
             ],
         )
