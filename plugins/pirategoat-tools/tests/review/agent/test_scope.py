@@ -785,6 +785,71 @@ class TestSemanticFilterIntegration:
             scope = review_scope.build_scope(args)
             mock_filter.assert_not_called()
 
+    def test_prose_files_bypass_semantic_filter(self, tmp_path):
+        """The filter's comment heuristics read Markdown bullets ('* ') as
+        docblock lines and headings ('# ') as comments — for prose files
+        they strip the content itself. Doc-language files must reach the
+        reviewer unfiltered."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = self._mock_git_prose_commands
+            args = argparse.Namespace(
+                domain="docs-drift", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=False,
+            )
+            scope = review_scope.build_scope(args)
+        diff = scope["diffs"]["docs/guide.md"]
+        assert "+* new bullet content" in diff
+        assert "-* old bullet content" in diff
+        assert "+# New Heading" in diff
+
+    def test_path_rescued_prose_keeps_its_content(self, tmp_path):
+        """A repo reviewer dispatched only by applies_to.paths (docs/**)
+        defaults to the code domain; the path rescue admits the Markdown
+        file, and the semantic filter must not then strip the very bullet
+        edits that triggered dispatch."""
+        with patch.object(review_scope, 'run_cmd') as mock_run, \
+             patch.object(review_scope, 'freshen_base_ref', side_effect=lambda x: x):
+            mock_run.side_effect = self._mock_git_prose_commands
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=False, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=False,
+                include_path=["docs/**"],
+            )
+            scope = review_scope.build_scope(args)
+        diff = scope["diffs"]["docs/guide.md"]
+        assert "+* new bullet content" in diff
+        assert "+# New Heading" in diff
+
+    @staticmethod
+    def _mock_git_prose_commands(cmd, check=True, capture_stderr=True):
+        """Mock git commands for a Markdown-only change."""
+        cmd_str = " ".join(cmd)
+        if "rev-parse --git-dir" in cmd_str:
+            return ".git"
+        if "rev-parse" in cmd_str:
+            return "abc123"
+        if "--name-only" in cmd_str:
+            return "docs/guide.md"
+        if "--numstat" in cmd_str:
+            return "2\t2\tdocs/guide.md"
+        if "merge-base" in cmd_str:
+            return "abc123"
+        if "rev-list --count" in cmd_str:
+            return "0"
+        if "diff" in cmd_str and "--" in cmd_str:
+            return (
+                "--- a/docs/guide.md\n+++ b/docs/guide.md\n"
+                "@@ -1,4 +1,4 @@\n"
+                "-# Old Heading\n"
+                "+# New Heading\n"
+                "-* old bullet content\n"
+                "+* new bullet content\n"
+            )
+        return ""
+
     @staticmethod
     def _mock_git_commands(cmd, check=True, capture_stderr=True):
         """Mock git commands for build_scope testing."""

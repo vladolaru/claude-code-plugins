@@ -470,6 +470,15 @@ def _ext_re(*groups) -> str:
     return r"\.(" + "|".join(exts) + r")$"
 
 
+# The semantic filter's heuristics assume programming-language comment
+# syntax. In prose formats those same characters ARE the content — a
+# Markdown bullet starts with '*' (the docblock heuristic) and a heading
+# with '#' (the comment heuristic) — so filtering strips exactly the
+# changed text the reviewer was dispatched to see (docs-drift domain,
+# path-rescued applies_to.paths files). Prose files bypass the filter.
+_SEMANTIC_FILTER_EXEMPT_RE = re.compile(_ext_re(_DOC_LANGS), re.IGNORECASE)
+
+
 def is_template_file(path: str) -> bool:
     """Return whether path is an inherently UI-emitting template file."""
     lowered = path.lower()
@@ -1241,8 +1250,11 @@ def build_scope(args: argparse.Namespace) -> dict:
 
             diff_text = get_diff_for_file(range_spec, filepath)
 
-            # Apply semantic filtering to reduce noise (docblocks, comments, formatting)
-            if use_semantic_filter:
+            # Apply semantic filtering to reduce noise (docblocks, comments,
+            # formatting). Prose files are exempt — the filter's comment
+            # heuristics would strip their content (see
+            # _SEMANTIC_FILTER_EXEMPT_RE).
+            if use_semantic_filter and not _SEMANTIC_FILTER_EXEMPT_RE.search(filepath):
                 diff_text = apply_semantic_filter(diff_text)
 
             diff_lines = count_diff_lines(diff_text)
