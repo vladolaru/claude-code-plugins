@@ -672,6 +672,40 @@ class TestStep6DispatchAgents:
         tok = shlex.split(cmd_line)
         assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
 
+    def test_codex_adapter_command_omits_the_claude_model_tier(self, mod, tmp_path):
+        """The Codex host dispatches the native subagent with no Claude
+        model override, so forwarding the declared tier would make
+        telemetry attribute the execution to a model that never ran. Empty
+        falls back to the adapter registry's honest 'inherit'."""
+        import shlex
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 2, 3, 5],
+            "dispatched_agents": [
+                {
+                    "name": "repo-renewals-reviewer",
+                    "adapter": "repo-reviewer-adapter",
+                    "ref": ".ai/agents/review/renewals.md",
+                    "label": "Renewals Expert",
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "model": "sonnet",
+                    "scope_domains": ["architecture"],
+                },
+            ],
+        }
+        ctx = {"git": {"git_range": "abc..HEAD"}}
+        g = mod.get_step_guidance(
+            6, "full", state, ctx, config={"host": "codex"},
+            output_dir=str(tmp_path),
+        )
+        cmd_line = next(
+            line for line in g["actions"]
+            if "bootstrap.py" in line and "--repo-agent-ref" in line
+        )
+        tok = shlex.split(cmd_line)
+        assert tok[tok.index("--model-tier") + 1] == ""
+
     def test_adapter_command_escapes_repo_controlled_strings(self, mod, tmp_path):
         """A malicious repo-supplied label/ref cannot inject shell commands."""
         import shlex

@@ -1052,8 +1052,12 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                     # The tier actually dispatched for this instance (the
                     # model hint below) — telemetry must record it, not the
                     # adapter registry's static tier, or the manifest holds
-                    # conflicting models for one agent.
-                    "--model-tier", agent.get("model") or "",
+                    # conflicting models for one agent. On the Codex host no
+                    # Claude model override is applied (the native subagent
+                    # runs the Codex model), so forwarding the declaration
+                    # would attribute the execution to a tier that never ran;
+                    # empty falls back to the adapter's registry "inherit".
+                    "--model-tier", "" if codex_host else (agent.get("model") or ""),
                     "--range", git_range,
                     "--output-dir", od,
                 ]
