@@ -199,6 +199,30 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
             if final_save_pos is None or pos > final_save_pos:
                 final_save_pos = pos
 
+    # save() persists one builder instance's accumulated state. A heredoc
+    # that reassigns the builder (constructs a second ReviewOutputBuilder
+    # to correct its review) discards the first instance's issues — the
+    # final artifact holds only issues added to the LAST instance
+    # constructed before the final save. Collecting earlier instances'
+    # add_issue() calls would merge superseded findings into the record.
+    final_ctor_pos: tuple[int, int] | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        ctor_name = (
+            func.id if isinstance(func, ast.Name)
+            else func.attr if isinstance(func, ast.Attribute)
+            else None
+        )
+        if ctor_name != "ReviewOutputBuilder":
+            continue
+        pos = (node.lineno, node.col_offset)
+        if final_save_pos is not None and pos > final_save_pos:
+            continue
+        if final_ctor_pos is None or pos > final_ctor_pos:
+            final_ctor_pos = pos
+
     issues: list[dict[str, Any]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -209,6 +233,10 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         if final_save_pos is not None and (
             node.lineno, node.col_offset
         ) > final_save_pos:
+            continue
+        if final_ctor_pos is not None and (
+            node.lineno, node.col_offset
+        ) < final_ctor_pos:
             continue
         issue: dict[str, Any] = {}
         for name, arg in zip(_BUILDER_ISSUE_POSITIONAL, node.args):

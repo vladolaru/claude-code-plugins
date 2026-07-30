@@ -678,6 +678,28 @@ class TestBashBuilderRecognition:
         issues = json.loads(record["content"])["issues"]
         assert [issue["title"] for issue in issues] == ["First", "Second"]
 
+    def test_builder_reassignment_supersedes_earlier_issues(self):
+        """save() persists ONE builder instance's state: a heredoc that
+        reassigns the builder to correct its review and saves again leaves
+        only the final instance's issues in the artifact. Reconstructing
+        the superseded instance's issues would merge discarded findings
+        into severity, overlap, and survival metrics."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="critical", title="Superseded", file="a.php",\n'
+            '    description="d", recommendation="r", line=1)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'builder.add_issue(severity="low", title="Final", file="b.php",\n'
+            '    description="d", recommendation="r", line=2)\n'
+            "builder.save(\"/tmp/pr-review-42\")\n"
+        )
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        issues = json.loads(record["content"])["issues"]
+        assert [issue["title"] for issue in issues] == ["Final"]
+
     def test_non_builder_bash_is_not_recognized(self):
         assert _mod._builder_review_from_heredoc("git diff main..HEAD") is None
         assert (
