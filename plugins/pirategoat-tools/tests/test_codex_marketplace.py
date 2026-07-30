@@ -227,3 +227,26 @@ def test_generated_codex_compatibility_files_are_current():
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_gitignored_dotfiles_are_not_surfaced_skill_assets():
+    """Local machine junk (.DS_Store and friends) inside a surfaced shared
+    skill must neither crash the generator (such files are often not UTF-8)
+    nor be copied into codex-skills/. Non-ignored dotfiles remain assets."""
+    skill_dir = REPO_ROOT / "plugins" / "dex" / "skills" / "knowledge-capture"
+    assert skill_dir.is_dir(), "surfaced shared skill moved; update the test"
+    junk = skill_dir / ".DS_Store"
+    assert not junk.exists()
+    try:
+        # Real .DS_Store files are binary; invalid UTF-8 is the crash case.
+        junk.write_bytes(b"Bud1\x00\x01\x86\x99junk")
+        result = subprocess.run(
+            [sys.executable, str(GENERATOR), "--check"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        junk.unlink(missing_ok=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ".DS_Store" not in result.stdout
