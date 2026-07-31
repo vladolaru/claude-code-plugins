@@ -510,6 +510,13 @@ class ReviewTelemetry:
         filenames delimited by quote characters but containing no C escapes.
         Escape-bearing partial or malformed wrappers return ``(None, True)``
         so authoritative sets become unavailable instead of inventing a path.
+
+        Sibling decoders for the same quote.c grammar with DIFFERENT,
+        deliberate policies: review_config._dequote_git_path (surrogateescape,
+        returns input unchanged on malformed — provenance gating must fail
+        closed by not matching) and agent/scope.py _unquote_git_path. A
+        grammar-level fix (escape table, octal handling) must land in all
+        three.
         """
         starts_quoted = value.startswith('"')
         ends_quoted = value.endswith('"')

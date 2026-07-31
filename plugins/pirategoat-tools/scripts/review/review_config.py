@@ -367,6 +367,12 @@ def _dequote_git_path(path: str) -> str:
     Returns the input unchanged when it is not quoted or the quoting is
     malformed — an undecodable entry can only fail to match, never widen
     trust.
+
+    Sibling decoders for the same quote.c grammar with DIFFERENT, deliberate
+    policies: telemetry._decode_git_c_quoted_path (strict UTF-8, fails to
+    ``(None, True)`` so measurement sets become unavailable) and
+    agent/scope.py _unquote_git_path. A grammar-level fix (escape table,
+    octal handling) must land in all three.
     """
     if len(path) < 2 or path[0] != '"' or path[-1] != '"':
         return path
