@@ -119,6 +119,39 @@ def test_scope_paths_are_confined_to_the_repo(woo_like):
         assert not root.rel_path.startswith("..")
 
 
+def test_symlink_to_external_directory_is_not_a_dependency_root(tmp_path):
+    """The lexical containment check passes for a repo-relative path whose
+    directory is really a symlink out of the repo, while isfile() follows the
+    link and finds the external lockfile. Accepting it would run the install
+    in (and stage files from) a PR-chosen external tree."""
+    external = tmp_path / "external"
+    _write(external / "composer.json")
+    _write(external / "composer.lock")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    os.symlink(str(external), str(repo / "vendor-link"))
+
+    selected, dropped = detect_dep_roots(str(repo), ["vendor-link/src/File.php"])
+
+    assert selected == []
+    assert dropped == []
+
+
+def test_symlink_within_the_repo_remains_a_valid_root(tmp_path):
+    """Only escapes are rejected — an in-repo symlinked directory resolves
+    inside the clone and stays usable."""
+    repo = tmp_path / "repo"
+    _write(repo / "packages/lib/composer.json")
+    _write(repo / "packages/lib/composer.lock")
+    os.symlink(
+        str(repo / "packages" / "lib"), str(repo / "lib-link"),
+    )
+
+    selected, _ = detect_dep_roots(str(repo), ["lib-link/src/File.php"])
+
+    assert DepRoot("composer", "lib-link") in selected
+
+
 @pytest.mark.parametrize("dep_root,expected", [
     (DepRoot("composer", "."), "composer"),
     (DepRoot("pnpm", "."), "pnpm"),
