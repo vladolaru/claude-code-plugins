@@ -5,7 +5,9 @@ import os
 
 import pytest
 
-from hosts.install.staging import stage_inputs
+from hosts.install.staging import (
+    hash_install_inputs, stage_inputs, staged_input_paths,
+)
 
 
 def _write(path, content=""):
@@ -190,3 +192,64 @@ def test_malformed_package_json_does_not_raise(repo, cache):
     stage_inputs("pnpm", str(repo), str(cache))  # must not raise
 
     assert (cache / "package.json").is_file()
+
+
+def test_staged_input_paths_cover_every_staged_category(repo):
+    """The hash and the copy must see the same files — one list feeds both."""
+    _write(repo / "package.json", json.dumps({
+        "pnpm": {"patchedDependencies": {"pkg@1.0.0": "patches/pkg.patch"}}
+    }))
+    _write(repo / "pnpm-lock.yaml", "importers:\n\n  packages/js/data:\n    dependencies: {}\n")
+    _write(repo / "patches/pkg.patch", "--- a\n+++ b\n")
+
+    rels = staged_input_paths("pnpm", str(repo))
+
+    assert "package.json" in rels
+    assert "pnpm-lock.yaml" in rels
+    assert ".npmrc" in rels  # fixed-name aux inputs listed even when absent
+    assert "patches/pkg.patch" in rels
+    assert os.path.join("packages/js/data", "package.json") in rels
+
+
+def test_hash_changes_when_an_aux_input_changes_without_the_lockfile(repo):
+    """The finding this locks: a .npmrc (or patch, or member manifest) edit
+    changes what the install produces, so it must change the freshness key
+    even though the lockfile is untouched."""
+    _write(repo / "package.json", "{}")
+    _write(repo / "package-lock.json", "{}")
+    _write(repo / ".npmrc", "hoist=true\n")
+    before = hash_install_inputs("npm", str(repo))
+
+    _write(repo / ".npmrc", "hoist=false\n")
+
+    assert hash_install_inputs("npm", str(repo)) != before
+
+
+def test_hash_changes_when_an_aux_input_appears(repo):
+    _write(repo / "package.json", "{}")
+    _write(repo / "package-lock.json", "{}")
+    before = hash_install_inputs("npm", str(repo))
+
+    _write(repo / ".npmrc", "registry=https://registry.example.test\n")
+
+    assert hash_install_inputs("npm", str(repo)) != before
+
+
+def test_hash_ignores_files_the_install_never_reads(repo):
+    _write(repo / "package.json", "{}")
+    _write(repo / "package-lock.json", "{}")
+    before = hash_install_inputs("npm", str(repo))
+
+    _write(repo / "src/index.js", "console.log('hi')\n")
+
+    assert hash_install_inputs("npm", str(repo)) == before
+
+
+def test_hash_is_stable_across_calls(repo):
+    _write(repo / "composer.json", "{}")
+    _write(repo / "composer.lock", "{}")
+
+    first = hash_install_inputs("composer", str(repo))
+
+    assert hash_install_inputs("composer", str(repo)) == first
+    assert len(first) == 64  # sha256 hex

@@ -28,11 +28,12 @@ what --frozen-lockfile expects.
 """
 
 import glob
+import hashlib
 import json
 import os
 import re
 import shutil
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Manifest + lockfile — the always-required pair.
 _BASE_FILES: Dict[str, List[str]] = {
@@ -57,33 +58,75 @@ _AUX_FILES: Dict[str, List[str]] = {
 }
 
 
+def staged_input_paths(manager: str, repo_path: str) -> List[str]:
+    """Repo-relative paths of every input `manager`'s install reads.
+
+    One list feeds both staging and the freshness hash: anything copied into
+    the slot must also invalidate the cache when it changes, or a config-only
+    edit (.npmrc, .pnpmfile.cjs, a patch, a member manifest) would keep
+    serving the old dependency layout as a cache hit.
+    """
+    rels = list(_BASE_FILES[manager] + _AUX_FILES[manager])
+    if manager == "pnpm":
+        rels.extend(_patch_files(repo_path))
+    rels.extend(_workspace_manifests(manager, repo_path))
+    return rels
+
+
 def stage_inputs(manager: str, repo_path: str, cache_dir: str) -> None:
     """Copy everything `manager`'s install needs from repo_path into cache_dir."""
-    for rel in _BASE_FILES[manager] + _AUX_FILES[manager]:
+    for rel in staged_input_paths(manager, repo_path):
         _copy_into(repo_path, rel, cache_dir)
 
-    if manager == "pnpm":
-        for rel in _patch_files(repo_path):
-            _copy_into(repo_path, rel, cache_dir)
 
-    for rel in _workspace_manifests(manager, repo_path):
-        _copy_into(repo_path, rel, cache_dir)
+def hash_install_inputs(manager: str, repo_path: str) -> str:
+    """Combined SHA-256 over every existing staged input's name and content.
+
+    This is the cache-slot freshness key. Names enter the digest alongside
+    content so an input appearing, disappearing, or moving changes the key;
+    inputs the staging containment check would refuse are excluded the same
+    way staging excludes them.
+    """
+    h = hashlib.sha256()
+    for rel in sorted(set(staged_input_paths(manager, repo_path))):
+        src = _resolve_staged_source(repo_path, rel)
+        if src is None:
+            continue
+        h.update(rel.encode("utf-8"))
+        h.update(b"\x00")
+        with open(src, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                h.update(chunk)
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def _resolve_staged_source(repo_path: str, rel_path: str) -> Optional[str]:
+    """Resolved absolute source for a staged input, or None when refused.
+
+    Refuses to read outside repo_path: rel_path can originate in
+    repo-controlled JSON, and a review may be running against an untrusted
+    branch.
+    """
+    repo_root = os.path.realpath(repo_path)
+    src = os.path.realpath(os.path.join(repo_root, rel_path))
+    if os.path.commonpath([repo_root, src]) != repo_root:
+        return None
+    if not os.path.isfile(src):
+        return None
+    return src
 
 
 def _copy_into(repo_path: str, rel_path: str, cache_dir: str) -> bool:
     """Copy repo_path/rel_path to cache_dir/rel_path, creating parent dirs.
 
-    Returns True when a file was copied. Refuses to read outside repo_path:
-    rel_path can originate in repo-controlled JSON, and a review may be
-    running against an untrusted branch.
+    Returns True when a file was copied.
     """
-    repo_root = os.path.realpath(repo_path)
-    src = os.path.realpath(os.path.join(repo_root, rel_path))
-    if os.path.commonpath([repo_root, src]) != repo_root:
-        return False
-    if not os.path.isfile(src):
+    src = _resolve_staged_source(repo_path, rel_path)
+    if src is None:
         return False
 
+    repo_root = os.path.realpath(repo_path)
     dest = os.path.join(cache_dir, os.path.relpath(src, repo_root))
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy2(src, dest)

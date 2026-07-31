@@ -3,7 +3,7 @@
 from typing import List
 
 from hosts.install.cache import (
-    cache_path_for_clone, clone_id_for, clone_root_for, read_stored_lockfile_hash,
+    cache_path_for_clone, clone_id_for, clone_root_for, read_stored_inputs_hash,
 )
 from hosts.install.lockfile import manager_for_slot
 from hosts.resolvers.base import HostResolver, ResolverResult
@@ -54,7 +54,7 @@ class InstallCacheResolver(HostResolver):
             # cleanup. Both halves of the gate must hold.
             if (
                 artifact_path.is_dir()
-                and read_stored_lockfile_hash(clone_id, slot) is not None
+                and read_stored_inputs_hash(clone_id, slot) is not None
             ):
                 entries.append(HostEntry(
                     name=artifact,  # "vendor" or "node_modules" — matches VendorResolver

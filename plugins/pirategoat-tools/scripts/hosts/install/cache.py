@@ -1,7 +1,7 @@
 """Per-clone install cache.
 
 One slot per (clone_id, manager). Slot content is replaced when the
-lockfile hash drifts. Atomic staging means a failed install preserves
+install-inputs hash drifts. Atomic staging means a failed install preserves
 the prior good cache. Reviewers consume the slot path via the
 host_context library-dep entries emitted by InstallCacheResolver.
 """
@@ -48,31 +48,31 @@ def cache_path_for_clone(clone_id: str, manager: str) -> Path:
     where _cache_root() resolves to <XDG_CACHE_HOME>/pirategoat/library-deps/.
 
     The slot is the bare manager name for a repo-root dependency root, or
-    "<manager>@<slug>" for a nested one — see lockfile.slot_name.
+    "<manager>@<slug>-<digest>" for a nested one — see lockfile.slot_name.
     """
     return clone_root_for(clone_id) / manager
 
 
-def _lockfile_hash_path(clone_id: str, manager: str) -> Path:
-    return cache_path_for_clone(clone_id, manager) / ".lockfile_hash"
+def _inputs_hash_path(clone_id: str, manager: str) -> Path:
+    return cache_path_for_clone(clone_id, manager) / ".inputs_hash"
 
 
-def read_stored_lockfile_hash(clone_id: str, manager: str) -> Optional[str]:
-    """Return the lockfile hash currently cached for this clone+manager.
+def read_stored_inputs_hash(clone_id: str, manager: str) -> Optional[str]:
+    """Return the install-inputs hash currently cached for this clone+manager.
 
     Returns None if no marker file exists or it is unreadable.
     """
     try:
-        return _lockfile_hash_path(clone_id, manager).read_text().strip() or None
+        return _inputs_hash_path(clone_id, manager).read_text().strip() or None
     except (FileNotFoundError, OSError):
         return None
 
 
-def write_stored_lockfile_hash(clone_id: str, manager: str, lockfile_hash: str) -> None:
-    """Write the marker file recording which lockfile hash this slot holds."""
-    marker = _lockfile_hash_path(clone_id, manager)
+def write_stored_inputs_hash(clone_id: str, manager: str, inputs_hash: str) -> None:
+    """Write the marker file recording which inputs hash this slot holds."""
+    marker = _inputs_hash_path(clone_id, manager)
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(lockfile_hash)
+    marker.write_text(inputs_hash)
 
 
 def _realpath_marker_path(clone_id: str) -> Path:
@@ -117,14 +117,14 @@ class EnsureResult:
 def ensure_current(
     repo_path: str,
     manager: str,
-    lockfile_hash: str,
+    inputs_hash: str,
     install_fn: Callable[[Path], None],
 ) -> EnsureResult:
-    """Make sure the per-clone cache slot is populated for *lockfile_hash*.
+    """Make sure the per-clone cache slot is populated for *inputs_hash*.
 
-    - Cache hit: marker matches lockfile_hash → return without calling install_fn.
+    - Cache hit: marker matches inputs_hash → return without calling install_fn.
     - Mismatch / first-time: stage a fresh install in a sibling tmp dir,
-      atomic-rename into place, then write the lockfile-hash marker.
+      atomic-rename into place, then write the inputs-hash marker.
 
     Atomic staging ensures a failed reinstall preserves the prior good cache:
     install_fn writes into <slot>.staging.<pid>.<ts>/, and the rename only
@@ -136,9 +136,9 @@ def ensure_current(
     """
     clone_id = clone_id_for(repo_path)
     slot = cache_path_for_clone(clone_id, manager)
-    stored = read_stored_lockfile_hash(clone_id, manager)
+    stored = read_stored_inputs_hash(clone_id, manager)
 
-    if stored == lockfile_hash and slot.is_dir():
+    if stored == inputs_hash and slot.is_dir():
         return EnsureResult(action="cache_hit", cache_path=slot)
 
     action = "replaced" if slot.is_dir() else "installed"
@@ -166,7 +166,7 @@ def ensure_current(
         shutil.rmtree(slot)
     os.replace(staging, slot)
 
-    write_stored_lockfile_hash(clone_id, manager, lockfile_hash)
+    write_stored_inputs_hash(clone_id, manager, inputs_hash)
     write_clone_realpath(clone_id, repo_path)
     return EnsureResult(action=action, cache_path=slot)
 

@@ -35,13 +35,13 @@ if SCRIPTS_DIR not in sys.path:
 
 from hosts.install.cache import ensure_current, prune_dead_clones
 from hosts.install.lockfile import (
-    DepRoot, detect_dep_roots, hash_lockfile, lockfile_for_manager, slot_name,
+    DepRoot, detect_dep_roots, lockfile_for_manager, slot_name,
 )
 from hosts.install.overrides import parse_overrides
 from hosts.install.runner import (
     apply_retry_args, build_install_command, classify_error, should_retry,
 )
-from hosts.install.staging import stage_inputs
+from hosts.install.staging import hash_install_inputs, stage_inputs
 
 
 class _InstallFailed(Exception):
@@ -166,7 +166,7 @@ def _handle_dep_root(
 
     Returns one of three payload shapes, each carrying "manager" and "path":
       - {"status": "no_lockfile"} — nothing to install
-      - {"status": "ok", "action", "cache_path", "lockfile_hash"}
+      - {"status": "ok", "action", "cache_path", "inputs_hash"}
         — success; "action" ∈ {"cache_hit", "installed", "replaced"}
       - {"status": "failed", "error_class", ...} — install failed
 
@@ -195,7 +195,11 @@ def _handle_dep_root(
     if not os.path.isfile(lockfile_path):
         return {**identity, "status": "no_lockfile"}
 
-    lockfile_hash = hash_lockfile(lockfile_path)
+    # Freshness keys on every staged input, not just the lockfile — a
+    # config-only change (.npmrc, .pnpmfile.cjs, a patch, a member manifest,
+    # composer.json settings) changes what the install produces and must not
+    # report a cache hit over the old layout.
+    inputs_hash = hash_install_inputs(manager, root_abs)
     base_args = list(extra_args)
     in_place = manager == "composer"
 
@@ -251,7 +255,7 @@ def _handle_dep_root(
 
     try:
         result = ensure_current(
-            repo_path, slot_name(dep_root), lockfile_hash, install_fn
+            repo_path, slot_name(dep_root), inputs_hash, install_fn
         )
     except _InstallFailed:
         return failure_holder
@@ -261,7 +265,7 @@ def _handle_dep_root(
         "status": "ok",
         "action": result.action,  # "cache_hit" | "installed" | "replaced"
         "cache_path": str(result.cache_path),
-        "lockfile_hash": lockfile_hash,
+        "inputs_hash": inputs_hash,
     }
 
 

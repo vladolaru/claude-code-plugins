@@ -3,7 +3,7 @@
 import pytest
 
 from hosts.install.cache import (
-    cache_path_for_clone, clone_id_for, write_stored_lockfile_hash,
+    cache_path_for_clone, clone_id_for, write_stored_inputs_hash,
 )
 from hosts.resolvers.install_cache import InstallCacheResolver
 
@@ -23,7 +23,7 @@ class TestInstallCacheResolver:
         slot = cache_path_for_clone(cid, "composer")
         slot.mkdir(parents=True)
         (slot / "vendor").mkdir()
-        write_stored_lockfile_hash(cid, "composer", "abc123")
+        write_stored_inputs_hash(cid, "composer", "abc123")
 
         result = InstallCacheResolver().resolve(str(repo))
         assert len(result.entries) == 1
@@ -54,7 +54,7 @@ class TestInstallCacheResolver:
         repo.mkdir()
         (repo / "composer.lock").write_text("{}")
         cid = clone_id_for(str(repo))
-        write_stored_lockfile_hash(cid, "composer", "abc123")  # marker, no vendor/
+        write_stored_inputs_hash(cid, "composer", "abc123")  # marker, no vendor/
         result = InstallCacheResolver().resolve(str(repo))
         assert result.entries == []
 
@@ -66,7 +66,7 @@ class TestInstallCacheResolver:
         slot = cache_path_for_clone(cid, "pnpm")
         slot.mkdir(parents=True)
         (slot / "node_modules").mkdir()
-        write_stored_lockfile_hash(cid, "pnpm", "def456")
+        write_stored_inputs_hash(cid, "pnpm", "def456")
 
         result = InstallCacheResolver().resolve(str(repo))
         assert len(result.entries) == 1

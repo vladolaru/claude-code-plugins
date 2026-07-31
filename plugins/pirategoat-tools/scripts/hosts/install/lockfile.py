@@ -1,4 +1,4 @@
-"""Lockfile detection and hashing.
+"""Lockfile detection and dependency-root scoping.
 
 A repo's dependency roots are not always its root directory. WooCommerce
 keeps no composer.lock at the top level — the one that matters for a PHP
@@ -48,15 +48,6 @@ def lockfile_for_manager(manager: str) -> str:
         "npm": "package-lock.json",
     }
     return mapping[manager]
-
-
-def hash_lockfile(lockfile_path: str) -> str:
-    """SHA-256 hex digest of the lockfile contents."""
-    h = hashlib.sha256()
-    with open(lockfile_path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 @dataclass(frozen=True)

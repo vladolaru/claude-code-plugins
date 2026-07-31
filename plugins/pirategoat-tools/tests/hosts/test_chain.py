@@ -196,7 +196,7 @@ class TestInstallCacheRegistered:
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
         from hosts.chain import ResolverChain
         from hosts.install.cache import (
-            cache_path_for_clone, clone_id_for, write_stored_lockfile_hash,
+            cache_path_for_clone, clone_id_for, write_stored_inputs_hash,
         )
 
         # Repo with both an in-repo vendor/ AND a populated cache slot
@@ -208,7 +208,7 @@ class TestInstallCacheRegistered:
         slot = cache_path_for_clone(cid, "composer")
         slot.mkdir(parents=True)
         (slot / "vendor").mkdir()
-        write_stored_lockfile_hash(cid, "composer", "abc123")
+        write_stored_inputs_hash(cid, "composer", "abc123")
 
         manifest = ResolverChain().run(str(repo))
         vendor_entries = [e for e in manifest.resolved if e.name == "vendor"]

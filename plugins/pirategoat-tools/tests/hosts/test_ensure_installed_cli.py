@@ -261,7 +261,7 @@ class TestPayloadShape:
         assert m["status"] == "ok"
         assert "cache_path" in m
         assert m["action"] == "installed"
-        assert m["lockfile_hash"]
+        assert m["inputs_hash"]
         # No legacy "symlink" / "cache_key" / "attempts" fields
         for legacy in ("symlink", "cache_key", "attempts"):
             assert legacy not in m
@@ -285,4 +285,24 @@ class TestPayloadShape:
             '{"_readme":[],"content-hash":"y","packages":[],"packages-dev":[]}'
         )
         rc2, payload2 = _run_main(["--repo", str(composer_repo)])
+        assert payload2["managers"][0]["action"] == "replaced"
+
+    def test_staged_config_change_without_lockfile_change_busts_the_cache(
+        self, tmp_path, fake_run, monkeypatch,
+    ):
+        """A .npmrc edit changes what the install produces even though the
+        lockfile is untouched — reporting a cache hit would expose the old
+        dependency layout built from the old config."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        repo = tmp_path / "jsrepo"
+        repo.mkdir()
+        (repo / "package.json").write_text("{}")
+        (repo / "package-lock.json").write_text("{}")
+        (repo / ".npmrc").write_text("registry=https://registry.example.test\n")
+        rc1, payload1 = _run_main(["--repo", str(repo)])
+        assert payload1["managers"][0]["action"] == "installed"
+
+        (repo / ".npmrc").write_text("registry=https://other.example.test\n")
+
+        rc2, payload2 = _run_main(["--repo", str(repo)])
         assert payload2["managers"][0]["action"] == "replaced"

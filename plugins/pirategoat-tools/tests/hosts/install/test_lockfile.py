@@ -3,8 +3,7 @@
 import pytest
 
 from hosts.install.lockfile import (
-    detect_php_manager, detect_js_manager,
-    hash_lockfile, lockfile_for_manager,
+    detect_php_manager, detect_js_manager, lockfile_for_manager,
 )
 
 
@@ -40,19 +39,3 @@ def test_detect_js_manager_none(tmp_path):
     assert detect_js_manager(str(tmp_path)) is None
 
 
-def test_hash_lockfile_is_stable(tmp_path):
-    f = tmp_path / "composer.lock"
-    f.write_text("deadbeef")
-    h1 = hash_lockfile(str(f))
-    h2 = hash_lockfile(str(f))
-    assert h1 == h2
-    assert len(h1) == 64  # sha256 hex
-
-
-def test_hash_changes_with_content(tmp_path):
-    f = tmp_path / "composer.lock"
-    f.write_text("a")
-    h1 = hash_lockfile(str(f))
-    f.write_text("b")
-    h2 = hash_lockfile(str(f))
-    assert h1 != h2
