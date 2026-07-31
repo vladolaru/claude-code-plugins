@@ -129,6 +129,45 @@ class TestInstallCacheResolver:
 
         assert result.entries == []
 
+    def test_scoped_roots_get_distinct_identities(self, cache_env):
+        """Two composer roots in one review must both survive the chain's
+        kind:name dedup — a shared "vendor" name silently dropped all but
+        the first, hiding the other root's dependency source."""
+        from hosts.install.lockfile import DepRoot, slot_name
+
+        repo = cache_env / "repo"
+        repo.mkdir()
+        cid = clone_id_for(str(repo))
+        nested_slot = slot_name(DepRoot("composer", "plugins/woocommerce"))
+        self._populate(cid, "composer", "vendor")
+        self._populate(cid, nested_slot, "vendor")
+        write_selected_slots(cid, [
+            {"slot": "composer", "manager": "composer", "rel_path": "."},
+            {"slot": nested_slot, "manager": "composer",
+             "rel_path": "plugins/woocommerce"},
+        ])
+
+        result = InstallCacheResolver().resolve(str(repo))
+
+        names = sorted(e.name for e in result.entries)
+        assert names == ["vendor", "vendor:plugins/woocommerce"]
+        assert len({e.name for e in result.entries}) == 2
+
+    def test_root_slot_keeps_the_artifact_name_for_vendor_shadowing(self, cache_env):
+        """The repo-root entry must stay named exactly like VendorResolver's
+        so the cache shadows a possibly-stale in-repo vendor/ via dedup."""
+        repo = cache_env / "repo"
+        repo.mkdir()
+        cid = clone_id_for(str(repo))
+        self._populate(cid, "composer", "vendor")
+        write_selected_slots(cid, [
+            {"slot": "composer", "manager": "composer", "rel_path": "."},
+        ])
+
+        result = InstallCacheResolver().resolve(str(repo))
+
+        assert [e.name for e in result.entries] == ["vendor"]
+
     def test_no_marker_falls_back_to_enumerating_populated_slots(self, cache_env):
         """Pre-marker caches and standalone chain runs keep working."""
         repo = cache_env / "repo"

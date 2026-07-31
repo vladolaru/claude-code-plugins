@@ -12,15 +12,39 @@ from hosts.types import HostEntry
 
 
 # Each manager's install produces a known top-level directory inside the
-# cache slot. Reviewers Read/Grep that directory. The artifact name doubles
-# as the host_context entry name so chain dedup with VendorResolver picks
-# whichever resolver runs first (this one, by chain ordering in Task 6).
+# cache slot. Reviewers Read/Grep that directory. For repo-root slots the
+# artifact name doubles as the host_context entry name so chain dedup with
+# VendorResolver picks whichever resolver runs first (this one, by chain
+# ordering); scoped roots carry the artifact plus their path — see
+# _entry_name.
 _ARTIFACT_DIR_BY_MANAGER = {
     "composer": "vendor",
     "npm": "node_modules",
     "pnpm": "node_modules",
     "yarn": "node_modules",
 }
+
+
+def _entry_name(artifact: str, slot: str, rel_path) -> str:
+    """host_context entry name for one populated slot.
+
+    Repo-root slots keep the bare artifact name ("vendor"/"node_modules"):
+    it matches VendorResolver's entry for the same content, so chain dedup
+    lets the cache shadow a possibly-stale in-repo directory. Every other
+    slot needs its own identity — the chain dedups on kind:name, so shared
+    names would silently drop all but the first of several scoped roots.
+    The rel_path (from the selection marker) is the readable identity;
+    the slot name stands in when only enumeration is available.
+    """
+    if rel_path in (".", ""):
+        return artifact
+    if rel_path:
+        return f"{artifact}:{rel_path}"
+    # Enumeration fallback: no rel_path on record. Bare slots are repo
+    # roots by construction (slot_name keeps them as the manager name).
+    if slot == manager_for_slot(slot):
+        return artifact
+    return f"{artifact}:{slot}"
 
 
 class InstallCacheResolver(HostResolver):
@@ -43,16 +67,19 @@ class InstallCacheResolver(HostResolver):
         # enumerating populated slots, which is all the information there is.
         selection = read_selected_slots(clone_id)
         if selection is None:
-            slots = [
-                slot_dir.name
+            candidates = [
+                (slot_dir.name, None)
                 for slot_dir in sorted(clone_root.iterdir())
                 # Skips the dot-prefixed markers and in-flight staging dirs.
                 if slot_dir.is_dir() and not slot_dir.name.startswith(".")
             ]
         else:
-            slots = list(dict.fromkeys(entry["slot"] for entry in selection))
+            candidates = list({
+                entry["slot"]: (entry["slot"], entry.get("rel_path"))
+                for entry in selection
+            }.values())
 
-        for slot in slots:
+        for slot, rel_path in candidates:
             artifact = _ARTIFACT_DIR_BY_MANAGER.get(manager_for_slot(slot))
             if not artifact:
                 continue
@@ -67,7 +94,7 @@ class InstallCacheResolver(HostResolver):
                 and read_stored_inputs_hash(clone_id, slot) is not None
             ):
                 entries.append(HostEntry(
-                    name=artifact,  # "vendor" or "node_modules" — matches VendorResolver
+                    name=_entry_name(artifact, slot, rel_path),
                     kind="library-dep",
                     path=str(artifact_path),
                     source=self.source,
