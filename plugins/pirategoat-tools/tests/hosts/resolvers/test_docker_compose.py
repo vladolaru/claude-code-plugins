@@ -1,5 +1,6 @@
 """Tests for the docker-compose resolver."""
 
+import os
 import textwrap
 from pathlib import Path
 
@@ -409,3 +410,24 @@ def test_unreadable_compose_file_returns_parse_error(tmp_path):
     finally:
         # Restore so tmp_path cleanup works
         cf.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_symlinked_mount_resolving_into_repo_is_self_owned(tmp_path):
+    """A compose mount source spelled as an outside path can be a symlink
+    resolving back into the reviewed repo — classifying it as upstream
+    would report the PR's own code as an independent runtime host.
+    Behavioral pin for any containment re-derivation, in any spelling."""
+    repo = tmp_path / "repo"
+    (repo / "embedded-plugin").mkdir(parents=True)
+    os.symlink(str(repo / "embedded-plugin"), str(tmp_path / "plugin-link"))
+    _write_compose(repo, "docker-compose.override.yml", """\
+        services:
+          wordpress:
+            volumes:
+              - ../plugin-link:/var/www/html/wp-content/plugins/foo
+    """)
+
+    result = DockerComposeResolver().resolve(str(repo))
+
+    assert result.entries == []
+    assert result.unresolved == []
