@@ -42,13 +42,22 @@ def _usage_totals_for_state(
     return total if found else None
 
 
+# Each usage source has exactly one availability family — deriving it here
+# makes a mismatched (source, family) pairing unrepresentable.
+_USAGE_FAMILY_BY_SOURCE = {
+    "step": "orchestrator_usage",
+    "agent": "agent_usage",
+    "model": "model_usage",
+}
+
+
 def _group_usage(
     runs: list[dict[str, Any]],
     *,
     state: str,
-    family: str,
     source: str,
 ) -> dict[str, dict[str, int]] | None:
+    family = _USAGE_FAMILY_BY_SOURCE[source]
     grouped: dict[str, dict[str, int]] = {}
     for run in runs:
         if run.get("metric_availability", {}).get(family) != state:
@@ -86,6 +95,35 @@ def _group_usage(
                         target = grouped.setdefault(name, _empty_usage())
                         _add_usage(target, usage)
     return dict(sorted(grouped.items())) if grouped else None
+
+
+# Lifecycle fields accumulated by _aggregate_lifecycle_state and emitted by
+# _lifecycle_block, with the transform applied at emission. One entry here
+# covers both states (bare and ``partial_observed_``-prefixed keys).
+_LIFECYCLE_FIELDS: dict[str, Any] = {
+    "started_events": None,
+    "completed_events": None,
+    "incomplete_identities": sorted,
+    "incomplete_count": None,
+    "incomplete_by_agent": lambda value: dict(sorted(value.items())),
+    "starts_by_agent": lambda value: dict(sorted(value.items())),
+    "extra_starts_by_agent": lambda value: dict(sorted(value.items())),
+    "retry_overhead": None,
+    "completion_gap": None,
+}
+
+
+def _lifecycle_block(totals: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Emit one lifecycle state's fields, gated on that state having runs."""
+    gate = totals["runs"]
+    return {
+        f"{prefix}{name}": (
+            (transform(totals[name]) if transform else totals[name])
+            if gate
+            else None
+        )
+        for name, transform in _LIFECYCLE_FIELDS.items()
+    }
 
 
 def _aggregate_lifecycle_state(
@@ -317,53 +355,68 @@ def _aggregate_tool_failures(
     }
 
 
+# Metrics reported for complete runs (bare keys). Partial runs report the
+# superset below under a programmatic ``partial_observed_`` prefix, so adding
+# a metric means one counter name here — never twin hand-written key pairs.
+_ARTIFACT_COMPLETE_KEYS = (
+    "first_builder_attempts",
+    "first_builder_successes",
+    "first_builder_failures",
+    "recoveries",
+    "no_builder_attempts",
+    "runs_with_builder_attempts",
+    "runs_without_builder_attempts",
+    "top_only_runs_with_first_builder_success",
+    "top_only_runs_with_first_builder_failure",
+    "runs_with_builder_recovery",
+)
+_ARTIFACT_PARTIAL_KEYS = (
+    "runs",
+    "first_builder_attempts",
+    "first_builder_successes",
+    "first_builder_failures",
+    "unknown_first_results",
+    "unclassified_builder_results",
+    "recoveries",
+    "no_builder_attempts",
+    "runs_with_builder_attempts",
+    "runs_without_builder_attempts",
+    "runs_with_unknown_builder_attempt_state",
+    "top_only_runs_with_first_builder_success",
+    "top_only_runs_with_first_builder_failure",
+    "top_only_runs_with_unknown_first_builder_result",
+    "runs_with_builder_recovery",
+    "top_only_unclassified_builder_results",
+)
+
+
 def _aggregate_artifact_writes(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> dict[str, Any]:
-    first_attempts = first_successes = first_failures = recoveries = no_attempts = 0
-    runs_with_attempts = runs_without_attempts = runs_with_recovery = 0
-    top_only_runs_with_first_success = top_only_runs_with_first_failure = 0
-    partial_runs = 0
-    partial_first_attempts = 0
-    partial_first_successes = 0
-    partial_first_failures = 0
-    partial_unknown_first_results = 0
-    partial_unclassified_builder_results = 0
-    partial_recoveries = 0
-    partial_no_attempts = 0
-    partial_runs_with_attempts = 0
-    partial_runs_without_attempts = 0
-    partial_runs_with_unknown_attempt_state = 0
-    partial_top_only_runs_with_first_success = 0
-    partial_top_only_runs_with_first_failure = 0
-    partial_top_only_runs_with_unknown_first = 0
-    partial_runs_with_recovery = 0
-    partial_top_only_unclassified_results = 0
+    buckets: dict[str, Counter] = {"complete": Counter(), "partial": Counter()}
     for run in runs:
         state = run.get("metric_availability", {}).get("artifact_writes")
-        if state not in {"complete", "partial"}:
+        if state not in buckets:
             continue
         transcript = run.get("transcript")
         artifacts = transcript.get("artifact_writes") if isinstance(transcript, dict) else None
         if not isinstance(artifacts, dict):
             continue
-        is_partial = state == "partial"
-        if is_partial:
-            partial_runs += 1
-            if artifacts.get("builder_attempted") is True:
-                partial_runs_with_attempts += 1
-            elif artifacts.get("builder_attempted") is False:
-                partial_runs_without_attempts += 1
-            else:
-                partial_runs_with_unknown_attempt_state += 1
-            partial_runs_with_recovery += int(
+        bucket = buckets[state]
+        bucket["runs"] += 1
+        attempted = artifacts.get("builder_attempted")
+        if attempted is True:
+            bucket["runs_with_builder_attempts"] += 1
+        elif attempted is False:
+            bucket["runs_without_builder_attempts"] += 1
+        else:
+            bucket["runs_with_unknown_builder_attempt_state"] += 1
+        # Complete runs count a run-level recovery only under a builder
+        # attempt; partial runs count every observed recovery.
+        if state == "partial" or attempted is True:
+            bucket["runs_with_builder_recovery"] += int(
                 artifacts.get("recovered") is True
             )
-        elif artifacts.get("builder_attempted") is True:
-            runs_with_attempts += 1
-            runs_with_recovery += int(artifacts.get("recovered") is True)
-        elif artifacts.get("builder_attempted") is False:
-            runs_without_attempts += 1
 
         by_agent = artifacts.get("by_agent")
         if isinstance(by_agent, list) and by_agent:
@@ -371,168 +424,58 @@ def _aggregate_artifact_writes(
                 if not isinstance(item, dict):
                     continue
                 if item.get("builder_attempted") is True:
+                    bucket["unclassified_builder_results"] += (
+                        item.get("builder_attempts", 0)
+                        - item.get("builder_successes", 0)
+                        - item.get("builder_failures", 0)
+                    )
                     first = item.get("first_builder_attempt_succeeded")
-                    if is_partial:
-                        partial_unclassified_builder_results += (
-                            item.get("builder_attempts", 0)
-                            - item.get("builder_successes", 0)
-                            - item.get("builder_failures", 0)
-                        )
                     if isinstance(first, bool):
-                        if is_partial:
-                            partial_first_attempts += 1
-                            partial_first_successes += int(first)
-                            partial_first_failures += int(not first)
-                        else:
-                            first_attempts += 1
-                            first_successes += int(first)
-                            first_failures += int(not first)
-                    elif is_partial:
-                        partial_first_attempts += 1
-                        partial_unknown_first_results += 1
-                    if is_partial:
-                        partial_recoveries += int(item.get("recovered") is True)
+                        bucket["first_builder_successes"] += int(first)
+                        bucket["first_builder_failures"] += int(not first)
                     else:
-                        recoveries += int(item.get("recovered") is True)
+                        bucket["unknown_first_results"] += 1
+                    bucket["recoveries"] += int(item.get("recovered") is True)
                 elif item.get("builder_attempted") is False:
-                    if is_partial:
-                        partial_no_attempts += 1
-                    else:
-                        no_attempts += 1
+                    bucket["no_builder_attempts"] += 1
         elif isinstance(by_agent, list):
+            bucket["top_only_unclassified_builder_results"] += (
+                artifacts.get("builder_attempts", 0)
+                - artifacts.get("builder_successes", 0)
+                - artifacts.get("builder_failures", 0)
+            )
             first = artifacts.get("first_builder_attempt_succeeded")
-            if is_partial:
-                partial_top_only_unclassified_results += (
-                    artifacts.get("builder_attempts", 0)
-                    - artifacts.get("builder_successes", 0)
-                    - artifacts.get("builder_failures", 0)
-                )
-                if isinstance(first, bool):
-                    partial_top_only_runs_with_first_success += int(first)
-                    partial_top_only_runs_with_first_failure += int(not first)
-                elif artifacts.get("builder_attempted") is True:
-                    partial_top_only_runs_with_unknown_first += 1
-            elif isinstance(first, bool):
-                top_only_runs_with_first_success += int(first)
-                top_only_runs_with_first_failure += int(not first)
+            if isinstance(first, bool):
+                bucket["top_only_runs_with_first_builder_success"] += int(first)
+                bucket["top_only_runs_with_first_builder_failure"] += int(not first)
+            elif attempted is True:
+                bucket["top_only_runs_with_unknown_first_builder_result"] += 1
 
+    # First attempts are derived: complete runs classify every counted first
+    # attempt as success or failure; partial runs also count unknown results.
+    buckets["complete"]["first_builder_attempts"] = (
+        buckets["complete"]["first_builder_successes"]
+        + buckets["complete"]["first_builder_failures"]
+    )
+    buckets["partial"]["first_builder_attempts"] = (
+        buckets["partial"]["first_builder_successes"]
+        + buckets["partial"]["first_builder_failures"]
+        + buckets["partial"]["unknown_first_results"]
+    )
+
+    complete_gate = availability["artifact_writes"]["complete"]
+    partial_gate = availability["artifact_writes"]["partial"]
     return {
-        "first_builder_attempts": (
-            first_attempts if availability["artifact_writes"]["complete"] else None
-        ),
-        "first_builder_successes": (
-            first_successes if availability["artifact_writes"]["complete"] else None
-        ),
-        "first_builder_failures": (
-            first_failures if availability["artifact_writes"]["complete"] else None
-        ),
-        "recoveries": recoveries if availability["artifact_writes"]["complete"] else None,
-        "no_builder_attempts": (
-            no_attempts if availability["artifact_writes"]["complete"] else None
-        ),
-        "runs_with_builder_attempts": (
-            runs_with_attempts
-            if availability["artifact_writes"]["complete"]
-            else None
-        ),
-        "runs_without_builder_attempts": (
-            runs_without_attempts
-            if availability["artifact_writes"]["complete"]
-            else None
-        ),
-        "top_only_runs_with_first_builder_success": (
-            top_only_runs_with_first_success
-            if availability["artifact_writes"]["complete"]
-            else None
-        ),
-        "top_only_runs_with_first_builder_failure": (
-            top_only_runs_with_first_failure
-            if availability["artifact_writes"]["complete"]
-            else None
-        ),
-        "runs_with_builder_recovery": (
-            runs_with_recovery
-            if availability["artifact_writes"]["complete"]
-            else None
-        ),
-        "partial_observed_runs": (
-            partial_runs if availability["artifact_writes"]["partial"] else None
-        ),
-        "partial_observed_first_builder_attempts": (
-            partial_first_attempts
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_first_builder_successes": (
-            partial_first_successes
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_first_builder_failures": (
-            partial_first_failures
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_unknown_first_results": (
-            partial_unknown_first_results
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_unclassified_builder_results": (
-            partial_unclassified_builder_results
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_recoveries": (
-            partial_recoveries
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_no_builder_attempts": (
-            partial_no_attempts
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_runs_with_builder_attempts": (
-            partial_runs_with_attempts
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_runs_without_builder_attempts": (
-            partial_runs_without_attempts
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_runs_with_unknown_builder_attempt_state": (
-            partial_runs_with_unknown_attempt_state
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_top_only_runs_with_first_builder_success": (
-            partial_top_only_runs_with_first_success
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_top_only_runs_with_first_builder_failure": (
-            partial_top_only_runs_with_first_failure
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_top_only_runs_with_unknown_first_builder_result": (
-            partial_top_only_runs_with_unknown_first
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_runs_with_builder_recovery": (
-            partial_runs_with_recovery
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
-        "partial_observed_top_only_unclassified_builder_results": (
-            partial_top_only_unclassified_results
-            if availability["artifact_writes"]["partial"]
-            else None
-        ),
+        **{
+            name: buckets["complete"][name] if complete_gate else None
+            for name in _ARTIFACT_COMPLETE_KEYS
+        },
+        **{
+            f"partial_observed_{name}": (
+                buckets["partial"][name] if partial_gate else None
+            )
+            for name in _ARTIFACT_PARTIAL_KEYS
+        },
         "availability": availability["artifact_writes"],
     }
 
@@ -648,99 +591,11 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "dispatch": dispatch,
         "coverage": coverage,
         "lifecycle": {
-            "started_events": (
-                lifecycle_complete["started_events"]
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "completed_events": (
-                lifecycle_complete["completed_events"]
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "incomplete_identities": (
-                sorted(lifecycle_complete["incomplete_identities"])
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "incomplete_count": (
-                lifecycle_complete["incomplete_count"]
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "incomplete_by_agent": (
-                dict(sorted(lifecycle_complete["incomplete_by_agent"].items()))
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "starts_by_agent": (
-                dict(sorted(lifecycle_complete["starts_by_agent"].items()))
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "extra_starts_by_agent": (
-                dict(sorted(lifecycle_complete["extra_starts_by_agent"].items()))
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "retry_overhead": (
-                lifecycle_complete["retry_overhead"]
-                if lifecycle_complete["runs"]
-                else None
-            ),
-            "completion_gap": (
-                lifecycle_complete["completion_gap"]
-                if lifecycle_complete["runs"]
-                else None
-            ),
+            **_lifecycle_block(lifecycle_complete),
             "partial_observed_runs": (
                 lifecycle_partial["runs"] if lifecycle_partial["runs"] else None
             ),
-            "partial_observed_started_events": (
-                lifecycle_partial["started_events"]
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_completed_events": (
-                lifecycle_partial["completed_events"]
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_incomplete_identities": (
-                sorted(lifecycle_partial["incomplete_identities"])
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_incomplete_count": (
-                lifecycle_partial["incomplete_count"]
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_incomplete_by_agent": (
-                dict(sorted(lifecycle_partial["incomplete_by_agent"].items()))
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_starts_by_agent": (
-                dict(sorted(lifecycle_partial["starts_by_agent"].items()))
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_extra_starts_by_agent": (
-                dict(sorted(lifecycle_partial["extra_starts_by_agent"].items()))
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_retry_overhead": (
-                lifecycle_partial["retry_overhead"]
-                if lifecycle_partial["runs"]
-                else None
-            ),
-            "partial_observed_completion_gap": (
-                lifecycle_partial["completion_gap"]
-                if lifecycle_partial["runs"]
-                else None
-            ),
+            **_lifecycle_block(lifecycle_partial, "partial_observed_"),
             "availability": availability["lifecycle"],
         },
         "outcomes": outcomes,
@@ -752,29 +607,23 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "availability": availability["usage"],
         },
         "orchestrator_usage": {
-            "by_step": _group_usage(
-                run_list, state="complete", family="orchestrator_usage", source="step"
-            ),
+            "by_step": _group_usage(run_list, state="complete", source="step"),
             "partial_observed_by_step": _group_usage(
-                run_list, state="partial", family="orchestrator_usage", source="step"
+                run_list, state="partial", source="step"
             ),
             "availability": availability["orchestrator_usage"],
         },
         "agent_usage": {
-            "by_agent": _group_usage(
-                run_list, state="complete", family="agent_usage", source="agent"
-            ),
+            "by_agent": _group_usage(run_list, state="complete", source="agent"),
             "partial_observed_by_agent": _group_usage(
-                run_list, state="partial", family="agent_usage", source="agent"
+                run_list, state="partial", source="agent"
             ),
             "availability": availability["agent_usage"],
         },
         "model_usage": {
-            "by_model": _group_usage(
-                run_list, state="complete", family="model_usage", source="model"
-            ),
+            "by_model": _group_usage(run_list, state="complete", source="model"),
             "partial_observed_by_model": _group_usage(
-                run_list, state="partial", family="model_usage", source="model"
+                run_list, state="partial", source="model"
             ),
             "availability": availability["model_usage"],
         },
