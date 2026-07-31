@@ -685,6 +685,53 @@ class TestSave:
             other = "B" if json_title.endswith("A") else "A"
             assert f"Finding from execution {other}" not in md_text
 
+    def test_interrupted_save_never_leaves_a_stale_readiness_pair(
+        self, monkeypatch
+    ):
+        """A save that dies between the Markdown and JSON publishes must not
+        leave a PREVIOUS execution's JSON as the readiness signal beside the
+        new Markdown — status and reconciliation would accept that
+        mismatched pair as complete. No JSON (honest incomplete, handled by
+        the readiness timeout) is the correct degraded state."""
+        import review.agent.output as output_mod
+
+        def _distinct_builder(marker):
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.add_issue(
+                severity="low",
+                category="test",
+                title=f"Finding from execution {marker}",
+                description="d",
+                file="src/f.py",
+                line=1,
+                recommendation="r",
+            )
+            return b
+
+        with tempfile.TemporaryDirectory() as d:
+            json_path = os.path.join(d, "security-review.json")
+            _distinct_builder("A").save(d)
+            assert os.path.isfile(json_path)
+
+            real_replace = os.replace
+            interrupt = {"armed": True}
+
+            def _dying_replace(src, dst):
+                if interrupt["armed"] and dst == json_path:
+                    raise OSError("process killed mid-publish")
+                real_replace(src, dst)
+
+            monkeypatch.setattr(output_mod.os, "replace", _dying_replace)
+            with pytest.raises(OSError):
+                _distinct_builder("B").save(d)
+
+            # The stale readiness signal from execution A is gone — the
+            # agent reads as incomplete instead of as a mismatched pair.
+            assert not os.path.exists(json_path)
+            md_text = Path(d, "security-review.md").read_text()
+            assert "Finding from execution B" in md_text
+            assert not list(Path(d).glob("*.tmp"))
+
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
         """Unique staging names never self-overwrite the way the old fixed
         name did, so a save that dies before publishing must clean up its

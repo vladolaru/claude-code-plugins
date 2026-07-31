@@ -604,6 +604,19 @@ class ReviewOutputBuilder:
                     lock_fd = os.open(output_dir, os.O_RDONLY)
                     stack.callback(os.close, lock_fd)
                     fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                # Invalidate a PREVIOUS execution's readiness signal before
+                # touching Markdown: if this save dies between the two
+                # replaces, the stale JSON would otherwise pair with the new
+                # Markdown and be accepted as a complete, matching artifact
+                # pair. With the unlink, an interruption leaves no JSON —
+                # the agent honestly reads as incomplete and the existing
+                # readiness timeout machinery handles it. First saves have
+                # nothing to unlink, so the readiness gap only ever replaces
+                # a stale signal, never delays a fresh one.
+                try:
+                    os.unlink(json_path)
+                except FileNotFoundError:
+                    pass
                 os.replace(staged_md_path, md_path)
                 os.replace(staged_json_path, json_path)
         finally:
