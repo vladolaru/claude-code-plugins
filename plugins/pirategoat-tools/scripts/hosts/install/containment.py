@@ -12,8 +12,10 @@ check passes for an in-repo spelling whose directory is really a symlink
 out of the repo. Round after round of review findings (symlinked dep
 roots, escaped bin dirs) traced back to call sites re-deriving this check
 locally and each forgetting a piece; hence one module, and a drift guard
-in tests/hosts/test_containment_contract.py that forbids os.path.commonpath
-anywhere else under scripts/hosts/.
+in tests/hosts/test_containment_contract.py that forbids the containment
+spellings (commonpath, is_relative_to, commonprefix) anywhere else under
+scripts/hosts/; other spellings rely on code review plus the resolver
+symlink behavior tests.
 
 contains_lexically exists for algorithmic bounds (walk-up loops over paths
 that may not exist, e.g. deleted files). It is NEVER a trust decision on
