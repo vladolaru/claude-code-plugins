@@ -95,6 +95,53 @@ def _incomplete_agent_executions(
     return sorted(unmatched.elements())
 
 
+def project_agent_lifecycle(items, *, strict: bool = False):
+    """Project append-only saves into one completion per execution.
+
+    The canonical save-revision projection shared by the telemetry producer
+    and the review_metrics consumer (via contracts) — both sides MUST agree
+    bit-exactly, so there is exactly one implementation.
+
+    ``items`` yields ``(is_completion, agent, payload)`` triples in event
+    order; ``agent`` is the agent name or ``None`` when unusable. A
+    completion matches an outstanding start while any remain — so
+    overlapping executions of the same agent each keep their completion.
+    Only once every start is matched does a further completion count as a
+    corrected save, replacing the latest completion.
+
+    With ``strict=False`` completions with no preceding start remain visible
+    for strict consumers to reject; with ``strict=True`` they fail the whole
+    projection (returns ``None``).
+    """
+    started: List[dict] = []
+    completed: List[dict] = []
+    start_counts: Counter = Counter()
+    completion_counts: Counter = Counter()
+    completion_slot: Dict[str, int] = {}
+
+    for is_completion, agent, payload in items:
+        if not is_completion:
+            started.append(payload)
+            if agent:
+                start_counts[agent] += 1
+            continue
+        if strict and (agent is None or agent not in start_counts):
+            return None
+        if (
+            agent
+            and agent in completion_slot
+            and completion_counts[agent] >= start_counts[agent]
+        ):
+            completed[completion_slot[agent]] = payload
+        else:
+            completed.append(payload)
+            if agent and start_counts[agent] > 0:
+                completion_counts[agent] += 1
+                completion_slot[agent] = len(completed) - 1
+
+    return started, completed
+
+
 class ReviewTelemetry:
     """Append-only JSONL telemetry for PR review pipelines.
 
@@ -692,44 +739,23 @@ class ReviewTelemetry:
     def _project_manifest_agent_lifecycle(
         self, events: List[dict], repo_path: str
     ) -> tuple[List[dict], List[dict]]:
-        """Project append-only saves into one completion per execution.
+        """Sanitize raw events and run the shared lifecycle projection."""
 
-        A completion matches an outstanding start while any remain — so
-        overlapping executions of the same agent each keep their completion.
-        Only once every start is matched does a further completion count as
-        a corrected save, replacing the latest completion. Completions with
-        no preceding start remain visible for strict consumers to reject.
-        """
-        started: List[dict] = []
-        completed: List[dict] = []
-        start_counts: Counter = Counter()
-        completion_counts: Counter = Counter()
-        completion_slot: Dict[str, int] = {}
+        def items():
+            for event in events:
+                event_name = event.get("event")
+                agent = event.get("agent")
+                agent_key = agent if isinstance(agent, str) and agent else None
+                if event_name == "agent_start":
+                    yield False, agent_key, self._manifest_agent_start_event(
+                        event, repo_path=repo_path
+                    )
+                elif event_name == "agent_complete":
+                    yield True, agent_key, self._manifest_agent_complete_event(
+                        event
+                    )
 
-        for event in events:
-            event_name = event.get("event")
-            agent = event.get("agent")
-            if event_name == "agent_start":
-                started.append(
-                    self._manifest_agent_start_event(event, repo_path=repo_path)
-                )
-                if isinstance(agent, str) and agent:
-                    start_counts[agent] += 1
-            elif event_name == "agent_complete":
-                completion = self._manifest_agent_complete_event(event)
-                if (
-                    isinstance(agent, str)
-                    and agent in completion_slot
-                    and completion_counts[agent] >= start_counts[agent]
-                ):
-                    completed[completion_slot[agent]] = completion
-                else:
-                    completed.append(completion)
-                    if isinstance(agent, str) and start_counts[agent] > 0:
-                        completion_counts[agent] += 1
-                        completion_slot[agent] = len(completed) - 1
-
-        return started, completed
+        return project_agent_lifecycle(items())
 
     _AGENT_NAME_RE = AGENT_NAME_RE
 

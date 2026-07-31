@@ -82,6 +82,14 @@ def test_metrics_uses_canonical_telemetry_contract():
         contracts._AVAILABILITY_FAMILIES
         == contracts._PIPELINE_FAMILIES + contracts._TRANSCRIPT_FAMILIES
     )
+    assert (
+        contracts._project_agent_lifecycle
+        is contracts._TELEMETRY_CONTRACT.project_agent_lifecycle
+    )
+    assert (
+        contracts._incomplete_agent_executions
+        is contracts._TELEMETRY_CONTRACT._incomplete_agent_executions
+    )
 
 
 def test_usage_fields_extend_transcript_producer_fields():

@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from .contracts import _SUPPORTED_MANIFEST_SCHEMA_VERSION, _parse_time
+from .contracts import (
+    _SUPPORTED_MANIFEST_SCHEMA_VERSION,
+    _incomplete_agent_executions,
+    _parse_time,
+    _project_agent_lifecycle,
+)
 from .sanitize import (
     _lifecycle_events_are_causal,
     _nonnegative_int,
@@ -124,32 +129,20 @@ def _project_lifecycle_revisions(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
     """Project same-agent save revisions without execution IDs.
 
-    Mirrors the telemetry producer's projection exactly: a completion
-    matches an outstanding start while any remain (overlapping executions
-    each keep their completion); only afterwards does a further completion
-    replace the latest one as a corrected save.
+    Runs the telemetry producer's own projection (via contracts) in strict
+    mode, so producer and consumer can never drift: a completion matches an
+    outstanding start while any remain (overlapping executions each keep
+    their completion); only afterwards does a further completion replace the
+    latest one as a corrected save. A completion with no preceding start
+    fails the projection.
     """
-    started: list[dict[str, Any]] = []
-    completed_events: list[dict[str, Any]] = []
-    start_counts: Counter[str] = Counter()
-    completion_counts: Counter[str] = Counter()
-    completion_slot: dict[str, int] = {}
-
-    for completed, event in events:
-        agent = event["agent"]
-        if completed:
-            if agent not in start_counts:
-                return None
-            if completion_counts[agent] >= start_counts[agent]:
-                completed_events[completion_slot[agent]] = event
-            else:
-                completed_events.append(event)
-                completion_counts[agent] += 1
-                completion_slot[agent] = len(completed_events) - 1
-        else:
-            started.append(event)
-            start_counts[agent] += 1
-    return started, completed_events
+    return _project_agent_lifecycle(
+        (
+            (completed, event["agent"], event)
+            for completed, event in events
+        ),
+        strict=True,
+    )
 
 
 def _sidecar_is_lifecycle_projection_prefix(
@@ -318,13 +311,12 @@ def _overlay_running_lifecycle(
 
     result = copy.deepcopy(manifest)
     combined_started = [*existing_started, *fresh_started]
-    unmatched = Counter(
-        event["agent"] for event in combined_started
-    ) - Counter(event["agent"] for event in combined_completed)
     result["agents"] = {
         "started": combined_started,
         "completed": combined_completed,
-        "incomplete": sorted(unmatched.elements()),
+        "incomplete": _incomplete_agent_executions(
+            combined_started, combined_completed
+        ),
     }
     return _sanitize_manifest(result)
 

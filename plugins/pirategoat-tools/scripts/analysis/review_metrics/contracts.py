@@ -37,6 +37,12 @@ DEFAULT_LOG_DIR = Path(_TELEMETRY_CONTRACT.LOG_DIR)
 DEFAULT_SESSIONS_ROOT = Path("~/.claude/projects").expanduser()
 DEFAULT_REGISTRY = _REVIEW_DIR / "agent_registry.json"
 
+# The lifecycle projection and incomplete-multiset rule are the producer's
+# own implementations — the consumer must mirror them bit-exactly, so it
+# calls them instead of re-implementing them.
+_project_agent_lifecycle = _TELEMETRY_CONTRACT.project_agent_lifecycle
+_incomplete_agent_executions = _TELEMETRY_CONTRACT._incomplete_agent_executions
+
 _USAGE_FIELDS = (
     "input_tokens",
     "cache_creation_input_tokens",
