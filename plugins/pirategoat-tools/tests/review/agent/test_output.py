@@ -612,6 +612,27 @@ class TestSave:
             assert os.path.isfile(os.path.join(d, "security-review.json"))
             assert not list(Path(d).glob("*.tmp"))
 
+    @staticmethod
+    def _race_a_retry_at_lock_acquisition(monkeypatch, output_mod, d, retry_save):
+        """Run retry_save() inside the outer save's window between staging
+        and publication — triggered at the outer save's os.open of the
+        output dir (its lock acquisition), i.e. just BEFORE it takes the
+        publication lock. Injecting from inside the lock (the old telemetry
+        hook point) would deadlock now that completion telemetry runs under
+        the lock: flock treats a second fd as an independent owner."""
+        if output_mod.fcntl is None:
+            pytest.skip("publication lock requires fcntl (POSIX)")
+        real_open = os.open
+        raced = []
+
+        def _open_hook(path, *args, **kwargs):
+            if not raced and str(path) == str(d):
+                raced.append(True)
+                retry_save()
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(output_mod.os, "open", _open_hook)
+
     def test_overlapping_saves_of_the_same_reviewer_do_not_collide(
         self, monkeypatch
     ):
@@ -623,20 +644,9 @@ class TestSave:
         import review.agent.output as output_mod
 
         with tempfile.TemporaryDirectory() as d:
-            raced = []
-
-            def _finish_a_retry_first(*args):
-                # Fires inside the outer save between staging and publish —
-                # the widest overlap window. Only the first (outer) save
-                # races; the nested retry's own telemetry call is a no-op.
-                if not raced:
-                    raced.append(True)
-                    ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
-
-            monkeypatch.setattr(
-                output_mod,
-                "_log_agent_complete_telemetry",
-                _finish_a_retry_first,
+            self._race_a_retry_at_lock_acquisition(
+                monkeypatch, output_mod, d,
+                lambda: ReviewOutputBuilder(pr_id="1", reviewer="security").save(d),
             )
             ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
             assert os.path.isfile(os.path.join(d, "security-review.json"))
@@ -664,17 +674,9 @@ class TestSave:
             return b
 
         with tempfile.TemporaryDirectory() as d:
-            raced = []
-
-            def _finish_a_retry_first(*args):
-                if not raced:
-                    raced.append(True)
-                    _distinct_builder("B").save(d)
-
-            monkeypatch.setattr(
-                output_mod,
-                "_log_agent_complete_telemetry",
-                _finish_a_retry_first,
+            self._race_a_retry_at_lock_acquisition(
+                monkeypatch, output_mod, d,
+                lambda: _distinct_builder("B").save(d),
             )
             _distinct_builder("A").save(d)
 
@@ -684,6 +686,49 @@ class TestSave:
             assert json_title in md_text
             other = "B" if json_title.endswith("A") else "A"
             assert f"Finding from execution {other}" not in md_text
+
+    def test_latest_completion_telemetry_matches_the_published_pair(
+        self, monkeypatch
+    ):
+        """Scheduling reads the manifest's latest agent_complete as the
+        agent's final execution. When saves overlap, the completion logged
+        last and the pair published last must belong to the SAME execution
+        — telemetry logged outside the publication lock let a slower save
+        publish its artifacts after a faster retry logged its completion."""
+        import review.agent.output as output_mod
+
+        def _builder_with_issues(count):
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            for index in range(count):
+                b.add_issue(
+                    severity="low",
+                    category="test",
+                    title=f"Finding {index}",
+                    description="d",
+                    file="src/f.py",
+                    line=index + 1,
+                    recommendation="r",
+                )
+            return b
+
+        completions = []
+
+        def _record(output_dir, reviewer, verdict, issue_count, severities):
+            completions.append(issue_count)
+
+        monkeypatch.setattr(
+            output_mod, "_log_agent_complete_telemetry", _record
+        )
+        with tempfile.TemporaryDirectory() as d:
+            self._race_a_retry_at_lock_acquisition(
+                monkeypatch, output_mod, d,
+                lambda: _builder_with_issues(2).save(d),
+            )
+            _builder_with_issues(1).save(d)
+
+            with open(os.path.join(d, "security-review.json")) as f:
+                published_count = len(json.load(f)["issues"])
+            assert completions[-1] == published_count
 
     def test_interrupted_save_never_leaves_a_stale_readiness_pair(
         self, monkeypatch

@@ -583,13 +583,6 @@ class ReviewOutputBuilder:
                 f"OBSERVATIONS: {len(self.observations)} | "
                 f"VERDICT: {output['verdict']}"
             )
-            _log_agent_complete_telemetry(
-                output_dir,
-                f"{self.reviewer}-reviewer",
-                output['verdict'],
-                output['summary']['total_issues'],
-                output['summary']['by_severity'],
-            )
             # Publish Markdown and JSON as one pair under an exclusive lock
             # so a single execution owns both artifacts — without it,
             # overlapping saves can interleave their publishes and leave the
@@ -597,19 +590,19 @@ class ReviewOutputBuilder:
             # goes first so the JSON readiness signal never precedes its
             # companion. The lock is the output directory's own fd (no lock
             # file to leave behind; flock auto-releases if the process dies);
-            # where flock is unavailable (non-POSIX) the publishes still
-            # happen back-to-back.
+            # where flock is unavailable (non-POSIX) the sequence still runs
+            # back-to-back.
             with contextlib.ExitStack() as stack:
                 if fcntl is not None:
                     lock_fd = os.open(output_dir, os.O_RDONLY)
                     stack.callback(os.close, lock_fd)
                     fcntl.flock(lock_fd, fcntl.LOCK_EX)
                 # Invalidate a PREVIOUS execution's readiness signal before
-                # touching Markdown: if this save dies between the two
-                # replaces, the stale JSON would otherwise pair with the new
-                # Markdown and be accepted as a complete, matching artifact
-                # pair. With the unlink, an interruption leaves no JSON —
-                # the agent honestly reads as incomplete and the existing
+                # anything else: if this save dies between the two replaces,
+                # the stale JSON would otherwise pair with the new Markdown
+                # and be accepted as a complete, matching artifact pair.
+                # With the unlink, an interruption leaves no JSON — the
+                # agent honestly reads as incomplete and the existing
                 # readiness timeout machinery handles it. First saves have
                 # nothing to unlink, so the readiness gap only ever replaces
                 # a stale signal, never delays a fresh one.
@@ -617,6 +610,21 @@ class ReviewOutputBuilder:
                     os.unlink(json_path)
                 except FileNotFoundError:
                     pass
+                # Completion telemetry logs INSIDE the lock, between the
+                # stale-signal unlink and the publishes, so {log, publish}
+                # is one atomic unit per execution: the manifest's latest
+                # agent_complete always describes the pair that ends up
+                # published last, never a slower overlapping save's. It
+                # still precedes the JSON replace — completion must be
+                # durable before the readiness signal a racing finalize
+                # would trust becomes visible.
+                _log_agent_complete_telemetry(
+                    output_dir,
+                    f"{self.reviewer}-reviewer",
+                    output['verdict'],
+                    output['summary']['total_issues'],
+                    output['summary']['by_severity'],
+                )
                 os.replace(staged_md_path, md_path)
                 os.replace(staged_json_path, json_path)
         finally:
