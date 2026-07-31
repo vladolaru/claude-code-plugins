@@ -184,8 +184,8 @@ def materialize_markdown(output_dir: str) -> List[str]:
     Derived artifacts for humans browsing the output directory: idempotent,
     regenerated from the settled canonical JSON, read by no pipeline
     consumer (readiness, reconciliation, and the bot all key on the JSON).
-    Malformed JSONs are skipped — grading and reconciliation report those
-    failures on their own channels.
+    Malformed JSONs are skipped with a note on stderr — grading and
+    reconciliation report those failures on their own channels.
     """
     written: List[str] = []
     for name in sorted(os.listdir(output_dir)):
@@ -196,7 +196,8 @@ def materialize_markdown(output_dir: str) -> List[str]:
             with open(json_path, encoding="utf-8") as handle:
                 data = json.load(handle)
             md_text = render_markdown(data)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
+            print(f"skipped {name}: {err}", file=sys.stderr)
             continue
         md_path = json_path[: -len(".json")] + ".md"
         with open(md_path, "w", encoding="utf-8") as handle:

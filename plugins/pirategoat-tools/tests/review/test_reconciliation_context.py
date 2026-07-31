@@ -1508,6 +1508,37 @@ class TestFullScript:
         assert "markdown_path" in stdout_json
         assert stdout_json["markdown_path"].endswith("reconciliation-context.md")
 
+    def test_main_materializes_reviewer_markdown(self, tmp_path):
+        """Reconciliation is the single site that renders the human-facing
+        per-reviewer Markdown from the settled JSONs."""
+        review = _make_review_json(
+            reviewer="security",
+            issues=[_make_issue(file="src/auth.py", line=10)],
+        )
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "src/auth.py",
+            "--pr-id", "42",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+
+        md_path = tmp_path / "security-review.md"
+        assert md_path.is_file()
+        md_text = md_path.read_text()
+        assert "## Executive Summary" in md_text
+
+        # Success payload lists the materialized reviewer Markdown paths
+        stdout_json = json.loads(result.stdout.strip())
+        assert "reviewer_markdown" in stdout_json
+        assert [os.path.basename(p) for p in stdout_json["reviewer_markdown"]] == [
+            "security-review.md",
+        ]
+
 
 # ===========================================================================
 # TestToMarkdown

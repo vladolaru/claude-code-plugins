@@ -612,6 +612,14 @@ class TestMaterializeMarkdown:
             assert [os.path.basename(p) for p in written] == ["security-review.md"]
             assert not Path(d, "broken-review.md").exists()
 
+    def test_skips_valid_json_missing_required_keys(self, capsys):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "empty-review.json").write_text("{}")
+            written = materialize_markdown(d)
+            assert written == []
+            assert not Path(d, "empty-review.md").exists()
+            assert "skipped empty-review.json" in capsys.readouterr().err
+
     def test_render_cli_prints_markdown(self):
         output_py = Path(__file__).parents[3] / "scripts" / "review" / "agent" / "output.py"
         assert output_py.is_file(), output_py  # layout guard: tests/review/agent -> plugin root
@@ -627,6 +635,23 @@ class TestMaterializeMarkdown:
             assert result.returncode == 0, result.stderr
             assert "CLI Title" in result.stdout
             assert "## Executive Summary" in result.stdout
+
+    def test_materialize_cli_prints_written_paths(self):
+        output_py = Path(__file__).parents[3] / "scripts" / "review" / "agent" / "output.py"
+        assert output_py.is_file(), output_py
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.save(d)
+            md_path = Path(d, "security-review.md")
+            if md_path.exists():
+                md_path.unlink()  # save() may or may not write md at this plan stage
+            result = subprocess.run(
+                [sys.executable, str(output_py), "materialize", d],
+                capture_output=True, text=True,
+            )
+            assert result.returncode == 0, result.stderr
+            assert str(md_path) in result.stdout
+            assert md_path.is_file()
 
 
 # =============================================================================
