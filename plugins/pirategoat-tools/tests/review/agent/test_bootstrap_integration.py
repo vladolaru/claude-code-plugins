@@ -659,9 +659,7 @@ class TestNotApplicableCompletionContract:
         assert all("RECORDED COUNTS:" in result.stdout for result in results)
         assert sorted(path.name for path in output_dir.iterdir()) == [
             "performance-review.json",
-            "performance-review.md",
             "security-review.json",
-            "security-review.md",
         ]
         for reviewer_name in ("security", "performance"):
             saved = json.loads(
@@ -708,7 +706,6 @@ class TestNotApplicableCompletionContract:
         assert "RECORDED COUNTS:" in result.stdout
         assert sorted(path.name for path in output_dir.iterdir()) == [
             "security-review.json",
-            "security-review.md",
         ]
         saved = json.loads((output_dir / "security-review.json").read_text())
         assert saved["meta"]["files_reviewed"] == 3
@@ -1349,16 +1346,16 @@ class TestOutputFilenameConsistency:
     """Output filenames from ReviewOutputBuilder.save() match bootstrap expectations."""
 
     def test_save_uses_review_suffix(self, tmp_path):
-        """save() should write {reviewer}-review.json and {reviewer}-review.md."""
+        """save() should write {reviewer}-review.json only."""
         from review.agent.output import ReviewOutputBuilder
 
         builder = ReviewOutputBuilder(pr_id="42", reviewer="dead-code")
         result = builder.save(str(tmp_path))
 
+        assert set(result) == {"json"}
         assert result["json"].endswith("dead-code-review.json"), f"Got: {result['json']}"
-        assert result["markdown"].endswith("dead-code-review.md"), f"Got: {result['markdown']}"
         assert os.path.isfile(result["json"])
-        assert os.path.isfile(result["markdown"])
+        assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
 
     def test_bootstrap_output_matches_save_filenames(self, tmp_path):
         """Bootstrap OUTPUT_FILES paths match what save() actually creates."""

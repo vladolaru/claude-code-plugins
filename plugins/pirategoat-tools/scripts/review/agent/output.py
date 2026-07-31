@@ -588,40 +588,39 @@ class ReviewOutputBuilder:
         return render_markdown(self.to_dict())
 
     def save(self, output_dir: str):
-        """Save both JSON and markdown."""
+        """Publish the review JSON — the single canonical artifact.
+
+        Markdown is derived from this JSON on demand (render_markdown /
+        materialize_markdown; reconciliation materializes it for humans at
+        end of run), so there is no artifact pair to keep consistent: an
+        interrupted re-save simply leaves the previous complete JSON
+        visible, the normal semantics of an atomic single-file write.
+        """
         os.makedirs(output_dir, exist_ok=True)
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
-        md_path = os.path.join(output_dir, f"{self.reviewer}-review.md")
 
-        # The review JSON is the readiness signal agents_status.py polls, and
-        # the pipeline may finalize the telemetry manifest the moment every
-        # agent looks finished. Completion must therefore be durable BEFORE
-        # the JSON becomes visible: stage it, log agent_complete, then
-        # publish atomically — otherwise a finalize racing this save records
-        # the agent permanently incomplete.
-        # The staging names carry a nonce because the lifecycle supports
+        # The review JSON is the readiness signal agents_status.py polls,
+        # and the pipeline may finalize the telemetry manifest the moment
+        # every agent looks finished. Completion must therefore be durable
+        # BEFORE the JSON becomes visible — otherwise a finalize racing
+        # this save records the agent permanently incomplete.
+        # The staging name carries a nonce because the lifecycle supports
         # overlapping executions of the same reviewer (retry before the
         # prior invocation finishes): a shared staging file would let one
         # execution's os.replace() consume the other's staged artifact.
         nonce = uuid.uuid4().hex
         staged_json_path = f"{json_path}.{nonce}.tmp"
-        staged_md_path = f"{md_path}.{nonce}.tmp"
         try:
-            with open(staged_md_path, 'w') as f:
-                f.write(self.to_markdown())
             with open(staged_json_path, 'w') as f:
                 f.write(self.to_json())
 
-            # Telemetry: log agent completion (best-effort)
-            # Use full agent name (reviewer + "-reviewer") to match the
-            # agent_start event and .started file written by bootstrap.py.
             output = self.to_dict()
 
             # Echo the RECORDED state so the calling agent reconciles its
             # self-reported COUNTS against what was actually saved, not its
-            # intent — a mismatch here means a finding was dropped or mangled
-            # before serialization.
+            # intent — a mismatch here means a finding was dropped or
+            # mangled before serialization.
             by_sev = output['summary']['by_severity']
             counts_str = ", ".join(f"{sev}: {by_sev[sev]}" for sev in _VALID_SEVERITIES)
             print(f"RECORDED COUNTS: {counts_str}")
@@ -630,41 +629,21 @@ class ReviewOutputBuilder:
                 f"OBSERVATIONS: {len(self.observations)} | "
                 f"VERDICT: {output['verdict']}"
             )
-            # Publish Markdown and JSON as one pair under an exclusive lock
-            # so a single execution owns both artifacts — without it,
-            # overlapping saves can interleave their publishes and leave the
-            # final JSON and Markdown describing different findings. Markdown
-            # goes first so the JSON readiness signal never precedes its
-            # companion. The lock is the output directory's own fd (no lock
-            # file to leave behind; flock auto-releases if the process dies);
-            # where flock is unavailable (non-POSIX) the sequence still runs
-            # back-to-back.
+            # Completion telemetry and publication run under one exclusive
+            # lock so {log, publish} is a single atomic unit per execution:
+            # the manifest's latest agent_complete always describes the
+            # JSON published last, never a slower overlapping save's. The
+            # log still precedes the replace — completion must be durable
+            # before the readiness signal a racing finalize would trust
+            # becomes visible. The lock is the output directory's own fd
+            # (no lock file to leave behind; flock auto-releases if the
+            # process dies); where flock is unavailable (non-POSIX) the
+            # two steps still run back-to-back.
             with contextlib.ExitStack() as stack:
                 if fcntl is not None:
                     lock_fd = os.open(output_dir, os.O_RDONLY)
                     stack.callback(os.close, lock_fd)
                     fcntl.flock(lock_fd, fcntl.LOCK_EX)
-                # Invalidate a PREVIOUS execution's readiness signal before
-                # anything else: if this save dies between the two replaces,
-                # the stale JSON would otherwise pair with the new Markdown
-                # and be accepted as a complete, matching artifact pair.
-                # With the unlink, an interruption leaves no JSON — the
-                # agent honestly reads as incomplete and the existing
-                # readiness timeout machinery handles it. First saves have
-                # nothing to unlink, so the readiness gap only ever replaces
-                # a stale signal, never delays a fresh one.
-                try:
-                    os.unlink(json_path)
-                except FileNotFoundError:
-                    pass
-                # Completion telemetry logs INSIDE the lock, between the
-                # stale-signal unlink and the publishes, so {log, publish}
-                # is one atomic unit per execution: the manifest's latest
-                # agent_complete always describes the pair that ends up
-                # published last, never a slower overlapping save's. It
-                # still precedes the JSON replace — completion must be
-                # durable before the readiness signal a racing finalize
-                # would trust becomes visible.
                 _log_agent_complete_telemetry(
                     output_dir,
                     f"{self.reviewer}-reviewer",
@@ -672,19 +651,17 @@ class ReviewOutputBuilder:
                     output['summary']['total_issues'],
                     output['summary']['by_severity'],
                 )
-                os.replace(staged_md_path, md_path)
                 os.replace(staged_json_path, json_path)
         finally:
-            # Unique staging names never self-overwrite, so a failed save
-            # must remove its orphans (replace already consumed them on
+            # A unique staging name never self-overwrites, so a failed save
+            # must remove its orphan (replace already consumed it on
             # success).
-            for staged in (staged_md_path, staged_json_path):
-                try:
-                    os.unlink(staged)
-                except FileNotFoundError:
-                    pass
+            try:
+                os.unlink(staged_json_path)
+            except FileNotFoundError:
+                pass
 
-        return {'json': json_path, 'markdown': md_path}
+        return {'json': json_path}
 
 if __name__ == '__main__':
     import argparse

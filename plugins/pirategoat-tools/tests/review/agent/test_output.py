@@ -660,15 +660,18 @@ class TestMaterializeMarkdown:
 
 
 class TestSave:
-    """save writes both JSON and markdown files."""
+    """save publishes the review JSON — the single canonical artifact."""
 
-    def test_creates_both_files(self):
+    def test_creates_only_the_canonical_json(self):
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             b.save(d)
             assert os.path.isfile(os.path.join(d, "security-review.json"))
-            assert os.path.isfile(os.path.join(d, "security-review.md"))
+            # Markdown is derived from the JSON on demand (render/
+            # materialize) — save() writing it would resurrect the
+            # artifact-pair consistency problem this contract removed.
+            assert not os.path.exists(os.path.join(d, "security-review.md"))
 
     def test_json_content_matches_to_dict(self):
         with tempfile.TemporaryDirectory() as d:
@@ -692,8 +695,7 @@ class TestSave:
         with tempfile.TemporaryDirectory() as d:
             b = ReviewOutputBuilder(pr_id="1", reviewer="arch")
             result = b.save(d)
-            assert result["json"] == os.path.join(d, "arch-review.json")
-            assert result["markdown"] == os.path.join(d, "arch-review.md")
+            assert result == {"json": os.path.join(d, "arch-review.json")}
 
     def test_prints_recorded_counts_to_stdout(self, capsys):
         """save() echoes the SAVED state so agents can reconcile their
@@ -789,47 +791,12 @@ class TestSave:
             assert os.path.isfile(os.path.join(d, "security-review.json"))
             assert not list(Path(d).glob("*.tmp"))
 
-    def test_overlapping_saves_publish_a_consistent_artifact_pair(
-        self, monkeypatch
-    ):
-        """The JSON and Markdown describe the same findings; interleaved
-        overlapping saves must not leave one execution's JSON next to the
-        other execution's Markdown. One execution owns the published pair."""
-        import review.agent.output as output_mod
-
-        def _distinct_builder(marker):
-            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue(
-                severity="low",
-                category="test",
-                title=f"Finding from execution {marker}",
-                description="d",
-                file="src/f.py",
-                line=1,
-                recommendation="r",
-            )
-            return b
-
-        with tempfile.TemporaryDirectory() as d:
-            self._race_a_retry_at_lock_acquisition(
-                monkeypatch, output_mod, d,
-                lambda: _distinct_builder("B").save(d),
-            )
-            _distinct_builder("A").save(d)
-
-            with open(os.path.join(d, "security-review.json")) as f:
-                json_title = json.load(f)["issues"][0]["title"]
-            md_text = Path(d, "security-review.md").read_text()
-            assert json_title in md_text
-            other = "B" if json_title.endswith("A") else "A"
-            assert f"Finding from execution {other}" not in md_text
-
-    def test_latest_completion_telemetry_matches_the_published_pair(
+    def test_latest_completion_telemetry_matches_the_published_json(
         self, monkeypatch
     ):
         """Scheduling reads the manifest's latest agent_complete as the
         agent's final execution. When saves overlap, the completion logged
-        last and the pair published last must belong to the SAME execution
+        last and the JSON published last must belong to the SAME execution
         — telemetry logged outside the publication lock let a slower save
         publish its artifacts after a faster retry logged its completion."""
         import review.agent.output as output_mod
@@ -866,53 +833,6 @@ class TestSave:
             with open(os.path.join(d, "security-review.json")) as f:
                 published_count = len(json.load(f)["issues"])
             assert completions[-1] == published_count
-
-    def test_interrupted_save_never_leaves_a_stale_readiness_pair(
-        self, monkeypatch
-    ):
-        """A save that dies between the Markdown and JSON publishes must not
-        leave a PREVIOUS execution's JSON as the readiness signal beside the
-        new Markdown — status and reconciliation would accept that
-        mismatched pair as complete. No JSON (honest incomplete, handled by
-        the readiness timeout) is the correct degraded state."""
-        import review.agent.output as output_mod
-
-        def _distinct_builder(marker):
-            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
-            b.add_issue(
-                severity="low",
-                category="test",
-                title=f"Finding from execution {marker}",
-                description="d",
-                file="src/f.py",
-                line=1,
-                recommendation="r",
-            )
-            return b
-
-        with tempfile.TemporaryDirectory() as d:
-            json_path = os.path.join(d, "security-review.json")
-            _distinct_builder("A").save(d)
-            assert os.path.isfile(json_path)
-
-            real_replace = os.replace
-            interrupt = {"armed": True}
-
-            def _dying_replace(src, dst):
-                if interrupt["armed"] and dst == json_path:
-                    raise OSError("process killed mid-publish")
-                real_replace(src, dst)
-
-            monkeypatch.setattr(output_mod.os, "replace", _dying_replace)
-            with pytest.raises(OSError):
-                _distinct_builder("B").save(d)
-
-            # The stale readiness signal from execution A is gone — the
-            # agent reads as incomplete instead of as a mismatched pair.
-            assert not os.path.exists(json_path)
-            md_text = Path(d, "security-review.md").read_text()
-            assert "Finding from execution B" in md_text
-            assert not list(Path(d).glob("*.tmp"))
 
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
         """Unique staging names never self-overwrite the way the old fixed
