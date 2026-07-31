@@ -33,7 +33,10 @@ SCRIPTS_DIR = str(Path(__file__).resolve().parents[1])
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
-from hosts.install.cache import ensure_current, prune_dead_clones
+from hosts.install.cache import (
+    clone_id_for, ensure_current, prune_dead_clones, write_clone_realpath,
+    write_selected_slots,
+)
 from hosts.install.lockfile import (
     DepRoot, detect_dep_roots, lockfile_for_manager, slot_name,
 )
@@ -108,6 +111,25 @@ def main(argv=None) -> int:
             if root.manager != "composer" else root
             for root in dep_roots
         ]
+
+    # Record this run's selection so the resolver exposes exactly these
+    # slots — never a historical slot left by a previous scope or a manager
+    # the repo has since migrated away from. Written even when empty, so
+    # "no roots" also supersedes the previous selection. Best-effort: on
+    # failure the resolver falls back to enumerating populated slots.
+    try:
+        clone_id = clone_id_for(args.repo)
+        write_selected_slots(clone_id, [
+            {
+                "slot": slot_name(root),
+                "manager": root.manager,
+                "rel_path": root.rel_path,
+            }
+            for root in dep_roots
+        ])
+        write_clone_realpath(clone_id, args.repo)
+    except OSError:
+        pass
 
     if not dep_roots:
         payload["status"] = "nothing_to_install"

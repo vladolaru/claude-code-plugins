@@ -306,3 +306,30 @@ class TestPayloadShape:
 
         rc2, payload2 = _run_main(["--repo", str(repo)])
         assert payload2["managers"][0]["action"] == "replaced"
+
+    def test_run_records_the_selected_slots_for_the_resolver(
+        self, composer_repo, fake_run,
+    ):
+        from hosts.install.cache import clone_id_for, read_selected_slots
+
+        _run_main(["--repo", str(composer_repo)])
+
+        selection = read_selected_slots(clone_id_for(str(composer_repo)))
+        assert selection == [
+            {"slot": "composer", "manager": "composer", "rel_path": "."},
+        ]
+
+    def test_a_rootless_run_supersedes_the_previous_selection(
+        self, composer_repo, fake_run,
+    ):
+        """Scope changes between reviews; a run that detects no roots must
+        replace the old selection so the resolver stops exposing it."""
+        from hosts.install.cache import clone_id_for, read_selected_slots
+
+        _run_main(["--repo", str(composer_repo)])
+        (composer_repo / "composer.lock").unlink()
+        (composer_repo / "composer.json").unlink()
+
+        _run_main(["--repo", str(composer_repo)])
+
+        assert read_selected_slots(clone_id_for(str(composer_repo))) == []

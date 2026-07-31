@@ -3,7 +3,8 @@
 from typing import List
 
 from hosts.install.cache import (
-    cache_path_for_clone, clone_id_for, clone_root_for, read_stored_inputs_hash,
+    cache_path_for_clone, clone_id_for, clone_root_for, read_selected_slots,
+    read_stored_inputs_hash,
 )
 from hosts.install.lockfile import manager_for_slot
 from hosts.resolvers.base import HostResolver, ResolverResult
@@ -32,17 +33,26 @@ class InstallCacheResolver(HostResolver):
         if not clone_root.is_dir():
             return ResolverResult(entries=entries, unresolved=[], notes={})
 
-        # Enumerate what the installer actually populated rather than
-        # re-deriving detection. Dependency roots are scope-derived — they
-        # depend on which files a review touched — so re-detecting here
-        # would disagree with the installer whenever scope differs, and
-        # would miss nested roots (e.g. plugins/woocommerce) entirely.
-        for slot_dir in sorted(clone_root.iterdir()):
-            # Skips the .realpath marker and in-flight .<slot>.staging.* dirs.
-            if not slot_dir.is_dir() or slot_dir.name.startswith("."):
-                continue
+        # Resolve the slots the installer selected for the CURRENT review,
+        # recorded in the .dep_roots.json marker. The clone root accumulates
+        # every slot ever populated — an old npm slot after a pnpm migration,
+        # scoped roots from earlier reviews with different changed files —
+        # and enumerating them would expose dependency source the current
+        # review never asked for. Without a marker (pre-marker cache layout,
+        # or a standalone chain run with no installer) fall back to
+        # enumerating populated slots, which is all the information there is.
+        selection = read_selected_slots(clone_id)
+        if selection is None:
+            slots = [
+                slot_dir.name
+                for slot_dir in sorted(clone_root.iterdir())
+                # Skips the dot-prefixed markers and in-flight staging dirs.
+                if slot_dir.is_dir() and not slot_dir.name.startswith(".")
+            ]
+        else:
+            slots = list(dict.fromkeys(entry["slot"] for entry in selection))
 
-            slot = slot_dir.name
+        for slot in slots:
             artifact = _ARTIFACT_DIR_BY_MANAGER.get(manager_for_slot(slot))
             if not artifact:
                 continue

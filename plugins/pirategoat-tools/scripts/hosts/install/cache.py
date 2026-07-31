@@ -7,12 +7,13 @@ host_context library-dep entries emitted by InstallCacheResolver.
 """
 
 import hashlib
+import json
 import os
 import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional
 
 from hosts.cache.paths import pirategoat_cache_root
 
@@ -73,6 +74,46 @@ def write_stored_inputs_hash(clone_id: str, manager: str, inputs_hash: str) -> N
     marker = _inputs_hash_path(clone_id, manager)
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(inputs_hash)
+
+
+def _selected_slots_path(clone_id: str) -> Path:
+    return _cache_root() / clone_id / ".dep_roots.json"
+
+
+def write_selected_slots(clone_id: str, slots: List[Dict]) -> None:
+    """Record the dependency-root slots the installer selected this run.
+
+    Full replacement each run — the selection is a property of the current
+    review's scope, and historical slots are exactly what the resolver must
+    not expose (an obsolete manager after a repo migration, a scoped root
+    from an earlier review with different changed files). Written even when
+    empty so "no roots" also supersedes the previous selection.
+
+    Each entry carries {"slot", "manager", "rel_path"}.
+    """
+    marker = _selected_slots_path(clone_id)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"version": 1, "slots": slots}))
+
+
+def read_selected_slots(clone_id: str) -> Optional[List[Dict]]:
+    """Return the recorded slot selection, or None when absent or invalid.
+
+    None means no installer has recorded a selection for this clone yet
+    (pre-marker cache layout, or a standalone chain run) — the resolver
+    then falls back to enumerating populated slots.
+    """
+    try:
+        data = json.loads(_selected_slots_path(clone_id).read_text())
+    except (OSError, ValueError):
+        return None
+    slots = data.get("slots") if isinstance(data, dict) else None
+    if not isinstance(slots, list):
+        return None
+    return [
+        entry for entry in slots
+        if isinstance(entry, dict) and isinstance(entry.get("slot"), str)
+    ]
 
 
 def _realpath_marker_path(clone_id: str) -> Path:
