@@ -131,6 +131,11 @@ def _aware_timestamp(value: object) -> datetime | None:
     Claude Code writes "Z"-suffixed timestamps, which fromisoformat() only
     accepts from Python 3.11 — normalize like the metrics contract parser
     so 3.10 does not discard every timestamped record as a gap.
+
+    Keep byte-for-byte aligned with review_metrics.contracts._parse_time —
+    this standalone module cannot import that package, so the two bodies
+    are mirrored deliberately. A divergence makes the same boundary
+    timestamp valid evidence in one module and a gap in the other.
     """
     if not isinstance(value, str) or not value:
         return None
@@ -140,7 +145,10 @@ def _aware_timestamp(value: object) -> datetime | None:
         return None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    try:
+        return parsed.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return None
 
 
 def _run_window(

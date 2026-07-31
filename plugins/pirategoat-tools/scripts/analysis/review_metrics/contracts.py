@@ -139,13 +139,17 @@ _ANSI_ESCAPE_RE = re.compile(
 
 
 def _parse_time(value: object) -> datetime | None:
+    # Keep byte-for-byte aligned with review_transcript._aware_timestamp —
+    # the standalone transcript parser cannot import this package, so the
+    # two bodies are mirrored deliberately. A divergence makes the same
+    # boundary timestamp valid evidence in one module and a gap in the other.
     if not isinstance(value, str) or not value:
         return None
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    if parsed.tzinfo is None:
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     try:
         return parsed.astimezone(timezone.utc)
