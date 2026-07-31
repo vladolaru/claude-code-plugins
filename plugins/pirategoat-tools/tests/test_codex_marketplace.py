@@ -236,7 +236,10 @@ def test_gitignored_dotfiles_are_not_surfaced_skill_assets():
     skill_dir = REPO_ROOT / "plugins" / "dex" / "skills" / "knowledge-capture"
     assert skill_dir.is_dir(), "surfaced shared skill moved; update the test"
     junk = skill_dir / ".DS_Store"
-    assert not junk.exists()
+    # Finder may already have dropped a real .DS_Store here — the very
+    # environment this test exists to tolerate. Preserve and restore it
+    # instead of asserting absence.
+    original = junk.read_bytes() if junk.exists() else None
     try:
         # Real .DS_Store files are binary; invalid UTF-8 is the crash case.
         junk.write_bytes(b"Bud1\x00\x01\x86\x99junk")
@@ -247,6 +250,9 @@ def test_gitignored_dotfiles_are_not_surfaced_skill_assets():
             text=True,
         )
     finally:
-        junk.unlink(missing_ok=True)
+        if original is None:
+            junk.unlink(missing_ok=True)
+        else:
+            junk.write_bytes(original)
     assert result.returncode == 0, result.stdout + result.stderr
     assert ".DS_Store" not in result.stdout
