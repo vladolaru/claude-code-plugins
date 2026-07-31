@@ -581,15 +581,16 @@ def load_runs(
 
     resolved: list[tuple[str, dict[str, Any]]] = []
     for identifier, records in sorted(by_run_id.items()):
-        canonical = {_canonical_manifest(record) for record in records}
-        if len(canonical) == 1:
-            record = (
-                json.loads(next(iter(canonical)))
-                if len(records) > 1
-                else records[0]
-            )
+        if len(records) == 1:
+            # The overwhelmingly common case — skip canonicalization, which
+            # exists only to compare same-run-id records against each other.
+            record = records[0]
         else:
-            record = _duplicate_conflict(identifier, records)
+            canonical = {_canonical_manifest(record) for record in records}
+            if len(canonical) == 1:
+                record = json.loads(next(iter(canonical)))
+            else:
+                record = _duplicate_conflict(identifier, records)
         resolved.append((identifier, record))
 
     if run_id is not None:

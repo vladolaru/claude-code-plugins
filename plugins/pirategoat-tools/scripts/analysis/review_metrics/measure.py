@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -32,13 +33,15 @@ from .usage import _add_usage, _empty_usage, _safe_usage
 from .load import _is_duplicate_conflict, _read_json
 
 
+@lru_cache(maxsize=None)
 def _load_transcript_module():
     # Always load the adjacent parser by exact path, like the telemetry and
     # dispatch-status contracts. An ambient `import review_transcript`
     # would pick up whatever another checkout or version already put on
     # sys.path/sys.modules in a long-lived process — an incompatible module
     # disables transcript metrics; a compatible stale one silently measures
-    # with different semantics.
+    # with different semantics. Cached so a cohort sweep pays the exact-path
+    # module execution once, not once per run.
     path = Path(__file__).resolve().parents[1] / "review_transcript.py"
     module = _load_exact_path_module(
         "review_transcript",
@@ -48,8 +51,9 @@ def _load_transcript_module():
     return module.enrich_run_transcript
 
 
-def _recognized_agents(registry_path: str | Path) -> set[str] | None:
-    value = _read_json(Path(registry_path).expanduser())
+@lru_cache(maxsize=None)
+def _recognized_agents_cached(key: tuple[str, int, int]) -> frozenset[str] | None:
+    value = _read_json(Path(key[0]))
     agents = value.get("agents") if isinstance(value, dict) else None
     if not isinstance(agents, dict):
         return None
@@ -59,7 +63,22 @@ def _recognized_agents(registry_path: str | Path) -> set[str] | None:
         if isinstance(name, str) and name and len(name) <= 256
     }
     names.update({"review-reconciliator", "decision-reviewer", "critic"})
-    return names
+    return frozenset(names)
+
+
+def _recognized_agents(registry_path: str | Path) -> set[str] | None:
+    # A cohort sweep asks for the same registry once per run; cache the
+    # parsed result keyed on (path, mtime, size) so an on-disk change is
+    # still picked up, and hand out a fresh set per caller.
+    path = Path(registry_path).expanduser()
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    cached = _recognized_agents_cached(
+        (str(path), stat.st_mtime_ns, stat.st_size)
+    )
+    return set(cached) if cached is not None else None
 
 
 def _unavailable_transcript(reason: str) -> dict[str, Any]:
