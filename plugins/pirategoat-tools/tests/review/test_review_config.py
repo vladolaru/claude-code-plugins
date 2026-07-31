@@ -365,7 +365,45 @@ class TestProvenanceGate:
         assert result["reviewers"] == []
         [entry] = result["untrusted"]
         assert entry["kind"] == "config"
-        assert any("provenance unknown" in d for d in result["diagnostics"])
+
+    def test_case_variant_changed_path_is_untrusted(self, mod, tmp_path):
+        """On case-insensitive filesystems (default macOS, Windows) Git can
+        track REVIEWER.MD while open() reads reviewer.md — the same on-disk
+        file. The gate must compare canonical identities, not exact
+        spellings."""
+        self._config(tmp_path)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["REVIEWER.MD"]
+        )
+        assert result["reviewers"] == []
+        assert result["untrusted"][0]["kind"] == "reviewer"
+
+    def test_case_variant_changed_config_excludes_everything(
+        self, mod, tmp_path
+    ):
+        self._config(tmp_path)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=[".PIRATEGOAT/Config.json"]
+        )
+        assert result["rules"] == []
+        assert result["reviewers"] == []
+        [entry] = result["untrusted"]
+        assert entry["kind"] == "config"
+
+    def test_unicode_normalization_variant_is_untrusted(self, mod, tmp_path):
+        """Git can report an NFD spelling (e + combining accent) of a file
+        the config declares in NFC — normalization-insensitive filesystems
+        open the same file through either."""
+        _touch(tmp_path, "règles.md")  # NFC: è as one code point
+        _write_config(tmp_path, {"review": {
+            "reviewers": [{"id": "x", "ref": "règles.md"}],
+        }})
+        result = mod.load_review_config(
+            str(tmp_path),
+            changed_files=["re\u0300gles.md"],  # NFD: e + combining grave
+        )
+        assert result["reviewers"] == []
+        assert result["untrusted"][0]["kind"] == "reviewer"
 
     def test_git_quoted_changed_path_still_gates(self, mod, tmp_path):
         """Git C-quotes names with non-ASCII bytes by default

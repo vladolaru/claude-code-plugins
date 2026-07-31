@@ -24,6 +24,7 @@ raises to the caller. Invalid entries are dropped and recorded in
 import json
 import os
 import re
+import unicodedata
 from typing import Any, Dict, List
 
 CONFIG_RELPATH = os.path.join(".pirategoat", "config.json")
@@ -135,8 +136,15 @@ def load_review_config(
         dequoted = _dequote_git_path(path)
         if dequoted != path:
             changed.add(dequoted.replace(os.sep, "/"))
+    # Comparison happens on canonical keys (casefolded, NFC) so
+    # filesystem-equivalent spellings of the same file cannot slip
+    # PR-controlled content past the gate.
+    changed_keys = {_provenance_key(path) for path in changed}
     repo_real = os.path.realpath(repo_path)
-    if changed & _provenance_rel_paths(config_relpath, config_path, repo_real):
+    if changed_keys & {
+        _provenance_key(p)
+        for p in _provenance_rel_paths(config_relpath, config_path, repo_real)
+    }:
         # The declarations themselves are PR-controlled: nothing they
         # declare can be trusted, including entries pointing at untouched
         # files.
@@ -165,7 +173,7 @@ def load_review_config(
         identities = _provenance_rel_paths(
             rel_path, entry.get("resolved_path") or "", repo_real
         )
-        if not identities & changed:
+        if not ({_provenance_key(i) for i in identities} & changed_keys):
             return entry
         result["untrusted"].append(
             {"kind": kind, "id": entry.get("id"), "path": rel_path,
@@ -390,6 +398,20 @@ def _provenance_rel_paths(declared_rel: str, abs_path: str, repo_real: str) -> s
         real = os.path.realpath(abs_path)
         identities.add(os.path.relpath(real, repo_real).replace(os.sep, "/"))
     return identities
+
+
+def _provenance_key(rel_path: str) -> str:
+    """Canonical comparison key for one provenance path spelling.
+
+    Casefolded and NFC-normalized: on case-insensitive or
+    normalization-insensitive filesystems (default macOS, Windows) Git can
+    track ``.PIRATEGOAT/config.json`` or an NFD spelling while ``open()``
+    reads the very same on-disk file through the declared spelling — an
+    exact-string comparison would then trust PR-controlled content. On
+    case-sensitive filesystems this over-matches at worst, which can only
+    exclude an entry (fail closed), never widen trust.
+    """
+    return unicodedata.normalize("NFC", rel_path).casefold()
 
 
 def _path_inside_repo(path: str, repo_path: str) -> bool:
