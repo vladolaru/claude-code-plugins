@@ -35,6 +35,8 @@ import re
 import shutil
 from typing import Dict, List, Optional
 
+from hosts.install.containment import resolve_inside
+
 # Manifest + lockfile — the always-required pair.
 _BASE_FILES: Dict[str, List[str]] = {
     "composer": ["composer.json", "composer.lock"],
@@ -104,15 +106,12 @@ def hash_install_inputs(manager: str, repo_path: str) -> str:
 def _resolve_staged_source(repo_path: str, rel_path: str) -> Optional[str]:
     """Resolved absolute source for a staged input, or None when refused.
 
-    Refuses to read outside repo_path: rel_path can originate in
-    repo-controlled JSON, and a review may be running against an untrusted
-    branch.
+    rel_path can originate in repo-controlled JSON and a review may be
+    running against an untrusted branch — the containment gate is the
+    trust decision; the isfile check just skips optional absent inputs.
     """
-    repo_root = os.path.realpath(repo_path)
-    src = os.path.realpath(os.path.join(repo_root, rel_path))
-    if os.path.commonpath([repo_root, src]) != repo_root:
-        return None
-    if not os.path.isfile(src):
+    src = resolve_inside(repo_path, rel_path)
+    if src is None or not os.path.isfile(src):
         return None
     return src
 

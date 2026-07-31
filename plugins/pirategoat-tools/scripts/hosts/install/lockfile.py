@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
 
+from hosts.install.containment import contains, contains_lexically
+
 
 def detect_php_manager(repo_path: str) -> Optional[str]:
     if os.path.isfile(os.path.join(repo_path, "composer.lock")):
@@ -101,28 +103,19 @@ def _nearest_root_with_lockfile(
     """
     current = os.path.normpath(os.path.join(repo_root, start_rel))
     repo_root = os.path.normpath(repo_root)
-    real_root = os.path.realpath(repo_root)
 
     while True:
-        try:
-            if os.path.commonpath([repo_root, current]) != repo_root:
-                return None
-        except ValueError:  # different drives / unrelated paths
+        if not contains_lexically(repo_root, current):
             return None
 
-        # The lexical check above cannot see symlinks, but isfile() follows
-        # them — a directory that is really a symlink out of the repo would
-        # become a dependency root whose install runs in (and stages files
-        # from) an external tree the PR chose. Accept only directories whose
-        # resolved identity stays inside the repo; a rejected level still
-        # lets a legitimate ancestor win.
+        # The lexical bound cannot see symlinks, but isfile() follows
+        # them — a directory that is really a symlink out of the repo
+        # would become a dependency root whose install runs in (and
+        # stages files from) an external tree the PR chose. Accept only
+        # directories whose resolved identity stays inside the repo; a
+        # rejected level still lets a legitimate ancestor win.
         if any(os.path.isfile(os.path.join(current, name)) for name in lockfiles):
-            real_current = os.path.realpath(current)
-            try:
-                contained = os.path.commonpath([real_root, real_current]) == real_root
-            except ValueError:
-                contained = False
-            if contained:
+            if contains(repo_root, current):
                 rel = os.path.relpath(current, repo_root)
                 return "." if rel == "." else rel.replace(os.sep, "/")
 

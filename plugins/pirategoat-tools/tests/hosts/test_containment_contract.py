@@ -113,3 +113,22 @@ class TestContainsLexically:
         # Lexically inside even though it resolves outside — which is why
         # this primitive must never be a trust decision on its own.
         assert contains_lexically(str(repo), str(repo / "link"))
+
+    def test_lexical_mixed_forms_fail_closed(self):
+        """ValueError inside the prefix check (mixed relative/absolute)
+        must mean 'not contained', never an exception or True."""
+        assert not contains_lexically("relative/repo", "/absolute/candidate")
+
+
+class TestDriftGuard:
+    def test_commonpath_containment_is_centralized(self):
+        """Every containment decision under scripts/hosts/ goes through
+        containment.py. A new inline commonpath check is exactly how the
+        symlinked-dep-root and escaped-bin-dir bypasses were born."""
+        hosts_dir = Path(__file__).parents[2] / "scripts" / "hosts"
+        offenders = [
+            str(path.relative_to(hosts_dir))
+            for path in sorted(hosts_dir.rglob("*.py"))
+            if path.name != "containment.py" and "commonpath" in path.read_text()
+        ]
+        assert offenders == []
