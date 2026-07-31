@@ -122,7 +122,11 @@ def test_nested_root_gets_its_own_cache_slot(nested_repo):
             DepRoot("composer", "plugins/woocommerce"), str(nested_repo), [],
         )
 
-    assert result["cache_path"].endswith("composer@plugins-woocommerce")
+    from hosts.install.lockfile import slot_name
+
+    expected_slot = slot_name(DepRoot("composer", "plugins/woocommerce"))
+    assert result["cache_path"].endswith(expected_slot)
+    assert expected_slot != "composer"  # its own slot, not the root's
 
 
 def test_js_still_installs_from_staged_inputs(tmp_path, monkeypatch):

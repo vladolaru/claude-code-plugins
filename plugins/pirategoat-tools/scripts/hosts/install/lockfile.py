@@ -15,6 +15,7 @@ composer root and no others.
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
 
@@ -77,17 +78,21 @@ def slot_name(dep_root: DepRoot) -> str:
     """Cache-slot name for a dep root.
 
     Root dep roots keep the bare manager name, so slots populated before
-    nested roots existed stay valid. Nested roots get "<manager>@<slug>".
-
-    The slug escapes "-" as "--" before turning "/" into "-", which keeps
-    the mapping injective: "a/b" -> "a-b" and "a-b" -> "a--b" cannot
-    collide. That matters because a collision would serve one root's
-    dependencies to a reviewer asking about another's.
+    nested roots existed stay valid. Nested roots get
+    "<manager>@<slug>-<digest>": the slug is a readable, filesystem-safe,
+    length-capped rendering of the path, and the 8-hex digest of the exact
+    rel_path carries the uniqueness guarantee. A collision would serve one
+    root's dependencies to a reviewer asking about another's, and readable
+    escaping alone cannot rule that out — the previous "-"→"--" then
+    "/"→"-" scheme mapped both "a-/b" and "a/-b" to "a---b".
     """
     if dep_root.rel_path in (".", ""):
         return dep_root.manager
-    slug = dep_root.rel_path.replace("-", "--").replace("/", "-")
-    return f"{dep_root.manager}@{slug}"
+    slug = re.sub(r"[^A-Za-z0-9._]+", "-", dep_root.rel_path).strip("-")[:80]
+    digest = hashlib.sha256(dep_root.rel_path.encode("utf-8")).hexdigest()[:8]
+    if not slug:
+        return f"{dep_root.manager}@{digest}"
+    return f"{dep_root.manager}@{slug}-{digest}"
 
 
 def manager_for_slot(slot: str) -> str:

@@ -155,22 +155,36 @@ def test_symlink_within_the_repo_remains_a_valid_root(tmp_path):
 @pytest.mark.parametrize("dep_root,expected", [
     (DepRoot("composer", "."), "composer"),
     (DepRoot("pnpm", "."), "pnpm"),
-    (DepRoot("composer", "plugins/woocommerce"), "composer@plugins-woocommerce"),
+    (DepRoot("composer", "plugins/woocommerce"),
+     "composer@plugins-woocommerce-2d8792ac"),
 ])
 def test_slot_name(dep_root, expected):
     assert slot_name(dep_root) == expected
 
 
-def test_slot_names_are_injective_across_slash_and_dash():
-    """'a/b' and 'a-b' must not share a slot — a collision would serve one
+@pytest.mark.parametrize("left,right", [
+    ("a/b", "a-b"),
+    # The previous escape scheme ("-"→"--", then "/"→"-") mapped both of
+    # these to "a---b" — distinct valid roots sharing one cache slot.
+    ("a-/b", "a/-b"),
+])
+def test_slot_names_are_injective(left, right):
+    """Distinct roots must not share a slot — a collision would serve one
     root's dependencies to a reviewer asking about the other's."""
-    assert slot_name(DepRoot("composer", "a/b")) != slot_name(DepRoot("composer", "a-b"))
+    assert slot_name(DepRoot("composer", left)) != slot_name(DepRoot("composer", right))
+
+
+def test_slot_name_stays_bounded_for_deep_paths():
+    """The readable slug is length-capped so a deep nested root cannot push
+    the slot directory name past filesystem component limits."""
+    deep = "/".join(f"segment{index}" for index in range(40))
+    assert len(slot_name(DepRoot("composer", deep))) < 120
 
 
 @pytest.mark.parametrize("slot,expected", [
     ("composer", "composer"),
     ("pnpm", "pnpm"),
-    ("composer@plugins-woocommerce", "composer"),
+    ("composer@plugins-woocommerce-2d8792ac", "composer"),
 ])
 def test_manager_for_slot(slot, expected):
     assert manager_for_slot(slot) == expected
