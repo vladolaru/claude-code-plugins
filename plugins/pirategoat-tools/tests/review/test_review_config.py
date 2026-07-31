@@ -405,6 +405,52 @@ class TestProvenanceGate:
         assert result["reviewers"] == []
         assert result["untrusted"][0]["kind"] == "reviewer"
 
+    def test_changed_gitlink_taints_declarations_beneath_it(
+        self, mod, tmp_path
+    ):
+        """A submodule update is reported as its gitlink root
+        (vendor/reviewers), not the files beneath it — a declaration under
+        the changed gitlink is content from the newly selected,
+        PR-controlled submodule commit."""
+        _touch(tmp_path, "vendor/reviewers/foo.md")
+        _write_config(tmp_path, {"review": {
+            "reviewers": [{"id": "x", "ref": "vendor/reviewers/foo.md"}],
+        }})
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["vendor/reviewers"]
+        )
+        assert result["reviewers"] == []
+        assert result["untrusted"][0]["kind"] == "reviewer"
+
+    def test_sibling_prefix_directory_does_not_taint(self, mod, tmp_path):
+        """Ancestor matching is segment-wise: a changed vendor/reviewers
+        entry must not taint vendor/reviewers-other/foo.md."""
+        _touch(tmp_path, "vendor/reviewers-other/foo.md")
+        _write_config(tmp_path, {"review": {
+            "reviewers": [{"id": "x", "ref": "vendor/reviewers-other/foo.md"}],
+        }})
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["vendor/reviewers"]
+        )
+        assert [r["id"] for r in result["reviewers"]] == ["x"]
+        assert result["untrusted"] == []
+
+    def test_changed_gitlink_over_config_excludes_everything(
+        self, mod, tmp_path
+    ):
+        """If .pirategoat itself is a changed gitlink, the config content
+        comes from the new submodule commit — nothing it declares can be
+        trusted."""
+        self._config(tmp_path)
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=[".pirategoat"]
+        )
+        assert result["rules"] == []
+        assert result["reviewers"] == []
+        [entry] = result["untrusted"]
+        assert entry["kind"] == "config"
+        assert any("untrusted until merged" in d for d in result["diagnostics"])
+
     def test_git_quoted_changed_path_still_gates(self, mod, tmp_path):
         """Git C-quotes names with non-ASCII bytes by default
         (core.quotePath), so the changed list may carry the encoded

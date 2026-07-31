@@ -245,7 +245,11 @@ carries the normalized result into `review-context.json` under `review_config`
   `.pirategoat/config.json` itself — is added or modified within the reviewed range
   (PR-controlled text is not repo-owner-approved content). The changed-file match covers
   both spellings of Git-C-quoted names AND each declaration's symlink-resolved target,
-  so neither encoding nor an in-repo symlink can slip PR text past the gate. Exclusions
+  compares canonical identities (casefolded, NFC — case-insensitive/normalization-
+  insensitive filesystems open the same file through either spelling), and treats a
+  changed path as tainting everything beneath it (a submodule update is reported as its
+  gitlink root, not the files inside), so neither encoding, an in-repo symlink, a case
+  variant, nor an updated submodule can slip PR text past the gate. Exclusions
   are hard (never dispatchable, reported under `untrusted` and carried in the plan's
   `warnings` — the only channel the step-5 briefing renders), and an unknown changed-file
   set fails closed. To test an unmerged reviewer deliberately, dispatch the adapter

@@ -141,10 +141,10 @@ def load_review_config(
     # PR-controlled content past the gate.
     changed_keys = {_provenance_key(path) for path in changed}
     repo_real = os.path.realpath(repo_path)
-    if changed_keys & {
-        _provenance_key(p)
-        for p in _provenance_rel_paths(config_relpath, config_path, repo_real)
-    }:
+    if _provenance_tainted(
+        _provenance_rel_paths(config_relpath, config_path, repo_real),
+        changed_keys,
+    ):
         # The declarations themselves are PR-controlled: nothing they
         # declare can be trusted, including entries pointing at untouched
         # files.
@@ -173,7 +173,7 @@ def load_review_config(
         identities = _provenance_rel_paths(
             rel_path, entry.get("resolved_path") or "", repo_real
         )
-        if not ({_provenance_key(i) for i in identities} & changed_keys):
+        if not _provenance_tainted(identities, changed_keys):
             return entry
         result["untrusted"].append(
             {"kind": kind, "id": entry.get("id"), "path": rel_path,
@@ -412,6 +412,23 @@ def _provenance_key(rel_path: str) -> str:
     exclude an entry (fail closed), never widen trust.
     """
     return unicodedata.normalize("NFC", rel_path).casefold()
+
+
+def _provenance_tainted(identities: set, changed_keys: set) -> bool:
+    """Whether any identity spelling is inside the changed set.
+
+    A changed entry taints an identity when it equals the identity OR any
+    of its ancestor directories (segment-wise): Git reports a submodule
+    update as its gitlink root (``vendor/reviewers``), not the files
+    beneath it, so a declaration under a changed gitlink is content from
+    the newly selected — PR-controlled — submodule commit.
+    """
+    for ident in identities:
+        parts = _provenance_key(ident).split("/")
+        for i in range(1, len(parts) + 1):
+            if "/".join(parts[:i]) in changed_keys:
+                return True
+    return False
 
 
 def _path_inside_repo(path: str, repo_path: str) -> bool:
