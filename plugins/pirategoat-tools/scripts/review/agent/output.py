@@ -35,7 +35,7 @@ import uuid
 
 try:
     import fcntl
-except ImportError:  # non-POSIX host — publish without the pair lock
+except ImportError:  # non-POSIX host — publish without the completion-publication lock
     fcntl = None
 from datetime import datetime
 from typing import List, Optional, Dict, Any
