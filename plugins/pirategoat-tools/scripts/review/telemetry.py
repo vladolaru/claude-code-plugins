@@ -25,19 +25,23 @@ from typing import Any, Dict, List, Optional
 
 try:
     from .dispatch_status import (
+        AGENT_NAME_RE,
         DISPATCHED_STATUSES,
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
+    from .agent.output import _VALID_SEVERITIES
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.dispatch_status import (
+        AGENT_NAME_RE,
         DISPATCHED_STATUSES,
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
+    from review.agent.output import _VALID_SEVERITIES
 
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
@@ -76,7 +80,7 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
     "verdict",
     "issue_count",
 )
-_SEVERITY_FIELDS = ("critical", "high", "medium", "low", "info")
+_SEVERITY_FIELDS = _VALID_SEVERITIES
 
 
 def _incomplete_agent_executions(
@@ -727,7 +731,7 @@ class ReviewTelemetry:
 
         return started, completed
 
-    _AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+    _AGENT_NAME_RE = AGENT_NAME_RE
 
     def _inspect_dispatch_plan(self, filename: str) -> dict:
         """Read a plan into safe list and index views with validity metadata."""

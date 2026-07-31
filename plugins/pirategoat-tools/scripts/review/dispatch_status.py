@@ -1,5 +1,13 @@
 """Canonical dispatch-plan status vocabulary shared by producers and consumers."""
 
+import re
+
+# Producer agent-name grammar: lowercase ASCII kebab-case. Agent names become
+# machine identifiers downstream (telemetry manifests, output filenames, shell
+# command tokens, transcript correlation), so every producer and consumer must
+# validate against this one pattern — always via .fullmatch().
+AGENT_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
 DISPATCH = "DISPATCH"
 DISPATCH_OVERRIDE = "DISPATCH_OVERRIDE"
 SKIPPED = "SKIPPED"
@@ -54,6 +62,7 @@ def validate_dispatch_plan_agents(agents: object) -> list[dict]:
 
 
 __all__ = [
+    "AGENT_NAME_RE",
     "DISPATCH",
     "DISPATCH_OVERRIDE",
     "SKIPPED",

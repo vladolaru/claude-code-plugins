@@ -24,8 +24,17 @@ raises to the caller. Invalid entries are dropped and recorded in
 import json
 import os
 import re
+import sys
 import unicodedata
 from typing import Any, Dict, List
+
+try:
+    from .dispatch_status import AGENT_NAME_RE
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.dispatch_status import AGENT_NAME_RE
 
 CONFIG_RELPATH = os.path.join(".pirategoat", "config.json")
 
@@ -285,13 +294,12 @@ def _normalize_reviewer(raw, repo_path, defaults, seen_ids, diagnostics):
 
 
 # IDs become machine identifiers downstream — repo-<id>-reviewer telemetry
-# names, output filenames, shell command tokens — and the whole measurement
-# chain enforces one producer agent-name contract: lowercase ASCII kebab
-# (telemetry._AGENT_NAME_RE, review_metrics contracts._PRODUCER_AGENT_NAME_RE,
-# transcript instance recognition). str.isalnum() would admit uppercase and
-# non-ASCII ids that every one of those consumers rejects, making a validly
+# names, output filenames, shell command tokens — so they must satisfy the
+# canonical producer agent-name grammar (dispatch_status.AGENT_NAME_RE) that
+# the whole measurement chain validates against. str.isalnum() would admit
+# uppercase and non-ASCII ids that every consumer rejects, making a validly
 # configured reviewer unmeasurable. Human-facing names belong in 'label'.
-_VALID_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+_VALID_ID_RE = AGENT_NAME_RE
 
 
 def _valid_id(value, kind, seen_ids, diagnostics):

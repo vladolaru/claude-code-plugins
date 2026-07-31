@@ -70,6 +70,35 @@ def test_metrics_uses_canonical_telemetry_contract():
         contracts._SUPPORTED_DISPATCH_STATUSES
         == dispatch_status.SUPPORTED_DISPATCH_STATUSES
     )
+    assert contracts._SEVERITIES == tuple(telemetry._SEVERITY_FIELDS)
+    assert (
+        contracts._PRODUCER_AGENT_NAME_RE.pattern
+        == dispatch_status.AGENT_NAME_RE.pattern
+    )
+    assert contracts._CRITIC_VERDICTS == frozenset(
+        contracts._CRITIC_CONTRACT.CRITIC_VERDICTS
+    )
+    assert (
+        contracts._AVAILABILITY_FAMILIES
+        == contracts._PIPELINE_FAMILIES + contracts._TRANSCRIPT_FAMILIES
+    )
+
+
+def test_usage_fields_extend_transcript_producer_fields():
+    """The consumer's usage vocabulary is the transcript producer's plus the
+    derived effective_input_tokens — the relationship is encoded nowhere in
+    code (the standalone transcript module cannot import this package), so
+    this guard is what keeps the two field sets from drifting."""
+    spec = importlib.util.spec_from_file_location(
+        "review_transcript_for_usage_fields",
+        PLUGIN_ROOT / "scripts" / "analysis" / "review_transcript.py",
+    )
+    transcript = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(transcript)
+
+    assert set(contracts._USAGE_FIELDS) == set(transcript._USAGE_FIELDS) | {
+        "effective_input_tokens"
+    }
 
 
 def test_warning_allowlist_covers_transcript_emitted_codes():

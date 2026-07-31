@@ -11,6 +11,7 @@ from .contracts import (
     DEFAULT_REGISTRY,
     _AVAILABILITY_FAMILIES,
     _CRITIC_VERDICTS,
+    _TRANSCRIPT_FAMILIES,
     _OBSERVED_READS_SCHEMA_VERSION,
     _USAGE_FIELDS,
     _load_exact_path_module,
@@ -692,37 +693,9 @@ def _transcript_metric_availability(
     transcript: dict[str, Any], *, disabled: bool
 ) -> dict[str, str]:
     if disabled:
-        return {
-            name: "disabled"
-            for name in (
-                "transcript",
-                "usage",
-                "orchestrator_usage",
-                "agent_usage",
-                "model_usage",
-                "tool_failures",
-                "artifact_writes",
-                "scope_comparable_reads",
-                "non_scope_comparable_reads",
-                "observed_reads",
-            )
-        }
+        return {name: "disabled" for name in _TRANSCRIPT_FAMILIES}
     if transcript.get("available") is not True:
-        return {
-            name: "missing"
-            for name in (
-                "transcript",
-                "usage",
-                "orchestrator_usage",
-                "agent_usage",
-                "model_usage",
-                "tool_failures",
-                "artifact_writes",
-                "scope_comparable_reads",
-                "non_scope_comparable_reads",
-                "observed_reads",
-            )
-        }
+        return {name: "missing" for name in _TRANSCRIPT_FAMILIES}
     completeness = transcript.get("completeness")
     completeness = completeness if isinstance(completeness, dict) else {}
 
