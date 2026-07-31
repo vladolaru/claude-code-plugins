@@ -392,7 +392,7 @@ def test_install_cache_failure_banner_is_preserved(mod, tmp_path, monkeypatch):
         def run(self, repo_path):
             return FakeManifest()
 
-    monkeypatch.setattr(mod, "_populate_install_cache", lambda repo_path: {"banner": install_banner})
+    monkeypatch.setattr(mod, "_populate_install_cache", lambda repo_path, scope_paths=None: {"banner": install_banner})
     monkeypatch.setattr(mod, "_HOSTS_CHAIN", FakeChain)
 
     ctx = mod.load_and_fill(

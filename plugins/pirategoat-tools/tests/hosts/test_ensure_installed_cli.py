@@ -17,7 +17,8 @@ from unittest import mock
 
 import pytest
 
-from hosts.ensure_installed import _handle_manager
+from hosts.ensure_installed import _handle_dep_root
+from hosts.install.lockfile import DepRoot
 
 
 SCRIPTS = (Path(__file__).parent.parent.parent / "scripts").resolve()
@@ -125,7 +126,7 @@ def test_missing_install_binary_returns_failed_status(tmp_path, monkeypatch):
 
     with mock.patch("hosts.ensure_installed.subprocess.run",
                     side_effect=FileNotFoundError("composer not found")):
-        result = _handle_manager("composer", str(repo), [])
+        result = _handle_dep_root(DepRoot("composer", "."), str(repo), [])
 
     assert result["status"] == "failed"
     assert result["error_class"] == "install_command_unavailable"
@@ -141,7 +142,7 @@ def test_install_timeout_returns_failed_status(tmp_path, monkeypatch):
 
     with mock.patch("hosts.ensure_installed.subprocess.run",
                     side_effect=subprocess.TimeoutExpired(cmd="composer", timeout=1200)):
-        result = _handle_manager("composer", str(repo), [])
+        result = _handle_dep_root(DepRoot("composer", "."), str(repo), [])
 
     assert result["status"] == "failed"
     assert result["error_class"] == "install_timeout"
@@ -160,7 +161,7 @@ def test_retry_install_exception_returns_failed_status(tmp_path, monkeypatch):
 
     with mock.patch("hosts.ensure_installed.subprocess.run",
                     side_effect=[first, FileNotFoundError("npm not found")]):
-        result = _handle_manager("npm", str(repo), [])
+        result = _handle_dep_root(DepRoot("npm", "."), str(repo), [])
 
     assert result["status"] == "failed"
     assert result["error_class"] == "install_command_unavailable"
@@ -180,8 +181,8 @@ def test_install_overrides_apply_env_to_cache_miss(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with mock.patch("hosts.ensure_installed.subprocess.run", side_effect=fake_run) as run:
-        result = _handle_manager(
-            "npm",
+        result = _handle_dep_root(
+            DepRoot("npm", "."),
             str(repo),
             [],
             env={"NPM_CONFIG_REGISTRY": "https://registry.example.test"},

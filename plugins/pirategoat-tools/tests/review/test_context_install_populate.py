@@ -20,7 +20,7 @@ class TestEnsureInstalledFromContext:
 
         call_order = []
 
-        def fake_populate(repo_path):
+        def fake_populate(repo_path, scope_paths=None):
             call_order.append("populate")
             return {"status": "ok", "managers": []}
 
@@ -43,7 +43,7 @@ class TestEnsureInstalledFromContext:
         """If ensure_installed.py raises, review continues with degraded host_context."""
         from review import context as ctx_mod
 
-        def fake_populate(repo_path):
+        def fake_populate(repo_path, scope_paths=None):
             raise RuntimeError("install failed catastrophically")
 
         monkeypatch.setattr(ctx_mod, "_populate_install_cache", fake_populate)

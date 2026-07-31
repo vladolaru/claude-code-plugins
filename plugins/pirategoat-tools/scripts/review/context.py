@@ -466,7 +466,9 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     repo_root = _resolve_repo_root(repo_path or os.getcwd())
     install_payload = {}
     try:
-        install_payload = _populate_install_cache(repo_root)
+        install_payload = _populate_install_cache(
+            repo_root, ctx.get("git", {}).get("changed_files"),
+        )
     except Exception:  # noqa: BLE001 — review must continue
         pass
 
@@ -549,8 +551,13 @@ def _resolve_author_name(ctx):
         pr["author_name"] = name
 
 
-def _populate_install_cache(repo_path):
+def _populate_install_cache(repo_path, scope_paths=None):
     """Run ensure_installed.py for the repo. Returns parsed payload or empty dict.
+
+    scope_paths are the review's changed files. They let the installer find
+    dependency roots that are not the repo root — WooCommerce's composer.lock
+    lives at plugins/woocommerce/, so without scope a PHP review gets no
+    vendor source at all.
 
     Best-effort: subprocess failure / timeout / unparseable JSON / missing
     script all degrade silently to {}. The caller wraps this in a try/except
@@ -565,9 +572,12 @@ def _populate_install_cache(repo_path):
     script = os.path.join(_scripts_dir, "hosts", "ensure_installed.py")
     if not os.path.isfile(script):
         return {}
+    cmd = [sys.executable, script, "--repo", repo_path]
+    if scope_paths:
+        cmd += ["--scope-json", json.dumps(list(scope_paths))]
     try:
         result = subprocess.run(
-            [sys.executable, script, "--repo", repo_path],
+            cmd,
             capture_output=True, text=True,
             # Matches the inner per-manager timeout in
             # ensure_installed.py:_run_install_command. A pathological install

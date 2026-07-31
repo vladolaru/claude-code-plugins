@@ -36,13 +36,21 @@ def clone_id_for(repo_path: str) -> str:
     return hashlib.sha256(real.encode("utf-8")).hexdigest()[:16]
 
 
-def cache_path_for_clone(clone_id: str, manager: str) -> Path:
-    """Return the per-clone cache slot path for a given manager.
+def clone_root_for(clone_id: str) -> Path:
+    """Return the per-clone directory holding all of that clone's slots."""
+    return _cache_root() / clone_id
 
-    Layout: <_cache_root()>/<clone_id>/<manager>/
+
+def cache_path_for_clone(clone_id: str, manager: str) -> Path:
+    """Return the per-clone cache slot path for a given slot name.
+
+    Layout: <_cache_root()>/<clone_id>/<slot>/
     where _cache_root() resolves to <XDG_CACHE_HOME>/pirategoat/library-deps/.
+
+    The slot is the bare manager name for a repo-root dependency root, or
+    "<manager>@<slug>" for a nested one — see lockfile.slot_name.
     """
-    return _cache_root() / clone_id / manager
+    return clone_root_for(clone_id) / manager
 
 
 def _lockfile_hash_path(clone_id: str, manager: str) -> Path:
