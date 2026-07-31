@@ -97,10 +97,13 @@ def _safe_repo_read_path(value: object) -> str | None:
 def _strict_repo_read_paths(value: object) -> list[str] | None:
     if not isinstance(value, list):
         return None
-    paths = [_safe_repo_read_path(item) for item in value]
-    if any(path is None for path in paths):
-        return None
-    return [path for path in paths if path is not None]
+    paths: list[str] = []
+    for item in value:
+        path = _safe_repo_read_path(item)
+        if path is None:
+            return None
+        paths.append(path)
+    return paths
 
 
 def _safe_scalar_map(value: object, names: Iterable[str]) -> dict[str, Any]:
@@ -278,17 +281,17 @@ def _sanitize_agents(value: object) -> dict[str, Any] | None:
         for name in ("started", "completed", "incomplete")
     ):
         return None
-    started = value.get("started")
-    completed = value.get("completed")
     return {
         "started": [
             event
-            for item in started if (event := _sanitize_agent_event(item, completed=False))
-        ] if isinstance(started, list) else [],
+            for item in value["started"]
+            if (event := _sanitize_agent_event(item, completed=False))
+        ],
         "completed": [
             event
-            for item in completed if (event := _sanitize_agent_event(item, completed=True))
-        ] if isinstance(completed, list) else [],
+            for item in value["completed"]
+            if (event := _sanitize_agent_event(item, completed=True))
+        ],
         "incomplete": _safe_strings(value.get("incomplete")),
     }
 
@@ -923,11 +926,7 @@ def _sanitize_summary(value: object) -> dict[str, Any]:
         count = _nonnegative_int(raw_summary.get(name))
         if count is not None:
             summary[name] = count
-    raw_severities = (
-        raw_summary.get("final_severities")
-        if isinstance(raw_summary, dict)
-        else None
-    )
+    raw_severities = raw_summary.get("final_severities")
     if isinstance(raw_severities, dict):
         summary["final_severities"] = {
             name: count
