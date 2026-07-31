@@ -266,10 +266,11 @@ execution.
 
 ## Output Contract
 
-Each reviewer agent produces two files in `OUTPUT_DIR`:
+Each reviewer agent publishes one file in `OUTPUT_DIR`:
 
-- `<agent-name>.json` — structured findings using `ReviewOutputBuilder` (see `schemas/review-output.ts` for types)
-- `<agent-name>.md` — human-readable Markdown summary
+- `<reviewer>-review.json` — the canonical artifact: structured findings written via `builder.save()` (see `schemas/review-output.ts` for types)
+
+The human-readable `<reviewer>-review.md` is derived from the JSON, not written by reviewers — reconciliation materializes it for humans, and it is renderable on demand via `python3 scripts/review/agent/output.py render|materialize`.
 
 **ReviewOutputBuilder API** (`scripts/review/agent/output.py`):
 

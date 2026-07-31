@@ -1029,9 +1029,9 @@ def build_output(
                 "Before writing output, every NOT DIFFED file must be either "
                 "reviewed or declared — an APPROVE that silently ignores them is "
                 "a protocol violation. Declare each file you could not reach "
-                'with builder.add_unreviewed("<path>") — it renders the '
-                "`**Not reviewed (budget):**` line in your Markdown summary and "
-                "records the gap in the JSON output — and never count a "
+                'with builder.add_unreviewed("<path>") — it records the gap '
+                "in the JSON output (the pipeline-derived Markdown renders it "
+                "as the `**Not reviewed (budget):**` line) — and never count a "
                 "declared-unreviewed file toward your verdict. "
                 "Declaring is for genuine budget exhaustion only: a declaration "
                 "written with most of your budget unspent is a protocol "
@@ -1184,7 +1184,7 @@ def build_output(
     lines.append(f"  actually saved. Copy your COUNTS signal from that echo — NOT from memory of")
     lines.append(f"  what you intended to file. If the echo differs from your intent (e.g. an")
     lines.append(f"  issue you added is missing), investigate and fix BEFORE declaring FINISHED.")
-    lines.append(f"  Do NOT read the output files back to verify — the echo is the confirmation.")
+    lines.append(f"  Do NOT read the output file back to verify — the echo is the confirmation.")
     lines.append("")
     lines.append("Return signal format:")
     lines.append("  STATUS: FINISHED")
