@@ -74,6 +74,30 @@ def test_vendor_dir_is_redirected_outside_the_repo(nested_repo):
     assert not (nested_repo / "plugins" / "woocommerce" / "vendor").exists()
 
 
+def test_bin_dir_is_redirected_outside_the_repo(nested_repo):
+    """config.bin-dir escapes the vendor redirect — COMPOSER_VENDOR_DIR only
+    relocates vendor, so a root that configures bin-dir outside vendor would
+    write binary proxy scripts into the working tree. COMPOSER_BIN_DIR must
+    override it into the cache slot."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        Path(kwargs["env"]["COMPOSER_VENDOR_DIR"]).mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with mock.patch("hosts.ensure_installed.subprocess.run", side_effect=fake_run):
+        _handle_dep_root(
+            DepRoot("composer", "plugins/woocommerce"), str(nested_repo), [],
+        )
+
+    bin_dir = captured["env"].get("COMPOSER_BIN_DIR")
+    assert bin_dir, "COMPOSER_BIN_DIR must be set for in-place composer installs"
+    assert os.path.isabs(bin_dir)
+    assert not bin_dir.startswith(str(nested_repo) + os.sep)
+    assert bin_dir == os.path.join(captured["env"]["COMPOSER_VENDOR_DIR"], "bin")
+
+
 def test_result_carries_the_dep_root_path(nested_repo):
     def fake_run(cmd, **kwargs):
         Path(kwargs["env"]["COMPOSER_VENDOR_DIR"]).mkdir(parents=True, exist_ok=True)

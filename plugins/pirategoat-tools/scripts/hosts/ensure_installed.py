@@ -207,8 +207,13 @@ def _handle_dep_root(
             install_env = _build_subprocess_env({
                 **(env or {}),
                 # Absolute, and outside the repo — this is what keeps the
-                # working tree untouched.
+                # working tree untouched. bin-dir must be redirected
+                # separately: it defaults to {vendor-dir}/bin, but a
+                # composer.json that sets config.bin-dir explicitly escapes
+                # the vendor redirect and would write binary proxies into
+                # the repo.
                 "COMPOSER_VENDOR_DIR": os.path.join(str(staging_path), "vendor"),
+                "COMPOSER_BIN_DIR": os.path.join(str(staging_path), "vendor", "bin"),
             })
         else:
             workdir = str(staging_path)
