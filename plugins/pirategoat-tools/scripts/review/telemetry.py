@@ -340,6 +340,7 @@ class ReviewTelemetry:
         if first_ts:
             total_ms = int((now - first_ts).total_seconds() * 1000)
 
+        extracts = self._output_extracts()
         event = {
             "event": "pipeline_end",
             "timestamp": now.isoformat(),
@@ -351,8 +352,8 @@ class ReviewTelemetry:
                 "bot_mode": bot_mode,
                 "thoughts_length": thoughts_length,
             },
-            "snapshot": self._snapshot(),
-            "summary": self._build_summary(total_ms),
+            "snapshot": self._snapshot(extracts),
+            "summary": self._build_summary(total_ms, extracts),
         }
         self._append(event)
         self._materialize_manifest("complete")
@@ -662,14 +663,9 @@ class ReviewTelemetry:
 
     def _pipeline_repo_path(self) -> str:
         """Read the repository root recorded by the pipeline start event."""
-        start = next(
-            (
-                event
-                for event in self._read_events()
-                if event.get("event") == "pipeline_start"
-            ),
-            {},
-        )
+        start = self._read_first_event()
+        if start is None or start.get("event") != "pipeline_start":
+            return ""
         pipeline = start.get("pipeline", {})
         if not isinstance(pipeline, dict):
             return ""
@@ -844,10 +840,9 @@ class ReviewTelemetry:
         reason = self._safe_dispatch_string(agent.get("reason"))
         return [reason] if reason else []
 
-    def _build_dispatch_manifest(self) -> dict:
+    def _build_dispatch_manifest(self, final_info: dict) -> dict:
         """Compare the deterministic plan with main-orchestrator adjustments."""
         initial_info = self._inspect_dispatch_plan("dispatch-plan.initial.json")
-        final_info = self._inspect_dispatch_plan("dispatch-plan.json")
 
         initial_available = initial_info["available"]
         final_available = final_info["available"]
@@ -1002,7 +997,11 @@ class ReviewTelemetry:
         return result
 
     def _build_coverage_manifest(
-        self, events: List[dict], context: Optional[dict], repo_path: str
+        self,
+        events: List[dict],
+        context: Optional[dict],
+        repo_path: str,
+        final_info: dict,
     ) -> Optional[dict]:
         """Build descriptive generated-scope coverage from durable inputs."""
         try:
@@ -1017,7 +1016,6 @@ class ReviewTelemetry:
                 strict=True,
             )
 
-            final_info = self._inspect_dispatch_plan("dispatch-plan.json")
             if not final_info["available"] or final_info["duplicates"]:
                 return None
             reviewable = self._normalize_repo_paths(
@@ -1179,8 +1177,11 @@ class ReviewTelemetry:
                 "transcript": False,
             },
         }
-        manifest["dispatch"] = self._build_dispatch_manifest()
-        coverage = self._build_coverage_manifest(events, context, repo_path)
+        final_info = self._inspect_dispatch_plan("dispatch-plan.json")
+        manifest["dispatch"] = self._build_dispatch_manifest(final_info)
+        coverage = self._build_coverage_manifest(
+            events, context, repo_path, final_info
+        )
         manifest["coverage"] = coverage
         manifest["availability"]["coverage"] = coverage is not None
         return manifest
@@ -1213,25 +1214,44 @@ class ReviewTelemetry:
                 except OSError:
                     pass
 
+    def _read_first_event(self) -> Optional[dict]:
+        """Read the immutable first JSONL event (the pipeline_start line).
+
+        Cached per instance after the first successful read — start() writes
+        the line once and it never changes, so every consumer (event identity,
+        quick mode, repo path) shares one file read instead of scanning the
+        growing log.
+        """
+        cached = getattr(self, "_first_event", None)
+        if cached is not None:
+            return cached
+        if not self.log_path or not os.path.isfile(self.log_path):
+            return None
+        try:
+            with open(self.log_path) as f:
+                first_line = f.readline().strip()
+            if not first_line:
+                return None
+            event = json.loads(first_line)
+        except (json.JSONDecodeError, OSError, TypeError):
+            return None
+        if not isinstance(event, dict):
+            return None
+        self._first_event = event
+        return event
+
     def _read_event_identity(self) -> tuple[int, str]:
         """Read durable event identity from memory or the pipeline_start event."""
         run_id = getattr(self, "_run_id", "")
         if run_id:
             return EVENT_SCHEMA_VERSION, run_id
 
-        if self.log_path and os.path.isfile(self.log_path):
-            try:
-                with open(self.log_path) as f:
-                    first_line = f.readline().strip()
-                if first_line:
-                    start = json.loads(first_line)
-                    return (
-                        start.get("schema_version", EVENT_SCHEMA_VERSION),
-                        start.get("run_id", ""),
-                    )
-            except (json.JSONDecodeError, OSError, TypeError):
-                pass
-
+        start = self._read_first_event()
+        if start is not None:
+            return (
+                start.get("schema_version", EVENT_SCHEMA_VERSION),
+                start.get("run_id", ""),
+            )
         return EVENT_SCHEMA_VERSION, ""
 
     def _duration_since_prev(self, now: datetime) -> Optional[int]:
@@ -1246,14 +1266,17 @@ class ReviewTelemetry:
         if not self._log_path or not os.path.isfile(self._log_path):
             return None
         try:
+            line = ""
             with open(self._log_path) as f:
-                lines = f.readlines()
-            if not lines:
-                return None
-            line = lines[line_index].strip()
+                if line_index == 0:
+                    line = f.readline().strip()
+                else:
+                    for raw in f:
+                        if raw.strip():
+                            line = raw.strip()
             if line:
                 return datetime.fromisoformat(json.loads(line)["timestamp"])
-        except (json.JSONDecodeError, KeyError, ValueError, IndexError):
+        except (json.JSONDecodeError, KeyError, ValueError, OSError):
             pass
         return None
 
@@ -1264,38 +1287,39 @@ class ReviewTelemetry:
         cross-process case where start() and finalize() run in different
         invocations of the pipeline script.
         """
-        if self.log_path and os.path.isfile(self.log_path):
-            try:
-                with open(self.log_path) as f:
-                    first_line = f.readline().strip()
-                if first_line:
-                    event = json.loads(first_line)
-                    if event.get("event") == "pipeline_start":
-                        return event.get("pipeline", {}).get("quick_mode", False)
-            except (json.JSONDecodeError, KeyError, OSError):
-                pass
+        event = self._read_first_event()
+        if event is not None and event.get("event") == "pipeline_start":
+            pipeline = event.get("pipeline", {})
+            if isinstance(pipeline, dict):
+                return pipeline.get("quick_mode", False)
         return getattr(self, "_quick_mode", False)
 
-    def _snapshot(self) -> dict:
+    def _output_extracts(self) -> dict:
+        """Extract every output-file summary once for shared consumption."""
+        return {
+            "context": self._extract_context(),
+            "dispatch": self._extract_dispatch(),
+            "agents": self._extract_agent_results(),
+            "findings": self._extract_findings(),
+        }
+
+    def _snapshot(self, extracts: Optional[dict] = None) -> dict:
         """Build a snapshot of the output directory state."""
+        extracts = extracts if extracts is not None else self._output_extracts()
         snap: Dict[str, Any] = {}
         snap["files"] = self._list_files()
 
-        context = self._extract_context()
-        if context:
-            snap["context"] = context
+        if extracts["context"]:
+            snap["context"] = extracts["context"]
 
-        dispatch = self._extract_dispatch()
-        if dispatch:
-            snap["dispatch"] = dispatch
+        if extracts["dispatch"]:
+            snap["dispatch"] = extracts["dispatch"]
 
-        agents = self._extract_agent_results()
-        if agents:
-            snap["agent_results"] = agents
+        if extracts["agents"]:
+            snap["agent_results"] = extracts["agents"]
 
-        findings = self._extract_findings()
-        if findings:
-            snap["findings"] = findings
+        if extracts["findings"]:
+            snap["findings"] = extracts["findings"]
 
         return snap
 
@@ -1426,18 +1450,23 @@ class ReviewTelemetry:
         except (json.JSONDecodeError, KeyError):
             return None
 
-    def _build_summary(self, total_duration_ms: Optional[int]) -> dict:
+    def _build_summary(
+        self,
+        total_duration_ms: Optional[int],
+        extracts: Optional[dict] = None,
+    ) -> dict:
         """Build pipeline summary from all available data."""
+        extracts = extracts if extracts is not None else self._output_extracts()
         summary: Dict[str, Any] = {"total_duration_ms": total_duration_ms}
         summary["quick_mode"] = self._read_quick_mode()
 
-        context = self._extract_context()
+        context = extracts["context"]
         if context:
             summary["pr_size_category"] = context.get("pr_size", {}).get("category")
             summary["changed_files_count"] = context.get("changed_files_count")
             summary["commit_count"] = context.get("commit_count")
 
-        dispatch = self._extract_dispatch()
+        dispatch = extracts["dispatch"]
         if dispatch:
             summary["agents_total"] = dispatch["total_agents"]
             by_status = dispatch.get("by_status", {})
@@ -1448,14 +1477,14 @@ class ReviewTelemetry:
                 len(v) for k, v in by_status.items() if k in SKIPPED_STATUSES
             )
 
-        agents = self._extract_agent_results()
+        agents = extracts["agents"]
         if agents:
             summary["agents_completed"] = len(agents)
             summary["total_agent_issues"] = sum(
                 a.get("issue_count", 0) for a in agents.values() if "error" not in a
             )
 
-        findings = self._extract_findings()
+        findings = extracts["findings"]
         if findings:
             summary["final_verdict"] = findings.get("verdict")
             summary["final_issues"] = findings.get("total_issues")
