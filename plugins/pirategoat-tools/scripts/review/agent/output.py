@@ -17,7 +17,13 @@ Usage:
         recommendation="..."
     )
     json_output = builder.to_json()
-    markdown_output = builder.to_markdown()
+    builder.save(output_dir)  # persists the canonical JSON artifact
+
+    Markdown is derived from the canonical JSON: render one dict with
+    render_markdown(data), or from the shell via the CLI —
+    `python3 output.py render <path>-review.json` prints one review's
+    Markdown, `python3 output.py materialize <output_dir>` writes
+    <reviewer>-review.md beside every *-review.json.
 """
 
 import contextlib
@@ -170,6 +176,33 @@ def render_markdown(data: Dict) -> str:
             md.append(f"- **`{obs['file']}`** — {obs['note']}\n")
 
     return ''.join(md)
+
+
+def materialize_markdown(output_dir: str) -> List[str]:
+    """Render <reviewer>-review.md beside every *-review.json in output_dir.
+
+    Derived artifacts for humans browsing the output directory: idempotent,
+    regenerated from the settled canonical JSON, read by no pipeline
+    consumer (readiness, reconciliation, and the bot all key on the JSON).
+    Malformed JSONs are skipped — grading and reconciliation report those
+    failures on their own channels.
+    """
+    written: List[str] = []
+    for name in sorted(os.listdir(output_dir)):
+        if not name.endswith("-review.json"):
+            continue
+        json_path = os.path.join(output_dir, name)
+        try:
+            with open(json_path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            md_text = render_markdown(data)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+        md_path = json_path[: -len(".json")] + ".md"
+        with open(md_path, "w", encoding="utf-8") as handle:
+            handle.write(md_text)
+        written.append(md_path)
+    return written
 
 
 class ReviewOutputBuilder:
@@ -652,25 +685,26 @@ class ReviewOutputBuilder:
 
         return {'json': json_path, 'markdown': md_path}
 
-# Test
 if __name__ == '__main__':
-    builder = ReviewOutputBuilder(pr_id="123", reviewer="security")
+    import argparse
 
-    builder.add_issue(
-        severity="critical",
-        title="SQL Injection",
-        file="src/User.php",
-        line=42,
-        description="Direct $_GET input in query",
-        recommendation="Use $wpdb->prepare()",
-        category="security",
-        vulnerability_type="sql_injection"
+    parser = argparse.ArgumentParser(
+        description="Render reviewer Markdown from canonical review JSON.",
     )
-
-    builder.set_files_reviewed(1)
-
-    print("=== JSON ===")
-    print(builder.to_json())
-
-    print("\n=== MARKDOWN ===")
-    print(builder.to_markdown())
+    sub = parser.add_subparsers(dest="command", required=True)
+    render_cmd = sub.add_parser(
+        "render", help="Print the Markdown for one *-review.json",
+    )
+    render_cmd.add_argument("json_path")
+    mat_cmd = sub.add_parser(
+        "materialize",
+        help="Write <reviewer>-review.md beside every *-review.json in a directory",
+    )
+    mat_cmd.add_argument("output_dir")
+    cli_args = parser.parse_args()
+    if cli_args.command == "render":
+        with open(cli_args.json_path, encoding="utf-8") as cli_handle:
+            print(render_markdown(json.load(cli_handle)))
+    else:
+        for written_path in materialize_markdown(cli_args.output_dir):
+            print(written_path)

@@ -10,6 +10,7 @@ Zero external dependencies beyond stdlib + pytest.
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -24,7 +25,11 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review.agent.output import ReviewOutputBuilder, render_markdown
+from review.agent.output import (
+    ReviewOutputBuilder,
+    materialize_markdown,
+    render_markdown,
+)
 
 
 # =============================================================================
@@ -567,6 +572,61 @@ class TestRenderMarkdown:
         rendered = render_markdown(data)
         assert "**File:** `f.py`\n" in rendered
         assert "(file-scoped)" not in rendered
+
+
+# =============================================================================
+# TestMaterializeMarkdown
+# =============================================================================
+
+
+class TestMaterializeMarkdown:
+    def test_writes_md_beside_every_review_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            for reviewer in ("security", "performance"):
+                b = ReviewOutputBuilder(pr_id="1", reviewer=reviewer)
+                b.add_issue("high", "T", "f.py", "d", "r", line=1)
+                b.save(d)
+            written = materialize_markdown(d)
+            assert sorted(os.path.basename(p) for p in written) == [
+                "performance-review.md", "security-review.md",
+            ]
+            with open(os.path.join(d, "security-review.json")) as f:
+                data = json.load(f)
+            md_text = Path(d, "security-review.md").read_text()
+            assert md_text == render_markdown(data)
+
+    def test_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.save(d)
+            first = materialize_markdown(d)
+            second = materialize_markdown(d)
+            assert first == second
+            assert Path(d, "security-review.md").is_file()
+
+    def test_skips_malformed_json_without_raising(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "broken-review.json").write_text("{ not json")
+            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            written = materialize_markdown(d)
+            assert [os.path.basename(p) for p in written] == ["security-review.md"]
+            assert not Path(d, "broken-review.md").exists()
+
+    def test_render_cli_prints_markdown(self):
+        output_py = Path(__file__).parents[3] / "scripts" / "review" / "agent" / "output.py"
+        assert output_py.is_file(), output_py  # layout guard: tests/review/agent -> plugin root
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+            b.add_issue("high", "CLI Title", "f.py", "d", "r", line=1)
+            b.save(d)
+            result = subprocess.run(
+                [sys.executable, str(output_py), "render",
+                 os.path.join(d, "security-review.json")],
+                capture_output=True, text=True,
+            )
+            assert result.returncode == 0, result.stderr
+            assert "CLI Title" in result.stdout
+            assert "## Executive Summary" in result.stdout
 
 
 # =============================================================================
