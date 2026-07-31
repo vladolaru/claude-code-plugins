@@ -9,6 +9,7 @@ of the library can't reach (see TESTING.md §"subprocess only for
 orchestration").
 """
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -20,6 +21,16 @@ EVAL_SCRIPT = TESTS_DIR / "grading" / "eval_agent_compliance.py"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 from review.agent.output import ReviewOutputBuilder
+
+# The runner is mostly exercised as a subprocess (see _run_eval), but
+# run_grade_only is also called directly to inspect its GradeResults.
+# Load it the same way the runner itself loads bootstrap: by exact path.
+_eval_spec = importlib.util.spec_from_file_location(
+    "_eval_agent_compliance_under_test", str(EVAL_SCRIPT),
+)
+_eval_mod = importlib.util.module_from_spec(_eval_spec)
+_eval_spec.loader.exec_module(_eval_mod)
+run_grade_only = _eval_mod.run_grade_only
 
 
 def _write_review_pair(output_dir: Path, reviewer: str = "security") -> None:
@@ -78,6 +89,26 @@ class TestGradeOnlyMode:
 
         assert "Traceback" not in result.stderr, result.stderr
         assert "security" in result.stdout
+
+    def test_grade_only_materializes_missing_markdown(self, tmp_path):
+        """Output dirs from fresh runs hold only the JSON — save() publishes the
+        canonical JSON and Markdown is derived. Grading renders the missing
+        Markdown from the JSON before grading the pair instead of failing the
+        md grader on absence."""
+        _write_review_pair(tmp_path)
+        assert not (tmp_path / "security-review.md").is_file()  # save() = JSON only
+
+        results = run_grade_only(str(tmp_path))
+        assert "security" in results
+        # md grade passed: the pair result flattens json + md checks, so no
+        # failure may mention the md file — and the rendered md must itself
+        # pass the markdown grader (same grader grade_output_pair delegates to).
+        result = results["security"]
+        assert result.passed, result.failures
+        assert not any("security-review.md" in failure for failure in result.failures)
+        md_grade = _eval_mod.grade_review_markdown(str(tmp_path / "security-review.md"))
+        assert md_grade.passed, md_grade.failures
+        assert (tmp_path / "security-review.md").is_file()
 
     def test_missing_directory_is_reported_not_crashed(self, tmp_path):
         result = _run_eval("--grade-only", str(tmp_path / "does-not-exist"), cwd=tmp_path)

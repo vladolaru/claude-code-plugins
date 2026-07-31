@@ -24,6 +24,7 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
+OUTPUT_MODULE = SCRIPTS_DIR / "review" / "agent" / "output.py"
 FIXTURES_DIR = TESTS_DIR / "fixtures"
 
 sys.path.insert(0, str(TESTS_DIR))
@@ -147,6 +148,17 @@ SCENARIOS = {
 # =============================================================================
 
 
+def _materialize_missing_markdown(output_dir: str) -> None:
+    """Render md for any *-review.json lacking one — save() publishes the
+    JSON only; Markdown is a derived artifact (see review/agent/output.py)."""
+    spec = importlib.util.spec_from_file_location(
+        "_pirategoat_review_output", str(OUTPUT_MODULE),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.materialize_markdown(output_dir)
+
+
 def run_grade_only(output_dir: str) -> dict:
     """Scan output dir for review files and grade them."""
     results = {}
@@ -154,6 +166,8 @@ def run_grade_only(output_dir: str) -> dict:
     if not os.path.isdir(output_dir):
         print(f"ERROR: Directory does not exist: {output_dir}")
         return results
+
+    _materialize_missing_markdown(output_dir)
 
     # Find all *-review.json files
     for filename in sorted(os.listdir(output_dir)):

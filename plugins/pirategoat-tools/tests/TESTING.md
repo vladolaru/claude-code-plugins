@@ -148,7 +148,7 @@ class GradeResult:
 | Function | Input | Checks |
 |---|---|---|
 | `grade_review_json(path)` | Path to `{reviewer}-review.json` | File exists, valid JSON, required fields (`pr_id`, `reviewer`, `verdict`, `summary`, `issues`, `meta`), valid severities, valid verdict, issue schema, summary structure |
-| `grade_review_markdown(path)` | Path to `{reviewer}-review.md` | File exists, `# ... Review` header, `## Executive Summary`, `**Verdict:**` |
+| `grade_review_markdown(path)` | Path to `{reviewer}-review.md` | File exists, `# ... Review` header, `## Executive Summary`, `**Verdict:**` — rendered from the JSON when absent |
 | `grade_signal_format(text)` | Return signal text | `STATUS: FINISHED`, `OUTPUT_FILES:`, `COUNTS:`, `VERDICT:`, `SUMMARY:` |
 | `grade_no_domain_files(text)` | Agent output for no-code scenario | APPROVE verdict, zero findings |
 | `grade_error_exit(text)` | Agent output for error scenario | Error indication, no STATUS: FINISHED |
@@ -159,7 +159,7 @@ class GradeResult:
 
 Offline grading tool for review output files — not part of the pytest suite.
 
-- **`--grade-only /path/to/output`** — Scans an existing output directory for `*-review.json` and `*-review.md` files, grades each pair. Fast, no model calls. Use after a real review run to validate agent output format.
+- **`--grade-only /path/to/output`** — Scans an existing output directory for `*-review.json` files and grades each json/md pair, materializing the Markdown from each JSON first (`save()` publishes the JSON only; Markdown is a derived artifact). Fast, no model calls. Use after a real review run to validate agent output format.
 
 ## Design Principles
 
