@@ -10,6 +10,10 @@ yarn.lock), runs the install in a per-clone cache slot under
 tree is never modified. Reviewers consume the cache via the host_context
 section's library-dep entries.
 
+Because the install runs outside the repo, every input it reads is staged
+into the cache slot first — manifest, lockfile, manager config, patch files
+and workspace member manifests. See hosts/install/staging.py.
+
 Emits a JSON status payload on stdout. Never exits non-zero for install
 failures — emits banners instead. Only exits non-zero on programmer error
 (bad args, unreachable state).
@@ -18,7 +22,6 @@ failures — emits banners instead. Only exits non-zero on programmer error
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +41,7 @@ from hosts.install.overrides import parse_overrides
 from hosts.install.runner import (
     apply_retry_args, build_install_command, classify_error, should_retry,
 )
+from hosts.install.staging import stage_inputs
 
 
 class _InstallFailed(Exception):
@@ -144,7 +148,7 @@ def _handle_manager(
     failure_holder: Dict[str, Any] = {}
 
     def install_fn(staging_path):
-        _stage_manifests(manager, repo_path, str(staging_path))
+        stage_inputs(manager, repo_path, str(staging_path))
         completed, failure = _run_install_command(
             manager, str(staging_path), base_args, install_env
         )
@@ -222,20 +226,6 @@ def _build_subprocess_env(overrides: Dict[str, str]) -> Dict[str, str]:
     merged = dict(os.environ)
     merged.update({key: str(value) for key, value in overrides.items()})
     return merged
-
-
-def _stage_manifests(manager: str, repo_path: str, cache_dir: str) -> None:
-    """Copy lockfile + manifest into cache_dir so install runs there."""
-    files = {
-        "composer": ["composer.json", "composer.lock"],
-        "npm": ["package.json", "package-lock.json"],
-        "pnpm": ["package.json", "pnpm-lock.yaml"],
-        "yarn": ["package.json", "yarn.lock"],
-    }[manager]
-    for fname in files:
-        src = os.path.join(repo_path, fname)
-        if os.path.isfile(src):
-            shutil.copy2(src, os.path.join(cache_dir, fname))
 
 
 if __name__ == "__main__":
