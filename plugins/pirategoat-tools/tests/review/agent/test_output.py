@@ -643,8 +643,7 @@ class TestMaterializeMarkdown:
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.save(d)
             md_path = Path(d, "security-review.md")
-            if md_path.exists():
-                md_path.unlink()  # save() may or may not write md at this plan stage
+            assert not md_path.exists()  # save() publishes the JSON only
             result = subprocess.run(
                 [sys.executable, str(output_py), "materialize", d],
                 capture_output=True, text=True,
