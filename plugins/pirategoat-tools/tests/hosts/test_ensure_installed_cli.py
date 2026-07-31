@@ -307,6 +307,58 @@ class TestPayloadShape:
         rc2, payload2 = _run_main(["--repo", str(repo)])
         assert payload2["managers"][0]["action"] == "replaced"
 
+    def test_capped_roots_raise_the_degradation_banner(
+        self, tmp_path, fake_run, monkeypatch,
+    ):
+        """Review context preserves install detail only when a banner exists,
+        so a silently capped root would read as full coverage to reviewers."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        repo = tmp_path / "many"
+        scope_args = []
+        for index in range(6):
+            root = repo / f"pkg{index}"
+            root.mkdir(parents=True)
+            (root / "composer.json").write_text("{}")
+            (root / "composer.lock").write_text("{}")
+            scope_args += ["--scope-path", f"pkg{index}/src/File.php"]
+
+        rc, payload = _run_main(["--repo", str(repo), *scope_args])
+
+        assert rc == 0
+        dropped = payload["dropped_dep_roots"]
+        assert len(dropped) == 2
+        banner = payload["banner"]
+        assert banner["degraded"] is True
+        assert banner["reason"] == "dep_roots_capped"
+        assert "were not installed" in banner["message"]
+        dropped_names = {f"{d['manager']} ({d['path']})" for d in dropped}
+        capped = [u for u in banner["unresolved"]
+                  if u["reason"] == "dep_roots_capped"]
+        assert {u["name"] for u in capped} == dropped_names
+
+    def test_failed_and_capped_roots_share_one_banner(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        repo = tmp_path / "many"
+        scope_args = []
+        for index in range(6):
+            root = repo / f"pkg{index}"
+            root.mkdir(parents=True)
+            (root / "composer.json").write_text("{}")
+            (root / "composer.lock").write_text("{}")
+            scope_args += ["--scope-path", f"pkg{index}/src/File.php"]
+
+        with mock.patch("hosts.ensure_installed.subprocess.run",
+                        side_effect=FileNotFoundError("composer not found")):
+            rc, payload = _run_main(["--repo", str(repo), *scope_args])
+
+        banner = payload["banner"]
+        assert banner["reason"] == "install_failed"
+        reasons = {u["reason"] for u in banner["unresolved"]}
+        assert "dep_roots_capped" in reasons
+        assert "install_command_unavailable" in reasons
+
     def test_run_records_the_selected_slots_for_the_resolver(
         self, composer_repo, fake_run,
     ):

@@ -145,25 +145,47 @@ def main(argv=None) -> int:
             extra_args=extra_args, env=overrides.env,
         ))
 
-    # Never narrow coverage silently — a dropped root means a reviewer is
-    # missing dependency source they have no way to know about.
     if dropped:
         payload["dropped_dep_roots"] = [
             {"manager": root.manager, "path": root.rel_path} for root in dropped
         ]
 
-    # Banner if anything failed
+    # Banner if coverage degraded. Failed installs and capped (dropped)
+    # roots both mean dependency source a reviewer expects is absent, and
+    # review context preserves install detail only when a banner exists —
+    # a payload field alone never reaches the reviewer, so a silent cap
+    # would read as full coverage.
     failed = [m for m in payload["managers"] if m["status"] == "failed"]
+    messages: List[str] = []
+    unresolved: List[Dict[str, Any]] = []
     if failed:
+        messages.append(
+            "install failed for " + ", ".join(_describe(m) for m in failed)
+        )
+        unresolved.extend(
+            {"name": _describe(m), "reason": m.get("error_class", "unknown")}
+            for m in failed
+        )
+    if dropped:
+        dropped_names = ", ".join(
+            f"{root.manager} ({root.rel_path})" for root in dropped
+        )
+        messages.append(
+            f"{len(dropped)} dependency root(s) over the per-manager cap "
+            f"were not installed: {dropped_names}"
+        )
+        unresolved.extend(
+            {"name": f"{root.manager} ({root.rel_path})",
+             "reason": "dep_roots_capped"}
+            for root in dropped
+        )
+    if messages:
         payload["banner"] = {
             "degraded": True,
-            "reason": "install_failed",
-            "message": "library-dep verification degraded: install failed for "
-                       + ", ".join(_describe(m) for m in failed),
-            "unresolved": [
-                {"name": _describe(m), "reason": m.get("error_class", "unknown")}
-                for m in failed
-            ],
+            "reason": "install_failed" if failed else "dep_roots_capped",
+            "message": "library-dep verification degraded: "
+                       + "; ".join(messages),
+            "unresolved": unresolved,
         }
 
     print(json.dumps(payload, indent=2))

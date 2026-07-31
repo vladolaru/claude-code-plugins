@@ -10,7 +10,10 @@ ResolverSource = Literal[
     "ecosystem-cache", "vendor-inspection", "install-cache",
 ]
 Confidence = Literal["low", "medium", "high"]
-BannerReason = Literal["partial_unresolved", "fully_unavailable", "install_failed"]
+BannerReason = Literal[
+    "partial_unresolved", "fully_unavailable", "install_failed",
+    "dep_roots_capped",
+]
 
 
 @dataclass
