@@ -24,7 +24,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review.agent.output import ReviewOutputBuilder
+from review.agent.output import ReviewOutputBuilder, render_markdown
 
 
 # =============================================================================
@@ -515,6 +515,58 @@ class TestToMarkdown:
         assert "## Info Issues" in md
         assert "File-scoped info finding" in md
         assert "`a.py` (file-scoped)" in md
+
+
+# =============================================================================
+# TestRenderMarkdown
+# =============================================================================
+
+
+class TestRenderMarkdown:
+    """Markdown is a pure function of the canonical JSON dict."""
+
+    @staticmethod
+    def _rich_builder():
+        b = ReviewOutputBuilder(pr_id="7", reviewer="security")
+        b.add_issue("high", "Title A", "a.py", "desc", "rec", line=3)
+        b.add_issue("info", "Note B", "b.py", "desc", "rec", line=None)
+        b.add_observation("c.py", "an observation")
+        b.add_positive("something good")
+        b.add_clearance(claim="no X remains", method="grep -rn X", evidence="0 hits")
+        b.add_unreviewed("z.py")
+        b.set_files_reviewed(3)
+        return b
+
+    def test_matches_builder_to_markdown(self):
+        b = self._rich_builder()
+        assert render_markdown(b.to_dict()) == b.to_markdown()
+
+    def test_round_trips_through_serialized_json(self):
+        """Rendering from the FILE representation — what materialization
+        does — must equal rendering from the live builder."""
+        b = self._rich_builder()
+        assert render_markdown(json.loads(b.to_json())) == b.to_markdown()
+
+    def test_legacy_issue_shape_renders_plain_file_location(self):
+        """*-review.json files from builder versions predating the `scope`
+        field carry line=null with no scope key — the renderer must fall
+        back to the plain file location, not crash or mislabel."""
+        data = self._rich_builder().to_dict()
+        data["issues"] = [{
+            "severity": "high",
+            "title": "Legacy issue",
+            "file": "f.py",
+            "line": None,
+            "description": "d",
+            "recommendation": "r",
+        }]
+        data["summary"] = {
+            "total_issues": 1,
+            "by_severity": {"critical": 0, "high": 1, "medium": 0, "low": 0, "info": 0},
+        }
+        rendered = render_markdown(data)
+        assert "**File:** `f.py`\n" in rendered
+        assert "(file-scoped)" not in rendered
 
 
 # =============================================================================

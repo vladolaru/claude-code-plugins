@@ -96,6 +96,82 @@ def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, se
         pass
 
 
+def render_markdown(data: Dict) -> str:
+    """Human-readable Markdown rendered from a review's canonical dict.
+
+    A pure function of the JSON representation — the same dict
+    to_dict()/to_json() produce and the *-review.json file holds — so a
+    rendering can never disagree with the artifact it came from.
+
+    Keys emitted since schema v1.0.0 are required (missing means KeyError —
+    the caller's problem); later schema additions are read with .get() and
+    render only when present.
+    """
+    md = []
+
+    md.append(f"# {data['reviewer'].title()} Review - PR #{data['pr_id']}\n\n")
+    md.append("## Executive Summary\n\n")
+    md.append(f"**Verdict:** {data['verdict'].upper()}\n")
+    md.append(f"**Total Issues:** {data['summary']['total_issues']}\n\n")
+
+    if data['summary']['total_issues'] > 0:
+        counts = data['summary']['by_severity']
+        md.append(f"- Critical: {counts['critical']}\n")
+        md.append(f"- High: {counts['high']}\n")
+        md.append(f"- Medium: {counts['medium']}\n\n")
+
+    # Declared coverage gap — in-scope files unreached at budget exhaustion
+    if data.get('unreviewed'):
+        files = ", ".join(f"`{f}`" for f in data['unreviewed'])
+        md.append(f"**Not reviewed (budget):** {files}\n\n")
+
+    # Issues — every severity that counts toward total_issues must render,
+    # or the Markdown claims findings it doesn't show.
+    for sev in ['critical', 'high', 'medium', 'low', 'info']:
+        sev_issues = [i for i in data['issues'] if i['severity'] == sev]
+
+        if sev_issues:
+            md.append(f"## {sev.title()} Issues\n\n")
+
+            for issue in sev_issues:
+                md.append(f"### {issue['title']}\n\n")
+                if issue['line']:
+                    location = f"**File:** `{issue['file']}` line {issue['line']}"
+                elif issue.get('scope') == 'file':
+                    location = f"**File:** `{issue['file']}` (file-scoped)"
+                else:
+                    location = f"**File:** `{issue['file']}`"
+                md.append(location + "\n\n")
+                md.append(f"{issue['description']}\n\n")
+                if issue.get('severity_floor'):
+                    md.append(f"**Severity floor:** {issue['severity_floor']}\n\n")
+                md.append(f"**Fix:** {issue['recommendation']}\n\n")
+
+    # Clearances — absence claims with their verification method
+    if data.get('clearances'):
+        md.append("## Clearances (verified absences)\n\n")
+        for c in data['clearances']:
+            md.append(f"- **{c['claim']}**\n")
+            md.append(f"  - Method: {c['method']}\n")
+            if c.get('evidence'):
+                md.append(f"  - Evidence: {c['evidence']}\n")
+        md.append("\n")
+
+    # Positive
+    if data['positive_observations']:
+        md.append("## Positive Observations\n\n")
+        for obs in data['positive_observations']:
+            md.append(f"- {obs}\n")
+
+    # Observations
+    if data.get('observations'):
+        md.append("\n## Observations\n\n")
+        for obs in data['observations']:
+            md.append(f"- **`{obs['file']}`** — {obs['note']}\n")
+
+    return ''.join(md)
+
+
 class ReviewOutputBuilder:
     """Simple builder for structured review outputs."""
 
@@ -475,70 +551,7 @@ class ReviewOutputBuilder:
 
     def to_markdown(self) -> str:
         """Generate human-readable markdown."""
-        data = self.to_dict()
-        md = []
-
-        md.append(f"# {self.reviewer.title()} Review - PR #{self.pr_id}\n\n")
-        md.append("## Executive Summary\n\n")
-        md.append(f"**Verdict:** {data['verdict'].upper()}\n")
-        md.append(f"**Total Issues:** {data['summary']['total_issues']}\n\n")
-
-        if data['summary']['total_issues'] > 0:
-            counts = data['summary']['by_severity']
-            md.append(f"- Critical: {counts['critical']}\n")
-            md.append(f"- High: {counts['high']}\n")
-            md.append(f"- Medium: {counts['medium']}\n\n")
-
-        # Declared coverage gap — in-scope files unreached at budget exhaustion
-        if data.get('unreviewed'):
-            files = ", ".join(f"`{f}`" for f in data['unreviewed'])
-            md.append(f"**Not reviewed (budget):** {files}\n\n")
-
-        # Issues — every severity that counts toward total_issues must render,
-        # or the Markdown claims findings it doesn't show.
-        for sev in ['critical', 'high', 'medium', 'low', 'info']:
-            sev_issues = [i for i in data['issues'] if i['severity'] == sev]
-
-            if sev_issues:
-                md.append(f"## {sev.title()} Issues\n\n")
-
-                for issue in sev_issues:
-                    md.append(f"### {issue['title']}\n\n")
-                    if issue['line']:
-                        location = f"**File:** `{issue['file']}` line {issue['line']}"
-                    elif issue.get('scope') == 'file':
-                        location = f"**File:** `{issue['file']}` (file-scoped)"
-                    else:
-                        location = f"**File:** `{issue['file']}`"
-                    md.append(location + "\n\n")
-                    md.append(f"{issue['description']}\n\n")
-                    if issue.get('severity_floor'):
-                        md.append(f"**Severity floor:** {issue['severity_floor']}\n\n")
-                    md.append(f"**Fix:** {issue['recommendation']}\n\n")
-
-        # Clearances — absence claims with their verification method
-        if data.get('clearances'):
-            md.append("## Clearances (verified absences)\n\n")
-            for c in data['clearances']:
-                md.append(f"- **{c['claim']}**\n")
-                md.append(f"  - Method: {c['method']}\n")
-                if c.get('evidence'):
-                    md.append(f"  - Evidence: {c['evidence']}\n")
-            md.append("\n")
-
-        # Positive
-        if data['positive_observations']:
-            md.append("## Positive Observations\n\n")
-            for obs in data['positive_observations']:
-                md.append(f"- {obs}\n")
-
-        # Observations
-        if data.get('observations'):
-            md.append("\n## Observations\n\n")
-            for obs in data['observations']:
-                md.append(f"- **`{obs['file']}`** — {obs['note']}\n")
-
-        return ''.join(md)
+        return render_markdown(self.to_dict())
 
     def save(self, output_dir: str):
         """Save both JSON and markdown."""
