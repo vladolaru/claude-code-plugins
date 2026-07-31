@@ -5,6 +5,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from hosts.install.containment import contains
 from hosts.resolvers.base import HostResolver, ResolverResult
 from hosts.types import HostEntry
 
@@ -181,9 +182,7 @@ class WpEnvResolver(HostResolver):
 
     @staticmethod
     def _is_inside_repo(repo_path: str, resolved_path: str) -> bool:
-        repo_real = os.path.realpath(repo_path)
-        path_real = os.path.realpath(resolved_path)
-        return path_real == repo_real or path_real.startswith(repo_real + os.sep)
+        return contains(repo_path, resolved_path)
 
     @staticmethod
     def _name_from_code_mapping_target(target: str) -> Optional[str]:
