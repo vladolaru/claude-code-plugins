@@ -1634,7 +1634,11 @@ def main() -> int:
             reviewer_markdown = _materialize_reviewer_markdown(
                 output_dir, output_builder_path,
             )
-        except Exception:
+        except Exception as err:  # noqa: BLE001 — best-effort by design
+            print(
+                f"reviewer markdown materialization failed: {err}",
+                file=sys.stderr,
+            )
             reviewer_markdown = []
 
         # Print success status

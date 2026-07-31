@@ -1539,6 +1539,39 @@ class TestFullScript:
             "security-review.md",
         ]
 
+    def test_materialization_failure_does_not_abort_reconciliation(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
+        """A rendering failure must not abort the step that gates the review:
+        exit stays 0, payload stays ok, reviewer_markdown degrades to []."""
+        review = _make_review_json(
+            reviewer="security",
+            issues=[_make_issue(file="src/auth.py", line=10)],
+        )
+        (tmp_path / "security-review.json").write_text(json.dumps(review))
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(mod, "_materialize_reviewer_markdown", _boom)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "reconciliation_context.py",
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "src/auth.py",
+            "--pr-id", "42",
+        ])
+
+        rc = mod.main()
+        captured = capsys.readouterr()
+
+        assert rc == 0
+        stdout_json = json.loads(captured.out.strip().splitlines()[-1])
+        assert stdout_json["status"] == "ok"
+        assert stdout_json["reviewer_markdown"] == []
+        assert "materialization failed" in captured.err
+
 
 # ===========================================================================
 # TestToMarkdown
