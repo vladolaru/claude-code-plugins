@@ -257,7 +257,7 @@ def derive_reviewer_name(agent_name: str) -> str:
     Per-agent artifacts in OUTPUT_DIR follow one of two naming conventions;
     pick the matching one when adding a new per-agent artifact:
     - Human/deliverable-facing artifacts use this short reviewer_name:
-      '<reviewer_name>-review.json' / '.md'.
+      '<reviewer_name>-review.json'.
     - Internal/orchestration-facing artifacts keyed on args.agent use the full
       agent_name: '<agent_name>.started', '<agent_name>-scoped-diff.patch'.
     """
@@ -1135,7 +1135,6 @@ def build_output(
     lines.append(f"REVIEWER_NAME: {reviewer_name}")
     lines.append("OUTPUT_FILES:")
     lines.append(f"  - {output_dir}/{reviewer_name}-review.json")
-    lines.append(f"  - {output_dir}/{reviewer_name}-review.md")
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
     lines.append("ReviewOutputBuilder — MUST use a one-shot quoted heredoc in this form:")
@@ -1166,7 +1165,7 @@ def build_output(
         'builder.set_files_reviewed(N)  # REQUIRED: replace N with the actual number of files you reviewed'
     )
     lines.append(f'builder.set_confidence(0.85)')
-    lines.append(f'result = builder.save(output_dir)  # returns {{"json": path, "markdown": path}}')
+    lines.append(f'result = builder.save(output_dir)  # returns {{"json": path}}')
     lines.append("PY")
     lines.append(f"")
     lines.append(f"line= MUST be the SOURCE FILE line number (from @@ hunk headers),")
@@ -1191,7 +1190,6 @@ def build_output(
     lines.append("  STATUS: FINISHED")
     lines.append(f"  OUTPUT_FILES:")
     lines.append(f"    - {output_dir}/{reviewer_name}-review.json")
-    lines.append(f"    - {output_dir}/{reviewer_name}-review.md")
     lines.append("  COUNTS: critical: N, high: N, medium: N  (copied from save()'s RECORDED COUNTS echo)")
     lines.append("  VERDICT: <APPROVE|COMMENT|REQUEST_CHANGES|BLOCK>")
     lines.append("  SUMMARY: <one sentence>")

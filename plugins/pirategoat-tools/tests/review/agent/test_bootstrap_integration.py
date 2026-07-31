@@ -96,7 +96,7 @@ class TestCategoryRepresentatives:
         # Personalization
         assert "REVIEWER_NAME: performance" in stdout
         assert f"{tmp_path}/performance-review.json" in stdout
-        assert f"{tmp_path}/performance-review.md" in stdout
+        assert f"{tmp_path}/performance-review.md" not in stdout
         assert "PIRATEGOAT_REVIEWER_NAME=performance" in stdout
 
         # Budget present with hard ceiling
@@ -532,7 +532,7 @@ class TestCanonicalExecutableBuilderSource:
         assert "Return signal format:" in prompt
         assert "STATUS: FINISHED" in prompt
         assert f"{tmp_path}/security-review.json" in prompt
-        assert f"{tmp_path}/security-review.md" in prompt
+        assert f"{tmp_path}/security-review.md" not in prompt
 
 
 class TestNotApplicableCompletionContract:
@@ -1358,7 +1358,12 @@ class TestOutputFilenameConsistency:
         assert not os.path.exists(os.path.join(str(tmp_path), "dead-code-review.md"))
 
     def test_bootstrap_output_matches_save_filenames(self, tmp_path):
-        """Bootstrap OUTPUT_FILES paths match what save() actually creates."""
+        """Bootstrap OUTPUT_FILES must name exactly the artifact save() publishes:
+        the review JSON, and no md the pipeline derives elsewhere.
+
+        This checks the briefing TEXT only (what the agent is told to produce);
+        the save() filesystem contract is covered by the tests above.
+        """
         output = build_output(
             agent_name="dead-code-reviewer",
             plugin_root="/fake/root",
@@ -1372,7 +1377,7 @@ class TestOutputFilenameConsistency:
             reviewer_name="dead-code",
         )
         assert f"{tmp_path}/dead-code-review.json" in output
-        assert f"{tmp_path}/dead-code-review.md" in output
+        assert f"{tmp_path}/dead-code-review.md" not in output
 
 
 def test_ecosystem_integration_reviewer_registered():

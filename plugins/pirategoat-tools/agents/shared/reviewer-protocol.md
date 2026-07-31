@@ -205,7 +205,7 @@ This is a non-executable API reference. Bootstrap's **OUTPUT INSTRUCTIONS** bloc
 - `builder.add_tool_result("ToolName")` - Track tools used
 - `builder.set_confidence(0.0-1.0)` - Set overall confidence
 - `builder.add_positive("observation")` - Note good patterns
-- `builder.save(output_dir)` - Write both output files, print the RECORDED COUNTS echo, return the paths (use this — not manual `to_json()`/`to_markdown()` writes)
+- `builder.save(output_dir)` - Write the review JSON, print the RECORDED COUNTS echo, return the path (use this — not manual `to_json()`/`to_markdown()` writes; the pipeline derives the Markdown from your JSON later)
 
 **Valid severities:** `critical`, `high`, `medium`, `low`, `info`
 
