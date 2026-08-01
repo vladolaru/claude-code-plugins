@@ -460,20 +460,9 @@ def load_and_fill(ctx_path, pr_number=None, gh_cmd=None, branch=False,
     # Review defaults
     ctx.setdefault("review", {}).setdefault("agent_timeout_seconds", 1200)
 
-    # Populate the per-clone install cache so InstallCacheResolver can
-    # surface library-dep entries below. Best-effort — install failures
-    # degrade host_context but do not block the review.
     repo_root = _resolve_repo_root(repo_path or os.getcwd())
-    install_payload = {}
-    try:
-        install_payload = _populate_install_cache(
-            repo_root, ctx.get("git", {}).get("changed_files"),
-        )
-    except Exception:  # noqa: BLE001 — review must continue
-        pass
-
     # Host context — discover from the repo root when git can identify it.
-    _fill_host_context(ctx, repo_root, install_payload=install_payload)
+    _fill_host_context(ctx, repo_root)
 
     # Repo-contributed review config (rules + reviewers) from the reviewed repo.
     _fill_review_config(ctx, repo_root)
@@ -551,78 +540,7 @@ def _resolve_author_name(ctx):
         pr["author_name"] = name
 
 
-def _populate_install_cache(repo_path, scope_paths=None):
-    """Run ensure_installed.py for the repo. Returns parsed payload or empty dict.
-
-    scope_paths are the review's changed files. They let the installer find
-    dependency roots that are not the repo root — WooCommerce's composer.lock
-    lives at plugins/woocommerce/, so without scope a PHP review gets no
-    vendor source at all.
-
-    Best-effort: subprocess failure / timeout / unparseable JSON / missing
-    script all degrade silently to {}. The caller wraps this in a try/except
-    too, so a raised exception also doesn't block the review.
-
-    Currently invoked for side effects (cache population) only — load_and_fill
-    discards the return. Returning the payload anyway leaves the door open for
-    a debug command or a future caller to inspect populate status.
-    """
-    # Reuse _scripts_dir resolved at module load — single source of truth for
-    # the scripts/ root path, shared with the hosts.chain import above.
-    script = os.path.join(_scripts_dir, "hosts", "ensure_installed.py")
-    if not os.path.isfile(script):
-        return {}
-    cmd = [sys.executable, script, "--repo", repo_path]
-    if scope_paths:
-        cmd += ["--scope-json", json.dumps(list(scope_paths))]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True, text=True,
-            # Matches the inner per-manager timeout in
-            # ensure_installed.py:_run_install_command. A pathological install
-            # that consumes the full inner timeout will trip both timeouts at
-            # once — the caller still degrades silently, the inner banner is lost.
-            timeout=20 * 60,
-        )
-        if result.returncode != 0:
-            return {}
-        try:
-            return json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return {}
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return {}
-
-
-def _merge_install_cache_banner(host_context, install_payload):
-    """Preserve install-cache degradation banners in rebuilt host context."""
-    if not isinstance(host_context, dict) or not isinstance(install_payload, dict):
-        return
-
-    banner = install_payload.get("banner")
-    if not banner:
-        return
-
-    diagnostics = host_context.setdefault("diagnostics", {})
-    diagnostics["install_cache"] = {
-        "status": install_payload.get("status"),
-        "managers": install_payload.get("managers", []),
-        "banner": banner,
-    }
-
-    existing = host_context.get("banner")
-    if not existing:
-        host_context["banner"] = banner
-        return
-
-    existing_unresolved = existing.setdefault("unresolved", [])
-    existing_unresolved.extend(banner.get("unresolved", []))
-    if banner.get("message") and banner["message"] not in existing.get("message", ""):
-        existing["message"] = f"{existing.get('message', '').rstrip()} {banner['message']}".strip()
-
-
-def _fill_host_context(ctx, repo_path, install_payload=None):
+def _fill_host_context(ctx, repo_path):
     """Populate host_context using hosts.chain.ResolverChain.
 
     Failure is soft: if the hosts package cannot be imported at module
@@ -634,7 +552,6 @@ def _fill_host_context(ctx, repo_path, install_payload=None):
         ctx["host_context"] = None
         return
     ctx["host_context"] = _HOSTS_CHAIN().run(repo_path).to_dict()
-    _merge_install_cache_banner(ctx["host_context"], install_payload or {})
 
 
 def _fill_review_config(ctx, repo_path):

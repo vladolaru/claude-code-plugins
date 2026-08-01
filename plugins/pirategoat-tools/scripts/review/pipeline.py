@@ -182,7 +182,7 @@ _STALE_ARTIFACTS = [
 ]
 
 DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches agents_status.py
-CONTEXT_GATHER_TIMEOUT = (20 * 60) + 60  # install-cache inner timeout + grace
+CONTEXT_GATHER_TIMEOUT = (2 * 30 * 60) + 60  # two ecosystem-cache refreshes + grace
 AGENT_WAIT_GRACE_SECONDS = 60
 
 # Files to preserve across runs

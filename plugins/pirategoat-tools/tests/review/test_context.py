@@ -360,50 +360,6 @@ def test_host_context_recomputed_when_present(tmp_path, monkeypatch):
     assert ctx["host_context"]["banner"] is None
 
 
-def test_install_cache_failure_banner_is_preserved(mod, tmp_path, monkeypatch):
-    """ensure_installed.py failure banners should survive host_context rebuild."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    outdir = tmp_path / "out"
-    outdir.mkdir()
-    (outdir / "review-context.json").write_text(json.dumps({
-        "version": 1,
-        "git": {"merge_base": "abc", "head_ref": "HEAD", "git_range": "abc..HEAD"},
-    }))
-
-    install_banner = {
-        "degraded": True,
-        "reason": "install_failed",
-        "message": "library-dep verification degraded: install failed for composer",
-        "unresolved": [{"name": "composer", "reason": "missing_binary"}],
-    }
-
-    class FakeManifest:
-        def to_dict(self):
-            return {
-                "version": 1,
-                "resolved": [],
-                "unresolved": [],
-                "banner": None,
-                "diagnostics": {},
-            }
-
-    class FakeChain:
-        def run(self, repo_path):
-            return FakeManifest()
-
-    monkeypatch.setattr(mod, "_populate_install_cache", lambda repo_path, scope_paths=None: {"banner": install_banner})
-    monkeypatch.setattr(mod, "_HOSTS_CHAIN", FakeChain)
-
-    ctx = mod.load_and_fill(
-        ctx_path=str(outdir / "review-context.json"),
-        branch=True,
-        repo_path=str(repo),
-    )
-
-    assert ctx["host_context"]["banner"] == install_banner
-
-
 def test_host_context_uses_git_root_when_repo_path_omitted_from_subdir(tmp_path, monkeypatch):
     """CWD fallback should discover repo-root wp-env config from subdirectories."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

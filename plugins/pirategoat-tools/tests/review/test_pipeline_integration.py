@@ -416,8 +416,10 @@ class TestStep3Orchestration:
         # Should succeed even without a git repo — subprocess failure is tolerated
         assert r.returncode == 0
 
-    def test_step_3_allows_install_cache_to_reach_inner_timeout(self, mod, tmp_path, monkeypatch):
-        """The context.py wrapper timeout must exceed ensure_installed.py's 20m inner timeout."""
+    def test_step_3_allows_known_ecosystem_cache_refreshes_to_finish(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """The context wrapper should allow both known host caches to refresh."""
         seen_timeouts = []
 
         def fake_run_subprocess(cmd, cwd=None, timeout=60):
@@ -435,7 +437,7 @@ class TestStep3Orchestration:
         )
 
         assert seen_timeouts
-        assert seen_timeouts[0] > 20 * 60
+        assert seen_timeouts[0] > 2 * 30 * 60
 
     def test_step_3_next_step_reflects_unfetched_issues(self, tmp_path):
         """When has_unfetched_issues is True, next step after 3 should be 4 (not 5)."""
