@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
 
 from git_paths import decode_git_c_quoted_path
-from hosts.install.containment import contains, contains_lexically
+from hosts.containment import contains, contains_lexically
 
 
 def detect_php_manager(repo_path: str) -> Optional[str]:

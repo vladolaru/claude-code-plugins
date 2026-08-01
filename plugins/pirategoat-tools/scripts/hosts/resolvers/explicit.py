@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any, Dict, List
 
-from hosts.install.containment import contains
+from hosts.containment import contains
 from hosts.resolvers.base import HostResolver, ResolverResult
 from hosts.types import HostEntry
 

@@ -35,7 +35,7 @@ import re
 import shutil
 from typing import Dict, List, Optional
 
-from hosts.install.containment import resolve_inside
+from hosts.containment import resolve_inside
 
 # Manifest + lockfile — the always-required pair.
 _BASE_FILES: Dict[str, List[str]] = {

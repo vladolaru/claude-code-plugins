@@ -1,25 +1,10 @@
-"""The hosts/ containment invariant — single enforcement point.
+"""Containment — the single enforcement point for repo-boundary checks.
 
-Everything under scripts/hosts/ obeys two invariants:
-
-  I1. A review never modifies the reviewed working tree.
-  I2. Nothing outside the repo's resolved path is read as an install input
-      or used as an execution directory.
-
-Repo content is PR-controlled and reviews run against untrusted branches,
-so every containment decision must compare RESOLVED identities — a lexical
-check passes for an in-repo spelling whose directory is really a symlink
-out of the repo. Round after round of review findings (symlinked dep
-roots, escaped bin dirs) traced back to call sites re-deriving this check
-locally and each forgetting a piece; hence one module, and a drift guard
-in tests/hosts/test_containment_contract.py that forbids the containment
-spellings (commonpath, is_relative_to, commonprefix) anywhere else under
-scripts/hosts/; other spellings rely on code review plus the resolver
-symlink behavior tests.
-
-contains_lexically exists for algorithmic bounds (walk-up loops over paths
-that may not exist, e.g. deleted files). It is NEVER a trust decision on
-its own — pair it with contains() before reading or executing anything.
+Invariant: host-context resolution never treats a path outside the
+repo's resolved root as belonging to the repo. Resolvers route every
+containment decision through this module; tests/hosts/
+test_containment_contract.py bans inline re-derivations under
+scripts/hosts/.
 """
 
 import os

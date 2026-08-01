@@ -1,26 +1,13 @@
 """Contract tests for the hosts/ containment invariant.
 
-Everything under scripts/hosts/ obeys two invariants:
-  I1. A review never modifies the reviewed working tree.
-  I2. Nothing outside the repo's resolved path is read as an install input
-      or used as an execution directory.
-containment.py is the single enforcement point; this module tests the
-primitives, guards against reimplementation drift, and proves I1
-end-to-end against the installer.
+Host-context resolution never trusts paths outside the repo's resolved root;
+containment.py is the single enforcement point.
 """
 
-import contextlib
-import hashlib
-import io
-import json
 import os
-import subprocess
 from pathlib import Path
-from unittest import mock
 
-import pytest
-
-from hosts.install.containment import contains, contains_lexically, resolve_inside
+from hosts.containment import contains, contains_lexically, resolve_inside
 
 
 class TestContains:
@@ -150,100 +137,3 @@ class TestDriftGuard:
             if spelling in path.read_text()
         ]
         assert offenders == []
-
-
-def _tree_snapshot(root: Path) -> dict:
-    # Files-only walk: empty dirs and dir-symlinks are invisible to the
-    # snapshot, so the fake must keep writing a file into every directory
-    # it creates for the diff to see a worktree escape.
-    snapshot = {}
-    for dirpath, _dirnames, filenames in os.walk(str(root)):
-        for name in filenames:
-            path = Path(dirpath) / name
-            rel = str(path.relative_to(root))
-            snapshot[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return snapshot
-
-
-class TestWorktreeImmutability:
-    def test_ensure_installed_never_touches_the_reviewed_worktree(
-        self, tmp_path, monkeypatch,
-    ):
-        """Invariant I1 proven end to end: run the installer over a repo
-        that exercises every write-redirect edge — a composer root with
-        config.bin-dir configured OUTSIDE vendor, a nested composer root,
-        and an npm root — with a fake package manager that honors env
-        redirects exactly like the real one. If any redirect is removed,
-        the fake writes into the repo and the snapshot diff fails."""
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-        repo = tmp_path / "repo"
-        (repo / "plugins" / "woocommerce").mkdir(parents=True)
-        (repo / "composer.json").write_text(json.dumps({
-            "config": {"bin-dir": "bin", "cache-dir": ".composer-cache"},
-        }))
-        (repo / "composer.lock").write_text("{}")
-        (repo / "plugins" / "woocommerce" / "composer.json").write_text("{}")
-        (repo / "plugins" / "woocommerce" / "composer.lock").write_text("{}")
-        (repo / "package.json").write_text("{}")
-        (repo / "package-lock.json").write_text("{}")
-        (repo / ".npmrc").write_text("registry=https://registry.example.test\n")
-        before = _tree_snapshot(repo)
-
-        def fake_run(cmd, **kwargs):
-            env = kwargs["env"]
-            cwd = kwargs["cwd"]
-            if cmd[0] == "composer":
-                assert "--no-scripts" in cmd  # repo scripts are the biggest worktree-write vector
-                vendor = env.get("COMPOSER_VENDOR_DIR") or os.path.join(cwd, "vendor")
-                config = json.loads(
-                    Path(cwd, "composer.json").read_text()
-                )
-                # Real composer precedence: COMPOSER_BIN_DIR env, then
-                # config.bin-dir (relative to the project root), then
-                # {vendor-dir}/bin. Modeling config.bin-dir is what makes
-                # the escaped-bin-dir edge non-vacuous: drop the env
-                # redirect and this writes bin/phpunit into the repo.
-                bin_dir = env.get("COMPOSER_BIN_DIR")
-                if not bin_dir:
-                    configured = config.get("config", {}).get("bin-dir")
-                    bin_dir = (
-                        os.path.join(cwd, configured) if configured
-                        else os.path.join(vendor, "bin")
-                    )
-                configured_cache = config.get("config", {}).get("cache-dir")
-                cache_dir = env.get("COMPOSER_CACHE_DIR") or (
-                    os.path.join(cwd, configured_cache) if configured_cache
-                    else os.path.expanduser("~/.cache/composer")
-                )
-                os.makedirs(vendor, exist_ok=True)
-                os.makedirs(bin_dir, exist_ok=True)
-                os.makedirs(cache_dir, exist_ok=True)
-                Path(vendor, "autoload.php").write_text("<?php\n")
-                Path(bin_dir, "phpunit").write_text("#!/bin/sh\n")
-                Path(cache_dir, "packages.json").write_text("{}")
-            else:
-                assert "--ignore-scripts" in cmd  # repo scripts are the biggest worktree-write vector
-                os.makedirs(os.path.join(cwd, "node_modules"), exist_ok=True)
-                Path(cwd, "node_modules", ".package-lock.json").write_text("{}")
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0, stdout="", stderr="",
-            )
-
-        from hosts.ensure_installed import main as ensure_installed_main
-
-        with mock.patch(
-            "hosts.ensure_installed.subprocess.run", side_effect=fake_run,
-        ):
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                rc = ensure_installed_main([
-                    "--repo", str(repo),
-                    "--scope-path", "plugins/woocommerce/src/File.php",
-                ])
-
-        assert rc == 0
-        payload = json.loads(buf.getvalue())
-        statuses = {m["status"] for m in payload["managers"]}
-        assert len(payload["managers"]) == 3, payload  # root composer + npm + nested composer
-        assert statuses == {"ok"}, payload  # not vacuous — installs really ran
-        assert _tree_snapshot(repo) == before

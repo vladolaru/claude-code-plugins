@@ -5,7 +5,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from hosts.install.containment import contains
+from hosts.containment import contains
 from hosts.resolvers.base import HostResolver, ResolverResult
 from hosts.types import HostEntry
 
