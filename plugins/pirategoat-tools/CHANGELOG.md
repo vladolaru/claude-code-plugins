@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.113.0] - 2026-08-01
+
+### Removed
+
+- **Automatic dependency installation from the reviewed repo's manifests.** `ensure_installed.py`, the `hosts/install/` package, and the install-cache resolver ran the reviewed branch's composer/npm/pnpm/yarn manifests to populate a per-clone library-dep cache. Those manifests are PR-controlled input, and package managers execute configuration as code — `.pnpmfile.cjs` hooks survive `--ignore-scripts`, Composer `path` repositories read outside the checkout, and workspace globs traverse arbitrary directories. Four months of containment hardening kept finding the next vector because the vector surface is the package managers' feature set. The trusted paths remain: dependencies already installed in the clone (vendor resolver, wp-env, docker-compose mounts) and the machine-wide ecosystem source cache for WordPress/WooCommerce. Missing dependency source now reports honestly as a `partial_unresolved`/`fully_unavailable` host-context banner instead of being manufactured at install time. The `install_failed`/`dep_roots_capped` banner reasons and the `install-cache` resolver source leave the type vocabulary; `containment.py` moves to `scripts/hosts/containment.py` with its drift guard intact. Existing caches under `~/.cache/pirategoat/library-deps/` are no longer read and can be deleted.
+
 ## [1.112.0] - 2026-07-29
 
 Makes the review pipeline measurable, and puts the resulting pressure on reviewers to spend the budget they are given.
