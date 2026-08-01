@@ -289,7 +289,7 @@ class TestHostContextSoftCap:
         for i in range(22):
             entries.append({
                 "name": f"lib-{i:02d}", "kind": "library-dep",
-                "path": f"/x/lib-{i:02d}", "source": "install-cache",
+                "path": f"/x/lib-{i:02d}", "source": "ecosystem-cache",
             })
         for i in range(3):
             entries.append({

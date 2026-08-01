@@ -162,7 +162,7 @@ def test_diagnostics_records_which_resolvers_ran(make_repo, monkeypatch, tmp_pat
 
 
 def test_library_dep_does_not_trigger_runtime_host_banner(tmp_path, monkeypatch):
-    """A repo with only library-deps in vendor/ should not warn about runtime hosts."""
+    """A repo with only vendor packages should not warn about runtime hosts."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     repo = tmp_path / "repo"
