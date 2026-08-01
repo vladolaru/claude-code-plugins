@@ -49,6 +49,26 @@ def test_changed_file_pulls_in_its_nearest_composer_root(woo_like):
     assert DepRoot("composer", "plugins/woocommerce") in selected
 
 
+@pytest.mark.parametrize(
+    "root_name,quoted_path",
+    [
+        ("café", r'"packages/caf\303\251/src/File.php"'),
+        ("tab\troot", r'"packages/tab\011root/src/File.php"'),
+    ],
+    ids=["non-ascii", "control-character"],
+)
+def test_git_quoted_scope_selects_nested_dependency_root(
+    tmp_path, root_name, quoted_path,
+):
+    repo = tmp_path / "repo"
+    _write(repo / "packages" / root_name / "composer.json")
+    _write(repo / "packages" / root_name / "composer.lock")
+
+    selected, _ = detect_dep_roots(str(repo), [quoted_path])
+
+    assert DepRoot("composer", f"packages/{root_name}") in selected
+
+
 def test_unrelated_composer_roots_are_not_pulled_in(woo_like):
     """47 composer.lock files in the real repo — scope must not install them all."""
     selected, _ = detect_dep_roots(str(woo_like), [

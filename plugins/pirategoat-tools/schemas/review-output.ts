@@ -229,7 +229,7 @@ export interface AggregatedReview {
  */
 export interface HostContextBanner {
     degraded: boolean;
-    reason: "partial_unresolved" | "fully_unavailable" | "install_failed";
+    reason: "partial_unresolved" | "fully_unavailable" | "install_failed" | "dep_roots_capped";
     message: string;
     unresolved: Array<{ name: string; reason: string; source?: string }>;
 }

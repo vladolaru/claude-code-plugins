@@ -28,6 +28,14 @@ import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
 
+_SCRIPTS_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from git_paths import decode_git_c_quoted_path
+
 # =============================================================================
 # Semantic filter — content-level noise removal from diffs
 # =============================================================================
@@ -278,19 +286,6 @@ def patch_has_markup_tokens(diff_text: str) -> bool:
     return False
 
 
-def _unquote_git_path(path: str) -> str:
-    """Decode git's C-style path quoting (backslash octal escapes, UTF-8)."""
-    try:
-        return (
-            path.encode("latin-1")
-            .decode("unicode_escape")
-            .encode("latin-1")
-            .decode("utf-8")
-        )
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return path
-
-
 def _parse_marker_path(line: str) -> Optional[str]:
     """Extract the path from a `+++ b/...` / `--- a/...` file marker.
 
@@ -308,7 +303,10 @@ def _parse_marker_path(line: str) -> Optional[str]:
     if body == "/dev/null":
         return None
     if body.startswith('"') and body.endswith('"') and len(body) > 1:
-        body = _unquote_git_path(body[1:-1])
+        decoded, was_git_quoted = decode_git_c_quoted_path(body)
+        if decoded is None:
+            return None
+        body = decoded if was_git_quoted else body[1:-1]
     if body.startswith(("a/", "b/")):
         return body[2:]
     return None

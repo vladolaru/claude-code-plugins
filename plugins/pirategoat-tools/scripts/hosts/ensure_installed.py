@@ -219,8 +219,8 @@ def _handle_dep_root(
 
     - JS managers install into the cache slot from staged inputs. Nothing in
       a node lockfile points outside the package directory.
-    - Composer installs *in place*, with COMPOSER_VENDOR_DIR redirected into
-      the cache slot. composer.json routinely declares `type: path`
+    - Composer installs *in place*, with every write root redirected into the
+      cache slot. composer.json routinely declares `type: path`
       repositories ("lib", "../../packages/php/blueprint"), which cannot
       resolve from a staging directory — WooCommerce's own nested root fails
       with "Source path ... is not found". Redirecting only the output keeps
@@ -252,16 +252,17 @@ def _handle_dep_root(
     def install_fn(staging_path):
         if in_place:
             workdir = root_abs
+            staging_root = str(staging_path)
+            vendor_dir = os.path.join(staging_root, "vendor")
             install_env = _build_subprocess_env({
                 **(env or {}),
-                # Absolute, and outside the repo — this is what keeps the
-                # working tree untouched. bin-dir must be redirected
-                # separately: it defaults to {vendor-dir}/bin, but a
-                # composer.json that sets config.bin-dir explicitly escapes
-                # the vendor redirect and would write binary proxies into
-                # the repo.
-                "COMPOSER_VENDOR_DIR": os.path.join(str(staging_path), "vendor"),
-                "COMPOSER_BIN_DIR": os.path.join(str(staging_path), "vendor", "bin"),
+                # Absolute, and outside the repo — these keep an in-place
+                # install from honoring relative config paths as worktree
+                # writes. Composer config can override bin-dir and cache-dir
+                # independently of vendor-dir, so redirect all three.
+                "COMPOSER_VENDOR_DIR": vendor_dir,
+                "COMPOSER_BIN_DIR": os.path.join(vendor_dir, "bin"),
+                "COMPOSER_CACHE_DIR": os.path.join(staging_root, "composer-cache"),
             })
         else:
             workdir = str(staging_path)

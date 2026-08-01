@@ -43,6 +43,8 @@ except ImportError:
     )
     from review.agent.output import _VALID_SEVERITIES
 
+from git_paths import decode_git_c_quoted_path
+
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
@@ -511,72 +513,11 @@ class ReviewTelemetry:
         Escape-bearing partial or malformed wrappers return ``(None, True)``
         so authoritative sets become unavailable instead of inventing a path.
 
-        Sibling decoders for the same quote.c grammar with DIFFERENT,
-        deliberate policies: review_config._dequote_git_path (surrogateescape,
-        returns input unchanged on malformed — provenance gating must fail
-        closed by not matching) and agent/scope.py _unquote_git_path. A
-        grammar-level fix (escape table, octal handling) must land in all
-        three.
+        The shared decoder owns Git's quote.c grammar. This telemetry wrapper
+        keeps strict UTF-8 semantics so malformed authoritative sets become
+        unavailable rather than inventing a path.
         """
-        starts_quoted = value.startswith('"')
-        ends_quoted = value.endswith('"')
-        if not starts_quoted and not ends_quoted:
-            return value, False
-        if not starts_quoted or not ends_quoted or len(value) < 2:
-            if "\\" not in value:
-                return value, False
-            return None, True
-
-        escape_bytes = {
-            "a": b"\a",
-            "b": b"\b",
-            "t": b"\t",
-            "n": b"\n",
-            "v": b"\v",
-            "f": b"\f",
-            "r": b"\r",
-            "\\": b"\\",
-            '"': b'"',
-        }
-        content = value[1:-1]
-        if "\\" not in content:
-            return value, False
-        decoded = bytearray()
-        index = 0
-        while index < len(content):
-            char = content[index]
-            if char == '"':
-                return None, True
-            if char != "\\":
-                decoded.extend(char.encode("utf-8"))
-                index += 1
-                continue
-
-            if index + 1 >= len(content):
-                return None, True
-            escape = content[index + 1]
-            if escape in escape_bytes:
-                decoded.extend(escape_bytes[escape])
-                index += 2
-                continue
-            if escape in "01234567":
-                octal = content[index + 1:index + 4]
-                if len(octal) != 3 or any(
-                    digit not in "01234567" for digit in octal
-                ):
-                    return None, True
-                byte = int(octal, 8)
-                if byte > 0xFF:
-                    return None, True
-                decoded.append(byte)
-                index += 4
-                continue
-            return None, True
-
-        try:
-            return decoded.decode("utf-8"), True
-        except UnicodeDecodeError:
-            return None, True
+        return decode_git_c_quoted_path(value)
 
     @classmethod
     def _normalize_repo_path(

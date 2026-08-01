@@ -98,6 +98,27 @@ def test_bin_dir_is_redirected_outside_the_repo(nested_repo):
     assert bin_dir == os.path.join(captured["env"]["COMPOSER_VENDOR_DIR"], "bin")
 
 
+def test_cache_dir_is_redirected_outside_the_repo(nested_repo):
+    """A relative config.cache-dir is rooted at Composer's working directory
+    unless COMPOSER_CACHE_DIR overrides it, which would mutate the worktree."""
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        Path(kwargs["env"]["COMPOSER_VENDOR_DIR"]).mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    with mock.patch("hosts.ensure_installed.subprocess.run", side_effect=fake_run):
+        _handle_dep_root(
+            DepRoot("composer", "plugins/woocommerce"), str(nested_repo), [],
+        )
+
+    cache_dir = captured["env"].get("COMPOSER_CACHE_DIR")
+    assert cache_dir, "COMPOSER_CACHE_DIR must be set for in-place composer installs"
+    assert os.path.isabs(cache_dir)
+    assert not cache_dir.startswith(str(nested_repo) + os.sep)
+
+
 def test_result_carries_the_dep_root_path(nested_repo):
     def fake_run(cmd, **kwargs):
         Path(kwargs["env"]["COMPOSER_VENDOR_DIR"]).mkdir(parents=True, exist_ok=True)

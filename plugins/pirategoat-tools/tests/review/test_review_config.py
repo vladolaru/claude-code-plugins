@@ -494,6 +494,24 @@ class TestProvenanceGate:
         assert result["rules"] == []
         assert result["untrusted"][0]["kind"] == "rule"
 
+    def test_symlinked_reviewer_gates_on_the_target(self, mod, tmp_path):
+        """Reviewer refs publish ``resolved_ref`` rather than the rules'
+        ``resolved_path``; both entry shapes must gate their target identity."""
+        _touch(tmp_path, "docs/target.md")
+        (tmp_path / "reviewer-link.md").symlink_to(
+            tmp_path / "docs" / "target.md"
+        )
+        _write_config(tmp_path, {"review": {
+            "reviewers": [{"id": "x", "ref": "reviewer-link.md"}],
+        }})
+
+        result = mod.load_review_config(
+            str(tmp_path), changed_files=["docs/target.md"]
+        )
+
+        assert result["reviewers"] == []
+        assert result["untrusted"][0]["kind"] == "reviewer"
+
     def test_symlinked_config_gates_on_the_target(self, mod, tmp_path):
         real_config = tmp_path / "docs" / "real-config.json"
         real_config.parent.mkdir(parents=True, exist_ok=True)

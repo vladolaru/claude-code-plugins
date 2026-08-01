@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
 
+from git_paths import decode_git_c_quoted_path
 from hosts.install.containment import contains, contains_lexically
 
 
@@ -130,7 +131,14 @@ def _scope_dirs(repo_path: str, scope_paths: Iterable[str]) -> List[str]:
     for raw in scope_paths:
         if not raw:
             continue
-        rel = raw.replace("\\", "/").lstrip("/")
+        rel, was_git_quoted = decode_git_c_quoted_path(raw)
+        if rel is None:
+            continue
+        # Direct CLI inputs may use platform separators; a decoded Git-quoted
+        # backslash is a literal filename byte and must not become a slash.
+        if not was_git_quoted:
+            rel = rel.replace("\\", "/")
+        rel = rel.lstrip("/")
         candidate = os.path.join(repo_path, rel)
         # A changed file that still exists resolves to its own directory;
         # anything else (deleted file, renamed dir) is treated as a path

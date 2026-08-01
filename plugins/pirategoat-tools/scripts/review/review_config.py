@@ -36,6 +36,8 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review.dispatch_status import AGENT_NAME_RE
 
+from git_paths import decode_git_c_quoted_path
+
 CONFIG_RELPATH = os.path.join(".pirategoat", "config.json")
 
 DEFAULT_EXECUTION = "inline"
@@ -180,7 +182,7 @@ def load_review_config(
     def _gate(entry, kind, file_field):
         rel_path = str(entry.get(file_field, "")).replace(os.sep, "/")
         identities = _provenance_rel_paths(
-            rel_path, entry.get("resolved_path") or "", repo_real
+            rel_path, entry.get(f"resolved_{file_field}") or "", repo_real
         )
         if not _provenance_tainted(identities, changed_keys):
             return entry
@@ -354,50 +356,25 @@ def _normalize_applies_to(raw) -> Dict[str, List[str]]:
     return out
 
 
-# Git C-quoting mnemonics (quote.c). Octal escapes are handled separately.
-_GIT_QUOTE_ESCAPES = {
-    "a": 0x07, "b": 0x08, "f": 0x0C, "n": 0x0A, "r": 0x0D,
-    "t": 0x09, "v": 0x0B, '"': 0x22, "\\": 0x5C,
-}
-
-
 def _dequote_git_path(path: str) -> str:
     """Decode one Git C-quoted path (``"..."``) to its literal form.
 
     Returns the input unchanged when it is not quoted or the quoting is
     malformed — an undecodable entry can only fail to match, never widen
     trust.
-
-    Sibling decoders for the same quote.c grammar with DIFFERENT, deliberate
-    policies: telemetry._decode_git_c_quoted_path (strict UTF-8, fails to
-    ``(None, True)`` so measurement sets become unavailable) and
-    agent/scope.py _unquote_git_path. A grammar-level fix (escape table,
-    octal handling) must land in all three.
     """
-    if len(path) < 2 or path[0] != '"' or path[-1] != '"':
+    decoded, was_git_quoted = decode_git_c_quoted_path(
+        path, errors="surrogateescape"
+    )
+    if decoded is None:
         return path
-    body = path[1:-1]
-    out = bytearray()
-    i = 0
-    while i < len(body):
-        ch = body[i]
-        if ch != "\\":
-            out.extend(ch.encode("utf-8", errors="surrogateescape"))
-            i += 1
-            continue
-        i += 1
-        if i >= len(body):
-            return path
-        nxt = body[i]
-        if nxt in _GIT_QUOTE_ESCAPES:
-            out.append(_GIT_QUOTE_ESCAPES[nxt])
-            i += 1
-        elif len(body) >= i + 3 and all(c in "01234567" for c in body[i:i + 3]):
-            out.append(int(body[i:i + 3], 8))
-            i += 3
-        else:
-            return path
-    return out.decode("utf-8", errors="surrogateescape")
+    # Preserve the legacy provenance policy for a quote-delimited spelling
+    # without escapes. The shared grammar treats it as an ordinary filename;
+    # this gate additionally compares the unwrapped spelling, which can only
+    # exclude content and never widen trust.
+    if not was_git_quoted and len(path) >= 2 and path[0] == path[-1] == '"':
+        return path[1:-1]
+    return decoded
 
 
 def _provenance_rel_paths(declared_rel: str, abs_path: str, repo_real: str) -> set:

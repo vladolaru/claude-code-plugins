@@ -178,7 +178,9 @@ class TestWorktreeImmutability:
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
         repo = tmp_path / "repo"
         (repo / "plugins" / "woocommerce").mkdir(parents=True)
-        (repo / "composer.json").write_text('{"config": {"bin-dir": "bin"}}')
+        (repo / "composer.json").write_text(json.dumps({
+            "config": {"bin-dir": "bin", "cache-dir": ".composer-cache"},
+        }))
         (repo / "composer.lock").write_text("{}")
         (repo / "plugins" / "woocommerce" / "composer.json").write_text("{}")
         (repo / "plugins" / "woocommerce" / "composer.lock").write_text("{}")
@@ -193,6 +195,9 @@ class TestWorktreeImmutability:
             if cmd[0] == "composer":
                 assert "--no-scripts" in cmd  # repo scripts are the biggest worktree-write vector
                 vendor = env.get("COMPOSER_VENDOR_DIR") or os.path.join(cwd, "vendor")
+                config = json.loads(
+                    Path(cwd, "composer.json").read_text()
+                )
                 # Real composer precedence: COMPOSER_BIN_DIR env, then
                 # config.bin-dir (relative to the project root), then
                 # {vendor-dir}/bin. Modeling config.bin-dir is what makes
@@ -200,18 +205,22 @@ class TestWorktreeImmutability:
                 # redirect and this writes bin/phpunit into the repo.
                 bin_dir = env.get("COMPOSER_BIN_DIR")
                 if not bin_dir:
-                    config = json.loads(
-                        Path(cwd, "composer.json").read_text()
-                    )
                     configured = config.get("config", {}).get("bin-dir")
                     bin_dir = (
                         os.path.join(cwd, configured) if configured
                         else os.path.join(vendor, "bin")
                     )
+                configured_cache = config.get("config", {}).get("cache-dir")
+                cache_dir = env.get("COMPOSER_CACHE_DIR") or (
+                    os.path.join(cwd, configured_cache) if configured_cache
+                    else os.path.expanduser("~/.cache/composer")
+                )
                 os.makedirs(vendor, exist_ok=True)
                 os.makedirs(bin_dir, exist_ok=True)
+                os.makedirs(cache_dir, exist_ok=True)
                 Path(vendor, "autoload.php").write_text("<?php\n")
                 Path(bin_dir, "phpunit").write_text("#!/bin/sh\n")
+                Path(cache_dir, "packages.json").write_text("{}")
             else:
                 assert "--ignore-scripts" in cmd  # repo scripts are the biggest worktree-write vector
                 os.makedirs(os.path.join(cwd, "node_modules"), exist_ok=True)

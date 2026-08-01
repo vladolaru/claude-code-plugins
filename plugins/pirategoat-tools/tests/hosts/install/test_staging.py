@@ -38,6 +38,17 @@ def test_stages_manifest_and_lockfile(repo, cache):
     assert (cache / "pnpm-lock.yaml").is_file()
 
 
+def test_stages_symlinked_manifest_at_declared_path(repo, cache):
+    _write(repo / "config/package.json", "{}")
+    (repo / "package.json").symlink_to(repo / "config/package.json")
+    _write(repo / "package-lock.json", "{}")
+
+    stage_inputs("npm", str(repo), str(cache))
+
+    assert (cache / "package.json").is_file()
+    assert not (cache / "config/package.json").exists()
+
+
 def test_stages_pnpm_workspace_file(repo, cache):
     """Catalogs live here; without it pnpm fails before reading the lockfile."""
     _write(repo / "package.json", "{}")
@@ -73,6 +84,21 @@ def test_stages_patch_files_preserving_relative_path(repo, cache):
     stage_inputs("pnpm", str(repo), str(cache))
 
     assert (cache / "bin" / "patches" / "pkg@1.0.0.patch").is_file()
+
+
+def test_stages_symlinked_patch_at_declared_path(repo, cache):
+    _write(repo / "package.json", json.dumps({
+        "pnpm": {"patchedDependencies": {"pkg@1.0.0": "patches/pkg.patch"}}
+    }))
+    _write(repo / "pnpm-lock.yaml", "")
+    _write(repo / "patch-targets/pkg.patch", "patch")
+    (repo / "patches").mkdir()
+    (repo / "patches/pkg.patch").symlink_to(repo / "patch-targets/pkg.patch")
+
+    stage_inputs("pnpm", str(repo), str(cache))
+
+    assert (cache / "patches/pkg.patch").read_text() == "patch"
+    assert not (cache / "patch-targets/pkg.patch").exists()
 
 
 def test_missing_patch_file_is_skipped_not_fatal(repo, cache):

@@ -125,8 +125,12 @@ def _copy_into(repo_path: str, rel_path: str, cache_dir: str) -> bool:
     if src is None:
         return False
 
-    repo_root = os.path.realpath(repo_path)
-    dest = os.path.join(cache_dir, os.path.relpath(src, repo_root))
+    # Source identity and destination identity are deliberately different:
+    # read through an in-repo symlink's resolved target, but preserve the
+    # declared path the package manager will use (package.json, patch refs).
+    dest = resolve_inside(cache_dir, rel_path)
+    if dest is None:
+        return False
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copy2(src, dest)
     return True
