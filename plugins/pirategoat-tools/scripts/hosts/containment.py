@@ -28,9 +28,8 @@ def contains_lexically(repo_path: str, candidate: str) -> bool:
 def resolve_inside(repo_path: str, rel_path: str) -> Optional[str]:
     """Resolved absolute path of repo_path/rel_path, or None when it escapes.
 
-    The gate for repo-declared relative paths (lockfile-declared patches,
-    workspace members): the returned path is safe to read as an install
-    input; None means the spelling escapes the repo once resolved.
+    The reusable gate for repo-declared relative paths: returns an absolute
+    path only when the resolved identity remains within the repo root.
     """
     real_root = os.path.realpath(repo_path)
     resolved = os.path.realpath(os.path.join(real_root, rel_path))

@@ -1,8 +1,6 @@
-"""Shared cache-root helper for pirategoat caches.
+"""Cache-root helper for pirategoat's ecosystem cache.
 
-Both the ecosystem cache (cache/manager.py) and the install cache
-(install/cache.py) must use the same root-resolution logic so users
-who set XDG_CACHE_HOME don't end up with two split cache trees.
+Centralizes XDG_CACHE_HOME/~/.cache resolution for the ecosystem cache.
 """
 
 import os

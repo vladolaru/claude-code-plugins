@@ -197,8 +197,7 @@ pirategoat-tools/
 │   ├── review/             # Review pipeline, dispatch, context, telemetry
 │   │   ├── dispatch_status.py  # Canonical dispatch vocabulary + plan validation
 │   │   └── agent/          # Agent bootstrap, scope filtering, output builder
-│   ├── hosts/              # Upstream host discovery (host_context CLI, chain, resolvers, ensure_installed, ecosystem_cache)
-│   │   ├── install/        # Internal install submodule (lockfile, cache, runner, overrides)
+│   ├── hosts/              # Upstream host discovery (host_context CLI, chain, resolvers, ecosystem_cache)
 │   │   └── cache/          # Internal ecosystem-cache manager (WordPress + WooCommerce)
 │   ├── linear/             # Linear issue pipeline, events
 │   ├── figma/              # Figma spec extraction, node parsing
