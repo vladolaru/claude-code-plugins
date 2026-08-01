@@ -157,7 +157,7 @@ def test_diagnostics_records_which_resolvers_ran(make_repo, monkeypatch, tmp_pat
     consulted = manifest.diagnostics.get("resolvers_consulted", [])
     assert set(consulted) == {
         "explicit", "wp-env", "docker-compose", "plugin-headers",
-        "install-cache", "vendor-inspection",
+        "vendor-inspection",
     }
 
 
@@ -180,58 +180,6 @@ def test_library_dep_does_not_trigger_runtime_host_banner(tmp_path, monkeypatch)
     assert len(library_deps) == 1
     assert library_deps[0].name == "vendor"
     assert library_deps[0].path == str(repo / "vendor")
-
-
-class TestInstallCacheRegistered:
-    def test_install_cache_runs_before_vendor(self):
-        from hosts.chain import _DEFAULT_RESOLVERS
-        sources = [r.source for r in _DEFAULT_RESOLVERS]
-        assert "install-cache" in sources
-        # install-cache runs BEFORE vendor-inspection so when both fire,
-        # the cache (always fresh after populate) wins via name-collision dedup.
-        assert sources.index("install-cache") < sources.index("vendor-inspection")
-
-    def test_cache_wins_dedup_over_vendor(self, tmp_path, monkeypatch):
-        """When both resolvers emit name="vendor", the cache wins via dedup."""
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-        from hosts.chain import ResolverChain
-        from hosts.install.cache import (
-            cache_path_for_clone, clone_id_for, write_stored_inputs_hash,
-        )
-
-        # Repo with both an in-repo vendor/ AND a populated cache slot
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / "composer.lock").write_text("{}")
-        (repo / "vendor").mkdir()
-        cid = clone_id_for(str(repo))
-        slot = cache_path_for_clone(cid, "composer")
-        slot.mkdir(parents=True)
-        (slot / "vendor").mkdir()
-        write_stored_inputs_hash(cid, "composer", "abc123")
-
-        manifest = ResolverChain().run(str(repo))
-        vendor_entries = [e for e in manifest.resolved if e.name == "vendor"]
-        # Exactly one entry — cache wins via dedup
-        assert len(vendor_entries) == 1
-        assert vendor_entries[0].source == "install-cache"
-        assert vendor_entries[0].path == str(slot / "vendor")
-
-    def test_vendor_serves_repo_with_in_repo_vendor_but_no_lockfile(self, tmp_path, monkeypatch):
-        """No lockfile → InstallCacheResolver silent → VendorResolver still emits in-repo vendor."""
-        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        from hosts.chain import ResolverChain
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / "vendor").mkdir()  # in-repo vendor only, no composer.lock
-
-        manifest = ResolverChain().run(str(repo))
-        vendor_entries = [e for e in manifest.resolved if e.name == "vendor"]
-        assert len(vendor_entries) == 1
-        assert vendor_entries[0].source == "vendor-inspection"
-        assert vendor_entries[0].path == str(repo / "vendor")
 
 
 class TestCacheFulfillment:
