@@ -6,7 +6,13 @@ from typing import get_args
 
 import pytest
 
-from hosts.types import Banner, BannerReason, HostEntry, HostContextManifest
+from hosts.types import (
+    Banner,
+    BannerReason,
+    HostEntry,
+    HostContextManifest,
+    ResolverSource,
+)
 
 
 def test_host_entry_minimal():
@@ -78,4 +84,17 @@ def test_typescript_banner_reasons_match_runtime_contract():
     assert interface is not None
     ts_reasons = set(re.findall(r'"([a-z_]+)"', interface.group(1)))
 
-    assert ts_reasons == set(get_args(BannerReason))
+    assert ts_reasons == {"partial_unresolved", "fully_unavailable"}
+    assert set(get_args(BannerReason)) == {"partial_unresolved", "fully_unavailable"}
+
+
+def test_resolver_sources_match_runtime_contract():
+    """Resolver sources remain limited to live discovery producers."""
+    assert set(get_args(ResolverSource)) == {
+        "explicit",
+        "wp-env",
+        "docker-compose",
+        "sibling",
+        "ecosystem-cache",
+        "vendor-inspection",
+    }
