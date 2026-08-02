@@ -1,6 +1,7 @@
 """Tests for review/pipeline.py — step briefing output (get_step_guidance)."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -578,6 +579,32 @@ class TestStep6DispatchAgents:
         assert mod._codex_task_name("Repo Reviewer/v2") == "repo_reviewer_v2"
         assert mod._codex_task_name("42-check") == "reviewer_42_check"
 
+        long_name = f"repo-{'a' * 70}-renewals-reviewer"
+        for reviewer_name in (
+            "security-reviewer",
+            "repo-a--b-reviewer",
+            long_name,
+            "42-check",
+        ):
+            task_name = mod._codex_task_name(reviewer_name)
+            assert re.fullmatch(r"[a-z][a-z0-9_]*", task_name)
+            assert len(task_name) <= 64
+
+    def test_codex_task_names_preserve_repeated_separators(self, mod):
+        single_separator = mod._codex_task_name("repo-a-b-reviewer")
+        repeated_separator = mod._codex_task_name("repo-a--b-reviewer")
+
+        assert single_separator == "repo_a_b_reviewer"
+        assert repeated_separator == "repo_a__b_reviewer"
+        assert single_separator != repeated_separator
+
+    def test_codex_task_names_distinguish_long_shared_prefixes(self, mod):
+        shared_prefix = f"repo-{'a' * 70}"
+        first_name = f"{shared_prefix}-renewals-reviewer"
+        second_name = f"{shared_prefix}-billing-reviewer"
+
+        assert mod._codex_task_name(first_name) != mod._codex_task_name(second_name)
+
     def test_claude_remains_default_dispatch_host(self, mod, tmp_path):
         state = self._make_state_with_agents()
         ctx = {"git": {"git_range": "abc..HEAD"}}
@@ -636,9 +663,12 @@ class TestStep6DispatchAgents:
         # records it — not the adapter registry's static tier.
         assert tok[tok.index("--model-tier") + 1] == "sonnet"
 
-    def test_codex_adapter_spawn_uses_adapter_task_not_instance_name(self, mod, tmp_path):
-        """Codex spawn_agent targets the installed generic adapter task, while the
-        synthetic instance name only travels in the bootstrap --instance-name arg."""
+    def test_codex_repo_reviewers_get_instance_task_names(self, mod, tmp_path):
+        """Each repo reviewer instance is its own Codex task. Task names
+        derive from the instance name — two reviewers sharing the
+        repo-reviewer-adapter definition must not collide on one task
+        path — while the adapter definition file is still what the task
+        is told to read. Step 8 already targets instance names."""
         import shlex
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
@@ -653,6 +683,15 @@ class TestStep6DispatchAgents:
                     "execution": "inline",
                     "scope_domains": ["architecture"],
                 },
+                {
+                    "name": "repo-billing-reviewer",
+                    "adapter": "repo-reviewer-adapter",
+                    "ref": ".ai/agents/review/billing.md",
+                    "label": "Billing Expert",
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "scope_domains": ["architecture"],
+                },
             ],
         }
         ctx = {"git": {"git_range": "abc..HEAD"}}
@@ -661,16 +700,57 @@ class TestStep6DispatchAgents:
             6, "full", state, ctx, config=config, output_dir=str(tmp_path)
         )
         text = "\n".join(g["actions"])
-        # spawn_agent task name is the generic adapter, not the instance name.
-        assert "task name `repo_reviewer_adapter`" in text
-        assert "task name `repo_renewals_reviewer`" not in text
-        # Instance identity is preserved only in the bootstrap command.
-        cmd_line = next(
+        step_6_task_names = {
+            match.group(1)
+            for line in g["actions"]
+            if (match := re.search(r"task name `([^`]+)`", line))
+        }
+        assert step_6_task_names == {
+            "repo_renewals_reviewer",
+            "repo_billing_reviewer",
+        }
+        assert "task name `repo_reviewer_adapter`" not in text
+        adapter_definition = mod.AGENTS_DIR / "repo-reviewer-adapter.md"
+        adapter_instruction = (
+            f"In the message, first read `{adapter_definition}` completely. "
+            "Treat its YAML frontmatter as Claude Code packaging metadata, "
+            "do not translate its model or tool labels, and follow the "
+            "Markdown reviewer instructions."
+        )
+        assert text.count(adapter_instruction) == 2
+        cmd_lines = [
             line for line in g["actions"]
             if "bootstrap.py" in line and "--repo-agent-ref" in line
+        ]
+        instance_names = {
+            shlex.split(line)[shlex.split(line).index("--instance-name") + 1]
+            for line in cmd_lines
+        }
+        assert instance_names == {"repo-renewals-reviewer", "repo-billing-reviewer"}
+
+        step_8_state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": [
+                    "repo-renewals-reviewer",
+                    "repo-billing-reviewer",
+                ],
+                "completed": [
+                    "repo-renewals-reviewer",
+                    "repo-billing-reviewer",
+                ],
+                "failed": [],
+            },
+        }
+        step_8 = mod.get_step_guidance(
+            8, "full", step_8_state, ctx, config=config, output_dir=str(tmp_path)
         )
-        tok = shlex.split(cmd_line)
-        assert tok[tok.index("--instance-name") + 1] == "repo-renewals-reviewer"
+        target_heading = step_8["actions"].index("Codex task targets:")
+        step_8_task_names = set(
+            re.findall(r"`([^`]+)`", step_8["actions"][target_heading + 1])
+        )
+        assert step_8_task_names == step_6_task_names
 
     def test_codex_adapter_command_omits_the_claude_model_tier(self, mod, tmp_path):
         """The Codex host dispatches the native subagent with no Claude

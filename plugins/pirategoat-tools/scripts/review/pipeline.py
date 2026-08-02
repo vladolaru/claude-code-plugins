@@ -24,6 +24,7 @@ Zero external dependencies (stdlib only).
 
 import argparse
 import glob as glob_mod
+import hashlib
 import json
 import os
 import re
@@ -75,13 +76,16 @@ def _agent_definition_path(agent_name):
 
 def _codex_task_name(agent_name):
     """Map a reviewer name to Codex's lowercase task-name contract."""
-    normalized = re.sub(r"[^a-z0-9_]+", "_", str(agent_name).lower())
-    normalized = normalized.strip("_")
+    normalized = re.sub(r"[^a-z0-9_]", "_", str(agent_name).lower())
     if not normalized:
         normalized = "reviewer"
-    if normalized[0].isdigit():
+    if normalized[0] not in "abcdefghijklmnopqrstuvwxyz":
         normalized = f"reviewer_{normalized}"
-    return normalized[:64]
+    if len(normalized) > 64:
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+        prefix_length = 64 - len(digest) - 1
+        normalized = f"{normalized[:prefix_length]}_{digest}"
+    return normalized
 
 
 def _codex_agent_instruction(agent_name):
@@ -1074,10 +1078,10 @@ def _step_6_dispatch_agents(mode, state, context, config, output_dir):
                 if codex_host:
                     actions.append(
                         f"- Call `spawn_agent` with task name "
-                        f"`{_codex_task_name(agent_type)}` and no Claude model "
-                        "override. The instance identity travels in the "
-                        "`--instance-name` argument of the bootstrap command below, "
-                        "not the task name."
+                        f"`{_codex_task_name(name)}` and no Claude model override. "
+                        "The task name is this reviewer instance's identity; the "
+                        "shared adapter definition remains below, and the bootstrap "
+                        "`--instance-name` argument carries the same identity."
                     )
                     actions.append(
                         f"- {_codex_agent_instruction(agent_type)} Then run the exact "
