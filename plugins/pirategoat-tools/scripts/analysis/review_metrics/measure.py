@@ -602,21 +602,26 @@ def _pipeline_metric_availability(
         coverage_state = "missing"
     outcome = manifest.get("outcome")
     summary = outcome.get("summary") if isinstance(outcome, dict) else None
+    # Manifest status is the single completeness authority: numeric
+    # summary totals under status=running are a snapshot (or a stale
+    # prior terminal summary an interactive rerun materialized over),
+    # never a completed observation.
+    manifest_complete = manifest.get("status") == "complete"
     raw_state = (
-        "complete"
+        ("complete" if manifest_complete else "partial")
         if isinstance(summary, dict)
         and _nonnegative_int(summary.get("total_agent_issues")) is not None
         else "missing"
     )
     final_state = (
-        "complete"
+        ("complete" if manifest_complete else "partial")
         if isinstance(summary, dict)
         and _nonnegative_int(summary.get("final_issues")) is not None
         else "missing"
     )
     if raw_state == final_state == "complete":
         outcomes_state = "complete"
-    elif "complete" in {raw_state, final_state}:
+    elif {"complete", "partial"} & {raw_state, final_state}:
         outcomes_state = "partial"
     else:
         outcomes_state = "missing"

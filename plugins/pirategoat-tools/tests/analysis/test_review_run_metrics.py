@@ -2225,6 +2225,33 @@ class TestMeasureRun:
             },
         }
 
+    def test_running_manifest_caps_outcome_states_at_partial(self, tmp_path):
+        """A running manifest with numeric summary totals (an interactive
+        rerun over a prior terminal summary) is partial evidence. Only
+        status=complete may report complete outcomes — presence of numbers
+        is not completion."""
+        manifest = _manifest(ended_at=None)
+        manifest["status"] = "running"
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["metric_availability"]["outcomes"] == "partial"
+        assert measured["metric_availability"]["raw_findings"] == "partial"
+        assert measured["metric_availability"]["final_findings"] == "partial"
+
+    def test_running_manifest_without_summary_reports_outcomes_missing(
+        self, tmp_path
+    ):
+        manifest = _manifest(ended_at=None)
+        manifest["status"] = "running"
+        manifest["outcome"].pop("summary")
+
+        measured = measure_run(manifest, tmp_path, include_transcripts=False)
+
+        assert measured["metric_availability"]["outcomes"] == "missing"
+        assert measured["metric_availability"]["raw_findings"] == "missing"
+        assert measured["metric_availability"]["final_findings"] == "missing"
+
     def test_transcript_enrichment_recognizes_every_synthesis_identity(
         self, monkeypatch, tmp_path
     ):
