@@ -12,6 +12,7 @@ Validates the --quality-metrics mode of analysis/session_analyzer.py:
 
 import importlib.util
 import json
+import ntpath
 import sys
 from pathlib import Path
 
@@ -568,6 +569,19 @@ class TestBashBuilderRecognition:
         assert positional_issue["severity"] == "medium"
         assert positional_issue["file"] == "src/g.php"
         assert positional_issue["line"] == 7
+
+    def test_builder_record_path_is_posix_across_analysis_hosts(
+        self, monkeypatch
+    ):
+        command = _builder_heredoc().replace(
+            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42'",
+            "PIRATEGOAT_OUTPUT_DIR='/out'",
+        )
+        with monkeypatch.context() as analysis_host:
+            analysis_host.setattr(_mod.os, "path", ntpath)
+            record = _mod._builder_review_from_heredoc(command)
+
+        assert record["path"] == "/out/security-review.json"
 
     def test_positional_tuple_mirrors_the_full_add_issue_signature(self):
         """Drift guard: the tuple must cover EVERY positional parameter of
@@ -1168,6 +1182,46 @@ class TestSaveIntegrity:
 
         [record] = data["write_outputs"]
         assert "source" not in record
+
+    def test_canonicalizes_path_before_last_save_wins(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        builder_save = _builder_heredoc().replace(
+            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42'",
+            "PIRATEGOAT_OUTPUT_DIR='/out/.'",
+        )
+        entries = [
+            _write_tool_entry(
+                "/out/security-review.json",
+                json.dumps({"reviewer": "security", "issues": []}),
+            ),
+            _tool_result_entry("write-1"),
+            _bash_entry(builder_save, tool_id="builder-1"),
+            _tool_result_entry("builder-1"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        [record] = data["write_outputs"]
+        assert record["source"] == "bash_builder_heredoc"
+        assert record["path"] == "/out/./security-review.json"
+
+    def test_non_string_path_is_kept_without_dedup_identity(self, tmp_path):
+        log = tmp_path / "agent.jsonl"
+        entries = [
+            _write_tool_entry(7, "first malformed path", tool_id="write-1"),
+            _tool_result_entry("write-1"),
+            _write_tool_entry(7, "second malformed path", tool_id="write-2"),
+            _tool_result_entry("write-2"),
+        ]
+        log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(log))
+
+        assert data["write_outputs"] == [
+            {"path": 7, "content": "first malformed path"},
+            {"path": 7, "content": "second malformed path"},
+        ]
 
     def test_failed_write_does_not_shadow_a_confirmed_builder_save(
         self, tmp_path

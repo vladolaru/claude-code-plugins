@@ -40,6 +40,7 @@ import ast
 import datetime
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -336,7 +337,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
 
     reviewer = env["PIRATEGOAT_REVIEWER_NAME"]
     return {
-        "path": os.path.join(
+        "path": posixpath.join(
             env["PIRATEGOAT_OUTPUT_DIR"], f"{reviewer}-review.json"
         ),
         "content": json.dumps({"reviewer": reviewer, "issues": issues}),
@@ -541,17 +542,27 @@ def parse_subagent_log(filepath: str) -> dict[str, Any]:
     # Saves to the same artifact overwrite each other regardless of
     # transport — a legacy Write followed by a corrected builder heredoc
     # (or vice versa) must count once, as its final content, not as an
-    # extra dispatch with duplicated findings. Pathless records carry no
-    # artifact identity and are kept as-is.
+    # extra dispatch with duplicated findings. Pathless or malformed-path
+    # records carry no artifact identity and are kept as-is.
     ordered_saves.sort(key=lambda item: item[0])
+
+    def _path_key(raw: object) -> str | None:
+        if not isinstance(raw, str) or not raw:
+            return None
+        # normpath collapses `./`, `//`, `a/../b`; transcript paths are
+        # POSIX regardless of the analysis host.
+        return posixpath.normpath(raw)
+
     last_by_path: dict[str, int] = {}
     for index, (_position, record) in enumerate(ordered_saves):
-        if record.get("path"):
-            last_by_path[record["path"]] = index
+        key = _path_key(record.get("path"))
+        if key is not None:
+            last_by_path[key] = index
     result["write_outputs"] = [
         record
         for index, (_position, record) in enumerate(ordered_saves)
-        if not record.get("path") or last_by_path[record["path"]] == index
+        if (key := _path_key(record.get("path"))) is None
+        or last_by_path[key] == index
     ]
 
     return result
