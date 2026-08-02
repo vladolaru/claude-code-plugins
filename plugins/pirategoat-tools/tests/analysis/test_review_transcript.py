@@ -25,6 +25,7 @@ correlate_run_agents = _mod.correlate_run_agents
 analyze_orchestrator_steps = _mod.analyze_orchestrator_steps
 analyze_subagent = _mod.analyze_subagent
 enrich_run_transcript = _mod.enrich_run_transcript
+manifest_step_timeline = _mod._manifest_step_timeline
 result_state = _mod._result_state
 is_bootstrap_builder_heredoc = _mod._is_bootstrap_builder_heredoc
 
@@ -35,6 +36,16 @@ _bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
 _bootstrap_spec.loader.exec_module(_bootstrap_mod)
 
 _TEST_TRANSCRIPT_START = datetime(2026, 7, 20, 10, 0, 0, tzinfo=timezone.utc)
+_MALFORMED_RUN_IDENTITIES = (0, False, [], {}, "   ", "run unsafe", "../run")
+_MALFORMED_RUN_ID_CASES = (
+    "zero",
+    "false",
+    "list",
+    "object",
+    "whitespace",
+    "embedded-space",
+    "unsafe-prefix",
+)
 
 
 def _write_jsonl(path: Path, entries: list[object]) -> Path:
@@ -2443,6 +2454,144 @@ def test_orchestrator_step_usage_counts_final_cumulative_record(tmp_path):
     assert stages["1"]["output_tokens"] == 484
     assert stages["1"]["input_tokens"] == 2
     assert stages["3"]["output_tokens"] == 3
+
+
+def test_manifest_step_timeline_rejects_foreign_run_event(tmp_path):
+    manifest = _manifest("foreign-step", tmp_path, tmp_path / "run", started=[])
+    manifest["run"]["id"] = "run-aaa"
+    manifest["steps"] = [
+        {
+            "event": "step",
+            "run_id": "run-zzz",
+            "step": 2,
+            "timestamp": (
+                _TEST_TRANSCRIPT_START + timedelta(seconds=10)
+            ).isoformat(),
+        }
+    ]
+
+    transitions, complete = manifest_step_timeline(manifest)
+
+    assert transitions == []
+    assert complete is False
+
+
+def test_manifest_step_timeline_rejects_identityless_event_for_identified_run(tmp_path):
+    manifest = _manifest("missing-step-id", tmp_path, tmp_path / "run", started=[])
+    manifest["run"]["id"] = "run-aaa"
+    manifest["steps"] = [
+        {
+            "event": "step",
+            "step": 2,
+            "timestamp": (
+                _TEST_TRANSCRIPT_START + timedelta(seconds=10)
+            ).isoformat(),
+        }
+    ]
+
+    transitions, complete = manifest_step_timeline(manifest)
+
+    assert transitions == []
+    assert complete is False
+
+
+def test_manifest_step_timeline_accepts_matching_identified_run_events(tmp_path):
+    manifest = _manifest("matching-step-id", tmp_path, tmp_path / "run", started=[])
+    manifest["run"]["id"] = "run-aaa"
+    manifest["steps"] = [
+        {
+            "event": "step",
+            "run_id": "run-aaa",
+            "step": step,
+            "timestamp": (
+                _TEST_TRANSCRIPT_START + timedelta(seconds=seconds)
+            ).isoformat(),
+        }
+        for step, seconds in ((2, 10), (3, 20))
+    ]
+
+    transitions, complete = manifest_step_timeline(manifest)
+
+    assert transitions == [
+        (_TEST_TRANSCRIPT_START, "1"),
+        (_TEST_TRANSCRIPT_START + timedelta(seconds=10), "2"),
+        (_TEST_TRANSCRIPT_START + timedelta(seconds=20), "3"),
+    ]
+    assert complete is True
+
+
+@pytest.mark.parametrize("identity_mode", ["missing", "none", "empty"])
+def test_manifest_step_timeline_accepts_legacy_identityless_events(
+    tmp_path, identity_mode
+):
+    manifest = _manifest("legacy-step", tmp_path, tmp_path / "run", started=[])
+    event = {
+        "event": "step",
+        "step": 2,
+        "timestamp": (_TEST_TRANSCRIPT_START + timedelta(seconds=10)).isoformat(),
+    }
+    if identity_mode != "missing":
+        identity = None if identity_mode == "none" else ""
+        manifest["run"]["id"] = identity
+        event["run_id"] = identity
+    manifest["steps"] = [event]
+
+    transitions, complete = manifest_step_timeline(manifest)
+
+    assert transitions == [
+        (_TEST_TRANSCRIPT_START, "1"),
+        (_TEST_TRANSCRIPT_START + timedelta(seconds=10), "2"),
+    ]
+    assert complete is True
+
+
+@pytest.mark.parametrize(
+    "malformed_run_id", _MALFORMED_RUN_IDENTITIES, ids=_MALFORMED_RUN_ID_CASES
+)
+def test_manifest_step_timeline_rejects_malformed_manifest_identity(
+    tmp_path, malformed_run_id
+):
+    manifest = _manifest("bad-manifest-id", tmp_path, tmp_path / "run", started=[])
+    manifest["run"]["id"] = malformed_run_id
+    manifest["steps"] = [
+        {
+            "event": "step",
+            "run_id": malformed_run_id,
+            "step": 2,
+            "timestamp": (
+                _TEST_TRANSCRIPT_START + timedelta(seconds=10)
+            ).isoformat(),
+        }
+    ]
+
+    transitions, complete = manifest_step_timeline(manifest)
+
+    assert transitions == []
+    assert complete is False
+
+
+@pytest.mark.parametrize(
+    "malformed_run_id", _MALFORMED_RUN_IDENTITIES, ids=_MALFORMED_RUN_ID_CASES
+)
+def test_manifest_step_timeline_rejects_malformed_event_identity(
+    tmp_path, malformed_run_id
+):
+    manifest = _manifest("bad-event-id", tmp_path, tmp_path / "run", started=[])
+    manifest["steps"] = [
+        {
+            "event": "step",
+            "run_id": malformed_run_id,
+            "step": 2,
+            "timestamp": (
+                _TEST_TRANSCRIPT_START + timedelta(seconds=10)
+            ).isoformat(),
+        }
+    ]
+
+    transitions, complete = manifest_step_timeline(manifest)
+
+    assert transitions == []
+    assert complete is False
 
 
 @pytest.mark.parametrize(

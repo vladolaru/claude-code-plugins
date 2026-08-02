@@ -1606,19 +1606,45 @@ def analyze_subagent(
     return _analyze_entries(iter_jsonl(path), repo_root, scope_paths)
 
 
+def _normalize_run_identity(value: object) -> tuple[str | None, bool]:
+    """Normalize valid run identity or legacy absence, rejecting other shapes."""
+    if value is None:
+        return None, True
+    if not isinstance(value, str):
+        return None, False
+    if value == "":
+        return None, True
+    if not _SAFE_ID.fullmatch(value):
+        return None, False
+    return value, True
+
+
 def _manifest_step_timeline(
     manifest: dict[str, Any],
 ) -> tuple[list[tuple[datetime, str]], bool]:
     """Validate the append-ordered manifest transitions for stage attribution."""
     window = _run_window(manifest)
+    run = manifest.get("run") if isinstance(manifest, dict) else None
+    manifest_run_id, manifest_run_id_valid = _normalize_run_identity(
+        run.get("id") if isinstance(run, dict) else None
+    )
     steps = manifest.get("steps") if isinstance(manifest, dict) else None
-    if window is None or not isinstance(steps, list):
+    if (
+        window is None
+        or not isinstance(steps, list)
+        or not manifest_run_id_valid
+    ):
         return [], False
     started_at, ended_at = window
     transitions: list[tuple[datetime, str]] = [(started_at, "1")]
     previous = started_at
     for event in steps:
         if not isinstance(event, dict) or event.get("event") != "step":
+            return [], False
+        event_run_id, event_run_id_valid = _normalize_run_identity(
+            event.get("run_id")
+        )
+        if not event_run_id_valid or event_run_id != manifest_run_id:
             return [], False
         step = event.get("step")
         timestamp = _aware_timestamp(event.get("timestamp"))
