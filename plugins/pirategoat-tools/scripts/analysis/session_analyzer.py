@@ -189,6 +189,7 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     # Source position approximates execution order exactly for the
     # mandated straight-line heredoc.
     final_save_pos: tuple[int, int] | None = None
+    save_receiver: ast.expr | None = None
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
@@ -198,6 +199,13 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
             pos = (node.lineno, node.col_offset)
             if final_save_pos is None or pos > final_save_pos:
                 final_save_pos = pos
+                save_receiver = node.func.value
+
+    save_receiver_name: str | None = None
+    if final_save_pos is not None:
+        if not isinstance(save_receiver, ast.Name):
+            return None
+        save_receiver_name = save_receiver.id
 
     # save() persists one builder instance's accumulated state. A heredoc
     # that reassigns the builder (constructs a second ReviewOutputBuilder
@@ -205,11 +213,66 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
     # final artifact holds only issues added to the LAST instance
     # constructed before the final save. Collecting earlier instances'
     # add_issue() calls would merge superseded findings into the record.
-    final_ctor_pos: tuple[int, int] | None = None
+    # Position alone is not identity: issues bind to the SAVED receiver's
+    # variable, so a second builder variable's calls are never merged in.
+    # The constructor assignment must also be that variable's final binding
+    # before save; an alias, factory rebind, or deletion leaves the saved
+    # instance unknowable and reconstruction fails closed.
+    latest_receiver_binding: ast.Name | None = None
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        if not (
+            isinstance(node, ast.Name)
+            and node.id == save_receiver_name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
             continue
-        func = node.func
+        pos = (node.lineno, node.col_offset)
+        if final_save_pos is not None and pos > final_save_pos:
+            continue
+        if latest_receiver_binding is None or pos > (
+            latest_receiver_binding.lineno,
+            latest_receiver_binding.col_offset,
+        ):
+            latest_receiver_binding = node
+
+    final_ctor_pos: tuple[int, int] | None = None
+    final_ctor_target: ast.Name | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        pos = (node.lineno, node.col_offset)
+        if final_save_pos is not None and pos > final_save_pos:
+            continue
+
+        binds_receiver = any(
+            (
+                isinstance(target, ast.Name)
+                and target.id == save_receiver_name
+            )
+            or (
+                isinstance(target, ast.Tuple)
+                and any(
+                    isinstance(item, ast.Name)
+                    and item.id == save_receiver_name
+                    for item in ast.walk(target)
+                )
+            )
+            for target in node.targets
+        )
+        if not binds_receiver:
+            continue
+        if len(node.targets) != 1 or isinstance(node.targets[0], ast.Tuple):
+            return None
+
+        target = node.targets[0]
+        value = node.value
+        if not (
+            isinstance(target, ast.Name)
+            and target.id == save_receiver_name
+            and isinstance(value, ast.Call)
+        ):
+            continue
+        func = value.func
         ctor_name = (
             func.id if isinstance(func, ast.Name)
             else func.attr if isinstance(func, ast.Attribute)
@@ -217,11 +280,15 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
         )
         if ctor_name != "ReviewOutputBuilder":
             continue
-        pos = (node.lineno, node.col_offset)
-        if final_save_pos is not None and pos > final_save_pos:
-            continue
         if final_ctor_pos is None or pos > final_ctor_pos:
             final_ctor_pos = pos
+            final_ctor_target = target
+
+    if final_save_pos is not None and (
+        final_ctor_pos is None
+        or latest_receiver_binding is not final_ctor_target
+    ):
+        return None
 
     issues: list[dict[str, Any]] = []
     for node in ast.walk(tree):
@@ -229,6 +296,12 @@ def _builder_review_from_heredoc(command: str) -> dict[str, Any] | None:
             continue
         func = node.func
         if not (isinstance(func, ast.Attribute) and func.attr == "add_issue"):
+            continue
+        receiver = func.value
+        if not (
+            isinstance(receiver, ast.Name)
+            and receiver.id == save_receiver_name
+        ):
             continue
         if final_save_pos is not None and (
             node.lineno, node.col_offset

@@ -700,6 +700,66 @@ class TestBashBuilderRecognition:
         issues = json.loads(record["content"])["issues"]
         assert [issue["title"] for issue in issues] == ["Final"]
 
+    def test_reconstruction_binds_issues_to_the_saved_receiver(self):
+        """add_issue() on a builder variable other than the saved receiver
+        persisted nothing — collecting it fabricates findings."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'other = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'saved = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'other.add_issue("high", "Unsaved", "a.php", "d", "r", "cat", 1)\n'
+            'saved.add_issue("low", "Saved", "b.php", "d", "r", "cat", 2)\n'
+            'saved.save("/tmp/pr-review-42")\n'
+        )
+
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        assert record is not None
+        issues = json.loads(record["content"])["issues"]
+        assert [issue["title"] for issue in issues] == ["Saved"]
+
+    def test_reconstruction_fails_closed_on_non_name_receiver(self):
+        """A save through anything but a plain variable is ambiguous."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'holder.b = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'holder.b.add_issue("high", "Finding", "a.php", "d", "r", "cat", 1)\n'
+            'holder.b.save("/tmp/pr-review-42")\n'
+        )
+
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        assert record is None
+
+    def test_reconstruction_fails_closed_when_save_receiver_is_rebound(self):
+        """A later alias rebind invalidates the receiver's old constructor."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            'saved = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'saved.add_issue("high", "Stale", "a.php", "d", "r", "cat", 1)\n'
+            'other = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+            'other.add_issue("low", "Actual", "b.php", "d", "r", "cat", 2)\n'
+            "saved = other\n"
+            'saved.save("/tmp/pr-review-42")\n'
+        )
+
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        assert record is None
+
+    def test_reconstruction_fails_closed_without_receiver_constructor_binding(self):
+        """A plain save receiver still needs a provable builder constructor."""
+        body = (
+            "from review.agent.output import ReviewOutputBuilder\n"
+            "saved = make_builder()\n"
+            'saved.add_issue("high", "Unknown", "a.php", "d", "r", "cat", 1)\n'
+            'saved.save("/tmp/pr-review-42")\n'
+        )
+
+        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+
+        assert record is None
+
     def test_non_builder_bash_is_not_recognized(self):
         assert _mod._builder_review_from_heredoc("git diff main..HEAD") is None
         assert (
