@@ -839,3 +839,71 @@ class TestHostConfig:
         assert result.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["host"] == "codex"
+
+
+class TestDependencyRefreshConfig:
+    """--refresh-deps is stored in run-config.json; hard-off non-interactive."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_flag_stored_in_config(self, tmp_path):
+        r = self._run("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      "--refresh-deps")
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+
+    def test_no_flag_defaults_false(self, tmp_path):
+        r = self._run("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config.get("refresh_dependencies") is False
+
+    def test_non_interactive_cli_flag_is_forced_off(self, tmp_path):
+        r = self._run("--step", "1", "--mode", "full",
+                      "--output-dir", str(tmp_path),
+                      "--interactive", "false", "--refresh-deps")
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+        assert "interactive-only" in r.stderr
+
+    def test_non_interactive_preseeded_config_is_forced_off(self, tmp_path):
+        # A bot pre-writes run-config.json; the pipeline must not honor a
+        # pre-seeded refresh_dependencies in bot mode.
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "full", "interactive": False,
+            "refresh_dependencies": True,
+        }))
+        r = self._run("--step", "1", "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_interactive_rerun_syncs_flag_from_cli(self, tmp_path):
+        # First run without the flag; rerun with it — CLI is authoritative
+        # on interactive reruns, matching --quick semantics.
+        self._run("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = self._run("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      "--refresh-deps")
+        assert r.returncode == 0
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+        # And back off again
+        self._run("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42")
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_step_1_clears_stale_dependency_refresh_artifact(self, tmp_path):
+        (tmp_path / "dependency-refresh.json").write_text("{}")
+        r = self._run("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert r.returncode == 0
+        assert not (tmp_path / "dependency-refresh.json").exists()

@@ -183,6 +183,7 @@ _STALE_ARTIFACTS = [
     "change-purpose.md",
     "scoped-diff.patch",
     "*-scoped-diff.patch",
+    "dependency-refresh.json",
 ]
 
 DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches agents_status.py
@@ -2368,6 +2369,11 @@ def main():
     parser.add_argument("--stash-ref", help="Stash ref to restore on cleanup")
     parser.add_argument("--quick", action="store_true", default=False,
                         help="Quick review mode: fewer agents, conditional critic skip")
+    parser.add_argument("--refresh-deps", action="store_true", default=False,
+                        help="Trusted-branch mode: authorize the orchestrator "
+                             "to refresh installed dependencies in the "
+                             "worktree with frozen-mode installs "
+                             "(interactive runs only)")
     parser.add_argument("--host", choices=SUPPORTED_HOSTS, default=None,
                         help="Orchestration host (default on first call: claude)")
 
@@ -2410,6 +2416,7 @@ def main():
             if args.session_id is not None:
                 config["session_id"] = args.session_id
             config["quick"] = args.quick
+            config["refresh_dependencies"] = args.refresh_deps
             write_config(output_dir, config)
         else:
             config = existing_config
@@ -2429,6 +2436,12 @@ def main():
             # prompt overrides), so we must not overwrite the bot's value.
             if config.get("interactive", True) and config.get("quick") != args.quick:
                 config["quick"] = args.quick
+                config_changed = True
+            # refresh_dependencies follows the same interactive rerun
+            # semantics as quick: the CLI is authoritative, including absence.
+            if config.get("interactive", True) and \
+                    config.get("refresh_dependencies", False) != args.refresh_deps:
+                config["refresh_dependencies"] = args.refresh_deps
                 config_changed = True
             if config_changed:
                 write_config(output_dir, config)
@@ -2453,6 +2466,18 @@ def main():
             ):
                 config["session_id"] = args.session_id
                 write_config(output_dir, config)
+
+        # Trusted-branch dependency refresh executes reviewed-branch code
+        # (package managers run configuration as code), so it is
+        # interactive-only: a bot reviewing third-party PRs must never
+        # inherit it, whether from the CLI or a pre-seeded run-config.json.
+        if not config.get("interactive", True) and \
+                config.get("refresh_dependencies"):
+            config["refresh_dependencies"] = False
+            write_config(output_dir, config)
+            print("WARNING: --refresh-deps / refresh_dependencies is "
+                  "interactive-only; disabled for this non-interactive run.",
+                  file=sys.stderr)
 
         # Interactive output directories may be reused, so prior-run context
         # cannot remain authoritative until step 3 gathers it afresh. Bot runs
