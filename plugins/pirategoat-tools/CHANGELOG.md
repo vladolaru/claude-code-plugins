@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Automatic dependency installation from the reviewed repo's manifests.** `ensure_installed.py`, the `hosts/install/` package, and the install-cache resolver ran the reviewed branch's composer/npm/pnpm/yarn manifests to populate a per-clone library-dep cache. Those manifests are PR-controlled input, and package managers execute configuration as code — `.pnpmfile.cjs` hooks survive `--ignore-scripts`, Composer `path` repositories read outside the checkout, and workspace globs traverse arbitrary directories. Four months of containment hardening kept finding the next vector because the vector surface is the package managers' feature set. The trusted paths remain: dependencies already installed in the clone (vendor resolver, wp-env, docker-compose mounts) and the machine-wide ecosystem source cache for WordPress/WooCommerce. Missing dependency source now reports honestly as a `partial_unresolved`/`fully_unavailable` host-context banner instead of being manufactured at install time. The `install_failed`/`dep_roots_capped` banner reasons and the `install-cache` resolver source leave the type vocabulary; `containment.py` moves to `scripts/hosts/containment.py` with its drift guard intact. Existing caches under `~/.cache/pirategoat/library-deps/` are no longer read and can be deleted.
 
+### Fixed
+
+- **Manifest status is the single completeness authority for outcomes.** Running manifests with numeric summary totals (interactive reruns over prior terminal summaries) reported complete raw/final outcomes; they now cap at partial, matching the coverage gate.
+- **Open-ended run windows close at the next human turn.** A crashed run's manifest has no `ended_at`; its window absorbed every later unrelated turn in the session. The first genuine human prompt after the opening turn now closes it; synthetic user records don't.
+- **Stage attribution requires same-run identity.** Step events from another run (or identityless events inside an identified manifest) invalidate the timeline instead of shifting main-session tokens into foreign stage boundaries; both-absent identities keep legacy segments valid.
+- **Heredoc reconstruction binds issues to the saved receiver.** A two-builder-variable heredoc no longer merges one builder's unsaved issues into the other's saved record; saves through anything but a plain variable fail closed.
+- **Save dedup canonicalizes artifact paths.** `/out/x.json` and `/out/./x.json` are one artifact; last-save-wins now keys on the normalized POSIX path.
+- **Running lifecycle sidecars validate their incomplete-sets.** The start-minus-completion multiset identity is enforced at any status; a running sidecar understating incompleteness is damaged evidence and fails closed.
+- **Legacy reconstruction is frozen as best-effort inference** (policy, plugin AGENTS.md): new legacy inference precision edges are known limitations rather than fix rounds unless they cause crashes, privacy/safety failures, or contaminate non-legacy evidence through foreign run/agent/artifact identity confusion.
+
 ## [1.112.0] - 2026-07-29
 
 Makes the review pipeline measurable, and puts the resulting pressure on reviewers to spend the budget they are given.
