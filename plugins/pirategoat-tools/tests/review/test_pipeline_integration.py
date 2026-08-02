@@ -457,6 +457,79 @@ class TestStep3Orchestration:
         # Output should point to step 4, not step 5
         assert "Step 4" in r.stdout
 
+    def _run_in(self, cwd, *args, env=None):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              cwd=cwd, env=env)
+
+    def test_step_3_detects_stale_dependency_roots_when_opted_in(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        # Commit a composer root, then change the lockfile in a second commit
+        # so HEAD~1..HEAD contains a manifest change.
+        (repo / "composer.json").write_text("{}\n")
+        (repo / "composer.lock").write_text("{}\n")
+        subprocess.run(["git", "add", "."], cwd=repo,
+                       capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "Add composer root"],
+                       cwd=repo, capture_output=True, check=True)
+        (repo / "composer.lock").write_text('{"changed": true}\n')
+        subprocess.run(["git", "add", "composer.lock"], cwd=repo,
+                       capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "Bump lock"],
+                       cwd=repo, capture_output=True, check=True)
+
+        out_dir = tmp_path / "out"
+        self._run_in(repo, "--step", "1", "--mode", "full",
+                     "--output-dir", str(out_dir),
+                     "--git-range", "HEAD~1..HEAD", "--refresh-deps")
+        r = self._run_in(repo, "--step", "3", "--mode", "full",
+                         "--output-dir", str(out_dir))
+
+        assert r.returncode == 0
+        state = json.loads((out_dir / "pipeline-state.json").read_text())
+        detection = state.get("dependency_refresh")
+        assert detection is not None
+        managers = [s["manager"] for s in detection["signals"]]
+        assert "composer" in managers
+
+    def test_step_3_skips_detection_without_opt_in(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
+
+        out_dir = tmp_path / "out"
+        self._run_in(repo, "--step", "1", "--mode", "full",
+                     "--output-dir", str(out_dir),
+                     "--git-range", "HEAD~1..HEAD")
+        r = self._run_in(repo, "--step", "3", "--mode", "full",
+                         "--output-dir", str(out_dir))
+
+        assert r.returncode == 0
+        state = json.loads((out_dir / "pipeline-state.json").read_text())
+        assert "dependency_refresh" not in state
+
+    def test_step_3_detection_outside_git_repo_degrades_honestly(self, tmp_path):
+        # No git repo: detection cannot resolve a repo root. The step must
+        # still succeed and record a failed detection, not a clean empty one.
+        # GIT_CEILING_DIRECTORIES stops rev-parse walking up into a parent
+        # repository that may contain tmp_path on some machines.
+        env = {**os.environ,
+               "GIT_CEILING_DIRECTORIES": str(tmp_path.parent)}
+        out_dir = tmp_path / "out"
+        self._run_in(tmp_path, "--step", "1", "--mode", "full",
+                     "--output-dir", str(out_dir), "--refresh-deps",
+                     env=env)
+        r = self._run_in(tmp_path, "--step", "3", "--mode", "full",
+                         "--output-dir", str(out_dir), env=env)
+
+        assert r.returncode == 0
+        state = json.loads((out_dir / "pipeline-state.json").read_text())
+        detection = state.get("dependency_refresh")
+        assert detection == {"signals": [], "detection_failed": True}
+
 
 class TestStep8WaitingRouting:
     """Step 8 WAITING state should persist without advancing the pipeline."""

@@ -43,6 +43,7 @@ try:
         SKIPPED_QUICK_MODE,
         validate_dispatch_plan_agents,
     )
+    from .dependency_refresh import detect_dependency_refresh
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -53,6 +54,7 @@ except ImportError:
         SKIPPED_QUICK_MODE,
         validate_dispatch_plan_agents,
     )
+    from review.dependency_refresh import detect_dependency_refresh
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPTS_DIR.parents[1]
@@ -1890,6 +1892,25 @@ def _run_subprocess(cmd, cwd=None, timeout=60):
 # Step Orchestration (side effects — subprocesses, file I/O)
 # ---------------------------------------------------------------------------
 
+def _detect_dependency_refresh_state(context):
+    """Run stale-dependency detection against the reviewed repo root.
+
+    Failure is honest, never silent: a missing repo root or a crashed
+    detection reports detection_failed instead of an empty clean result.
+    """
+    try:
+        repo_root = _git_output("rev-parse", "--show-toplevel")
+        if not repo_root:
+            return {"signals": [], "detection_failed": True}
+        changed = context.get("git", {}).get("changed_files") or []
+        result = detect_dependency_refresh(repo_root, changed)
+        if not isinstance(result, dict) or "signals" not in result:
+            return {"signals": [], "detection_failed": True}
+        return result
+    except Exception:
+        return {"signals": [], "detection_failed": True}
+
+
 def _orchestrate_step(step, mode, config, state, context, output_dir):
     """Run step-specific side effects (subprocesses, file I/O).
 
@@ -1953,6 +1974,12 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
         git = context.get("git", {})
         if git.get("git_range"):
             state["resolved_params"]["git_range"] = git["git_range"]
+
+        # Trusted-branch dependency refresh — deterministic detection only.
+        # Execution belongs to the orchestrator via the step 3 briefing; the
+        # script never installs anything.
+        if config.get("refresh_dependencies"):
+            state["dependency_refresh"] = _detect_dependency_refresh_state(context)
 
     if step == 5:
         # Run plan_dispatch.py to determine which agents to dispatch
