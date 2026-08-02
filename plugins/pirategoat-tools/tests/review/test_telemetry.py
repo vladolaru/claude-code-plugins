@@ -2687,3 +2687,90 @@ class TestQuickModeTelemetry:
         events = _read_events(t2.log_path)
         final = events[-1]
         assert final["summary"]["quick_mode"] is True
+
+
+class TestDependencyRefreshManifest:
+    """The manifest records the sanitized dependency-refresh report."""
+
+    def _telemetry(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
+        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
+                run_id="run-1")
+        return t, out_dir
+
+    def test_absent_when_never_requested_and_no_report(self, mod, tmp_path):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        assert manifest["dependency_refresh"] is None
+
+    def test_requested_without_report_is_recorded(self, mod, tmp_path):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        t.log_step(step=3, phase="SETUP", title="Gather Context")
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        section = manifest["dependency_refresh"]
+        assert section["requested"] is True
+        assert section["reported"] is False
+        assert "status" not in section
+
+    def test_report_is_sanitized_into_the_manifest(self, mod, tmp_path):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        (out_dir / "dependency-refresh.json").write_text(json.dumps({
+            "status": "completed",
+            "commands": [
+                {"directory": ".", "command": "composer install",
+                 "exit_status": "ok"},
+            ],
+            "tracked_files_dirty": False,
+        }))
+        t.log_step(step=3, phase="SETUP", title="Gather Context")
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        section = manifest["dependency_refresh"]
+        assert section == {
+            "requested": True,
+            "reported": True,
+            "status": "completed",
+            "tracked_files_dirty": False,
+            "commands": [
+                {"directory": ".", "command": "composer install",
+                 "exit_status": "ok"},
+            ],
+        }
+
+    def test_invalid_report_values_sanitize_not_crash(self, mod, tmp_path):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "dependency-refresh.json").write_text(json.dumps({
+            "status": "did-things",
+            "commands": [
+                "rm -rf /",                       # not a dict — dropped
+                {"directory": 42, "command": ["x"], "exit_status": "great"},
+            ],
+            "tracked_files_dirty": "yes",
+        }))
+        t.log_step(step=3, phase="SETUP", title="Gather Context")
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        section = manifest["dependency_refresh"]
+        assert section["requested"] is False
+        assert section["reported"] is True
+        assert section["status"] == "invalid"
+        assert section["tracked_files_dirty"] is None
+        assert section["commands"] == [
+            {"directory": None, "command": None, "exit_status": "invalid"},
+        ]
+
+    def test_non_object_report_reads_as_unreported(self, mod, tmp_path):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        (out_dir / "dependency-refresh.json").write_text("[1, 2, 3]")
+        t.log_step(step=3, phase="SETUP", title="Gather Context")
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        section = manifest["dependency_refresh"]
+        assert section["requested"] is True
+        assert section["reported"] is False

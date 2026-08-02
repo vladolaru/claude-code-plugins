@@ -84,6 +84,11 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
 )
 _SEVERITY_FIELDS = _VALID_SEVERITIES
 
+_DEPENDENCY_REFRESH_STATUSES = frozenset({"completed", "partial", "failed"})
+_MAX_DEPENDENCY_REFRESH_COMMANDS = 32
+_MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS = 200
+_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS = 500
+
 
 def _incomplete_agent_executions(
     started: List[Dict[str, Any]], completed: List[Dict[str, Any]]
@@ -1041,6 +1046,57 @@ class ReviewTelemetry:
         except Exception:
             return None
 
+    def _build_dependency_refresh_manifest(self):
+        """Sanitize the orchestrator's dependency-refresh report.
+
+        The artifact is orchestrator-written free text: only known fields
+        with expected shapes survive, commands are length-capped measurement
+        evidence (like adjustment reasons), and a non-object file reads as
+        unreported. Returns None when refresh was never requested and no
+        report exists — absent, not a measured no-op.
+        """
+        config = self._read_json_file("run-config.json") or {}
+        requested = config.get("refresh_dependencies") is True
+        report = self._read_json_file("dependency-refresh.json")
+        if not requested and report is None:
+            return None
+        result = {"requested": requested, "reported": report is not None}
+        if report is None:
+            return result
+
+        status = report.get("status")
+        result["status"] = (
+            status if status in _DEPENDENCY_REFRESH_STATUSES else "invalid"
+        )
+        dirty = report.get("tracked_files_dirty")
+        result["tracked_files_dirty"] = dirty if isinstance(dirty, bool) else None
+
+        sanitized = []
+        commands = report.get("commands")
+        if isinstance(commands, list):
+            for entry in commands[:_MAX_DEPENDENCY_REFRESH_COMMANDS]:
+                if not isinstance(entry, dict):
+                    continue
+                directory = entry.get("directory")
+                command = entry.get("command")
+                exit_status = entry.get("exit_status")
+                sanitized.append({
+                    "directory": (
+                        directory[:_MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS]
+                        if isinstance(directory, str) else None
+                    ),
+                    "command": (
+                        command[:_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS]
+                        if isinstance(command, str) else None
+                    ),
+                    "exit_status": (
+                        exit_status
+                        if exit_status in ("ok", "failed") else "invalid"
+                    ),
+                })
+        result["commands"] = sanitized
+        return result
+
     def _build_manifest(self, status: str) -> dict:
         """Build the versioned materialized view from durable run events."""
         events = self._read_events()
@@ -1136,6 +1192,7 @@ class ReviewTelemetry:
         )
         manifest["coverage"] = coverage
         manifest["availability"]["coverage"] = coverage is not None
+        manifest["dependency_refresh"] = self._build_dependency_refresh_manifest()
         return manifest
 
     def _materialize_manifest(self, status: str) -> None:
