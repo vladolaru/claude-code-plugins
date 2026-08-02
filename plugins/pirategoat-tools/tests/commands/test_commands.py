@@ -240,3 +240,15 @@ class TestUnifiedMission:
         """No command should say 'PR review orchestrator' — identity is mode-agnostic."""
         content = read_command(command)
         assert "pr review orchestrator" not in content.lower()
+
+
+class TestDependencyRefreshFlagDocumented:
+    """Every review command documents the --refresh-deps opt-in."""
+
+    @pytest.mark.parametrize("command", [
+        "pr-review.md", "full-code-review.md", "code-review.md",
+    ])
+    def test_command_documents_refresh_deps(self, command):
+        text = (COMMANDS_DIR / command).read_text()
+        assert "--refresh-deps" in text
+        assert "refresh" in text.lower()

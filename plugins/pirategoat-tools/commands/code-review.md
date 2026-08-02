@@ -28,6 +28,16 @@ the file, verify it exists, then move on. Do not skip verification.
 - Branch name: review that branch incrementally
 - Explicit git range (contains `..`): review that range
 
+**Detect dependency refresh mode:** If the user's input clearly asks to
+refresh or install dependencies before the review (e.g., "refresh deps",
+"refresh dependencies", "update dependencies first", "install deps first"),
+add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch
+mode: the pipeline will detect stale dependency roots and brief you to run
+frozen-mode installs in the worktree — only add it when the user asked,
+never by default. Examples:
+- `/code-review refresh deps` → add `--refresh-deps`
+- `/code-review` → do NOT add `--refresh-deps`
+
 **Construct output directory** (sanitize all fragments):
 
 ```bash
@@ -54,10 +64,11 @@ MODE=full
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --step 1 --mode "$MODE" --output-dir "$OUTPUT_DIR" \
-  --session-id "${CLAUDE_SESSION_ID}"
+  --session-id "${CLAUDE_SESSION_ID}" [--refresh-deps]
 ```
 
-If an explicit git range was provided, add `--git-range "<RANGE>"`.
+If an explicit git range was provided, add `--git-range "<RANGE>"`. Add
+`--refresh-deps` only if the user asked to refresh dependencies.
 
 Execute the briefing printed by the script. Then call with `--step N`
 where N is the next step indicated in the output. Continue until the

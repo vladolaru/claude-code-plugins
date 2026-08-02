@@ -34,6 +34,17 @@ add `--quick` to the first `pipeline.py` call. Examples:
 - `/pr-review quick mode https://github.com/.../pull/42` → add `--quick`
 - `/pr-review 42` → do NOT add `--quick` (standard review)
 
+**Detect dependency refresh mode:** If the user's input clearly asks to
+refresh or install dependencies before the review (e.g., "refresh deps",
+"refresh dependencies", "update dependencies first", "install deps first"),
+add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch
+mode: the pipeline will detect stale dependency roots and brief you to run
+frozen-mode installs in the worktree — only add it when the user asked,
+never by default. Examples:
+- `/pr-review 42 refresh deps` → add `--refresh-deps`
+- `/pr-review 42 with fresh dependencies` → add `--refresh-deps`
+- `/pr-review 42` → do NOT add `--refresh-deps`
+
 **Construct output directory** (sanitize all fragments):
 
 ```bash
@@ -48,10 +59,11 @@ mkdir -p "$OUTPUT_DIR"
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --step 1 --mode pr --output-dir "$OUTPUT_DIR" --pr-number "<PR_NUMBER>" \
-  --session-id "${CLAUDE_SESSION_ID}" [--quick]
+  --session-id "${CLAUDE_SESSION_ID}" [--quick] [--refresh-deps]
 ```
 
-Add `--quick` only if the user indicated they want a quick review.
+Add `--quick` only if the user indicated they want a quick review; add
+`--refresh-deps` only if they asked to refresh dependencies.
 
 Execute the briefing printed by the script. Then call with `--step N`
 where N is the next step indicated in the output. Continue until the
