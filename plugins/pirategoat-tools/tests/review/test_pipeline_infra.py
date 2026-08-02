@@ -1,6 +1,7 @@
 """Tests for review/pipeline.py — infrastructure: step sequence, routing, state, CLI."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -844,9 +845,20 @@ class TestHostConfig:
 class TestDependencyRefreshConfig:
     """--refresh-deps is stored in run-config.json; hard-off non-interactive."""
 
-    def _run(self, *args):
+    def _run(self, *args, env=None):
+        # Hermetic by default: never read the developer's real
+        # ~/.config/pirategoat/config.json trust declaration.
+        if env is None:
+            env = {**os.environ, "XDG_CONFIG_HOME": "/nonexistent-xdg"}
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+    def _trusting_env(self, tmp_path):
+        config_dir = tmp_path / "xdg" / "pirategoat"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "config.json").write_text(json.dumps(
+            {"review": {"refresh_dependencies": True}}))
+        return {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
 
     def test_flag_stored_in_config(self, tmp_path):
         r = self._run("--step", "1", "--mode", "pr",
@@ -907,3 +919,59 @@ class TestDependencyRefreshConfig:
                       "--output-dir", str(tmp_path), "--pr-number", "42")
         assert r.returncode == 0
         assert not (tmp_path / "dependency-refresh.json").exists()
+
+    def test_user_config_defaults_interactive_runs_on(self, tmp_path):
+        # ~/.config/pirategoat/config.json declares interactive runs
+        # dependency-trusted: no per-run flag needed.
+        out = tmp_path / "out"
+        r = self._run("--step", "1", "--mode", "pr",
+                      "--output-dir", str(out), "--pr-number", "42",
+                      env=self._trusting_env(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+
+    def test_no_refresh_deps_overrides_config_default(self, tmp_path):
+        out = tmp_path / "out"
+        r = self._run("--step", "1", "--mode", "pr",
+                      "--output-dir", str(out), "--pr-number", "42",
+                      "--no-refresh-deps",
+                      env=self._trusting_env(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_user_config_never_applies_to_non_interactive(self, tmp_path):
+        out = tmp_path / "out"
+        r = self._run("--step", "1", "--mode", "full",
+                      "--output-dir", str(out),
+                      "--interactive", "false",
+                      env=self._trusting_env(tmp_path))
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False
+
+    def test_rerun_without_flag_keeps_config_default(self, tmp_path):
+        # With a trusting user config, flag absence resolves to the
+        # config default, not to off.
+        out = tmp_path / "out"
+        env = self._trusting_env(tmp_path)
+        self._run("--step", "1", "--mode", "pr",
+                  "--output-dir", str(out), "--pr-number", "42", env=env)
+        self._run("--step", "1", "--mode", "pr",
+                  "--output-dir", str(out), "--pr-number", "42", env=env)
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is True
+
+    def test_malformed_user_config_defaults_off(self, tmp_path):
+        config_dir = tmp_path / "xdg" / "pirategoat"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text("{not json")
+        env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+        out = tmp_path / "out"
+        r = self._run("--step", "1", "--mode", "pr",
+                      "--output-dir", str(out), "--pr-number", "42",
+                      env=env)
+        assert r.returncode == 0
+        config = json.loads((out / "run-config.json").read_text())
+        assert config["refresh_dependencies"] is False

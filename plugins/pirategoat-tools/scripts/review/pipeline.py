@@ -44,6 +44,7 @@ try:
         validate_dispatch_plan_agents,
     )
     from .dependency_refresh import detect_dependency_refresh
+    from .user_settings import load_user_settings, refresh_dependencies_default
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -55,6 +56,10 @@ except ImportError:
         validate_dispatch_plan_agents,
     )
     from review.dependency_refresh import detect_dependency_refresh
+    from review.user_settings import (
+        load_user_settings,
+        refresh_dependencies_default,
+    )
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPTS_DIR.parents[1]
@@ -2474,6 +2479,22 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
 # Main
 # ---------------------------------------------------------------------------
 
+def _resolve_refresh_dependencies(cli_value):
+    """Resolve the trusted-branch refresh opt-in for this step-1 call.
+
+    An explicit --refresh-deps / --no-refresh-deps wins; an omitted flag
+    falls back to the requester's machine-local trust declaration
+    (~/.config/pirategoat/config.json). The interactive-only hard-off in
+    main() still runs after this and remains authoritative for bot runs.
+    """
+    if cli_value is not None:
+        return cli_value
+    try:
+        return refresh_dependencies_default(load_user_settings())
+    except Exception:
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified review pipeline")
     parser.add_argument("--step", type=int, required=True, help="Step number (1-12)")
@@ -2490,11 +2511,14 @@ def main():
     parser.add_argument("--stash-ref", help="Stash ref to restore on cleanup")
     parser.add_argument("--quick", action="store_true", default=False,
                         help="Quick review mode: fewer agents, conditional critic skip")
-    parser.add_argument("--refresh-deps", action="store_true", default=False,
+    parser.add_argument("--refresh-deps", action=argparse.BooleanOptionalAction,
+                        default=None,
                         help="Trusted-branch mode: authorize the orchestrator "
                              "to refresh installed dependencies in the "
                              "worktree with frozen-mode installs "
-                             "(interactive runs only)")
+                             "(interactive runs only). Omitted, the "
+                             "requester's machine-local config default "
+                             "applies (~/.config/pirategoat/config.json)")
     parser.add_argument("--host", choices=SUPPORTED_HOSTS, default=None,
                         help="Orchestration host (default on first call: claude)")
 
@@ -2537,7 +2561,8 @@ def main():
             if args.session_id is not None:
                 config["session_id"] = args.session_id
             config["quick"] = args.quick
-            config["refresh_dependencies"] = args.refresh_deps
+            config["refresh_dependencies"] = \
+                _resolve_refresh_dependencies(args.refresh_deps)
             write_config(output_dir, config)
         else:
             config = existing_config
@@ -2559,10 +2584,12 @@ def main():
                 config["quick"] = args.quick
                 config_changed = True
             # refresh_dependencies follows the same interactive rerun
-            # semantics as quick: the CLI is authoritative, including absence.
+            # semantics as quick: the CLI is authoritative, with an omitted
+            # flag resolving to the requester's machine-local default.
+            effective_refresh = _resolve_refresh_dependencies(args.refresh_deps)
             if config.get("interactive", True) and \
-                    config.get("refresh_dependencies", False) != args.refresh_deps:
-                config["refresh_dependencies"] = args.refresh_deps
+                    config.get("refresh_dependencies", False) != effective_refresh:
+                config["refresh_dependencies"] = effective_refresh
                 config_changed = True
             if config_changed:
                 write_config(output_dir, config)
