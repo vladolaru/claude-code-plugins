@@ -1963,6 +1963,7 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
                 "--mode", mode,
                 "--git-range", git_range,
                 "--output-dir", output_dir,
+                "--host", _host(config),
             ]
             changed_csv = git.get("changed_files_csv", "")
             if changed_csv:

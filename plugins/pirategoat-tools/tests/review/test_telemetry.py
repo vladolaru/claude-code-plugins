@@ -1423,6 +1423,7 @@ class TestRunManifest:
             ],
             "configured_planner_checks": [],
             "model_tier": "sonnet",
+            "declared_model": None,
             "adjustment_reason": "change does not touch an auth boundary",
             "change": "removed",
         }
@@ -1465,6 +1466,34 @@ class TestRunManifest:
 
         dispatch = _read_manifest(telemetry)["dispatch"]
         assert dispatch["agents"]["repo-renewals-reviewer"]["model_tier"] == "opus"
+
+    def test_repo_reviewer_declared_model_reaches_dispatch_telemetry(
+        self, telemetry, output_dir
+    ):
+        entry = {
+            "name": "repo-renewals-reviewer",
+            "domain": None,
+            "status": "DISPATCH",
+            "reason": "repo-declared reviewer applies",
+            "adapter": "repo-reviewer-adapter",
+            "model": "inherit",
+            "declared_model": "opus",
+        }
+        (output_dir / "dispatch-plan.initial.json").write_text(
+            json.dumps({"agents": [entry]})
+        )
+        (output_dir / "dispatch-plan.json").write_text(
+            json.dumps({"agents": [entry]})
+        )
+
+        telemetry.start(run_id="run-1")
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        decision = _read_manifest(telemetry)["dispatch"]["agents"][
+            "repo-renewals-reviewer"
+        ]
+        assert decision["model_tier"] == "inherit"
+        assert decision["declared_model"] == "opus"
 
     @pytest.mark.parametrize("plan_name", ["initial", "final"])
     @pytest.mark.parametrize(

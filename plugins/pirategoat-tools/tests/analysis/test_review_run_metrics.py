@@ -2638,6 +2638,19 @@ class TestMeasureRun:
         assert measured["dispatch"] is None
         assert measured["metric_availability"]["dispatch"] == "missing"
 
+    def test_dispatch_model_provenance_survives_supported_load(self, tmp_path):
+        manifest = _manifest()
+        decision = manifest["dispatch"]["agents"]["code-reviewer"]
+        decision["model_tier"] = "inherit"
+        decision["declared_model"] = "opus"
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+        loaded = run["dispatch"]["agents"]["code-reviewer"]
+
+        assert loaded["model_tier"] == "inherit"
+        assert loaded["declared_model"] == "opus"
+
     @pytest.mark.parametrize(
         "status,dispatched",
         [

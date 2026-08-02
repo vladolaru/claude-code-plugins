@@ -702,6 +702,7 @@ def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
         "final_status",
         "final_reason",
         "model_tier",
+        "declared_model",
         "adjustment_reason",
         "change",
     )

@@ -1818,7 +1818,9 @@ def _load_review_context(path: Optional[str]) -> Optional[dict]:
         return None
 
 
-def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_list):
+def expand_repo_reviewers(
+    review_context, domain_counts, clean_files, dispatch_list, host="claude"
+):
     """Expand repo-declared reviewers into synthetic adapter dispatch entries.
 
     Each ``reviewers[]`` entry in the reviewed repo's ``.pirategoat/config.json``
@@ -1883,7 +1885,12 @@ def expand_repo_reviewers(review_context, domain_counts, clean_files, dispatch_l
             "label": rev.get("label", rev["id"]),
             "channel": rev.get("channel", "blocking"),
             "execution": rev.get("execution", "inline"),
-            "model": rev.get("model"),
+            "model": (
+                "inherit"
+                if host == "codex" and rev.get("model")
+                else rev.get("model")
+            ),
+            "declared_model": rev.get("model"),
             "scope_domains": scope_domains,
             "domain": None,
             "focus": rev.get("label", rev["id"]),
@@ -1904,6 +1911,7 @@ def build_dispatch_plan(
     diffstat: Optional[Dict] = None,
     review_context: Optional[dict] = None,
     quick: bool = False,
+    host: str = "claude",
 ) -> dict:
     """Build the complete dispatch plan.
 
@@ -1917,6 +1925,8 @@ def build_dispatch_plan(
         diffstat: Pre-fetched diffstat (fetched from git if None).
         review_context: Parsed review-context.json dict (for PR metadata triage).
         quick: If True, exclude low-signal agents with SKIPPED_QUICK_MODE status.
+        host: Dispatch host. Codex native subagents ignore Claude model
+            declarations, so repo-reviewer entries project their effective tier.
 
     Returns:
         Dispatch plan dict with mode, dispatch array, scope_summary, etc.
@@ -2009,7 +2019,7 @@ def build_dispatch_plan(
     # Repo-contributed reviewers: expand each declared reviewer into a synthetic
     # dispatch entry targeting the generic adapter, gated by applicability.
     repo_signals, repo_warnings = expand_repo_reviewers(
-        review_context, domain_counts, clean_files, dispatch_list
+        review_context, domain_counts, clean_files, dispatch_list, host=host
     )
     agent_signals.extend(repo_signals)
 
@@ -2090,6 +2100,15 @@ def main():
         default=False,
         help="Quick review mode: exclude low-signal agents.",
     )
+    parser.add_argument(
+        "--host",
+        choices=["claude", "codex"],
+        default="claude",
+        help=(
+            "Dispatch host; Codex projects declared Claude model tiers to "
+            "the effective inherit tier."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -2110,6 +2129,7 @@ def main():
         changed_files=changed_files,
         review_context=review_context,
         quick=args.quick,
+        host=args.host,
     )
 
     # Output JSON to stdout (for inline parsing by commands)

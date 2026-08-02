@@ -3836,3 +3836,51 @@ class TestRepoReviewerExpansion:
         entry = next(a for a in plan["agents"] if a["name"] == "repo-domain-expert-reviewer")
         assert entry["adapter"] == "repo-reviewer-adapter"
         assert entry["status"] == "DISPATCH"
+
+    def test_codex_host_projects_effective_model_tier(self, registry, tmp_path):
+        rev = {"id": "domain-expert", "label": "Domain Expert",
+               "ref": ".ai/agents/review/expert.md",
+               "applies_to": {"paths": ["**/*.php"]}, "channel": "blocking",
+               "execution": "inline", "model": "opus"}
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="abc..HEAD",
+            output_dir=str(tmp_path),
+            changed_files=["src/x.php"],
+            registry=registry,
+            commit_messages="",
+            diffstat={},
+            review_context=_review_ctx([rev]),
+            host="codex",
+        )
+
+        entry = next(
+            agent for agent in plan["agents"]
+            if agent.get("adapter") == "repo-reviewer-adapter"
+        )
+        assert entry["model"] == "inherit"
+        assert entry["declared_model"] == "opus"
+
+    def test_claude_host_keeps_declared_model_tier(self, registry, tmp_path):
+        rev = {"id": "domain-expert", "label": "Domain Expert",
+               "ref": ".ai/agents/review/expert.md",
+               "applies_to": {"paths": ["**/*.php"]}, "channel": "blocking",
+               "execution": "inline", "model": "opus"}
+        plan = build_dispatch_plan(
+            mode="full",
+            git_range="abc..HEAD",
+            output_dir=str(tmp_path),
+            changed_files=["src/x.php"],
+            registry=registry,
+            commit_messages="",
+            diffstat={},
+            review_context=_review_ctx([rev]),
+            host="claude",
+        )
+
+        entry = next(
+            agent for agent in plan["agents"]
+            if agent.get("adapter") == "repo-reviewer-adapter"
+        )
+        assert entry["model"] == "opus"
+        assert entry["declared_model"] == "opus"

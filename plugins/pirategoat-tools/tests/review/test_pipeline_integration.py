@@ -597,6 +597,55 @@ class TestStep5Orchestration:
         assert json.loads(final_path.read_text()) == plan
         assert not initial_path.exists()
 
+    def test_step_5_real_planner_projects_persisted_codex_host(self, tmp_path):
+        repo = self._make_repo(tmp_path)
+        result = self._run(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path), "--host", "codex",
+            cwd=str(repo),
+        )
+        assert result.returncode == 0
+
+        prompt_path = repo / ".ai" / "agents" / "review" / "expert.md"
+        prompt_path.parent.mkdir(parents=True)
+        prompt_path.write_text("Review the domain behavior.")
+        context = {
+            "git": {
+                "git_range": "HEAD..HEAD",
+                "changed_files": ["src/x.php"],
+                "changed_files_csv": "src/x.php",
+            },
+            "review_config": {
+                "rules": [],
+                "reviewers": [{
+                    "id": "domain-expert",
+                    "label": "Domain Expert",
+                    "ref": ".ai/agents/review/expert.md",
+                    "resolved_ref": str(prompt_path),
+                    "applies_to": {"paths": ["**/*.php"]},
+                    "channel": "blocking",
+                    "execution": "inline",
+                    "model": "opus",
+                }],
+                "untrusted": [],
+            },
+        }
+        (tmp_path / "review-context.json").write_text(json.dumps(context))
+
+        result = self._run(
+            "--step", "5", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=str(repo),
+        )
+
+        assert result.returncode == 0
+        plan = json.loads((tmp_path / "dispatch-plan.json").read_text())
+        entry = next(
+            agent for agent in plan["agents"]
+            if agent.get("adapter") == "repo-reviewer-adapter"
+        )
+        assert entry["model"] == "inherit"
+        assert entry["declared_model"] == "opus"
+
     def test_failed_planner_retry_preserves_existing_baseline_and_adjusted_plan(
         self, mod, tmp_path, monkeypatch
     ):

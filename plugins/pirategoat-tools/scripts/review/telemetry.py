@@ -935,6 +935,10 @@ class ReviewTelemetry:
                     or self._safe_dispatch_string(final.get("model"))
                     or self._safe_dispatch_string(registry_agent.get("model_tier"))
                 ),
+                "declared_model": (
+                    self._safe_dispatch_string(initial.get("declared_model"))
+                    or self._safe_dispatch_string(final.get("declared_model"))
+                ),
                 "adjustment_reason": self._safe_dispatch_string(
                     final.get("override_reason")
                 ),
