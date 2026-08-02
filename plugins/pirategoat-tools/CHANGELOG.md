@@ -5,6 +5,12 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.114.0] - 2026-08-02
+
+### Added
+
+- **Trusted-branch dependency refresh (opt-in).** `--refresh-deps` on the three review commands lets the requester authorize refreshing installed dependencies in the worktree before reviewers dispatch — recovering the review depth lost with 1.113.0's installer removal for the case where the requester trusts the branch enough to execute its code. The pipeline deterministically detects stale dependency roots (manifest/lockfile changed in range, or installed state missing) at step 3 and briefs the main orchestrator to refresh them adaptively, constrained to frozen-mode installs (`composer install`, `npm ci`, `pnpm install --frozen-lockfile`, `yarn install --immutable`) that must not modify tracked files; host context is re-resolved afterward via the new `context.py --refresh-host-context`, and the orchestrator's `dependency-refresh.json` report lands sanitized in the run manifest as measurement provenance. Interactive-only: step 1 forces the flag off for non-interactive (bot) runs whether it arrives via CLI or a pre-seeded run-config.json. Default remains off — reviews of uninstalled repos keep reporting honest degraded host context.
+
 ## [1.113.0] - 2026-08-01
 
 ### Removed

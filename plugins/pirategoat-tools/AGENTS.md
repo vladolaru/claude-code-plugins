@@ -15,7 +15,8 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/agent/scope.py` | Efficient diff scoping. Filters changes by domain (security, performance, php-tests, etc.) and outputs structured STATUS/FILES/STATS/DIFFS sections. **Language recognition lives in one place:** the `_PROG_LANGS`/`_STYLE_LANGS`/`_QUERY_LANGS`/`_DOC_LANGS`/`_DATA_LANGS`/`_FRONTEND_LANGS` groups, plus `_MIXED_MARKUP_LANGS`, `_TEMPLATE_LANGS`, and `_TEMPLATE_SUFFIXES` for rendered UI. Domains compose extensions via `_ext_re(...)`; `is_template_file()` distinguishes pure and compound templates for a11y dispatch and budget priority. Add formats to these sources once — never edit per-domain regexes. Budget priority tiers (`production_first`, `markup_evidence`) order files before largest-first budgeting; one oversized leading diff is protected outside the ordinary pool, and `--summary-json-out` persists per-agent scope summaries for run-level coverage accounting. |
 | `scripts/review/plan_dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review/pipeline.py. Also runs the unrecognized-source safety net (`detect_unrecognized_source`) that emits a `warnings[]` entry when a changed source language no domain covers — so coverage gaps fail loudly instead of producing a clean review. |
 | `scripts/review/dispatch_status.py` | Canonical producer/consumer dispatch-status vocabulary and dispatch-plan agent validator. Consumers classify dispatched and skipped states only through its explicit sets; hand-edited invalid statuses fail with the offending agent and value. |
-| `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. |
+| `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. `--refresh-host-context` re-runs only host-context discovery against the existing review-context.json (used after a trusted-branch dependency refresh). |
+| `scripts/review/dependency_refresh.py` | Deterministic stale-dependency-root detection for trusted-branch refresh (opt-in `--refresh-deps`). Side-effect free: signals composer/npm/pnpm/yarn roots whose manifest/lockfile changed in range or whose installed state is missing, bounded to repo root + directories containing changed manifest files. Execution belongs to the step 3 briefing, never this module. |
 | `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, `add_unreviewed()` (declared budget-omission coverage gaps, verified against the bootstrap-written `<reviewer>-deferred-files.json` sidecar when present so an unmatched declaration fails loudly instead of inverting into a reviewed claim), verdict calculation, JSON/Markdown serialization. |
 | `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8. |
 | `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
@@ -127,6 +128,42 @@ These are variations on the mission, not repetitions. Each connects the mission 
 ### Step 8 Readiness Gate
 
 Before reconciliation, step 8 checks if all dispatched agents have finished via `review/agents_status.py`. If agents are still running, returns a WAITING briefing. Tracks `first_waiting_at` in pipeline state. If elapsed wait exceeds `agent_timeout_seconds + 60s`, escalates: clears the waiting state and proceeds with reconciliation using available results, instructing the LLM to TaskStop stuck agents first.
+
+### Trusted-Branch Dependency Refresh (opt-in)
+
+The pipeline never installs dependencies itself (1.113.0 removed
+manifest-driven installation — package managers execute configuration as
+code). When the requester explicitly opts in with `--refresh-deps`
+(`refresh_dependencies` in run-config.json), the pipeline instead lets the
+**main orchestrator** refresh the worktree, because opting in means the
+requester trusts the branch enough to execute its code.
+
+Split of responsibilities:
+
+- **Deterministic detection** (`scripts/review/dependency_refresh.py`, run by
+  step 3 orchestration): signals dependency roots whose manifest/lockfile
+  changed in the reviewed range or whose installed state is missing. Failure
+  records `detection_failed` — staleness is reported unknown, never silently
+  clean.
+- **Adaptive execution** (step 3 briefing): the orchestrator runs the
+  suggested commands, constrained to frozen-mode installs (`composer
+  install`, `npm ci`, `pnpm install --frozen-lockfile`, `yarn install
+  --immutable`) that must not modify tracked files (verified via `git status
+  --porcelain`, restore on violation), then re-resolves host context with
+  `context.py --refresh-host-context` and writes `dependency-refresh.json`
+  (a step 3 handoff gate).
+- **Measurement** (`telemetry.py`): the manifest records the sanitized
+  report under `dependency_refresh` — a run reviewed against freshly
+  installed dependencies is not comparable to one with degraded host
+  context.
+
+**Hard-off for bots.** `refresh_dependencies` is interactive-only: step 1
+forces it off (with a stderr warning) for `interactive: false` runs whether
+it arrived via CLI or a pre-seeded run-config.json. A bot reviewing
+third-party PRs must never execute reviewed-branch code. The adaptive
+orchestrator solves the *variability* problem (which manager, which
+commands, monorepos); the opt-in gate — and only the gate — solves the
+*trust* problem.
 
 ### Shared Protocols
 
