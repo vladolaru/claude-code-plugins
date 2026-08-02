@@ -498,3 +498,76 @@ def test_fill_review_config_populates_context(tmp_path, monkeypatch):
     assert ctx["review_config"] is not None
     ids = [r["id"] for r in ctx["review_config"]["rules"]]
     assert "r1" in ids
+
+
+class TestRefreshHostContextMode:
+    """--refresh-host-context re-resolves host_context in place."""
+
+    def _init_repo(self, path):
+        subprocess.run(["git", "init"], cwd=path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@e.com"],
+                       cwd=path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "T"],
+                       cwd=path, capture_output=True, check=True)
+
+    def _run(self, *args, cwd):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+
+    def test_refresh_updates_host_context_and_preserves_fields(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ctx = {
+            "git": {"git_range": "abc..def", "changed_files": ["a.py"]},
+            "pr": {"number": 42},
+            "host_context": {"stale": True},
+        }
+        (out_dir / "review-context.json").write_text(json.dumps(ctx))
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode == 0
+        updated = json.loads((out_dir / "review-context.json").read_text())
+        # Prior fields preserved untouched
+        assert updated["git"]["git_range"] == "abc..def"
+        assert updated["pr"]["number"] == 42
+        # host_context re-resolved: the stale marker is gone
+        assert updated.get("host_context") != {"stale": True}
+
+    def test_refresh_does_not_require_branch_or_pr_number(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / "review-context.json").write_text("{}")
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode == 0
+
+    def test_refresh_with_missing_context_file_starts_empty(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode == 0
+        updated = json.loads((out_dir / "review-context.json").read_text())
+        assert "host_context" in updated
+        assert updated["output"]["directory"] == str(out_dir)

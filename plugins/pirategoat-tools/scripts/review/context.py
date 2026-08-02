@@ -597,15 +597,39 @@ def main():
                         help="Path to the repo under review (for host-context "
                              "discovery). Defaults to the git root of the "
                              "current working directory when available.")
+    parser.add_argument("--refresh-host-context", action="store_true",
+                        help="Only re-run host-context discovery against the "
+                             "existing review-context.json and write it back. "
+                             "Used after a trusted-branch dependency refresh "
+                             "so reviewers see the fresh installed state.")
 
     args = parser.parse_args()
 
-    if not args.pr_number and not args.branch:
+    if not args.refresh_host_context and not args.pr_number and not args.branch:
         print("ERROR: Must provide --pr-number or --branch", file=sys.stderr)
         sys.exit(1)
 
     os.makedirs(args.output_dir, exist_ok=True)
     ctx_path = os.path.join(args.output_dir, "review-context.json")
+
+    if args.refresh_host_context:
+        # Trusted-branch dependency refresh changed the installed state on
+        # disk; re-resolve ONLY host context so a full (slow) regather isn't
+        # paid twice in one run. Everything else in the file is preserved.
+        try:
+            with open(ctx_path) as f:
+                ctx = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            ctx = {}
+        if not isinstance(ctx, dict):
+            ctx = {}
+        repo_root = _resolve_repo_root(args.repo_path or os.getcwd())
+        _fill_host_context(ctx, repo_root)
+        ctx.setdefault("output", {})["directory"] = args.output_dir
+        with open(ctx_path, "w") as f:
+            json.dump(ctx, f, indent=2)
+        print(json.dumps(ctx.get("host_context"), indent=2))
+        return
 
     ctx = load_and_fill(
         ctx_path,
