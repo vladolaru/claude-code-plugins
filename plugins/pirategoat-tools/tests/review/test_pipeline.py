@@ -1861,3 +1861,96 @@ class TestStep10QuickMode:
             assert "decision-reviewer" not in text, (
                 f"Critic should be skipped for verdict '{verdict}'"
             )
+
+
+class TestStep3DependencyRefresh:
+    """Step 3 briefing renders trusted-branch dependency refresh guidance."""
+
+    _SIGNAL_STATE = {
+        "completed_steps": [],
+        "dependency_refresh": {
+            "signals": [
+                {
+                    "manager": "composer",
+                    "directory": ".",
+                    "reasons": ["changed_in_range"],
+                    "changed_files": ["composer.lock"],
+                    "installed_state_present": True,
+                    "suggested_command": "composer install",
+                },
+            ],
+        },
+    }
+
+    def _text(self, g):
+        parts = list(g["situation"]) + list(g["actions"])
+        if g.get("handoff"):
+            parts += list(g["handoff"])
+        return "\n".join(parts)
+
+    def test_signals_render_refresh_section(self, mod, tmp_path):
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "Dependency refresh" in text
+        assert "composer install" in text
+        assert "frozen-mode" in text
+        assert "git status --porcelain" in text
+        assert "--refresh-host-context" in text
+        assert "dependency-refresh.json" in text
+
+    def test_handoff_gates_the_refresh_report(self, mod, tmp_path):
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+                                  config=config, output_dir=str(tmp_path))
+        handoff_text = "\n".join(g["handoff"])
+        assert "dependency-refresh.json" in handoff_text
+        # change-purpose handoff still present (no unfetched issues)
+        assert "change-purpose.md" in handoff_text
+
+    def test_refresh_handoff_survives_unfetched_issues(self, mod, tmp_path):
+        state = dict(self._SIGNAL_STATE)
+        state["resolved_params"] = {"has_unfetched_issues": True}
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", state, {},
+                                  config=config, output_dir=str(tmp_path))
+        handoff_text = "\n".join(g["handoff"] or [])
+        assert "dependency-refresh.json" in handoff_text
+        # change-purpose moves to step 4 when issues are unfetched
+        assert "change-purpose.md" not in handoff_text
+
+    def test_enabled_with_no_signals_reports_nothing_to_refresh(self, mod, tmp_path):
+        state = {"completed_steps": [],
+                 "dependency_refresh": {"signals": []}}
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", state, {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "nothing to refresh" in text
+        assert "composer install" not in text
+        handoff_text = "\n".join(g["handoff"] or [])
+        assert "dependency-refresh.json" not in handoff_text
+
+    def test_detection_failure_reports_unknown_staleness(self, mod, tmp_path):
+        state = {"completed_steps": [],
+                 "dependency_refresh": {"signals": [],
+                                        "detection_failed": True}}
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        g = mod.get_step_guidance(3, "full", state, {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "detection failed" in text
+
+    def test_flag_off_renders_nothing(self, mod, tmp_path):
+        config = {"mode": "full", "interactive": True}
+        g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
+                                  config=config, output_dir=str(tmp_path))
+        text = self._text(g)
+        assert "Dependency refresh" not in text
+        assert "dependency-refresh.json" not in text

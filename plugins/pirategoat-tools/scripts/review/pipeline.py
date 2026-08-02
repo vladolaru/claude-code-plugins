@@ -764,6 +764,86 @@ def _change_purpose_handoff(output_dir):
     ]
 
 
+def _dependency_refresh_briefing(state, config, output_dir):
+    """Situation/actions/handoff lines for trusted-branch dependency refresh.
+
+    All three lists are empty when the requester did not opt in. Detection
+    failure and empty detection each get one honest situation line so the
+    orchestrator never has to guess why no refresh instructions appeared.
+    """
+    if not (config or {}).get("refresh_dependencies"):
+        return [], [], []
+    od = output_dir or "<OUTPUT_DIR>"
+    detection = state.get("dependency_refresh") or {}
+    signals = detection.get("signals") or []
+
+    if detection.get("detection_failed"):
+        return (
+            ["**Dependency refresh:** enabled, but stale-dependency "
+             "detection failed — treat dependency staleness as unknown and "
+             "proceed without refreshing.", ""],
+            [],
+            [],
+        )
+    if not signals:
+        return (
+            ["**Dependency refresh:** enabled — no stale dependency roots "
+             "detected; nothing to refresh.", ""],
+            [],
+            [],
+        )
+
+    situation = [
+        "**Dependency refresh (trusted-branch mode):** the requester "
+        "authorized refreshing installed dependencies in this worktree. "
+        "Stale dependency roots detected:",
+    ]
+    for s in signals:
+        reasons = ", ".join(s.get("reasons", []))
+        presence = (
+            "installed state present"
+            if s.get("installed_state_present")
+            else "installed state missing"
+        )
+        situation.append(
+            f"- {s.get('manager')} in `{s.get('directory')}` ({reasons}; "
+            f"{presence}) — suggested: `{s.get('suggested_command')}`"
+        )
+    situation.append("")
+
+    actions = [
+        "Refresh the stale dependency roots BEFORE writing the "
+        "change-purpose summary, so host context reflects what reviewers "
+        "will read:",
+        "- Run each suggested command in its listed directory. Adapt to "
+        "this repo where needed (e.g. classic Yarn spells `--immutable` as "
+        "`--frozen-lockfile`), but stay within frozen-mode installs of the "
+        "detected package managers: `composer install`, `npm ci`, "
+        "`pnpm install --frozen-lockfile`, `yarn install --immutable`.",
+        "- NEVER run update/upgrade/add/require commands — the install "
+        "must not modify tracked files.",
+        "- After installing, run `git status --porcelain` and check for "
+        "modified TRACKED files. If any appear, restore them with "
+        "`git checkout -- <path>` and record the refresh as failed.",
+        "- Re-resolve host context so reviewers see the refreshed state: "
+        f"`python3 {SCRIPTS_DIR / 'context.py'} --output-dir {od} "
+        "--refresh-host-context`",
+        "",
+    ]
+
+    handoff = [
+        f"Write `{od}/dependency-refresh.json` recording what you ran:",
+        "```json",
+        '{"status": "<completed | partial | failed>",',
+        ' "commands": [{"directory": "<dir>", "command": "<command run>", '
+        '"exit_status": "<ok | failed>"}],',
+        ' "tracked_files_dirty": <true | false>}',
+        "```",
+        "Verify the file exists before proceeding.",
+    ]
+    return situation, actions, handoff
+
+
 def _step_3_gather_context(mode, state, context, config, output_dir):
     """Step 3: Gather Context — present curated briefing."""
     git = context.get("git", {})
@@ -830,13 +910,27 @@ def _step_3_gather_context(mode, state, context, config, output_dir):
                 f"{library_root_count} dependency roots resolved."
             )
 
-    # Actions
+    # Trusted-branch dependency refresh — renders only when the requester
+    # opted in (run-config refresh_dependencies).
+    refresh_situation, refresh_actions, refresh_handoff = \
+        _dependency_refresh_briefing(state, config, output_dir)
+    situation.extend(refresh_situation)
+
+    # Actions — refresh first, so host context is fresh before the
+    # change-purpose summary is written.
+    actions.extend(refresh_actions)
     actions.append("Review the context above and write the change-purpose summary.")
 
-    # Change-purpose handoff — only when no unfetched issues
+    # Handoff — the refresh report gates step 3 whenever a refresh was
+    # instructed; change-purpose joins it unless unfetched issues push the
+    # summary to step 4.
     has_unfetched = state.get("resolved_params", {}).get("has_unfetched_issues", False)
+    handoff_lines = list(refresh_handoff)
     if not has_unfetched:
-        handoff = _change_purpose_handoff(output_dir)
+        if handoff_lines:
+            handoff_lines.append("")
+        handoff_lines.extend(_change_purpose_handoff(output_dir))
+    handoff = handoff_lines or None
 
     return {
         "phase": "SETUP",
