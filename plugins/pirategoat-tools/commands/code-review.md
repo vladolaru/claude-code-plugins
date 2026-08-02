@@ -33,10 +33,15 @@ refresh or install dependencies before the review (e.g., "refresh deps",
 "refresh dependencies", "update dependencies first", "install deps first"),
 add `--refresh-deps` to the first `pipeline.py` call. This is trusted-branch
 mode: the pipeline will detect stale dependency roots and brief you to run
-frozen-mode installs in the worktree — only add it when the user asked,
-never by default. Examples:
+frozen-mode installs in the worktree — only add the flag when the user
+asked. Examples:
 - `/code-review refresh deps` → add `--refresh-deps`
-- `/code-review` → do NOT add `--refresh-deps`
+- `/code-review` → omit the flag
+
+An omitted flag falls back to the requester's machine-local default
+(`~/.config/pirategoat/config.json` with `review.refresh_dependencies: true`
+turns refresh on for every interactive run). If the user asks to skip the
+refresh for this run, add `--no-refresh-deps`.
 
 **Construct output directory** (sanitize all fragments):
 

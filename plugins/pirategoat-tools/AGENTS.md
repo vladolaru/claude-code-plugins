@@ -17,6 +17,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/dispatch_status.py` | Canonical producer/consumer dispatch-status vocabulary and dispatch-plan agent validator. Consumers classify dispatched and skipped states only through its explicit sets; hand-edited invalid statuses fail with the offending agent and value. |
 | `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. `--refresh-host-context` re-runs only host-context discovery against the existing review-context.json (used after a trusted-branch dependency refresh). |
 | `scripts/review/dependency_refresh.py` | Deterministic stale-dependency-root detection for trusted-branch refresh (opt-in `--refresh-deps`). Side-effect free: signals composer/npm/pnpm/yarn roots whose manifest/lockfile changed in range or whose installed state is missing, bounded to repo root + directories containing changed manifest files. Execution belongs to the step 3 briefing, never this module. |
+| `scripts/review/user_settings.py` | Requester-side machine-local settings (`~/.config/pirategoat/config.json` / `$XDG_CONFIG_HOME`). Owns the standing trust declaration `review.refresh_dependencies: true` that defaults trusted-branch refresh on for every interactive run. Deliberately separate from the reviewed repo's `.pirategoat/config.json`: trust is the requester's to declare, never the repo's. |
 | `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, `add_unreviewed()` (declared budget-omission coverage gaps, verified against the bootstrap-written `<reviewer>-deferred-files.json` sidecar when present so an unmatched declaration fails loudly instead of inverting into a reviewed claim), verdict calculation, JSON/Markdown serialization. |
 | `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8. |
 | `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
@@ -133,10 +134,18 @@ Before reconciliation, step 8 checks if all dispatched agents have finished via 
 
 The pipeline never installs dependencies itself (1.113.0 removed
 manifest-driven installation — package managers execute configuration as
-code). When the requester explicitly opts in with `--refresh-deps`
-(`refresh_dependencies` in run-config.json), the pipeline instead lets the
-**main orchestrator** refresh the worktree, because opting in means the
-requester trusts the branch enough to execute its code.
+code). When the requester opts in — per run with `--refresh-deps`, or as a
+standing machine-local declaration in `~/.config/pirategoat/config.json`
+(`{"review": {"refresh_dependencies": true}}`, resolved by
+`user_settings.py`) — the pipeline instead lets the **main orchestrator**
+refresh the worktree, because opting in means the requester trusts the
+branch enough to execute its code. Resolution: an explicit
+`--refresh-deps`/`--no-refresh-deps` wins; an omitted flag falls back to
+the machine-local default; the effective value lands in run-config.json as
+`refresh_dependencies`. The standing declaration covers every interactive
+run the requester starts — all modes, all clones — which includes
+interactive PR reviews of third-party branches; that is the requester's
+explicit trust decision, made in a file the reviewed repo can never touch.
 
 Split of responsibilities:
 
