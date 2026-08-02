@@ -61,7 +61,7 @@ CODEX_PLUGIN_ROOT="<absolute plugin root: two directories above the directory co
 python3 ${CODEX_PLUGIN_ROOT}/scripts/review/pipeline.py \
   --host codex \
   --step 1 --mode full --output-dir "$OUTPUT_DIR" \
-  --session-id "${CLAUDE_SESSION_ID}"
+  --session-id "${CODEX_THREAD_ID}"
 ```
 
 If an explicit git range was provided, add `--git-range "<RANGE>"`.

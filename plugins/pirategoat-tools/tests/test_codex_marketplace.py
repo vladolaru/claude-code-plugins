@@ -210,6 +210,35 @@ def test_review_command_adapters_select_codex_host():
         assert "--host codex" in text
 
 
+def test_generated_skills_never_reference_claude_session_id():
+    """CLAUDE_SESSION_ID is Claude-host vocabulary. A generated Codex
+    skill that passes it hands the pipeline an empty session ID and
+    silently kills transcript correlation. The three review adapters must
+    pass the verified Codex thread identity, while every generated skill
+    remains free of the Claude-only variable."""
+    review_skill_paths = [
+        REPO_ROOT
+        / "plugins"
+        / "pirategoat-tools"
+        / "codex-skills"
+        / command_name
+        / "SKILL.md"
+        for command_name in ("pr-review", "full-code-review", "code-review")
+    ]
+    for skill_path in review_skill_paths:
+        skill_text = skill_path.read_text(encoding="utf-8")
+        assert '--session-id "${CODEX_THREAD_ID}"' in skill_text, skill_path
+
+    skill_files = sorted(REPO_ROOT.glob("plugins/*/codex-skills/*/SKILL.md"))
+    assert skill_files, "generated skill inventory is empty"
+    offenders = [
+        str(path)
+        for path in skill_files
+        if "CLAUDE_SESSION_ID" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
 def test_canonical_skills_use_host_neutral_skill_directory():
     for skill_path in REPO_ROOT.glob("plugins/*/skills/*/SKILL.md"):
         text = skill_path.read_text()

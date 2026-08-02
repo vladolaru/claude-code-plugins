@@ -304,6 +304,11 @@ def translate_command_body(
 ) -> str:
     body = normalize_text(body)
     body = body.replace("${CLAUDE_PLUGIN_ROOT}", "${CODEX_PLUGIN_ROOT}")
+    # Host session identity: Claude exposes CLAUDE_SESSION_ID; Codex
+    # exposes CODEX_THREAD_ID (verified 2026-08-02 via `codex exec` env
+    # dump). Translate so generated skills correlate transcripts on both
+    # hosts instead of passing an empty Claude-only variable.
+    body = body.replace("${CLAUDE_SESSION_ID}", "${CODEX_THREAD_ID}")
     # Word-boundary match so `$ARGUMENTS_LIST` etc. are not rewritten to
     # `${CODEX_SKILL_ARGUMENTS}_LIST`.
     body = re.sub(r"\$ARGUMENTS\b", "${CODEX_SKILL_ARGUMENTS}", body)
