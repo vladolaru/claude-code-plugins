@@ -193,6 +193,7 @@ def _bounded_jsonl_entries(
     pending: list[dict[str, Any]] = []
     pending_time_gap = False
     pending_parse_gap = False
+    pending_has_opening_prompt = False
     in_window = False
     parse_gap = False
     time_gap = False
@@ -238,22 +239,37 @@ def _bounded_jsonl_entries(
                         pending = [value]
                         pending_time_gap = False
                         pending_parse_gap = False
+                        pending_has_opening_prompt = True
                     else:
                         pending.append(value)
                     continue
+                window_was_open = in_window
+                opening_prompt_was_buffered = False
                 if not in_window:
                     in_window = True
+                    opening_prompt_was_buffered = pending_has_opening_prompt
                     entries.extend(pending)
                     pending = []
+                    pending_has_opening_prompt = False
                     if pending_time_gap:
                         time_gap = True
                     if pending_parse_gap:
                         parse_gap = True
                 if (
-                    ended_at is not None
-                    and timestamp > ended_at
-                    and _is_human_prompt(value)
+                    _is_human_prompt(value)
+                    and (
+                        (ended_at is not None and timestamp > ended_at)
+                        or (
+                            ended_at is None
+                            and (window_was_open or opening_prompt_was_buffered)
+                        )
+                    )
                 ):
+                    # The opening turn may be entirely buffered before
+                    # started_at. A live interactive interjection may close
+                    # an open run early, but running windows are already
+                    # partial evidence and unbounded absorption of foreign
+                    # turns is worse.
                     break
                 entries.append(value)
     except OSError:

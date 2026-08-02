@@ -2567,7 +2567,7 @@ class TestEnrichRunTranscript:
             "observed_reads": None,
         }
 
-    def test_run_window_is_inclusive_and_running_window_is_open_ended(self, tmp_path):
+    def test_completed_run_window_is_inclusive(self, tmp_path):
         sessions = tmp_path / "sessions"
         output_dir = tmp_path / "run"
         entries = [
@@ -2598,10 +2598,104 @@ class TestEnrichRunTranscript:
 
         assert bounded["usage"]["output_tokens"] == 5
 
+    def test_open_ended_window_closes_at_next_human_prompt(self, tmp_path):
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "review this"},
+                },
+                -1,
+            ),
+            _at(_assistant(usage=_usage(1, 2)), 0),
+            _at(_assistant(usage=_usage(2, 3)), 60),
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "unrelated task"},
+                },
+                61,
+            ),
+            _at(_assistant(usage=_usage(100, 100)), 62),
+        ]
+        _write_jsonl(sessions / "open-ended-human.jsonl", entries)
+        manifest = _manifest(
+            "open-ended-human", tmp_path, output_dir, started=[]
+        )
         manifest["run"]["ended_at"] = None
-        running = enrich_run_transcript(manifest, sessions, set())
 
-        assert running["usage"]["output_tokens"] == 105
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 5
+
+    def test_open_ended_window_closes_when_first_post_start_record_is_human(
+        self, tmp_path
+    ):
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "review this"},
+                },
+                -2,
+            ),
+            _at(_assistant(usage=_usage(1, 2)), -1),
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "unrelated task"},
+                },
+                1,
+            ),
+            _at(_assistant(usage=_usage(100, 100)), 2),
+        ]
+        _write_jsonl(sessions / "open-ended-buffered.jsonl", entries)
+        manifest = _manifest(
+            "open-ended-buffered", tmp_path, output_dir, started=[]
+        )
+        manifest["run"]["ended_at"] = None
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 2
+
+    @pytest.mark.parametrize(
+        "synthetic_content",
+        [
+            "<task-notification>agent done</task-notification>",
+            "<session_digest>compacted context</session_digest>",
+        ],
+        ids=["task-notification", "session-digest"],
+    )
+    def test_open_ended_window_ignores_synthetic_user_records(
+        self, tmp_path, synthetic_content
+    ):
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        entries = [
+            _at(_assistant(usage=_usage(1, 2)), 0),
+            _at(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": synthetic_content},
+                },
+                1,
+            ),
+            _at(_assistant(usage=_usage(2, 3)), 2),
+        ]
+        _write_jsonl(sessions / "open-ended-synthetic.jsonl", entries)
+        manifest = _manifest(
+            "open-ended-synthetic", tmp_path, output_dir, started=[]
+        )
+        manifest["run"]["ended_at"] = None
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        assert result["usage"]["output_tokens"] == 5
 
     def test_invalid_utf8_line_costs_one_line_not_the_enrichment(
         self, tmp_path
