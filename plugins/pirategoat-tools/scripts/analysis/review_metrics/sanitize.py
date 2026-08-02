@@ -465,9 +465,10 @@ def _strict_lifecycle_agents(
 
     starts_by_agent = Counter(event["agent"] for event in started)
     completions_by_agent = Counter(event["agent"] for event in completed)
-    if status == "complete" and Counter(incomplete) != (
-        starts_by_agent - completions_by_agent
-    ):
+    # The producer derives all three lists from one event stream, so this
+    # identity holds for running manifests too. A violation is damaged or
+    # foreign evidence, not a valid in-progress snapshot.
+    if Counter(incomplete) != (starts_by_agent - completions_by_agent):
         return None
     return {
         "started": started,

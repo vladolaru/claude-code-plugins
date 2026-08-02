@@ -3862,9 +3862,8 @@ class TestLifecycleMeasurement:
             "completion_gap": 0,
         }
 
-    def test_running_native_lifecycle_retains_observations_as_partial(self, tmp_path):
-        manifest = _manifest(ended_at=None)
-        manifest["status"] = "running"
+    def test_running_lifecycle_rejects_missing_unmatched_agent(self, tmp_path):
+        manifest = _running_manifest()
         manifest["agents"] = {
             "started": [_agent_start()],
             "completed": [],
@@ -3873,30 +3872,16 @@ class TestLifecycleMeasurement:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["metric_availability"]["lifecycle"] == "partial"
-        assert measured["lifecycle"] == {
-            "started_events": 1,
-            "completed_events": 0,
-            "incomplete_identities": [],
-            "incomplete_count": 0,
-            "incomplete_by_agent": {},
-            "starts_by_agent": {"code-reviewer": 1},
-            "extra_starts_by_agent": {"code-reviewer": 0},
-            "retry_overhead": 0,
-            "completion_gap": 1,
-        }
+        assert measured["metric_availability"]["lifecycle"] == "missing"
+        assert measured["lifecycle"] is None
 
-    def test_running_native_lifecycle_accepts_current_unmatched_multiset(
+    def test_running_lifecycle_accepts_current_unmatched_multiset(
         self, tmp_path
     ):
-        manifest = _manifest(ended_at=None)
-        manifest["status"] = "running"
+        manifest = _running_manifest()
         manifest["agents"] = {
-            "started": [
-                _agent_start(timestamp="2026-07-19T10:00:10+00:00"),
-                _agent_start(timestamp="2026-07-19T10:00:11+00:00"),
-            ],
-            "completed": [_agent_complete()],
+            "started": [_agent_start()],
+            "completed": [],
             "incomplete": ["code-reviewer"],
         }
 
