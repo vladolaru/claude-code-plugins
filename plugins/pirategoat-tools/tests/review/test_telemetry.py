@@ -557,6 +557,24 @@ class TestRunManifest:
         assert "PIPELINE_RESULT_SECRET" not in serialized
         assert "TOOL_RESULT_SECRET" not in serialized
 
+    def test_manifest_counts_event_parse_gaps(self, telemetry):
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(agent_name="security-reviewer")
+        with open(telemetry.log_path, "a") as log:
+            log.write("not json\n")
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        assert _read_manifest(telemetry)["event_parse_gaps"] == 1
+
+    def test_clean_manifest_omits_event_parse_gaps(self, telemetry):
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(agent_name="security-reviewer")
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        assert "event_parse_gaps" not in _read_manifest(telemetry)
+
     def test_finalize_records_agent_lifecycle_and_incomplete_names(
         self, telemetry
     ):

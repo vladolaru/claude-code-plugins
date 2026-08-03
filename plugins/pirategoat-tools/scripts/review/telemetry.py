@@ -163,6 +163,7 @@ class ReviewTelemetry:
         self.output_dir = output_dir
         self.log_dir = log_dir or LOG_DIR
         self._log_path: Optional[str] = None
+        self._event_parse_gaps = 0
 
     @property
     def log_path(self) -> Optional[str]:
@@ -462,7 +463,12 @@ class ReviewTelemetry:
             f.write(json.dumps(event, separators=(",", ":")) + "\n")
 
     def _read_events(self) -> List[dict]:
-        """Read valid object events, skipping malformed JSONL lines."""
+        """Read object events, skipping and counting malformed/non-object lines.
+
+        Counting skipped lines keeps the manifest from presenting a damaged log
+        as if it were a clean, shorter event stream.
+        """
+        self._event_parse_gaps = 0
         events = []
         log_path = self.log_path
         if not log_path or not os.path.isfile(log_path):
@@ -477,9 +483,12 @@ class ReviewTelemetry:
                     try:
                         event = json.loads(line)
                     except (json.JSONDecodeError, TypeError):
+                        self._event_parse_gaps += 1
                         continue
                     if isinstance(event, dict):
                         events.append(event)
+                    else:
+                        self._event_parse_gaps += 1
         except OSError:
             pass
         return events
@@ -1225,6 +1234,8 @@ class ReviewTelemetry:
         manifest["coverage"] = coverage
         manifest["availability"]["coverage"] = coverage is not None
         manifest["dependency_refresh"] = self._build_dependency_refresh_manifest()
+        if self._event_parse_gaps:
+            manifest["event_parse_gaps"] = self._event_parse_gaps
         return manifest
 
     def _materialize_manifest(self, status: str) -> None:
