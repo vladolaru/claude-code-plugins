@@ -1049,18 +1049,50 @@ class ReviewTelemetry:
     def _build_dependency_refresh_manifest(self):
         """Sanitize the orchestrator's dependency-refresh report.
 
-        The artifact is orchestrator-written free text: only known fields
-        with expected shapes survive, commands are length-capped measurement
-        evidence (like adjustment reasons), and a non-object file reads as
-        unreported. Returns None when refresh was never requested and no
-        report exists — absent, not a measured no-op.
+        The orchestrator report is free text and the verification artifact is
+        script-owned: only known fields with expected shapes survive, commands
+        are length-capped measurement evidence (like adjustment reasons), and
+        a non-object file reads as absent. Returns None when refresh was never
+        requested and neither evidence artifact exists — absent, not a
+        measured no-op.
         """
         config = self._read_json_file("run-config.json") or {}
         requested = config.get("refresh_dependencies") is True
         report = self._read_json_file("dependency-refresh.json")
-        if not requested and report is None:
+        verification = self._read_json_file(
+            "dependency-refresh-verification.json"
+        )
+        if not requested and report is None and verification is None:
             return None
         result = {"requested": requested, "reported": report is not None}
+
+        if verification is not None:
+            commands_allowed = verification.get("commands_allowed")
+            tracked_files_dirty = verification.get("tracked_files_dirty")
+            disallowed_commands = verification.get("disallowed_commands")
+            result["verification"] = {
+                "report_present": verification.get("report_present") is True,
+                "commands_allowed": (
+                    commands_allowed
+                    if isinstance(commands_allowed, bool) else None
+                ),
+                "disallowed_commands": [
+                    command[:_MAX_DEPENDENCY_REFRESH_COMMAND_CHARS]
+                    for command in (
+                        disallowed_commands[:_MAX_DEPENDENCY_REFRESH_COMMANDS]
+                        if isinstance(disallowed_commands, list) else []
+                    )
+                    if isinstance(command, str)
+                ],
+                "tracked_files_dirty": (
+                    tracked_files_dirty
+                    if isinstance(tracked_files_dirty, bool) else None
+                ),
+                "verification_failed": (
+                    verification.get("verification_failed") is True
+                ),
+            }
+
         if report is None:
             return result
 

@@ -43,7 +43,10 @@ try:
         SKIPPED_QUICK_MODE,
         validate_dispatch_plan_agents,
     )
-    from .dependency_refresh import detect_dependency_refresh
+    from .dependency_refresh import (
+        detect_dependency_refresh,
+        verify_dependency_refresh,
+    )
     from .user_settings import load_user_settings, refresh_dependencies_default
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
@@ -55,7 +58,10 @@ except ImportError:
         SKIPPED_QUICK_MODE,
         validate_dispatch_plan_agents,
     )
-    from review.dependency_refresh import detect_dependency_refresh
+    from review.dependency_refresh import (
+        detect_dependency_refresh,
+        verify_dependency_refresh,
+    )
     from review.user_settings import (
         load_user_settings,
         refresh_dependencies_default,
@@ -191,6 +197,7 @@ _STALE_ARTIFACTS = [
     "scoped-diff.patch",
     "*-scoped-diff.patch",
     "dependency-refresh.json",
+    "dependency-refresh-verification.json",
 ]
 
 DEFAULT_AGENT_TIMEOUT = 1200  # 20 minutes — matches agents_status.py
@@ -991,8 +998,34 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
     """Present the planner baseline for main-orchestrator adjustment."""
     od = output_dir or "<OUTPUT_DIR>"
 
-    situation = [_PHASE_TRANSITIONS["EXECUTION"], ""]
+    situation = []
     actions = []
+
+    verification = state.get("dependency_refresh_verification") or {}
+    if verification.get("tracked_files_dirty") is True:
+        situation.append(
+            "⚠️  Dependency refresh verification found modified tracked files:"
+        )
+        for path in verification.get("dirty_files", []):
+            if isinstance(path, str):
+                situation.append(f"- `{path}`")
+        situation.extend([
+            "Restore each listed file with `git checkout -- <path>`, then update "
+            f"`{od}/dependency-refresh.json` BEFORE dispatch.",
+            "",
+        ])
+    elif (
+        verification.get("disallowed_commands")
+        or verification.get("verification_failed") is True
+    ):
+        situation.extend([
+            "⚠️  Dependency refresh could not be verified clean; proceeding is "
+            "allowed, and the telemetry manifest records the verification "
+            "evidence honestly.",
+            "",
+        ])
+
+    situation.extend([_PHASE_TRANSITIONS["EXECUTION"], ""])
 
     plan_summary = state.get("dispatch_plan_summary", {})
     plan_agents = state.get("dispatch_plan_agents", [])
@@ -2082,6 +2115,26 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
             state["dependency_refresh"] = _detect_dependency_refresh_state(context)
 
     if step == 5:
+        if config.get("refresh_dependencies"):
+            try:
+                repo_root = _git_output("rev-parse", "--show-toplevel")
+                verification = verify_dependency_refresh(repo_root, output_dir)
+            except Exception:
+                verification = {
+                    "report_present": False,
+                    "commands_allowed": None,
+                    "disallowed_commands": [],
+                    "tracked_files_dirty": None,
+                    "dirty_files": [],
+                    "verification_failed": True,
+                }
+            with open(
+                os.path.join(output_dir, "dependency-refresh-verification.json"),
+                "w",
+            ) as verification_file:
+                json.dump(verification, verification_file, indent=2, sort_keys=True)
+            state["dependency_refresh_verification"] = verification
+
         # Run plan_dispatch.py to determine which agents to dispatch
         git = context.get("git", {})
         git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")

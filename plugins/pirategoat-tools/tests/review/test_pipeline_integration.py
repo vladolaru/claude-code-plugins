@@ -614,6 +614,124 @@ class TestStep5Orchestration:
         assert 5 in state["completed_steps"]
         assert "dispatch_plan_summary" in state
 
+    def test_step_5_writes_dependency_refresh_verification_when_opted_in(
+        self, tmp_path
+    ):
+        repo = self._make_repo(tmp_path)
+        self._run(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path), "--git-range", "HEAD~1..HEAD",
+            "--refresh-deps", cwd=str(repo),
+        )
+        (tmp_path / "dependency-refresh.json").write_text(json.dumps({
+            "status": "completed",
+            "commands": [],
+            "tracked_files_dirty": False,
+        }))
+
+        result = self._run(
+            "--step", "5", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=str(repo),
+        )
+
+        assert result.returncode == 0
+        verification = json.loads(
+            (tmp_path / "dependency-refresh-verification.json").read_text()
+        )
+        assert verification["report_present"] is True
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["dependency_refresh_verification"] == verification
+
+    def test_step_5_skips_dependency_refresh_verification_without_opt_in(
+        self, tmp_path
+    ):
+        repo = self._make_repo(tmp_path)
+        self._run(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path), "--git-range", "HEAD~1..HEAD",
+            "--no-refresh-deps", cwd=str(repo),
+        )
+        (tmp_path / "dependency-refresh.json").write_text(json.dumps({
+            "status": "completed",
+            "commands": [],
+            "tracked_files_dirty": False,
+        }))
+
+        result = self._run(
+            "--step", "5", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=str(repo),
+        )
+
+        assert result.returncode == 0
+        assert not (tmp_path / "dependency-refresh-verification.json").exists()
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert "dependency_refresh_verification" not in state
+
+    def test_step_5_dependency_refresh_verification_warns_before_dispatch(
+        self, mod, tmp_path
+    ):
+        guidance = mod._step_5_dispatch_plan(
+            "full",
+            {
+                "dependency_refresh_verification": {
+                    "report_present": True,
+                    "commands_allowed": True,
+                    "disallowed_commands": [],
+                    "tracked_files_dirty": True,
+                    "dirty_files": ["src/changed.py"],
+                    "verification_failed": False,
+                }
+            },
+            {},
+            {"refresh_dependencies": True},
+            str(tmp_path),
+        )
+
+        situation = "\n".join(guidance["situation"])
+        assert guidance["situation"][0].startswith("⚠️")
+        assert "`src/changed.py`" in situation
+        assert "git checkout -- <path>" in situation
+        assert "dependency-refresh.json" in situation
+        assert "BEFORE dispatch" in situation
+
+    @pytest.mark.parametrize(
+        "verification",
+        [
+            {
+                "report_present": True,
+                "commands_allowed": False,
+                "disallowed_commands": ["npm install"],
+                "tracked_files_dirty": False,
+                "dirty_files": [],
+                "verification_failed": False,
+            },
+            {
+                "report_present": True,
+                "commands_allowed": True,
+                "disallowed_commands": [],
+                "tracked_files_dirty": False,
+                "dirty_files": [],
+                "verification_failed": True,
+            },
+        ],
+    )
+    def test_step_5_dependency_refresh_verification_degradation_is_honest(
+        self, mod, tmp_path, verification
+    ):
+        guidance = mod._step_5_dispatch_plan(
+            "full",
+            {"dependency_refresh_verification": verification},
+            {},
+            {"refresh_dependencies": True},
+            str(tmp_path),
+        )
+
+        situation = "\n".join(guidance["situation"])
+        assert guidance["situation"][0].startswith("⚠️")
+        assert "could not be verified clean" in situation
+        assert "proceeding is allowed" in situation
+        assert "manifest records" in situation
+
     def test_step_5_preserves_initial_plan_before_orchestrator_adjustment(
         self, tmp_path
     ):
@@ -816,6 +934,16 @@ class TestStep5Orchestration:
         mod.clean_stale_artifacts(str(tmp_path))
 
         assert not initial_path.exists()
+
+    def test_step_1_clears_stale_dependency_refresh_verification(
+        self, mod, tmp_path
+    ):
+        verification_path = tmp_path / "dependency-refresh-verification.json"
+        verification_path.write_text('{"report_present": true}')
+
+        mod.clean_stale_artifacts(str(tmp_path))
+
+        assert not verification_path.exists()
 
 
 class TestStep6Orchestration:
