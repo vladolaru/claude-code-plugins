@@ -12,6 +12,8 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review.dependency_refresh import (
     _COMPOSER_SPEC,
     _NODE_SPECS,
+    ALLOWED_INSTALL_BASES,
+    ALLOWED_INSTALL_FLAGS,
     detect_dependency_refresh,
 )
 
@@ -104,6 +106,17 @@ def test_suggested_commands_block_scripts_as_defense_in_depth():
     }
     assert _COMPOSER_SPEC["suggested_command"] == \
         "composer install --no-scripts --no-plugins --prefer-dist --no-interaction"
+    assert ALLOWED_INSTALL_BASES == (
+        ("composer", "install"),
+        ("npm", "ci"),
+        ("pnpm", "install"),
+        ("yarn", "install"),
+    )
+    assert ALLOWED_INSTALL_FLAGS == frozenset({
+        "--ignore-scripts", "--no-scripts", "--no-plugins", "--prefer-dist",
+        "--no-interaction", "--no-audit", "--no-fund", "--frozen-lockfile",
+        "--immutable", "--mode=skip-build",
+    })
 
 
 class TestNestedRoots:
