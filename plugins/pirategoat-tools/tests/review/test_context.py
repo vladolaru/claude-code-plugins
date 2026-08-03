@@ -536,6 +536,7 @@ class TestRefreshHostContextMode:
 
         assert r.returncode == 0
         updated = json.loads((out_dir / "review-context.json").read_text())
+        assert updated["host_context"] != {"stale": True}
         expected = {**ctx, "host_context": json.loads(r.stdout)}
         assert updated == expected
 
