@@ -156,25 +156,28 @@ Split of responsibilities:
   records `detection_failed` — staleness is reported unknown, never silently
   clean.
 - **Adaptive execution** (step 3 briefing): the orchestrator runs the
-  suggested commands, constrained to frozen-mode installs (`composer
-  install`, `npm ci`, `pnpm install --frozen-lockfile`, `yarn install
-  --immutable`) that must not modify tracked files (verified via `git status
-  --porcelain`, restore on violation), then re-resolves host context with
-  `context.py --refresh-host-context` and writes `dependency-refresh.json`
-  (a step 3 handoff gate).
+  suggested install commands (`composer install`, `npm ci`, `pnpm install
+  --frozen-lockfile`, `yarn install --immutable`), checks for tracked-file
+  changes, then re-resolves host context with `context.py
+  --refresh-host-context` and writes `dependency-refresh.json` (a step 3
+  handoff gate).
 - **Measurement** (`telemetry.py`): the manifest records the sanitized
   report under `dependency_refresh` — a run reviewed against freshly
   installed dependencies is not comparable to one with degraded host
   context.
 
-Execution governance (verified-adaptive, decided 2026-08-03): the
-orchestrator performs the installs adaptively, and the pipeline verifies
-rather than trusts — step 5 validates the reported commands against the
-frozen-mode allowlist and runs its own `git status --porcelain
---untracked-files=no`, recording a `verification` block in the manifest next
-to the self-report. Suggested commands carry script-blocking flags as
-defense-in-depth; they are NOT the safety mechanism (`.pnpmfile.cjs` survives
-`--ignore-scripts`) — requester trust plus deterministic verification is.
+Execution governance (requester-trusted with post-hoc evidence, decided
+2026-08-03): requester opt-in is the execution trust boundary, and the
+orchestrator performs the installs adaptively. At step 5, the pipeline records
+post-hoc evidence: it validates the command strings in the self-report against
+its install-command allowlist and independently observes tracked Git dirtiness
+with `git status --porcelain --untracked-files=no`, recording a `verification`
+block beside the self-report in the manifest. Neither check attests which
+commands actually executed. A missing report leaves command evidence unknown
+without marking verification itself failed, and validation failures do not
+block dispatch. Suggested commands carry script-blocking flags as
+defense-in-depth, not as a guarantee that package-manager execution is safe:
+`.pnpmfile.cjs` survives `--ignore-scripts`.
 
 **Hard-off for bots.** `refresh_dependencies` is interactive-only: step 1
 forces it off (with a stderr warning) for `interactive: false` runs whether
