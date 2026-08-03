@@ -2818,6 +2818,47 @@ class TestDependencyRefreshManifest:
             "verification_failed": False,
         }
 
+    def test_unhashable_status_preserves_report_and_verification(
+        self, mod, tmp_path
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        (out_dir / "dependency-refresh.json").write_text(json.dumps({
+            "status": [],
+            "commands": [],
+            "tracked_files_dirty": False,
+        }))
+        (out_dir / "dependency-refresh-verification.json").write_text(
+            json.dumps({
+                "report_present": True,
+                "commands_allowed": True,
+                "disallowed_commands": [],
+                "tracked_files_dirty": False,
+                "dirty_files": [],
+                "verification_failed": False,
+            })
+        )
+
+        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
+
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        assert manifest["dependency_refresh"] == {
+            "requested": True,
+            "reported": True,
+            "status": "invalid",
+            "tracked_files_dirty": False,
+            "commands": [],
+            "verification": {
+                "report_present": True,
+                "commands_allowed": True,
+                "disallowed_commands": [],
+                "tracked_files_dirty": False,
+                "verification_failed": False,
+            },
+        }
+        assert manifest["steps"][-1]["step"] == 5
+
     def test_verification_is_absent_when_file_is_missing(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "run-config.json").write_text(json.dumps(

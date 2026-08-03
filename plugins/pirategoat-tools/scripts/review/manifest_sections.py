@@ -445,7 +445,9 @@ def build_dependency_refresh_manifest(output_dir: str):
 
     status = report.get("status")
     result["status"] = (
-        status if status in _DEPENDENCY_REFRESH_STATUSES else "invalid"
+        status
+        if isinstance(status, str) and status in _DEPENDENCY_REFRESH_STATUSES
+        else "invalid"
     )
     dirty = report.get("tracked_files_dirty")
     result["tracked_files_dirty"] = dirty if isinstance(dirty, bool) else None
