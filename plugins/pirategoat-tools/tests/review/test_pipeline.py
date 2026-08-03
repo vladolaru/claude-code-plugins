@@ -1340,6 +1340,32 @@ class TestStep9ReviewReport:
         g = mod.get_step_guidance(9, "full", state, {})
         assert "Review coverage claims" not in "\n".join(g["actions"])
 
+    @pytest.mark.parametrize(
+        "reconciliation_payload",
+        [
+            None,
+            {"inline_coverage": ["malformed"]},
+        ],
+        ids=["missing-context", "malformed-coverage"],
+    )
+    def test_step9_state_loading_clears_stale_deferred_claims(
+        self, mod, tmp_path, reconciliation_payload
+    ):
+        if reconciliation_payload is not None:
+            (tmp_path / "reconciliation-context.json").write_text(
+                json.dumps(reconciliation_payload)
+            )
+        state = {
+            "inline_coverage_gaps": {"src/stale.py": ["code-reviewer"]},
+            "inline_coverage_claims": {
+                "src/stale.py": ["security-reviewer"],
+            },
+        }
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        assert state["inline_coverage_claims"] == {}
+
     def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
         state = {"completed_steps": [], "inline_coverage_gaps": {}}
         g = mod.get_step_guidance(9, "full", state, {})
