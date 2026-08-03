@@ -1501,35 +1501,35 @@ def _analyze_entries(
         )
 
     failures: list[dict[str, Any]] = []
-    for position, item in enumerate(analyzed_calls):
-        if item["state"] != "failure":
-            continue
-        later = analyzed_calls[position + 1 :]
-        recovered = any(
-            candidate["state"] == "success"
-            and candidate["call"]["name"] == item["call"]["name"]
-            and candidate["operation"] == item["operation"]
-            and (
-                candidate["target"] == item["target"]
-                or item["operation"] == "builder_output_attempt"
+    success_keys: set[tuple[str, str, str]] = set()
+    success_name_ops: set[tuple[str, str]] = set()
+    for item in reversed(analyzed_calls):
+        name = item["call"]["name"]
+        operation = item["operation"]
+        target = item["target"]
+        key = (name, operation, target)
+        name_op = (name, operation)
+        # At each item, these sets contain strictly later successes.
+        if item["state"] == "failure":
+            recovered = key in success_keys or (
+                operation == "builder_output_attempt"
+                and name_op in success_name_ops
             )
-            for candidate in later
-        )
-        failures.append(
-            {
-                "category": item["category"],
-                "detector": item["detector"],
-                "tool": (
-                    item["call"]["name"]
-                    if item["call"]["name"] in _SAFE_TOOL_NAMES
-                    else "Other"
-                ),
-                "operation_class": item["operation"],
-                "normalized_target": item["target"],
-                "recovered": recovered,
-                "recovery": "later_success" if recovered else "none",
-            }
-        )
+            failures.append(
+                {
+                    "category": item["category"],
+                    "detector": item["detector"],
+                    "tool": name if name in _SAFE_TOOL_NAMES else "Other",
+                    "operation_class": operation,
+                    "normalized_target": target,
+                    "recovered": recovered,
+                    "recovery": "later_success" if recovered else "none",
+                }
+            )
+        elif item["state"] == "success":
+            success_keys.add(key)
+            success_name_ops.add(name_op)
+    failures.reverse()
 
     builder = [
         item

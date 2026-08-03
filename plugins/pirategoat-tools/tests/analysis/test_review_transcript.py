@@ -1168,6 +1168,74 @@ class TestAnalyzeSubagent:
         [failure] = result["tool_failures"]
         assert failure["recovered"] is True
 
+    def test_earlier_read_success_does_not_mark_later_failure_recovered(
+        self, tmp_path
+    ):
+        target = str(tmp_path / "safe.py")
+        transcript = _write_jsonl(
+            tmp_path / "earlier-read-success.jsonl",
+            [
+                _assistant(_call("success", "Read", file_path=target)),
+                _result("success", is_error=False),
+                _assistant(_call("failure", "Read", file_path=target)),
+                _result("failure", "API Error: retry", is_error=None),
+            ],
+        )
+
+        result = analyze_subagent(transcript, tmp_path, [])
+
+        assert result["tool_failures"] == [
+            {
+                "category": "api_error",
+                "detector": "signature",
+                "tool": "Read",
+                "operation_class": "read",
+                "normalized_target": _mod._file_target(target, tmp_path),
+                "recovered": False,
+                "recovery": "none",
+            }
+        ]
+
+    def test_builder_success_on_different_target_marks_failure_recovered(
+        self, tmp_path
+    ):
+        failed_command = _builder_envelope("raise SystemExit(1)")
+        successful_command = _builder_envelope('builder.add_positive("safe")')
+        transcript = _write_jsonl(
+            tmp_path / "builder-different-target-recovery.jsonl",
+            [
+                _assistant(_call("failure", "Bash", command=failed_command)),
+                _result(
+                    "failure",
+                    "failed",
+                    is_error=None,
+                    structured={"exitCode": 1},
+                ),
+                _assistant(_call("success", "Bash", command=successful_command)),
+                _result(
+                    "success",
+                    "RECORDED COUNTS: safe",
+                    is_error=None,
+                    structured={"exitCode": 0},
+                ),
+            ],
+        )
+
+        result = analyze_subagent(transcript, tmp_path, [])
+
+        assert failed_command != successful_command
+        assert result["tool_failures"] == [
+            {
+                "category": "structured_failure",
+                "detector": "structured",
+                "tool": "Bash",
+                "operation_class": "builder_output_attempt",
+                "normalized_target": _mod._opaque_target(failed_command),
+                "recovered": True,
+                "recovery": "later_success",
+            }
+        ]
+
     def test_structured_bash_result_controls_failure_and_corrected_body_recovery(
         self, tmp_path
     ):
