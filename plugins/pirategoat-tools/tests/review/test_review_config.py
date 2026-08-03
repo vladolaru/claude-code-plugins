@@ -148,7 +148,10 @@ class TestRules:
             spec.loader.exec_module(module)
             return module
 
-        telemetry = _load("rc_contract_telemetry", "scripts/review/telemetry.py")
+        manifest_sections = _load(
+            "rc_contract_manifest_sections",
+            "scripts/review/manifest_sections.py",
+        )
         sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "analysis"))
         try:
             contracts = _load(
@@ -164,7 +167,7 @@ class TestRules:
         for rid in ["payments", "a", "renewals-v2", "0-day"]:
             assert mod._VALID_ID_RE.fullmatch(rid), rid
             instance = f"repo-{rid}-reviewer"
-            assert telemetry.ReviewTelemetry._AGENT_NAME_RE.fullmatch(instance), instance
+            assert manifest_sections.AGENT_NAME_RE.fullmatch(instance), instance
             assert contracts._PRODUCER_AGENT_NAME_RE.fullmatch(instance), instance
             assert transcript._REPO_REVIEWER_INSTANCE_RE.fullmatch(instance), instance
         # The consumers' shared charset is [a-z0-9-]; _VALID_ID_RE must be a
