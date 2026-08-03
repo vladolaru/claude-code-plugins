@@ -575,6 +575,32 @@ class TestRunManifest:
 
         assert "event_parse_gaps" not in _read_manifest(telemetry)
 
+    def test_manifest_counts_invalid_utf8_event_parse_gap(self, telemetry):
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(agent_name="security-reviewer")
+        with open(telemetry.log_path, "ab") as log:
+            log.write(b"\xff\n")
+
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["event_parse_gaps"] == 1
+        assert manifest["status"] == "complete"
+        assert manifest["run"]["id"] == "run-1"
+        assert manifest["agents"]["started"][0]["agent"] == (
+            "security-reviewer"
+        )
+
+    def test_read_first_event_rejects_invalid_utf8_without_scanning_forward(
+        self, telemetry
+    ):
+        log_path = Path(telemetry.output_dir) / "invalid-first.jsonl"
+        later_event = json.dumps({"event": "pipeline_start"}).encode("utf-8")
+        log_path.write_bytes(b"\xff\n" + later_event + b"\n")
+        telemetry._log_path = str(log_path)
+
+        assert telemetry._read_first_event() is None
+
     def test_finalize_records_agent_lifecycle_and_incomplete_names(
         self, telemetry
     ):

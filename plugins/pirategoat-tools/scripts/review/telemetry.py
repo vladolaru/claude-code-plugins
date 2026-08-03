@@ -475,14 +475,14 @@ class ReviewTelemetry:
             return events
 
         try:
-            with open(log_path) as log:
+            with open(log_path, "rb") as log:
                 for line in log:
                     line = line.strip()
                     if not line:
                         continue
                     try:
                         event = json.loads(line)
-                    except (json.JSONDecodeError, TypeError):
+                    except (json.JSONDecodeError, TypeError, UnicodeError):
                         self._event_parse_gaps += 1
                         continue
                     if isinstance(event, dict):
@@ -1280,12 +1280,12 @@ class ReviewTelemetry:
         if not self.log_path or not os.path.isfile(self.log_path):
             return None
         try:
-            with open(self.log_path) as f:
+            with open(self.log_path, "rb") as f:
                 first_line = f.readline().strip()
             if not first_line:
                 return None
             event = json.loads(first_line)
-        except (json.JSONDecodeError, OSError, TypeError):
+        except (json.JSONDecodeError, OSError, TypeError, UnicodeError):
             return None
         if not isinstance(event, dict):
             return None
