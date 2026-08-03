@@ -207,9 +207,17 @@ class TestPathSafety:
 
 
 class TestVerifyDependencyRefresh:
+    _RESULT_KEYS = {
+        "report_present",
+        "commands_allowed",
+        "disallowed_commands",
+        "tracked_files_dirty",
+        "dirty_files",
+        "verification_failed",
+    }
+
     @staticmethod
     def _write_report(output_dir, commands):
-        output_dir.mkdir(parents=True, exist_ok=True)
         report = {
             "status": "ok",
             "commands": [
@@ -218,9 +226,22 @@ class TestVerifyDependencyRefresh:
             ],
             "tracked_files_dirty": False,
         }
+        TestVerifyDependencyRefresh._write_report_payload(output_dir, report)
+
+    @staticmethod
+    def _write_report_payload(output_dir, report):
+        output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "dependency-refresh.json").write_text(
             json.dumps(report), encoding="utf-8"
         )
+
+    @classmethod
+    def _assert_unknown_report_failure(cls, result, report_present):
+        assert set(result) == cls._RESULT_KEYS
+        assert result["report_present"] is report_present
+        assert result["commands_allowed"] is None
+        assert result["tracked_files_dirty"] is False
+        assert result["verification_failed"] is True
 
     @staticmethod
     def _init_repo(repo):
@@ -269,6 +290,96 @@ class TestVerifyDependencyRefresh:
         assert result["commands_allowed"] is False
         assert result["disallowed_commands"] == commands
 
+    def test_control_characters_in_commands_are_rejected(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        commands = ["npm ci\n--ignore-scripts", "npm ci\r--ignore-scripts"]
+        self._write_report(output_dir, commands)
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert result["commands_allowed"] is False
+        assert result["disallowed_commands"] == commands
+
+    def test_malformed_command_shapes_fail_unknown(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        malformed_reports = (
+            {"status": "ok"},
+            {"status": "ok", "commands": "npm ci"},
+            {"status": "ok", "commands": ["npm ci"]},
+            {"status": "ok", "commands": [{"command": 42}]},
+        )
+
+        for index, report in enumerate(malformed_reports):
+            output_dir = tmp_path / f"malformed-{index}"
+            self._write_report_payload(output_dir, report)
+
+            result = verify_dependency_refresh(repo, output_dir)
+
+            self._assert_unknown_report_failure(result, report_present=True)
+
+    def test_malformed_json_fails_unknown_with_complete_result(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        (output_dir / "dependency-refresh.json").write_text(
+            "{not-json", encoding="utf-8"
+        )
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        self._assert_unknown_report_failure(result, report_present=False)
+
+    def test_non_object_json_fails_unknown(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        non_object_reports = ([], None, "report", 42)
+
+        for index, report in enumerate(non_object_reports):
+            output_dir = tmp_path / f"non-object-{index}"
+            self._write_report_payload(output_dir, report)
+
+            result = verify_dependency_refresh(repo, output_dir)
+
+            self._assert_unknown_report_failure(result, report_present=False)
+
+    def test_invalid_utf8_fails_unknown_with_complete_result(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        (output_dir / "dependency-refresh.json").write_bytes(b"\xff")
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        self._assert_unknown_report_failure(result, report_present=False)
+
+    def test_oversized_report_fails_unknown(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        self._write_report_payload(
+            output_dir,
+            {"commands": [], "padding": "x" * (1024 * 1024)},
+        )
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        self._assert_unknown_report_failure(result, report_present=False)
+
+    def test_too_many_reported_commands_fail_unknown(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        self._write_report(output_dir, ["npm ci"] * 129)
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        self._assert_unknown_report_failure(result, report_present=True)
+
     def test_dirty_tracked_file_is_reported(self, tmp_path):
         repo = tmp_path / "repo"
         self._init_repo(repo)
@@ -289,6 +400,7 @@ class TestVerifyDependencyRefresh:
 
         assert result["report_present"] is False
         assert result["commands_allowed"] is None
+        assert result["verification_failed"] is False
 
     def test_git_failure_reports_unknown_tracked_state(self, tmp_path, monkeypatch):
         repo = tmp_path / "not-a-repo"

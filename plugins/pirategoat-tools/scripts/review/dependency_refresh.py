@@ -79,6 +79,8 @@ ALLOWED_INSTALL_FLAGS = frozenset({
 })
 
 _MAX_DIRTY_FILES = 20
+_MAX_REPORT_BYTES = 1024 * 1024
+_MAX_REPORTED_COMMANDS = 128
 
 
 def detect_dependency_refresh(repo_root, changed_files):
@@ -164,6 +166,8 @@ def _command_allowed(command):
     """Return whether a reported command matches the frozen-install grammar."""
     if not isinstance(command, str):
         return False
+    if not command.isprintable():
+        return False
     if any(character in command for character in "&;|`$><"):
         return False
 
@@ -188,24 +192,51 @@ def verify_dependency_refresh(repo_root, output_dir):
 
     report_path = Path(output_dir) / "dependency-refresh.json"
     try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        with report_path.open("rb") as report_file:
+            report_bytes = report_file.read(_MAX_REPORT_BYTES + 1)
+    except FileNotFoundError:
         report = None
+    except OSError:
+        report = None
+        result["verification_failed"] = True
+    else:
+        if len(report_bytes) > _MAX_REPORT_BYTES:
+            report = None
+            result["verification_failed"] = True
+        else:
+            try:
+                report = json.loads(report_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                report = None
+                result["verification_failed"] = True
+            else:
+                if not isinstance(report, dict):
+                    report = None
+                    result["verification_failed"] = True
 
     if isinstance(report, dict):
         result["report_present"] = True
         commands = report.get("commands")
-        if isinstance(commands, list):
+        commands_schema_valid = (
+            isinstance(commands, list)
+            and len(commands) <= _MAX_REPORTED_COMMANDS
+            and all(
+                isinstance(entry, dict)
+                and isinstance(entry.get("command"), str)
+                for entry in commands
+            )
+        )
+        if commands_schema_valid:
             for entry in commands:
-                if not isinstance(entry, dict):
-                    continue
                 command = entry.get("command")
                 if not _command_allowed(command):
                     result["disallowed_commands"].append(str(command)[:500])
-        result["disallowed_commands"] = result["disallowed_commands"][
-            :_MAX_DIRTY_FILES
-        ]
-        result["commands_allowed"] = not result["disallowed_commands"]
+            result["disallowed_commands"] = result["disallowed_commands"][
+                :_MAX_DIRTY_FILES
+            ]
+            result["commands_allowed"] = not result["disallowed_commands"]
+        else:
+            result["verification_failed"] = True
 
     try:
         git_status = subprocess.run(
