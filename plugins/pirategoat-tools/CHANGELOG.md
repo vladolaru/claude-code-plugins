@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dependency refresh preserves pre-existing tracked edits.** Step 3 now stashes tracked worktree changes under a dedicated refresh identity before installs, restores installer-created tracked changes as failure evidence from a known-clean baseline, and reapplies only the recorded stash even when installation fails.
 - **Dependency detection decodes Git-quoted paths correctly.** The C-quote decoder's success flag was read as a malformed flag, silently dropping changed manifests under non-ASCII paths and reporting nothing to refresh beneath the `detection_failed` channel.
 - **Refresh evidence handling is bounded without losing independent signals.** Malformed, oversized, overlong-command-list, invalid-UTF, and decoder-limit report inputs are rejected from recorded report evidence; the independent status check ignores untracked files while retaining tracked submodule changes. Restoration guidance preserves intentional edits, and dirty-tree, disallowed-command, and verifier-failure evidence can surface together.
 - **`--refresh-host-context` preserves the rest of the review context.** A successful refresh replaces only `host_context`, retaining every other field including opaque `output`; an unreadable `review-context.json` exits 1 without overwriting the run state.

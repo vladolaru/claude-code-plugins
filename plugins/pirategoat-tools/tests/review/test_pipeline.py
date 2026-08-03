@@ -2014,6 +2014,37 @@ class TestStep3DependencyRefresh:
         assert "--refresh-host-context" in text
         assert "dependency-refresh.json" in text
 
+    def test_refresh_guidance_preserves_pre_existing_tracked_edits_in_order(
+        self, mod, tmp_path
+    ):
+        config = {"mode": "full", "interactive": True,
+                  "refresh_dependencies": True}
+        guidance = mod.get_step_guidance(
+            3,
+            "full",
+            dict(self._SIGNAL_STATE),
+            {},
+            config=config,
+            output_dir=str(tmp_path),
+        )
+        actions = "\n".join(guidance["actions"])
+
+        ordered_guidance = [
+            "git status --porcelain --untracked-files=no",
+            "pirategoat dependency refresh: pre-existing tracked edits",
+            "record the exact created stash ref",
+            "clean tracked worktree",
+            "Run each suggested command",
+            "record them as dependency-refresh failure evidence",
+            "restore the refresh-created tracked changes",
+            "restore only the dedicated dependency-refresh stash",
+            "--refresh-host-context",
+        ]
+        offsets = [actions.index(phrase) for phrase in ordered_guidance]
+        assert offsets == sorted(offsets)
+        assert "even when an install command fails" in actions
+        assert "git checkout -- <path>" not in actions
+
     def test_handoff_gates_the_refresh_report(self, mod, tmp_path):
         config = {"mode": "full", "interactive": True,
                   "refresh_dependencies": True}
