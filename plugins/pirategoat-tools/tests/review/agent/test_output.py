@@ -757,7 +757,9 @@ class TestSave:
         output dir (its lock acquisition), i.e. just BEFORE it takes the
         publication lock. Injecting from inside the lock (the old telemetry
         hook point) would deadlock now that completion telemetry runs under
-        the lock: flock treats a second fd as an independent owner."""
+        the lock: flock treats a second fd as an independent owner. Returns
+        the mutable raced list; callers MUST assert it is non-empty or lock
+        primitive drift turns the race test into a no-op."""
         if output_mod.fcntl is None:
             pytest.skip("publication lock requires fcntl (POSIX)")
         real_open = os.open
@@ -770,6 +772,7 @@ class TestSave:
             return real_open(path, *args, **kwargs)
 
         monkeypatch.setattr(output_mod.os, "open", _open_hook)
+        return raced
 
     def test_overlapping_saves_of_the_same_reviewer_do_not_collide(
         self, monkeypatch
@@ -782,11 +785,15 @@ class TestSave:
         import review.agent.output as output_mod
 
         with tempfile.TemporaryDirectory() as d:
-            self._race_a_retry_at_lock_acquisition(
+            raced = self._race_a_retry_at_lock_acquisition(
                 monkeypatch, output_mod, d,
                 lambda: ReviewOutputBuilder(pr_id="1", reviewer="security").save(d),
             )
             ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            assert raced, (
+                "Race hook never fired; lock acquisition no longer goes through "
+                "os.open(output_dir); update injection point."
+            )
             assert os.path.isfile(os.path.join(d, "security-review.json"))
             assert not list(Path(d).glob("*.tmp"))
 
@@ -823,11 +830,15 @@ class TestSave:
             output_mod, "_log_agent_complete_telemetry", _record
         )
         with tempfile.TemporaryDirectory() as d:
-            self._race_a_retry_at_lock_acquisition(
+            raced = self._race_a_retry_at_lock_acquisition(
                 monkeypatch, output_mod, d,
                 lambda: _builder_with_issues(2).save(d),
             )
             _builder_with_issues(1).save(d)
+            assert raced, (
+                "Race hook never fired; lock acquisition no longer goes through "
+                "os.open(output_dir); update injection point."
+            )
 
             with open(os.path.join(d, "security-review.json")) as f:
                 published_count = len(json.load(f)["issues"])
