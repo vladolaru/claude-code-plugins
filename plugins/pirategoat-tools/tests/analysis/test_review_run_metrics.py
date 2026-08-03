@@ -2691,6 +2691,22 @@ class TestMeasureRun:
         assert loaded["model_tier"] == "inherit"
         assert loaded["declared_model"] == "opus"
 
+    def test_load_runs_drops_unsafe_dispatch_adjustment_reason(self, tmp_path):
+        """PR-influenced adjustment prose must not bypass free-text
+        hardening through scalar manifest fields."""
+        unsafe_reason = "reason \x1b[31mred\x1b[0m"
+        manifest = _manifest()
+        decision = manifest["dispatch"]["agents"]["code-reviewer"]
+        decision["adjustment_reason"] = unsafe_reason
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+        loaded = run["dispatch"]["agents"]["code-reviewer"]
+
+        assert loaded["final_status"] == "DISPATCH"
+        assert "adjustment_reason" not in loaded
+        assert unsafe_reason not in json.dumps(run)
+
     @pytest.mark.parametrize(
         "status,dispatched",
         [
@@ -6781,7 +6797,7 @@ class TestFormattingAndCli:
         assert sum(line.startswith("| ") for line in table.splitlines()) == 3
 
     def test_json_keeps_structured_values_without_table_escaping(self):
-        run = _measured_run("safe\n| value |\x1b[31mred\x1b[0m")
+        run = _measured_run("safe\n| value |")
 
         rendered = format_json([run], aggregate_cohort([run]))
         payload = json.loads(rendered)

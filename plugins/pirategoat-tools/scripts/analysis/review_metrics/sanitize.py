@@ -49,15 +49,21 @@ def _safe_wall_time_ms(value: object) -> int | None:
     return parsed if parsed is not None and parsed <= _MAX_WALL_TIME_MS else None
 
 
-def _safe_string(value: object) -> str | None:
-    if not isinstance(value, str) or not value or "\x00" in value:
-        return None
+def _has_unsafe_string_characters(value: str) -> bool:
     # Block terminal escapes and zero-width formatting while retaining
     # legitimate multiline prose whitespace.
-    if any(
+    return "\x00" in value or any(
         character not in {"\n", "\t"}
         and unicodedata.category(character) in {"Cc", "Cf"}
         for character in value
+    )
+
+
+def _safe_string(value: object) -> str | None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or _has_unsafe_string_characters(value)
     ):
         return None
     return value if len(value) <= 4096 else None
@@ -124,7 +130,9 @@ def _safe_scalar_map(value: object, names: Iterable[str]) -> dict[str, Any]:
             continue
         item = value.get(name)
         if item is None or (
-            isinstance(item, str) and "\x00" not in item and len(item) <= 4096
+            isinstance(item, str)
+            and not _has_unsafe_string_characters(item)
+            and len(item) <= 4096
         ):
             result[name] = item
     return result
