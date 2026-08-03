@@ -167,6 +167,15 @@ Split of responsibilities:
   installed dependencies is not comparable to one with degraded host
   context.
 
+Execution governance (verified-adaptive, decided 2026-08-03): the
+orchestrator performs the installs adaptively, and the pipeline verifies
+rather than trusts — step 5 validates the reported commands against the
+frozen-mode allowlist and runs its own `git status --porcelain
+--untracked-files=no`, recording a `verification` block in the manifest next
+to the self-report. Suggested commands carry script-blocking flags as
+defense-in-depth; they are NOT the safety mechanism (`.pnpmfile.cjs` survives
+`--ignore-scripts`) — requester trust plus deterministic verification is.
+
 **Hard-off for bots.** `refresh_dependencies` is interactive-only: step 1
 forces it off (with a stderr warning) for `interactive: false` runs whether
 it arrived via CLI or a pre-seeded run-config.json. A bot reviewing
