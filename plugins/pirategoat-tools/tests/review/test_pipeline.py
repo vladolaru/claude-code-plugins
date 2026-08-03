@@ -1315,6 +1315,31 @@ class TestStep9ReviewReport:
         assert "src/starved.php" in text
         assert "code-reviewer, security-reviewer" in text
 
+    def test_surfaces_deferred_claims_as_not_proof(self, mod, tmp_path):
+        """Deferred-review claims stay visible without becoming proof of review."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {
+                "src/big_module.py": ["security-reviewer"],
+            },
+        }
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+        assert "claims" in text.lower()
+        assert "src/big_module.py" in text
+        assert "security-reviewer" in text
+        assert "not proof" in text.lower()
+
+    def test_malformed_deferred_claims_are_ignored(self, mod, tmp_path):
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": ["unexpected-list"],
+        }
+        g = mod.get_step_guidance(9, "full", state, {})
+        assert "Review coverage claims" not in "\n".join(g["actions"])
+
     def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
         state = {"completed_steps": [], "inline_coverage_gaps": {}}
         g = mod.get_step_guidance(9, "full", state, {})
