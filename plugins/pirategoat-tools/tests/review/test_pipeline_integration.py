@@ -458,6 +458,8 @@ class TestStep3Orchestration:
         assert "Step 4" in r.stdout
 
     def _run_in(self, cwd, *args, env=None):
+        if env is None:
+            env = {**os.environ, "XDG_CONFIG_HOME": "/nonexistent-xdg"}
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True,
                               cwd=cwd, env=env)
