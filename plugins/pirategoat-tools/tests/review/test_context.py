@@ -524,6 +524,7 @@ class TestRefreshHostContextMode:
             "git": {"git_range": "abc..def", "changed_files": ["a.py"]},
             "pr": {"number": 42},
             "review_config": {"rules": [{"id": "preserved-rule"}]},
+            "output": "opaque-output",
             "host_context": {"stale": True},
         }
         (out_dir / "review-context.json").write_text(json.dumps(ctx))
@@ -535,12 +536,8 @@ class TestRefreshHostContextMode:
 
         assert r.returncode == 0
         updated = json.loads((out_dir / "review-context.json").read_text())
-        # Prior fields preserved untouched
-        assert updated["git"]["git_range"] == "abc..def"
-        assert updated["pr"]["number"] == 42
-        assert updated["review_config"] == ctx["review_config"]
-        # host_context re-resolved: the stale marker is gone
-        assert updated.get("host_context") != {"stale": True}
+        expected = {**ctx, "host_context": json.loads(r.stdout)}
+        assert updated == expected
 
     def test_refresh_does_not_require_branch_or_pr_number(self, tmp_path):
         repo = tmp_path / "repo"

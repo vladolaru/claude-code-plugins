@@ -634,7 +634,6 @@ def main():
             sys.exit(1)
         repo_root = _resolve_repo_root(args.repo_path or os.getcwd())
         _fill_host_context(ctx, repo_root)
-        ctx.setdefault("output", {})["directory"] = args.output_dir
         with open(ctx_path, "w") as f:
             json.dump(ctx, f, indent=2)
         print(json.dumps(ctx.get("host_context"), indent=2))
