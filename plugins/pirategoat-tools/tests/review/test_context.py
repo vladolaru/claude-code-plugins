@@ -523,6 +523,7 @@ class TestRefreshHostContextMode:
         ctx = {
             "git": {"git_range": "abc..def", "changed_files": ["a.py"]},
             "pr": {"number": 42},
+            "review_config": {"rules": [{"id": "preserved-rule"}]},
             "host_context": {"stale": True},
         }
         (out_dir / "review-context.json").write_text(json.dumps(ctx))
@@ -537,6 +538,7 @@ class TestRefreshHostContextMode:
         # Prior fields preserved untouched
         assert updated["git"]["git_range"] == "abc..def"
         assert updated["pr"]["number"] == 42
+        assert updated["review_config"] == ctx["review_config"]
         # host_context re-resolved: the stale marker is gone
         assert updated.get("host_context") != {"stale": True}
 
@@ -555,19 +557,65 @@ class TestRefreshHostContextMode:
 
         assert r.returncode == 0
 
-    def test_refresh_with_missing_context_file_starts_empty(self, tmp_path):
+    def test_refresh_with_corrupt_context_fails_without_overwriting(self, tmp_path):
         repo = tmp_path / "repo"
         repo.mkdir()
         self._init_repo(repo)
         out_dir = tmp_path / "out"
         out_dir.mkdir()
+        ctx_path = out_dir / "review-context.json"
+        original = b"{not json"
+        ctx_path.write_bytes(original)
 
         r = self._run("--refresh-host-context",
                       "--output-dir", str(out_dir),
                       "--repo-path", str(repo),
                       cwd=repo)
 
-        assert r.returncode == 0
-        updated = json.loads((out_dir / "review-context.json").read_text())
-        assert "host_context" in updated
-        assert updated["output"]["directory"] == str(out_dir)
+        assert r.returncode != 0
+        assert "ERROR:" in r.stderr
+        assert "refusing to overwrite" in r.stderr
+        assert ctx_path.read_bytes() == original
+
+    def test_refresh_with_missing_context_fails_without_creating_file(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ctx_path = out_dir / "review-context.json"
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode != 0
+        assert "ERROR:" in r.stderr
+        assert "refusing to overwrite" in r.stderr
+        assert not ctx_path.exists()
+
+    def test_refresh_with_non_object_context_fails_without_overwriting(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_repo(repo)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        ctx_path = out_dir / "review-context.json"
+        original = " [1, 2]\n"
+        ctx_path.write_text(original)
+
+        r = self._run("--refresh-host-context",
+                      "--output-dir", str(out_dir),
+                      "--repo-path", str(repo),
+                      cwd=repo)
+
+        assert r.returncode != 0
+        assert "ERROR:" in r.stderr
+        assert "JSON object" in r.stderr
+        assert "refusing to overwrite" in r.stderr
+        assert ctx_path.read_text() == original

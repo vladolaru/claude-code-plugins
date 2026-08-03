@@ -613,16 +613,25 @@ def main():
     ctx_path = os.path.join(args.output_dir, "review-context.json")
 
     if args.refresh_host_context:
-        # Trusted-branch dependency refresh changed the installed state on
-        # disk; re-resolve ONLY host context so a full (slow) regather isn't
-        # paid twice in one run. Everything else in the file is preserved.
+        # This runs mid-review after dependency refresh and updates only host
+        # context. Damaged run state must fail without being overwritten.
         try:
             with open(ctx_path) as f:
                 ctx = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            ctx = {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeError):
+            print(
+                "ERROR: --refresh-host-context requires an existing readable "
+                "review-context.json; refusing to overwrite run state.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         if not isinstance(ctx, dict):
-            ctx = {}
+            print(
+                "ERROR: --refresh-host-context requires review-context.json "
+                "to contain a JSON object; refusing to overwrite run state.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         repo_root = _resolve_repo_root(args.repo_path or os.getcwd())
         _fill_host_context(ctx, repo_root)
         ctx.setdefault("output", {})["directory"] = args.output_dir
