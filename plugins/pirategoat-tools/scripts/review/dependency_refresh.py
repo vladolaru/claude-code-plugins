@@ -17,7 +17,9 @@ are examined. A manifest without a lockfile never signals — no frozen-mode
 install exists for it.
 """
 
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -75,6 +77,8 @@ ALLOWED_INSTALL_FLAGS = frozenset({
     "--no-interaction", "--no-audit", "--no-fund", "--frozen-lockfile",
     "--immutable", "--mode=skip-build",
 })
+
+_MAX_DIRTY_FILES = 20
 
 
 def detect_dependency_refresh(repo_root, changed_files):
@@ -154,3 +158,72 @@ def _signal(directory, spec, changed, installed):
         "installed_state_present": installed,
         "suggested_command": spec["suggested_command"],
     }
+
+
+def _command_allowed(command):
+    """Return whether a reported command matches the frozen-install grammar."""
+    if not isinstance(command, str):
+        return False
+    if any(character in command for character in "&;|`$><"):
+        return False
+
+    tokens = command.split()
+    for base in ALLOWED_INSTALL_BASES:
+        if tuple(tokens[:len(base)]) != base:
+            continue
+        return all(token in ALLOWED_INSTALL_FLAGS for token in tokens[len(base):])
+    return False
+
+
+def verify_dependency_refresh(repo_root, output_dir):
+    """Independently verify a dependency refresh report and tracked Git state."""
+    result = {
+        "report_present": False,
+        "commands_allowed": None,
+        "disallowed_commands": [],
+        "tracked_files_dirty": None,
+        "dirty_files": [],
+        "verification_failed": False,
+    }
+
+    report_path = Path(output_dir) / "dependency-refresh.json"
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        report = None
+
+    if isinstance(report, dict):
+        result["report_present"] = True
+        commands = report.get("commands")
+        if isinstance(commands, list):
+            for entry in commands:
+                if not isinstance(entry, dict):
+                    continue
+                command = entry.get("command")
+                if not _command_allowed(command):
+                    result["disallowed_commands"].append(str(command)[:500])
+        result["disallowed_commands"] = result["disallowed_commands"][
+            :_MAX_DIRTY_FILES
+        ]
+        result["commands_allowed"] = not result["disallowed_commands"]
+
+    try:
+        git_status = subprocess.run(
+            ["git", "-C", str(repo_root), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if git_status.returncode != 0:
+            raise OSError(git_status.stderr.strip())
+        dirty_files = [
+            line[3:]
+            for line in git_status.stdout.splitlines()
+            if line and not line.startswith("??")
+        ]
+        result["tracked_files_dirty"] = bool(dirty_files)
+        result["dirty_files"] = dirty_files[:_MAX_DIRTY_FILES]
+    except (OSError, subprocess.SubprocessError):
+        result["verification_failed"] = True
+
+    return result

