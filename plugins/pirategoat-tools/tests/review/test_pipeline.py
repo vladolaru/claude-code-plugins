@@ -1876,7 +1876,10 @@ class TestStep3DependencyRefresh:
                     "reasons": ["changed_in_range"],
                     "changed_files": ["composer.lock"],
                     "installed_state_present": True,
-                    "suggested_command": "composer install",
+                    "suggested_command": (
+                        "composer install --no-scripts --no-plugins "
+                        "--prefer-dist --no-interaction"
+                    ),
                 },
             ],
         },
@@ -1896,7 +1899,10 @@ class TestStep3DependencyRefresh:
         text = self._text(g)
         assert "Dependency refresh" in text
         assert "composer install" in text
-        assert "frozen-mode" in text
+        assert "Commands disable lifecycle scripts on purpose; do not strip flags" in text
+        assert "yarn install --frozen-lockfile --ignore-scripts" in text
+        assert "never chain commands (`&&`, `;`)" in text
+        assert "Pipeline independently verifies reported commands and worktree state" in text
         assert "git status --porcelain" in text
         assert "--refresh-host-context" in text
         assert "dependency-refresh.json" in text

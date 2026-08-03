@@ -35,30 +35,46 @@ _NODE_SPECS = (
     {
         "manager": "pnpm",
         "lockfile": "pnpm-lock.yaml",
-        "suggested_command": "pnpm install --frozen-lockfile",
+        "suggested_command": "pnpm install --frozen-lockfile --ignore-scripts",
     },
     {
         "manager": "yarn",
         "lockfile": "yarn.lock",
-        "suggested_command": "yarn install --immutable",
+        "suggested_command": "yarn install --immutable --mode=skip-build",
     },
     {
         "manager": "npm",
         "lockfile": "package-lock.json",
-        "suggested_command": "npm ci",
+        "suggested_command": "npm ci --ignore-scripts --no-audit --no-fund",
     },
 )
 
 _COMPOSER_SPEC = {
     "manager": "composer",
     "lockfile": "composer.lock",
-    "suggested_command": "composer install",
+    "suggested_command": (
+        "composer install --no-scripts --no-plugins --prefer-dist --no-interaction"
+    ),
 }
 
 _MANIFEST_BASENAMES = frozenset(
     {"composer.json", "composer.lock", "package.json"}
     | {spec["lockfile"] for spec in _NODE_SPECS}
 )
+
+# Verification vocabulary for the trusted-branch refresh; bases are accepted
+# openings, flags accepted extra tokens.
+ALLOWED_INSTALL_BASES = (
+    ("composer", "install"),
+    ("npm", "ci"),
+    ("pnpm", "install"),
+    ("yarn", "install"),
+)
+ALLOWED_INSTALL_FLAGS = frozenset({
+    "--ignore-scripts", "--no-scripts", "--no-plugins", "--prefer-dist",
+    "--no-interaction", "--no-audit", "--no-fund", "--frozen-lockfile",
+    "--immutable", "--mode=skip-build",
+})
 
 
 def detect_dependency_refresh(repo_root, changed_files):

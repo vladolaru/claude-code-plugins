@@ -820,13 +820,14 @@ def _dependency_refresh_briefing(state, config, output_dir):
         "Refresh the stale dependency roots BEFORE writing the "
         "change-purpose summary, so host context reflects what reviewers "
         "will read:",
-        "- Run each suggested command in its listed directory. Adapt to "
-        "this repo where needed (e.g. classic Yarn spells `--immutable` as "
-        "`--frozen-lockfile`), but stay within frozen-mode installs of the "
-        "detected package managers: `composer install`, `npm ci`, "
-        "`pnpm install --frozen-lockfile`, `yarn install --immutable`.",
-        "- NEVER run update/upgrade/add/require commands — the install "
-        "must not modify tracked files.",
+        "- Run each suggested command in its listed directory. Commands "
+        "disable lifecycle scripts on purpose; do not strip flags. Classic "
+        "Yarn v1 spelling is `yarn install --frozen-lockfile "
+        "--ignore-scripts`.",
+        "- NEVER run update/upgrade/add/require, never chain commands "
+        "(`&&`, `;`); install must not modify tracked files. Pipeline "
+        "independently verifies reported commands and worktree state at "
+        "next step.",
         "- After installing, run `git status --porcelain` and check for "
         "modified TRACKED files. If any appear, restore them with "
         "`git checkout -- <path>` and record the refresh as failed.",

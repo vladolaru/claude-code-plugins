@@ -9,7 +9,11 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review.dependency_refresh import detect_dependency_refresh
+from review.dependency_refresh import (
+    _COMPOSER_SPEC,
+    _NODE_SPECS,
+    detect_dependency_refresh,
+)
 
 
 def _make_root(tmp_path, files=(), dirs=()):
@@ -35,7 +39,8 @@ class TestComposerDetection:
         assert signal["reasons"] == ["changed_in_range"]
         assert signal["changed_files"] == ["composer.lock"]
         assert signal["installed_state_present"] is True
-        assert signal["suggested_command"] == "composer install"
+        assert signal["suggested_command"] == \
+            "composer install --no-scripts --no-plugins --prefer-dist --no-interaction"
 
     def test_missing_vendor_signals_even_without_range_change(self, tmp_path):
         root = _make_root(tmp_path, files=("composer.json", "composer.lock"))
@@ -69,20 +74,36 @@ class TestNodeManagerPriority:
         managers = [s["manager"] for s in result["signals"]]
         assert managers == ["pnpm"]
         assert result["signals"][0]["suggested_command"] == \
-            "pnpm install --frozen-lockfile"
+            "pnpm install --frozen-lockfile --ignore-scripts"
 
     def test_yarn_lockfile_detected(self, tmp_path):
         root = _make_root(tmp_path, files=("package.json", "yarn.lock"))
         result = detect_dependency_refresh(str(root), ["yarn.lock"])
         assert result["signals"][0]["manager"] == "yarn"
         assert result["signals"][0]["suggested_command"] == \
-            "yarn install --immutable"
+            "yarn install --immutable --mode=skip-build"
 
     def test_npm_lockfile_detected(self, tmp_path):
         root = _make_root(tmp_path, files=("package.json", "package-lock.json"))
         result = detect_dependency_refresh(str(root), ["package-lock.json"])
         assert result["signals"][0]["manager"] == "npm"
-        assert result["signals"][0]["suggested_command"] == "npm ci"
+        assert result["signals"][0]["suggested_command"] == \
+            "npm ci --ignore-scripts --no-audit --no-fund"
+
+
+def test_suggested_commands_block_scripts_as_defense_in_depth():
+    # Script-blocking flags are defense-in-depth; command verification is the gate.
+    node_commands = {
+        spec["manager"]: spec["suggested_command"] for spec in _NODE_SPECS
+    }
+
+    assert node_commands == {
+        "npm": "npm ci --ignore-scripts --no-audit --no-fund",
+        "pnpm": "pnpm install --frozen-lockfile --ignore-scripts",
+        "yarn": "yarn install --immutable --mode=skip-build",
+    }
+    assert _COMPOSER_SPEC["suggested_command"] == \
+        "composer install --no-scripts --no-plugins --prefer-dist --no-interaction"
 
 
 class TestNestedRoots:
