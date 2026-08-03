@@ -1215,6 +1215,78 @@ def build_error_output(agent_name: str, error_msg: str, plugin_root: str = "UNKN
     )
 
 
+def resolve_reviewer_identity(args):
+    """Resolve registry vs adapter-ref identity for this invocation.
+
+    Returns (agent_name, effective_agent_name, adapter_label,
+    repo_agent_ref, ref_mode_error) — ref_mode_error is a printable
+    message when the ref-mode flags are inconsistent, else None.
+    """
+    agent_name = args.agent
+    adapter_label = args.adapter_label
+    repo_agent_ref = args.repo_agent_ref
+
+    # Adapter ref-mode is active when a repo reviewer ref is supplied.
+    ref_mode = bool(repo_agent_ref)
+    if ref_mode and not args.instance_name:
+        return (
+            agent_name,
+            None,
+            adapter_label,
+            repo_agent_ref,
+            build_error_output(
+                agent_name,
+                "Adapter ref-mode requires --instance-name.",
+            ),
+        )
+    if ref_mode and args.execution == "isolated":
+        # Defense in depth behind plan_dispatch's refusal: an explicit
+        # isolation request must never silently widen into inline
+        # execution of the repo prompt — not even via a dispatch override.
+        return (
+            agent_name,
+            None,
+            adapter_label,
+            repo_agent_ref,
+            build_error_output(
+                args.instance_name or agent_name,
+                "Isolated execution is not implemented. Refusing to run the "
+                "repo reviewer prompt inline against an explicit isolation "
+                "request.",
+            ),
+        )
+    # Identity used for per-instance artifacts (started marker, scoped-diff file,
+    # output file names). In ref-mode the adapter shares one registry key across
+    # N instances, so uniqueness must come from --instance-name.
+    effective_agent_name = args.instance_name if ref_mode else agent_name
+
+    return agent_name, effective_agent_name, adapter_label, repo_agent_ref, None
+
+
+def persist_deferred_sidecar(output_dir, effective_agent_name,
+                             deferred_files, list_only_files):
+    """Write the authoritative deferred-set sidecar for the output builder.
+
+    Written even when empty: with no deferred files, any add_unreviewed()
+    declaration is wrong. Fail-open on write errors (builder falls back
+    to form-only validation).
+    """
+    # effective_agent_name, not the registry agent: the builder locates this
+    # sidecar via PIRATEGOAT_REVIEWER_NAME, which is derived from the effective
+    # (per-instance) identity — and adapter ref-mode instances must not collide
+    # on one shared template-named file. List-only files are in scope but are
+    # not budget-deferred, so they do not belong in the authoritative set.
+    deferred_sidecar = os.path.join(
+        output_dir,
+        f"{derive_reviewer_name(effective_agent_name)}-deferred-files.json",
+    )
+    try:
+        with open(deferred_sidecar, "w", encoding="utf-8") as f:
+            json.dump({"schema": 1, "deferred_files": deferred_files}, f)
+    except OSError:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Bootstrap Reviewer — single-command setup for reviewer agents.",
@@ -1279,46 +1351,34 @@ def main():
     )
     args = parser.parse_args()
 
-    # Adapter ref-mode is active when a repo reviewer ref is supplied.
-    ref_mode = bool(args.repo_agent_ref)
-    if ref_mode and not args.instance_name:
-        print(build_error_output(
-            args.agent,
-            "Adapter ref-mode requires --instance-name.",
-        ))
+    (
+        agent_name,
+        effective_agent_name,
+        adapter_label,
+        repo_agent_ref,
+        ref_mode_error,
+    ) = resolve_reviewer_identity(args)
+    if ref_mode_error:
+        print(ref_mode_error)
         sys.exit(1)
-    if ref_mode and args.execution == "isolated":
-        # Defense in depth behind plan_dispatch's refusal: an explicit
-        # isolation request must never silently widen into inline
-        # execution of the repo prompt — not even via a dispatch override.
-        print(build_error_output(
-            args.instance_name or args.agent,
-            "Isolated execution is not implemented. Refusing to run the "
-            "repo reviewer prompt inline against an explicit isolation "
-            "request.",
-        ))
-        sys.exit(1)
-    # Identity used for per-instance artifacts (started marker, scoped-diff file,
-    # output file names). In ref-mode the adapter shares one registry key across
-    # N instances, so uniqueness must come from --instance-name.
-    effective_agent_name = args.instance_name if ref_mode else args.agent
+    ref_mode = bool(repo_agent_ref)
 
     # Step 1: Validate agent name
-    if args.agent not in AGENT_CONFIG:
+    if agent_name not in AGENT_CONFIG:
         print(build_error_output(
-            args.agent,
-            f"Unknown agent '{args.agent}'. "
+            agent_name,
+            f"Unknown agent '{agent_name}'. "
             f"Available: {', '.join(sorted(AGENT_CONFIG.keys()))}",
         ))
         sys.exit(1)
 
-    config = AGENT_CONFIG[args.agent]
+    config = AGENT_CONFIG[agent_name]
 
     # Step 2: Find plugin root
     plugin_root = find_plugin_root()
     if not plugin_root:
         print(build_error_output(
-            args.agent,
+            agent_name,
             "Could not find pirategoat-tools plugin root. "
             "Ensure the plugin is installed or /tmp/.pirategoat-tools-root is set.",
         ))
@@ -1331,7 +1391,7 @@ def main():
     protocol_content = read_file(protocol_path)
     if not protocol_content:
         print(build_error_output(
-            args.agent,
+            agent_name,
             f"Could not read reviewer protocol at {protocol_path}",
             plugin_root,
         ))
@@ -1461,7 +1521,7 @@ def main():
         # changed files no reviewer received inline. Only when the caller
         # pinned the output dir — standalone runs detect it after the fact.
         primary_summary_out = (
-            os.path.join(args.output_dir, f"{args.agent}-scope-summary.json")
+            os.path.join(args.output_dir, f"{agent_name}-scope-summary.json")
             if args.output_dir else None
         )
         rc, scope_output = run_scope_discovery(
@@ -1507,7 +1567,7 @@ def main():
             sec_summary_out = (
                 os.path.join(
                     args.output_dir,
-                    f"{args.agent}-scope-summary-{sec_domain}.json",
+                    f"{agent_name}-scope-summary-{sec_domain}.json",
                 )
                 if args.output_dir else None
             )
@@ -1595,25 +1655,12 @@ def main():
         dict.fromkeys([*scope_files_for_budget, *not_diffed_paths, *list_only_paths])
     )
 
-    # Persist the authoritative deferred set so ReviewOutputBuilder can
-    # verify add_unreviewed() declarations at write time — an unmatched
-    # declaration (typo, wrong root) would otherwise silently invert into a
-    # deferred-but-reviewed claim downstream. Written even when empty: with
-    # no deferred files, any declaration is wrong. Fail-open: without the
-    # sidecar the builder falls back to form-only validation.
-    # effective_agent_name, not args.agent: the builder locates this sidecar
-    # via PIRATEGOAT_REVIEWER_NAME, which is derived from the effective
-    # (per-instance) identity — and adapter ref-mode instances must not
-    # collide on one shared template-named file.
-    deferred_sidecar = os.path.join(
+    persist_deferred_sidecar(
         output_dir,
-        f"{derive_reviewer_name(effective_agent_name)}-deferred-files.json",
+        effective_agent_name,
+        not_diffed_paths,
+        list_only_paths,
     )
-    try:
-        with open(deferred_sidecar, "w", encoding="utf-8") as f:
-            json.dump({"schema": 1, "deferred_files": not_diffed_paths}, f)
-    except OSError:
-        pass
 
     if scope_lines_for_budget > 0:
         review_budget = compute_review_budget(scope_lines_for_budget, len(scope_files_for_budget))
@@ -1682,10 +1729,10 @@ def main():
     repo_reviewer_prompt = None
     if ref_mode:
         repo_reviewer_prompt = build_repo_reviewer_prompt_section(
-            ref_path=args.repo_agent_ref,
+            ref_path=repo_agent_ref,
             execution=args.execution,
             channel=args.channel,
-            label=args.adapter_label or args.instance_name,
+            label=adapter_label or args.instance_name,
             reviewer_name=reviewer_name,
         )
 

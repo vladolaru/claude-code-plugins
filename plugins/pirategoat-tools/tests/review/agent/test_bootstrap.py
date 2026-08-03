@@ -3,6 +3,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -45,6 +46,116 @@ REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 # =============================================================================
 # Unit Tests — direct import
 # =============================================================================
+
+
+class TestResolveReviewerIdentity:
+    """Registry and adapter-ref invocations preserve their current identities."""
+
+    def test_registry_mode_uses_registry_agent_name(self):
+        args = SimpleNamespace(
+            agent="security-reviewer",
+            repo_agent_ref=None,
+            instance_name=None,
+            adapter_label=None,
+            execution="inline",
+        )
+
+        assert _mod.resolve_reviewer_identity(args) == (
+            "security-reviewer",
+            "security-reviewer",
+            None,
+            None,
+            None,
+        )
+
+    def test_ref_mode_uses_instance_name(self):
+        args = SimpleNamespace(
+            agent="repo-reviewer-adapter",
+            repo_agent_ref=".pirategoat/reviewers/renewals.md",
+            instance_name="repo-renewals-reviewer",
+            adapter_label="Renewals",
+            execution="inline",
+        )
+
+        assert _mod.resolve_reviewer_identity(args) == (
+            "repo-reviewer-adapter",
+            "repo-renewals-reviewer",
+            "Renewals",
+            ".pirategoat/reviewers/renewals.md",
+            None,
+        )
+
+    @pytest.mark.parametrize(
+        ("instance_name", "execution", "expected_error"),
+        [
+            (None, "inline", "Adapter ref-mode requires --instance-name."),
+            (
+                "repo-renewals-reviewer",
+                "isolated",
+                "Isolated execution is not implemented.",
+            ),
+        ],
+    )
+    def test_inconsistent_ref_mode_flags_return_printable_error(
+        self, instance_name, execution, expected_error
+    ):
+        args = SimpleNamespace(
+            agent="repo-reviewer-adapter",
+            repo_agent_ref=".pirategoat/reviewers/renewals.md",
+            instance_name=instance_name,
+            adapter_label="Renewals",
+            execution=execution,
+        )
+
+        (
+            agent_name,
+            effective_agent_name,
+            adapter_label,
+            repo_agent_ref,
+            error,
+        ) = _mod.resolve_reviewer_identity(args)
+
+        assert agent_name == "repo-reviewer-adapter"
+        assert effective_agent_name is None
+        assert adapter_label == "Renewals"
+        assert repo_agent_ref == ".pirategoat/reviewers/renewals.md"
+        assert expected_error in error
+        assert "STATUS: ERROR" in error
+
+
+class TestPersistDeferredSidecar:
+    """The extracted writer preserves the existing deferred-file contract."""
+
+    def test_writes_only_authoritative_deferred_files(self, tmp_path):
+        _mod.persist_deferred_sidecar(
+            str(tmp_path),
+            "repo-renewals-reviewer",
+            ["src/deferred.php"],
+            ["src/list-only.php"],
+        )
+
+        payload = json.loads(
+            (tmp_path / "repo-renewals-deferred-files.json").read_text()
+        )
+        assert payload == {"schema": 1, "deferred_files": ["src/deferred.php"]}
+
+    def test_writes_empty_authoritative_set(self, tmp_path):
+        _mod.persist_deferred_sidecar(
+            str(tmp_path), "security-reviewer", [], ["src/list-only.php"]
+        )
+
+        payload = json.loads(
+            (tmp_path / "security-deferred-files.json").read_text()
+        )
+        assert payload == {"schema": 1, "deferred_files": []}
+
+    def test_write_errors_fail_open(self, tmp_path):
+        output_file = tmp_path / "not-a-directory"
+        output_file.write_text("occupied")
+
+        _mod.persist_deferred_sidecar(
+            str(output_file), "security-reviewer", ["src/deferred.php"], []
+        )
 
 
 class TestExtractProtocolSections:
