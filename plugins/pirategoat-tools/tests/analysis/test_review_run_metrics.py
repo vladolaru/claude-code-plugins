@@ -570,10 +570,10 @@ class TestLoadRuns:
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
 
-        def deny_glob(_path, _pattern):
+        def deny_iterdir(_path):
             raise PermissionError("denied")
 
-        monkeypatch.setattr(type(log_dir), "glob", deny_glob)
+        monkeypatch.setattr(type(log_dir), "iterdir", deny_iterdir)
 
         with pytest.raises(OSError, match="denied"):
             load_runs(log_dir)
