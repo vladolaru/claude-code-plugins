@@ -1010,18 +1010,23 @@ def _step_5_dispatch_plan(mode, state, context, config, output_dir):
             if isinstance(path, str):
                 situation.append(f"- `{path}`")
         situation.extend([
-            "Restore each listed file with `git checkout -- <path>`, then update "
-            f"`{od}/dependency-refresh.json` BEFORE dispatch.",
+            "Inspect each listed change and preserve or back up intentional "
+            "edits. Use `git checkout -- <path>` only after confirming that "
+            "specific change was caused solely by the dependency refresh. "
+            f"Then update `{od}/dependency-refresh.json` BEFORE dispatch.",
             "",
         ])
-    elif (
-        verification.get("disallowed_commands")
-        or verification.get("verification_failed") is True
-    ):
+
+    verification_reasons = []
+    if verification.get("disallowed_commands"):
+        verification_reasons.append("reported command outside the allowlist")
+    if verification.get("verification_failed") is True:
+        verification_reasons.append("verification itself failed")
+    if verification_reasons:
         situation.extend([
             "⚠️  Dependency refresh could not be verified clean; proceeding is "
             "allowed, and the telemetry manifest records the verification "
-            "evidence honestly.",
+            f"evidence honestly. Reasons: {'; '.join(verification_reasons)}.",
             "",
         ])
 

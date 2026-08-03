@@ -688,11 +688,44 @@ class TestStep5Orchestration:
         )
 
         situation = "\n".join(guidance["situation"])
+        normalized = situation.lower()
         assert guidance["situation"][0].startswith("⚠️")
         assert "`src/changed.py`" in situation
+        assert "inspect each listed change" in normalized
+        assert "preserve or back up intentional edits" in normalized
         assert "git checkout -- <path>" in situation
+        assert "only after confirming" in normalized
+        assert "caused solely by the dependency refresh" in normalized
         assert "dependency-refresh.json" in situation
         assert "BEFORE dispatch" in situation
+
+    def test_step_5_dependency_refresh_verification_reports_combined_evidence(
+        self, mod, tmp_path
+    ):
+        guidance = mod._step_5_dispatch_plan(
+            "full",
+            {
+                "dependency_refresh_verification": {
+                    "report_present": True,
+                    "commands_allowed": False,
+                    "disallowed_commands": ["npm install"],
+                    "tracked_files_dirty": True,
+                    "dirty_files": ["src/changed.py"],
+                    "verification_failed": True,
+                }
+            },
+            {},
+            {"refresh_dependencies": True},
+            str(tmp_path),
+        )
+
+        situation = "\n".join(guidance["situation"]).lower()
+        assert sum(
+            line.startswith("⚠️") for line in guidance["situation"]
+        ) == 2
+        assert "modified tracked files" in situation
+        assert "reported command outside the allowlist" in situation
+        assert "verification itself failed" in situation
 
     @pytest.mark.parametrize(
         "verification",
