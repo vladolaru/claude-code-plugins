@@ -125,6 +125,25 @@ def test_warning_allowlist_covers_transcript_emitted_codes():
     )
 
 
+def test_safe_string_rejects_ansi_terminal_escape_sequences():
+    """Adjustment reasons can contain PR-influenced prose, so ANSI terminal
+    escapes must fail closed rather than reach local reports."""
+    assert sanitize._safe_string("reason \x1b[31mred\x1b[0m") is None
+
+
+def test_safe_string_rejects_zero_width_format_characters():
+    """Adjustment reasons can contain PR-influenced prose, so zero-width
+    format characters must fail closed rather than obscure report text."""
+    assert sanitize._safe_string("zero\u200bwidth") is None
+
+
+def test_safe_string_retains_multiline_prose_whitespace():
+    """Newlines and tabs are legitimate whitespace in multiline prose."""
+    value = "line one\n\tline two"
+
+    assert sanitize._safe_string(value) == value
+
+
 def _manifest(
     run_id: str = "run-1",
     *,

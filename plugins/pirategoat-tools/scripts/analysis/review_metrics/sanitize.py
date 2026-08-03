@@ -52,6 +52,14 @@ def _safe_wall_time_ms(value: object) -> int | None:
 def _safe_string(value: object) -> str | None:
     if not isinstance(value, str) or not value or "\x00" in value:
         return None
+    # Block terminal escapes and zero-width formatting while retaining
+    # legitimate multiline prose whitespace.
+    if any(
+        character not in {"\n", "\t"}
+        and unicodedata.category(character) in {"Cc", "Cf"}
+        for character in value
+    ):
+        return None
     return value if len(value) <= 4096 else None
 
 
