@@ -206,7 +206,12 @@ def verify_dependency_refresh(repo_root, output_dir):
         else:
             try:
                 report = json.loads(report_bytes.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            except (
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                ValueError,
+                RecursionError,
+            ):
                 report = None
                 result["verification_failed"] = True
             else:
@@ -240,7 +245,10 @@ def verify_dependency_refresh(repo_root, output_dir):
 
     try:
         git_status = subprocess.run(
-            ["git", "-C", str(repo_root), "status", "--porcelain"],
+            [
+                "git", "-C", str(repo_root), "status", "--porcelain",
+                "--untracked-files=no",
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -254,7 +262,7 @@ def verify_dependency_refresh(repo_root, output_dir):
         ]
         result["tracked_files_dirty"] = bool(dirty_files)
         result["dirty_files"] = dirty_files[:_MAX_DIRTY_FILES]
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeError):
         result["verification_failed"] = True
 
     return result

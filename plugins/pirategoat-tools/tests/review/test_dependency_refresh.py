@@ -235,6 +235,13 @@ class TestVerifyDependencyRefresh:
             json.dumps(report), encoding="utf-8"
         )
 
+    @staticmethod
+    def _write_raw_report(output_dir, report_text):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "dependency-refresh.json").write_text(
+            report_text, encoding="utf-8"
+        )
+
     @classmethod
     def _assert_unknown_report_failure(cls, result, report_present):
         assert set(result) == cls._RESULT_KEYS
@@ -263,6 +270,39 @@ class TestVerifyDependencyRefresh:
             check=True,
             capture_output=True,
         )
+
+    @classmethod
+    def _init_repo_with_submodule(cls, tmp_path):
+        child = tmp_path / "child"
+        parent = tmp_path / "parent"
+        cls._init_repo(child)
+        cls._init_repo(parent)
+        submodule = parent / "dependency"
+        subprocess.run(
+            [
+                "git", "-C", str(parent),
+                "-c", "protocol.file.allow=always",
+                "submodule", "add", str(child), "dependency",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(parent), "add", ".gitmodules", "dependency"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(parent),
+                "-c", "user.name=Dependency Refresh Test",
+                "-c", "user.email=dependency-refresh@example.com",
+                "commit", "-m", "Add dependency submodule",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return parent, submodule
 
     def test_allowed_command_and_clean_tree(self, tmp_path):
         repo = tmp_path / "repo"
@@ -357,6 +397,29 @@ class TestVerifyDependencyRefresh:
 
         self._assert_unknown_report_failure(result, report_present=False)
 
+    def test_integer_decoder_limit_fails_unknown(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        report_text = '{"commands":[],"value":' + ("9" * 5000) + "}"
+        self._write_raw_report(output_dir, report_text)
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        self._assert_unknown_report_failure(result, report_present=False)
+
+    def test_decoder_recursion_limit_fails_unknown(self, tmp_path):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        nested_value = ("[" * 200000) + "0" + ("]" * 200000)
+        report_text = '{"commands":[],"value":' + nested_value + "}"
+        self._write_raw_report(output_dir, report_text)
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        self._assert_unknown_report_failure(result, report_present=False)
+
     def test_oversized_report_fails_unknown(self, tmp_path):
         repo = tmp_path / "repo"
         self._init_repo(repo)
@@ -392,6 +455,28 @@ class TestVerifyDependencyRefresh:
         assert result["tracked_files_dirty"] is True
         assert result["dirty_files"] == ["tracked.txt"]
 
+    def test_untracked_file_inside_submodule_is_ignored(self, tmp_path):
+        repo, submodule = self._init_repo_with_submodule(tmp_path)
+        output_dir = tmp_path / "output"
+        self._write_report(output_dir, [])
+        (submodule / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert result["tracked_files_dirty"] is False
+        assert result["dirty_files"] == []
+
+    def test_tracked_file_inside_submodule_remains_dirty(self, tmp_path):
+        repo, submodule = self._init_repo_with_submodule(tmp_path)
+        output_dir = tmp_path / "output"
+        self._write_report(output_dir, [])
+        (submodule / "tracked.txt").write_text("mutated\n", encoding="utf-8")
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert result["tracked_files_dirty"] is True
+        assert result["dirty_files"] == ["dependency"]
+
     def test_missing_report_never_claims_commands_are_clean(self, tmp_path):
         repo = tmp_path / "repo"
         self._init_repo(repo)
@@ -413,3 +498,27 @@ class TestVerifyDependencyRefresh:
 
         assert result["verification_failed"] is True
         assert result["tracked_files_dirty"] is None
+
+    def test_git_stdout_decode_failure_preserves_report_evidence(
+        self, tmp_path, monkeypatch
+    ):
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        output_dir = tmp_path / "output"
+        self._write_report(output_dir, [])
+
+        def raise_decode_error(*_args, **_kwargs):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+        monkeypatch.setattr(
+            "review.dependency_refresh.subprocess.run", raise_decode_error
+        )
+
+        result = verify_dependency_refresh(repo, output_dir)
+
+        assert set(result) == self._RESULT_KEYS
+        assert result["report_present"] is True
+        assert result["commands_allowed"] is True
+        assert result["tracked_files_dirty"] is None
+        assert result["dirty_files"] == []
+        assert result["verification_failed"] is True
