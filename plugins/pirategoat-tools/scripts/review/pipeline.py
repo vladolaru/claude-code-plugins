@@ -637,6 +637,22 @@ def _step_2_repo_setup(mode, state, context, config, output_dir):
 # Step 3: Gather Context
 # ---------------------------------------------------------------------------
 
+def _markdown_code_span(value):
+    """Render an untrusted scalar as a single-line Markdown code span."""
+    text = "".join(
+        char if char.isprintable() else " "
+        for char in str(value)
+    )
+    text = re.sub(r"\s+", " ", text).strip()
+    longest_backtick_run = max(
+        (len(match.group(0)) for match in re.finditer(r"`+", text)),
+        default=0,
+    )
+    delimiter = "`" * max(1, longest_backtick_run + 1)
+    padding = " " if not text or text.startswith("`") or text.endswith("`") else ""
+    return f"{delimiter}{padding}{text}{padding}{delimiter}"
+
+
 def _format_pr_metadata(context):
     """Format PR metadata for step 3 situation."""
     pr = context.get("pr", {})
@@ -1609,9 +1625,13 @@ def _step_9_review_report(mode, state, context, config, output_dir):
             "claims:"
         )
         for f_path, agents in sorted(claims.items()):
-            agents_list = agents if isinstance(agents, list) else [str(agents)]
-            claimed_by = ", ".join(str(agent) for agent in agents_list)
-            actions.append(f"- `{f_path}` (claimed by: {claimed_by})")
+            agents_list = agents if isinstance(agents, list) else [agents]
+            claimed_by = ", ".join(
+                _markdown_code_span(agent) for agent in agents_list
+            )
+            actions.append(
+                f"- {_markdown_code_span(f_path)} (claimed by: {claimed_by})"
+            )
         actions.append("")
 
     handoff = [

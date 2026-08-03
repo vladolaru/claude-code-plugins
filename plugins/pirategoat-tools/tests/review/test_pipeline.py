@@ -1330,6 +1330,37 @@ class TestStep9ReviewReport:
         assert "src/big_module.py" in text
         assert "security-reviewer" in text
         assert "not proof" in text.lower()
+        assert "`src/big_module.py`" in text
+        assert "`security-reviewer`" in text
+
+    def test_deferred_claims_render_untrusted_values_as_safe_code_spans(
+        self, mod, tmp_path
+    ):
+        path = "src/evil``name.py\r\n## injected heading\r\n- injected file`"
+        claimant = (
+            "`security`reviewer\r\n# injected claimant\r\n* injected agent`"
+        )
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {path: [claimant]},
+        }
+
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+
+        assert "\n## injected heading" not in text
+        assert "\n- injected file" not in text
+        assert "\n# injected claimant" not in text
+        assert "\n* injected agent" not in text
+        assert (
+            "``` src/evil``name.py ## injected heading - injected file` ```"
+            in text
+        )
+        assert (
+            "`` `security`reviewer # injected claimant * injected agent` ``"
+            in text
+        )
 
     def test_malformed_deferred_claims_are_ignored(self, mod, tmp_path):
         state = {
@@ -1365,6 +1396,31 @@ class TestStep9ReviewReport:
         mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
 
         assert state["inline_coverage_claims"] == {}
+
+    def test_step9_state_loading_wires_deferred_claims_to_warning(
+        self, mod, tmp_path
+    ):
+        claims = {"src/big_module.py": ["security-reviewer"]}
+        (tmp_path / "reconciliation-context.json").write_text(
+            json.dumps(
+                {
+                    "inline_coverage": {
+                        "files_never_inline": {},
+                        "files_deferred_reviewed": claims,
+                    },
+                }
+            )
+        )
+        state = {}
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        assert state["inline_coverage_claims"] == claims
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+        assert "Review coverage claims" in text
+        assert "src/big_module.py" in text
+        assert "security-reviewer" in text
 
     def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
         state = {"completed_steps": [], "inline_coverage_gaps": {}}
