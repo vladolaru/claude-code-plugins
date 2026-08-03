@@ -179,6 +179,40 @@ def _command_allowed(command):
     return False
 
 
+def load_dependency_refresh_report(output_dir):
+    """Return ``(report, load_failed)`` for the orchestrator self-report.
+
+    A missing report is not itself a failure. Unreadable, oversized,
+    malformed, non-object, or parser-exhausting reports are failures and do
+    not return evidence.
+    """
+    report_path = Path(output_dir) / "dependency-refresh.json"
+    try:
+        with report_path.open("rb") as report_file:
+            report_bytes = report_file.read(_MAX_REPORT_BYTES + 1)
+    except FileNotFoundError:
+        return None, False
+    except OSError:
+        return None, True
+
+    if len(report_bytes) > _MAX_REPORT_BYTES:
+        return None, True
+
+    try:
+        report = json.loads(report_bytes.decode("utf-8"))
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+        RecursionError,
+        MemoryError,
+    ):
+        return None, True
+    if not isinstance(report, dict):
+        return None, True
+    return report, False
+
+
 def verify_dependency_refresh(repo_root, output_dir):
     """Independently verify a dependency refresh report and tracked Git state."""
     result = {
@@ -190,34 +224,9 @@ def verify_dependency_refresh(repo_root, output_dir):
         "verification_failed": False,
     }
 
-    report_path = Path(output_dir) / "dependency-refresh.json"
-    try:
-        with report_path.open("rb") as report_file:
-            report_bytes = report_file.read(_MAX_REPORT_BYTES + 1)
-    except FileNotFoundError:
-        report = None
-    except OSError:
-        report = None
+    report, report_load_failed = load_dependency_refresh_report(output_dir)
+    if report_load_failed:
         result["verification_failed"] = True
-    else:
-        if len(report_bytes) > _MAX_REPORT_BYTES:
-            report = None
-            result["verification_failed"] = True
-        else:
-            try:
-                report = json.loads(report_bytes.decode("utf-8"))
-            except (
-                UnicodeDecodeError,
-                json.JSONDecodeError,
-                ValueError,
-                RecursionError,
-            ):
-                report = None
-                result["verification_failed"] = True
-            else:
-                if not isinstance(report, dict):
-                    report = None
-                    result["verification_failed"] = True
 
     if isinstance(report, dict):
         result["report_present"] = True

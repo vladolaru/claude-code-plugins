@@ -11,6 +11,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review import dependency_refresh
 from review.dependency_refresh import (
     _COMPOSER_SPEC,
     _NODE_SPECS,
@@ -204,6 +205,51 @@ class TestPathSafety:
             str(root), ["b/composer.lock", "a/composer.lock"]
         )
         assert [s["directory"] for s in result["signals"]] == ["a", "b"]
+
+
+class TestLoadDependencyRefreshReport:
+    def test_missing_report_is_not_a_load_failure(self, tmp_path):
+        report, load_failed = dependency_refresh.load_dependency_refresh_report(
+            tmp_path
+        )
+
+        assert report is None
+        assert load_failed is False
+
+    def test_valid_object_is_returned(self, tmp_path):
+        (tmp_path / "dependency-refresh.json").write_text(
+            '{"commands": []}', encoding="utf-8"
+        )
+
+        report, load_failed = dependency_refresh.load_dependency_refresh_report(
+            tmp_path
+        )
+
+        assert report == {"commands": []}
+        assert load_failed is False
+
+    def test_unreadable_report_is_a_load_failure(self, tmp_path):
+        (tmp_path / "dependency-refresh.json").mkdir()
+
+        report, load_failed = dependency_refresh.load_dependency_refresh_report(
+            tmp_path
+        )
+
+        assert report is None
+        assert load_failed is True
+
+    def test_oversized_report_is_a_load_failure(self, tmp_path):
+        (tmp_path / "dependency-refresh.json").write_text(
+            '{"padding":"' + ("x" * (1024 * 1024)) + '"}',
+            encoding="utf-8",
+        )
+
+        report, load_failed = dependency_refresh.load_dependency_refresh_report(
+            tmp_path
+        )
+
+        assert report is None
+        assert load_failed is True
 
 
 class TestVerifyDependencyRefresh:

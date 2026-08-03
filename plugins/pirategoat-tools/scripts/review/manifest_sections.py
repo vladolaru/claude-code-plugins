@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
+    from .dependency_refresh import load_dependency_refresh_report
     from .dispatch_status import (
         AGENT_NAME_RE,
         DISPATCHED_STATUSES,
@@ -21,6 +22,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review.dependency_refresh import load_dependency_refresh_report
     from review.dispatch_status import (
         AGENT_NAME_RE,
         DISPATCHED_STATUSES,
@@ -403,7 +405,7 @@ def build_dependency_refresh_manifest(output_dir: str):
     """
     config = read_json_file(output_dir, "run-config.json") or {}
     requested = config.get("refresh_dependencies") is True
-    report = read_json_file(output_dir, "dependency-refresh.json")
+    report, _report_load_failed = load_dependency_refresh_report(output_dir)
     verification = read_json_file(
         output_dir, "dependency-refresh-verification.json"
     )

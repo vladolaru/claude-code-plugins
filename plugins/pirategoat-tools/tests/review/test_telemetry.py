@@ -2863,6 +2863,56 @@ class TestDependencyRefreshManifest:
             "verification_failed": False,
         }
 
+    @pytest.mark.parametrize(
+        "report_bytes",
+        [
+            b"{not-json",
+            json.dumps({
+                "commands": [],
+                "padding": "x" * (1024 * 1024),
+            }).encode("utf-8"),
+            (
+                b'{"commands":[],"value":'
+                + (b"[" * 200000)
+                + b"0"
+                + (b"]" * 200000)
+                + b"}"
+            ),
+            b"\xff",
+        ],
+        ids=("malformed", "oversized", "deeply-nested", "invalid-utf8"),
+    )
+    def test_hostile_self_report_preserves_verification(
+        self, mod, tmp_path, report_bytes
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        (out_dir / "dependency-refresh.json").write_bytes(report_bytes)
+        (out_dir / "dependency-refresh-verification.json").write_text(
+            json.dumps({
+                "report_present": False,
+                "commands_allowed": None,
+                "disallowed_commands": [],
+                "tracked_files_dirty": False,
+                "dirty_files": [],
+                "verification_failed": True,
+            })
+        )
+
+        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
+
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        section = manifest["dependency_refresh"]
+        assert section["reported"] is False
+        assert section["verification"] == {
+            "report_present": False,
+            "commands_allowed": None,
+            "disallowed_commands": [],
+            "tracked_files_dirty": False,
+            "verification_failed": True,
+        }
+
     def test_invalid_report_values_sanitize_not_crash(self, mod, tmp_path):
         t, out_dir = self._telemetry(mod, tmp_path)
         (out_dir / "dependency-refresh.json").write_text(json.dumps({
