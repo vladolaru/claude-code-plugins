@@ -72,8 +72,8 @@ def detect_dependency_refresh(repo_root, changed_files):
     for raw in changed_files or []:
         if not isinstance(raw, str) or not raw:
             continue
-        decoded, malformed = decode_git_c_quoted_path(raw)
-        if malformed or decoded is None:
+        decoded, _was_git_quoted = decode_git_c_quoted_path(raw)
+        if decoded is None:
             continue
         path = decoded.strip('"').replace("\\", "/")
         segments = path.split("/")

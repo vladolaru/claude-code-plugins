@@ -135,6 +135,22 @@ class TestPathSafety:
         result = detect_dependency_refresh(str(root), ['"composer.loc\\'])
         assert result["signals"] == []
 
+    def test_successfully_decoded_quoted_manifest_signals(self, tmp_path):
+        """A ``(decoded, True)`` result is a successful quoted decode."""
+        dep_dir = tmp_path / "café"
+        dep_dir.mkdir()
+        (dep_dir / "composer.json").write_text("{}")
+        (dep_dir / "composer.lock").write_text("{}")
+
+        result = detect_dependency_refresh(
+            str(tmp_path), ['"caf\\303\\251/composer.json"']
+        )
+
+        signals = result["signals"]
+        assert len(signals) == 1
+        assert signals[0]["manager"] == "composer"
+        assert signals[0]["directory"] == "café"
+
     def test_non_string_and_empty_entries_are_skipped(self, tmp_path):
         root = _make_root(tmp_path, files=("composer.json", "composer.lock"),
                           dirs=("vendor",))
