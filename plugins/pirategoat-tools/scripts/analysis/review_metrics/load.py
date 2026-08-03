@@ -544,11 +544,12 @@ def load_runs(
 ) -> list[dict[str, Any]]:
     """Load recent review manifests, with reduced legacy JSONL fallback."""
     root = Path(log_dir).expanduser()
-    try:
-        manifests = sorted(root.glob("*.manifest.json"))
-        json_logs = sorted(root.glob("*.jsonl"))
-    except OSError:
+    # A missing directory means no runs; listing failures on an existing path
+    # must propagate instead of producing a false clean zero cohort.
+    if not root.exists():
         return []
+    manifests = sorted(root.glob("*.manifest.json"))
+    json_logs = sorted(root.glob("*.jsonl"))
 
     loaded: list[dict[str, Any]] = []
     handled_logs: set[Path] = set()

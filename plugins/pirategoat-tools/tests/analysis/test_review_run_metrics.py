@@ -557,6 +557,27 @@ def _measure_fake_transcript(monkeypatch, tmp_path: Path, transcript: dict) -> d
 
 
 class TestLoadRuns:
+    def test_missing_log_dir_returns_empty_without_creating_it(self, tmp_path):
+        log_dir = tmp_path / "missing-logs"
+
+        assert not log_dir.exists()
+        assert load_runs(log_dir) == []
+        assert not log_dir.exists()
+
+    def test_unreadable_log_dir_propagates_listing_error(
+        self, monkeypatch, tmp_path
+    ):
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        def deny_glob(_path, _pattern):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(type(log_dir), "glob", deny_glob)
+
+        with pytest.raises(OSError, match="denied"):
+            load_runs(log_dir)
+
     def test_prefers_valid_manifest_without_loading_sibling_jsonl(self, tmp_path):
         manifest = _manifest("manifest-run")
         _write_manifest(tmp_path / "review.manifest.json", manifest)
