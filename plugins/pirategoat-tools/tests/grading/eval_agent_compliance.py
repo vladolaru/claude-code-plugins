@@ -257,6 +257,25 @@ SCENARIOS = {
         "diff": str(FIXTURES_DIR / "multi-file-realistic.diff"),
         "grader": "output_pair",
     },
+    "php_clean_review": {
+        "description": "Well-written WP PHP (capability, nonce, prepared query, escaping) — false-positive probe",
+        "agents": ["security-reviewer", "performance-reviewer"],
+        "diff": str(FIXTURES_DIR / "php-clean-source.diff"),
+        "grader": "output_pair",
+        "expected": {
+            "security-reviewer": {"verdict_in": ["approve"], "max_severity": "low"},
+            "performance-reviewer": {"verdict_in": ["approve"], "max_severity": "low"},
+        },
+    },
+    "js_clean_review": {
+        "description": "Well-written TS API client (no secrets, encoded params) — false-positive probe",
+        "agents": ["security-reviewer"],
+        "diff": str(FIXTURES_DIR / "js-clean-source.diff"),
+        "grader": "output_pair",
+        "expected": {
+            "security-reviewer": {"verdict_in": ["approve"], "max_severity": "low"},
+        },
+    },
 }
 
 

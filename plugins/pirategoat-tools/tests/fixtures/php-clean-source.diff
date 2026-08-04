@@ -1,0 +1,56 @@
+diff --git a/src/SettingsPage.php b/src/SettingsPage.php
+new file mode 100644
+--- /dev/null
++++ b/src/SettingsPage.php
+@@ -0,0 +1,31 @@
++<?php
++
++class Settings_Page {
++
++    public function register() {
++        add_action( 'admin_post_save_my_settings', [ $this, 'handle_save' ] );
++    }
++
++    public function handle_save() {
++        if ( ! current_user_can( 'manage_options' ) ) {
++            wp_die( esc_html__( 'Insufficient permissions.', 'my-plugin' ), 403 );
++        }
++
++        check_admin_referer( 'save_my_settings' );
++
++        $interval = isset( $_POST['sync_interval'] )
++            ? absint( wp_unslash( $_POST['sync_interval'] ) )
++            : 0;
++
++        if ( $interval > 0 ) {
++            update_option( 'my_plugin_sync_interval', $interval );
++        }
++
++        wp_safe_redirect( admin_url( 'options-general.php?page=my-plugin' ) );
++        exit;
++    }
++
++    public function render_interval( $interval ) {
++        echo '<span class="interval">' . esc_html( (string) $interval ) . '</span>';
++    }
++}
+diff --git a/src/SettingsRepository.php b/src/SettingsRepository.php
+new file mode 100644
+--- /dev/null
++++ b/src/SettingsRepository.php
+@@ -0,0 +1,15 @@
++<?php
++
++class Settings_Repository {
++
++    public function get_log_entries( $limit ) {
++        global $wpdb;
++
++        return $wpdb->get_results(
++            $wpdb->prepare(
++                "SELECT id, message, created_at FROM {$wpdb->prefix}my_plugin_log ORDER BY created_at DESC LIMIT %d",
++                absint( $limit )
++            )
++        );
++    }
++}
