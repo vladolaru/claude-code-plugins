@@ -563,7 +563,13 @@ def main():
 
     args = parser.parse_args()
 
-    if args.report_out:
+    if args.trials < 1:
+        parser.error(f"--trials must be >= 1, got {args.trials}")
+
+    # Pre-flight only where a report will actually be written (dispatch mode) —
+    # touching it in other modes would leave a 0-byte file that reads as an
+    # empty result set.
+    if args.report_out and args.dispatch:
         report_path = Path(args.report_out)
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.touch()
