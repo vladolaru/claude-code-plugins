@@ -103,6 +103,25 @@ SCENARIOS = {
         "agents": ["security-reviewer"],
         "diff": str(PLUGIN_ROOT / "test-samples" / "json-output-test" / "test-pr-security.diff"),
         "grader": "output_pair",
+        "expected": {
+            "security-reviewer": {
+                "verdict_in": ["block", "request_changes"],
+                "required_findings": [
+                    {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+                     "match_any": [r"sql[\s-]*inject", r"\bprepare\b", r"interpolat", r"unsanitiz"]},
+                ],
+                "acceptable_findings": [
+                    {"id": "missing-capability-check", "file": "src/UserHandler.php",
+                     "match_any": [r"current_user_can", r"capabilit", r"authoriz", r"access control"]},
+                    {"id": "csrf-nonce", "file": "src/UserHandler.php",
+                     "match_any": [r"\bnonce\b", r"csrf", r"state-chang"]},
+                    {"id": "raw-table-name", "file": "src/UserHandler.php",
+                     "match_any": [r"prefix", r"wp_delete_user", r"\btable\b"]},
+                    {"id": "unguarded-superglobal", "file": "src/UserHandler.php",
+                     "match_any": [r"isset", r"unslash", r"sanitiz", r"superglobal"]},
+                ],
+            },
+        },
     },
     "error_no_git_repo": {
         "description": "Running outside a git repo should produce error",
@@ -116,30 +135,121 @@ SCENARIOS = {
         "agents": ["security-reviewer", "architecture-reviewer", "performance-reviewer"],
         "diff": str(FIXTURES_DIR / "php-source.diff"),
         "grader": "output_pair",
+        "expected": {
+            "security-reviewer": {
+                "verdict_in": ["block", "request_changes"],
+                "required_findings": [
+                    {"id": "sql-injection-get", "file": "src/PaymentHandler.php", "line": 14,
+                     "match_any": [r"sql[\s-]*inject", r"\$_GET", r"concatenat", r"\bprepare\b"]},
+                ],
+                "acceptable_findings": [
+                    {"id": "sql-injection-insert", "file": "src/PaymentHandler.php",
+                     "match_any": [r"interpolat", r"\bINSERT\b", r"\bprepare\b", r"inject"]},
+                    {"id": "idor-access-control", "file": "src/PaymentHandler.php",
+                     "match_any": [r"access control", r"authoriz", r"\bIDOR\b", r"user_id"]},
+                    {"id": "unvalidated-order", "file": "src/OrderProcessor.php",
+                     "match_any": [r"validat", r"untrusted", r"authoriz"]},
+                ],
+            },
+            "architecture-reviewer": {
+                "verdict_in": ["comment", "request_changes", "block"],
+                "acceptable_findings": [
+                    {"id": "handler-owns-queries", "file": "src/PaymentHandler.php",
+                     "match_any": [r"coupl", r"abstraction", r"repository", r"separation", r"respons"]},
+                    {"id": "no-failure-handling", "file": "src/OrderProcessor.php",
+                     "match_any": [r"error handling", r"failure", r"transaction", r"partial"]},
+                ],
+            },
+            "performance-reviewer": {
+                "verdict_in": ["approve", "comment"],
+            },
+        },
     },
     "js_source_review": {
         "description": "JS/TS source with XSS and hardcoded API key",
         "agents": ["security-reviewer"],
         "diff": str(FIXTURES_DIR / "js-ts-source.diff"),
         "grader": "output_pair",
+        "expected": {
+            "security-reviewer": {
+                "verdict_in": ["block", "request_changes"],
+                "required_findings": [
+                    {"id": "dom-xss", "file": "src/components/UserForm.tsx", "line": 14,
+                     "match_any": [r"\bxss\b", r"innerHTML", r"sanitiz"]},
+                    {"id": "hardcoded-api-key", "file": "src/api/client.ts", "line": 1,
+                     "match_any": [r"hard-?coded", r"api.?key", r"secret", r"credential"]},
+                ],
+                "acceptable_findings": [
+                    {"id": "url-interpolation", "file": "src/api/client.ts",
+                     "match_any": [r"encodeURIComponent", r"interpolat", r"\bURL\b"]},
+                ],
+            },
+        },
     },
     "php_tests_review": {
         "description": "PHP test files with missing assertions and over-mocking",
         "agents": ["php-tests-reviewer"],
         "diff": str(FIXTURES_DIR / "php-test-only.diff"),
         "grader": "output_pair",
+        "expected": {
+            "php-tests-reviewer": {
+                "verdict_in": ["block", "request_changes", "comment"],
+                "required_findings": [
+                    {"id": "meaningless-assertion", "file": "tests/PaymentHandlerTest.php",
+                     "line": 15, "line_tolerance": 5,
+                     "match_any": [r"assertNotNull", r"meaning", r"weak assert", r"behavior"]},
+                    {"id": "no-assertions", "file": "tests/OrderProcessorTest.php",
+                     "match_any": [r"assert"]},
+                ],
+                "acceptable_findings": [
+                    {"id": "over-mocking", "file": "tests/PaymentHandlerTest.php",
+                     "match_any": [r"mock", r"assertInstanceOf", r"construct"]},
+                ],
+            },
+        },
     },
     "e2e_tests_review": {
         "description": "E2E test files with hard-coded waits",
         "agents": ["e2e-tests-reviewer"],
         "diff": str(FIXTURES_DIR / "e2e-test-only.diff"),
         "grader": "output_pair",
+        "expected": {
+            "e2e-tests-reviewer": {
+                "verdict_in": ["block", "request_changes", "comment"],
+                "required_findings": [
+                    {"id": "hardcoded-wait", "file": "e2e/checkout.spec.ts",
+                     "line": 9, "line_tolerance": 3,
+                     "match_any": [r"waitForTimeout", r"hard-?coded wait", r"fixed wait"]},
+                ],
+                "acceptable_findings": [
+                    {"id": "second-wait", "file": "e2e/checkout.spec.ts",
+                     "match_any": [r"waitForTimeout", r"wait"]},
+                    {"id": "pom-wait", "file": "e2e/pages/CheckoutPage.ts",
+                     "match_any": [r"waitForTimeout", r"wait"]},
+                    {"id": "brittle-locators", "file": "e2e/checkout.spec.ts",
+                     "match_any": [r"locator", r"selector", r"getByRole", r"test.?id"]},
+                ],
+            },
+        },
     },
     "wp_specific_review": {
         "description": "WP plugin with hooks, i18n, escaping, and wpdb",
         "agents": ["wp-architecture-reviewer", "security-reviewer"],
         "diff": str(FIXTURES_DIR / "wp-hooks-and-i18n.diff"),
         "grader": "output_pair",
+        "expected": {
+            "security-reviewer": {
+                "verdict_in": ["block", "request_changes", "comment"],
+                "required_findings": [
+                    {"id": "unescaped-output", "file": "includes/class-payment-gateway.php",
+                     "line": 48, "line_tolerance": 3,
+                     "match_any": [r"esc_html", r"escap", r"\bxss\b"]},
+                ],
+            },
+            "wp-architecture-reviewer": {
+                "verdict_in": ["approve", "comment", "request_changes"],
+            },
+        },
     },
     "realistic_multi_file": {
         "description": "Realistic multi-file PR touching all domains",
