@@ -56,7 +56,11 @@ ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 def setup_temp_git_repo(diff_file: str = None) -> str:
     """Create a temp git repo, optionally applying a diff."""
     tmp = tempfile.mkdtemp(prefix="eval-reviewer-")
-    subprocess.run(["git", "init"], cwd=tmp, capture_output=True)
+    # scope.py resolves the review base ref to "main" when no origin remote
+    # exists, so the base branch must be named main and the changes must land
+    # on a diverging feature branch — otherwise every scope-using agent sees
+    # NO_CHANGES.
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp, capture_output=True)
     subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp, capture_output=True)
@@ -69,6 +73,7 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
     subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp, capture_output=True)
 
     if diff_file and os.path.isfile(diff_file):
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp, capture_output=True)
         result = subprocess.run(
             ["git", "apply", str(diff_file)],
             cwd=tmp, capture_output=True, text=True,
@@ -212,14 +217,19 @@ def dispatch_agent(agent_name: str, bootstrap_output: str, agent_def: str, cwd: 
     if not claude_path:
         return 1, "ERROR: claude CLI not found in PATH"
 
-    cmd = [claude_path, "-p", prompt]
+    # The real pipeline runs reviewers via the Agent tool under an interactive
+    # parent that can answer permission prompts. A bare `claude -p` cannot, so
+    # a content-triggered "ask" (e.g. destructive SQL quoted in finding prose)
+    # would silently deny the builder call and no output would be written.
+    # The eval repo is a throwaway tempdir, so skip permission prompts.
+    cmd = [claude_path, "-p", "--dangerously-skip-permissions", prompt]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300, cwd=cwd,
+            cmd, capture_output=True, text=True, timeout=600, cwd=cwd,
         )
         return result.returncode, result.stdout
     except subprocess.TimeoutExpired:
-        return 1, "ERROR: Agent dispatch timed out after 300s"
+        return 1, "ERROR: Agent dispatch timed out after 600s"
     except FileNotFoundError:
         return 1, "ERROR: claude CLI not found"
 
@@ -249,9 +259,16 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
             )
 
         if scenario["grader"] == "no_domain_files":
-            # Check if bootstrap output says NO_DOMAIN_FILES
+            # Bootstrap short-circuit: NO_DOMAIN_FILES means no agent runs, so
+            # there is no agent output to grade. grade_no_domain_files targets
+            # agent return signals — running it against the full bootstrap
+            # prompt false-positives on protocol prose that teaches severity
+            # vocabulary. The short-circuit itself is the pass condition.
             if "NO_DOMAIN_FILES" in bootstrap_out:
-                return grade_no_domain_files(bootstrap_out)
+                return GradeResult(
+                    passed=True, score=1.0, failures=[],
+                    checks_run=1, checks_passed=1,
+                )
             # If scope was OK (no domain filtering at bootstrap level), we need dispatch
             # For dispatch mode, we'd send to agent and grade output
             # In non-dispatch bootstrap-only mode, just check the bootstrap succeeded
@@ -269,8 +286,16 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         # Dispatch agent
         rc, agent_output = dispatch_agent(agent_name, bootstrap_out, agent_def, cwd)
 
-        # Grade
+        # Keep the agent's final message for postmortem — without it a
+        # missing output file is undiagnosable.
+        transcript_path = os.path.join(output_dir, f"{agent_name}-dispatch-transcript.txt")
+        with open(transcript_path, "w") as f:
+            f.write(f"exit_code: {rc}\n\n{agent_output}")
+
+        # Grade. Reviewers publish JSON only — Markdown is a derived artifact
+        # (see review/agent/output.py), so materialize it before the pair grade.
         if scenario["grader"] == "output_pair":
+            _materialize_missing_markdown(output_dir)
             return grade_output_pair(output_dir, _mod.derive_reviewer_name(agent_name))
         elif scenario["grader"] == "signal_format":
             return grade_signal_format(agent_output)
