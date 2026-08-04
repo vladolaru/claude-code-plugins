@@ -20,7 +20,7 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
 EVAL_SCRIPT = TESTS_DIR / "grading" / "eval_agent_compliance.py"
 
 sys.path.insert(0, str(TESTS_DIR))
-from helpers.graders import SEVERITY_RANK, VALID_VERDICTS
+from helpers.graders import DEFAULT_LINE_TOLERANCE, SEVERITY_RANK, VALID_VERDICTS
 
 _spec = importlib.util.spec_from_file_location("_eval_for_keys", str(EVAL_SCRIPT))
 _mod = importlib.util.module_from_spec(_spec)
@@ -136,7 +136,7 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
                 f"{name}/{agent}/{spec_id}: line {line} outside "
                 f"1..{new_files[spec['file']]} of {spec['file']}"
             )
-            tol = spec.get("line_tolerance", 2)
+            tol = spec.get("line_tolerance", DEFAULT_LINE_TOLERANCE)
             assert line + tol <= new_files[spec["file"]], (
                 f"{name}/{agent}/{spec_id}: line {line} + tolerance {tol} exceeds "
                 f"{new_files[spec['file']]}-line span of {spec['file']}"
