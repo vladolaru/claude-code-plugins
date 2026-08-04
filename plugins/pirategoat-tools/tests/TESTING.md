@@ -161,6 +161,55 @@ Offline grading tool for review output files — not part of the pytest suite.
 
 - **`--grade-only /path/to/output`** — Scans an existing output directory for `*-review.json` files and grades each json/md pair, materializing the Markdown from each JSON first (`save()` publishes the JSON only; Markdown is a derived artifact). Fast, no model calls. Use after a real review run to validate agent output format.
 
+### Detection Benchmark (live model calls)
+
+Beyond protocol compliance, dispatch mode scores **detection quality** against
+per-scenario answer keys (`SCENARIOS[...]["expected"]` in
+`grading/eval_agent_compliance.py`). Keys assert required findings (recall),
+acceptable secondary findings (never punished), severity ceilings and verdict
+sets (precision), and `expect_not_applicable` (correct abstention). Clean-code
+scenarios (`php_clean_review`, `js_clean_review`) are pure false-positive
+probes.
+
+```bash
+# Single benchmark run for one scenario
+python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_review
+
+# Restrict to one agent of a scenario
+python3 tests/grading/eval_agent_compliance.py --dispatch --scenario realistic_multi_file --agent php-tests-reviewer
+
+# Nondeterminism-controlled benchmark: majority vote across 3 dispatches
+python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_review --trials 3
+
+# Structured report for cross-version comparison
+python3 tests/grading/eval_agent_compliance.py --dispatch --report-out "$TMPDIR/detection-report.json"
+```
+
+Grading is deterministic (file + line-window + keyword regexes over
+title/description/category — no model judge). A correct finding the patterns
+miss shows up unmatched in the report; widen that spec's `match_any`. Keys are
+validated against their fixtures by `tests/grading/test_answer_keys.py` (pure
+pytest, no model calls): files must exist in the diff, lines must be in range,
+regexes must compile, fixtures must apply, and every key needs at least one
+gate. When editing a fixture or key, run that guard first.
+
+**Multi-trial semantics.** `--trials N` re-dispatches each *keyed* agent N
+times (unkeyed agents always run once; the `Running:` line prints once, so
+re-dispatches are silent) and majority-votes every check: compliance, verdict,
+each required finding, each severity/unexpected gate, and both abstention
+conditions. The threshold is strictly more than half (`N // 2 + 1`), so
+`--trials 2` demands both trials pass. An unreadable trial counts as a miss on
+every check. Note that aggregate check counts (~3-6 votes) are not comparable
+with single-trial check counts (compliance + detection checks), so don't mix
+`--trials` settings when comparing reports.
+
+**Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
+`trials`, and `results[]` with `scenario`, `agent`, `passed`, `checks_run`,
+`checks_passed`, `failures`, `detail`. `detail` is polymorphic — single-trial
+entries carry `{verdict, match, gates, compliance_passed}`; multi-trial
+entries carry `{trials, per_trial, per_trial_failures}`. Discriminate on the
+top-level `trials` field.
+
 ## Design Principles
 
 These principles guide all testing decisions. Follow them when adding or modifying tests.
