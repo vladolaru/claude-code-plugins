@@ -445,7 +445,7 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
             (len(issues) == 0,
              f"expected zero findings with not_applicable, got {len(issues)}"),
         ])
-        result.detail = {"verdict": verdict, "match": None}
+        result.detail = {"verdict": verdict, "match": None, "issue_count": len(issues)}
         return result
 
     match = match_findings(issues, key)
@@ -508,7 +508,9 @@ def aggregate_detection_trials(details: List[dict], key: dict) -> GradeResult:
     """Majority vote across trial details (GradeResult.detail dicts).
 
     A trial with a None/empty detail counts as a miss on every check —
-    an unreadable trial must never improve the aggregate.
+    an unreadable trial must never improve the aggregate. With an even
+    trial count the majority threshold requires strictly more than half,
+    so --trials 2 demands both trials pass every check.
     """
     details = [d or {} for d in details]
     trials = len(details)
@@ -526,6 +528,11 @@ def aggregate_detection_trials(details: List[dict], key: dict) -> GradeResult:
         checks.append((
             abstained >= need,
             f"not_applicable verdict in only {abstained}/{trials} trials",
+        ))
+        clean = sum(1 for d in details if d.get("issue_count") == 0)
+        checks.append((
+            clean >= need,
+            f"zero-findings abstention in only {clean}/{trials} trials",
         ))
     else:
         verdict_in = key.get("verdict_in")

@@ -587,6 +587,7 @@ def main():
                     result = aggregate_detection_trials(
                         [g.detail for g in trial_grades], key,
                     )
+                    result.detail["per_trial_failures"] = [g.failures for g in trial_grades]
                 else:
                     result = run_dispatch_scenario(scenario_name, scenario, agent_name)
                 agent_results[agent_name] = result

@@ -612,11 +612,16 @@ class TestGradeDetection:
 
     def test_expect_not_applicable(self):
         key = {"expect_not_applicable": True}
-        assert grade_detection(self._review("not_applicable", []), key).passed
+        passing = grade_detection(self._review("not_applicable", []), key)
+        assert passing.passed
+        assert passing.detail["issue_count"] == 0
+
         r = grade_detection(self._review("comment", [self._issue()]), key)
         assert not r.passed
+
         r = grade_detection(self._review("not_applicable", [self._issue()]), key)
         assert not r.passed
+        assert r.detail["issue_count"] == 1
 
 
 class TestMergeGrades:
@@ -694,10 +699,25 @@ class TestAggregateDetectionTrials:
 
     def test_not_applicable_majority(self):
         key = {"expect_not_applicable": True}
-        na = {"verdict": "not_applicable", "compliance_passed": True, "match": None}
+        na = {"verdict": "not_applicable", "compliance_passed": True, "match": None, "issue_count": 0}
         wrong = {"verdict": "comment", "compliance_passed": True, "match": None}
         assert aggregate_detection_trials([na, na, wrong], key).passed
         assert not aggregate_detection_trials([na, wrong, wrong], key).passed
+
+    def test_abstention_with_findings_fails_across_trials(self):
+        key = {"expect_not_applicable": True}
+        clean_trial = {
+            "verdict": "not_applicable", "compliance_passed": True,
+            "match": None, "issue_count": 0,
+        }
+        dirty_trial = {
+            "verdict": "not_applicable", "compliance_passed": True,
+            "match": None, "issue_count": 1,
+        }
+        details = [dirty_trial, dirty_trial, clean_trial]
+        r = aggregate_detection_trials(details, key)
+        assert not r.passed
+        assert any("zero-findings" in f for f in r.failures)
 
     def test_severity_gate_votes_across_trials(self):
         key = {"verdict_in": ["approve"], "max_severity": "low"}
