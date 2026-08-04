@@ -32,6 +32,7 @@ from helpers.graders import (
     match_findings,
     grade_detection,
     merge_grades,
+    aggregate_detection_trials,
 )
 
 from review.agent.output import ReviewOutputBuilder
@@ -637,3 +638,77 @@ class TestMergeGrades:
                         checks_passed=1, detail=None)
         m = merge_grades(a, b)
         assert m.detail == {"verdict": "x"}
+
+
+class TestGradeDetectionGates:
+    """grade_detection records per-gate outcomes for trial aggregation."""
+
+    def test_gates_recorded_when_present(self):
+        key = {"verdict_in": ["approve"], "max_severity": "low", "max_unexpected": 0}
+        review = {"verdict": "approve",
+                  "issues": [{"file": "f.php", "line": 1, "title": "noise",
+                              "description": "", "category": "", "severity": "medium"}]}
+        r = grade_detection(review, key)
+        assert r.detail["gates"] == {"max_severity": False, "max_unexpected": False}
+
+    def test_gates_empty_when_no_gates_in_key(self):
+        r = grade_detection({"verdict": "block", "issues": []}, {"verdict_in": ["block"]})
+        assert r.detail["gates"] == {}
+
+
+class TestAggregateDetectionTrials:
+    KEY = {
+        "verdict_in": ["block"],
+        "required_findings": [
+            {"id": "sql-injection", "file": "f.php", "match_any": [r"inject"]},
+        ],
+    }
+
+    def _detail(self, verdict="block", found=True, compliant=True, gates=None):
+        matched = {"sql-injection": 0} if found else {}
+        return {
+            "verdict": verdict,
+            "compliance_passed": compliant,
+            "gates": gates if gates is not None else {},
+            "match": {"matched_required": matched, "matched_acceptable": {},
+                      "missing_required": [] if found else ["sql-injection"],
+                      "unexpected": []},
+        }
+
+    def test_majority_detection_passes(self):
+        details = [self._detail(), self._detail(), self._detail(found=False)]
+        r = aggregate_detection_trials(details, self.KEY)
+        assert r.passed, r.failures
+
+    def test_minority_detection_fails(self):
+        details = [self._detail(found=False), self._detail(found=False), self._detail()]
+        r = aggregate_detection_trials(details, self.KEY)
+        assert not r.passed
+        assert any("1/3" in f for f in r.failures)
+
+    def test_compliance_must_hold_in_majority(self):
+        details = [self._detail(compliant=False), self._detail(compliant=False), self._detail()]
+        r = aggregate_detection_trials(details, self.KEY)
+        assert not r.passed
+        assert any("compliance" in f for f in r.failures)
+
+    def test_not_applicable_majority(self):
+        key = {"expect_not_applicable": True}
+        na = {"verdict": "not_applicable", "compliance_passed": True, "match": None}
+        wrong = {"verdict": "comment", "compliance_passed": True, "match": None}
+        assert aggregate_detection_trials([na, na, wrong], key).passed
+        assert not aggregate_detection_trials([na, wrong, wrong], key).passed
+
+    def test_severity_gate_votes_across_trials(self):
+        key = {"verdict_in": ["approve"], "max_severity": "low"}
+        good = self._detail(verdict="approve", gates={"max_severity": True})
+        bad = self._detail(verdict="approve", gates={"max_severity": False})
+        assert aggregate_detection_trials([good, good, bad], key).passed
+        r = aggregate_detection_trials([good, bad, bad], key)
+        assert not r.passed
+        assert any("max_severity" in f for f in r.failures)
+
+    def test_unreadable_trial_counts_against_every_check(self):
+        details = [self._detail(), None, None]
+        r = aggregate_detection_trials(details, self.KEY)
+        assert not r.passed

@@ -461,6 +461,8 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
             f"required finding not detected: {spec['id']}",
         ))
 
+    gates = {}
+
     max_severity = key.get("max_severity")
     if max_severity is not None:
         limit = SEVERITY_RANK[max_severity]
@@ -469,16 +471,19 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
             if SEVERITY_RANK.get(i.get("severity"), 0) > limit
         })
         checks.append((not over, f"findings above max severity '{max_severity}': {over}"))
+        gates["max_severity"] = not over
 
     max_unexpected = key.get("max_unexpected")
     if max_unexpected is not None:
+        within = len(match["unexpected"]) <= max_unexpected
         checks.append((
-            len(match["unexpected"]) <= max_unexpected,
+            within,
             f"{len(match['unexpected'])} unexpected findings exceed cap {max_unexpected}",
         ))
+        gates["max_unexpected"] = within
 
     result = _grade(checks)
-    result.detail = {"verdict": verdict, "match": match}
+    result.detail = {"verdict": verdict, "match": match, "gates": gates}
     return result
 
 
@@ -497,3 +502,56 @@ def merge_grades(compliance: GradeResult, detection: GradeResult) -> GradeResult
         checks_passed=passed_count,
         detail=detection.detail if detection.detail is not None else compliance.detail,
     )
+
+
+def aggregate_detection_trials(details: List[dict], key: dict) -> GradeResult:
+    """Majority vote across trial details (GradeResult.detail dicts).
+
+    A trial with a None/empty detail counts as a miss on every check —
+    an unreadable trial must never improve the aggregate.
+    """
+    details = [d or {} for d in details]
+    trials = len(details)
+    need = trials // 2 + 1
+    checks = []
+
+    compliant = sum(1 for d in details if d.get("compliance_passed"))
+    checks.append((
+        compliant >= need,
+        f"output-contract compliance held in only {compliant}/{trials} trials",
+    ))
+
+    if key.get("expect_not_applicable"):
+        abstained = sum(1 for d in details if d.get("verdict") == "not_applicable")
+        checks.append((
+            abstained >= need,
+            f"not_applicable verdict in only {abstained}/{trials} trials",
+        ))
+    else:
+        verdict_in = key.get("verdict_in")
+        if verdict_in:
+            acceptable = sum(1 for d in details if d.get("verdict") in verdict_in)
+            checks.append((
+                acceptable >= need,
+                f"verdict in {verdict_in} in only {acceptable}/{trials} trials",
+            ))
+        for spec in key.get("required_findings", []):
+            hits = sum(
+                1 for d in details
+                if spec["id"] in ((d.get("match") or {}).get("matched_required") or {})
+            )
+            checks.append((
+                hits >= need,
+                f"required finding '{spec['id']}' detected in only {hits}/{trials} trials",
+            ))
+        for gate in ("max_severity", "max_unexpected"):
+            if key.get(gate) is not None:
+                held = sum(1 for d in details if (d.get("gates") or {}).get(gate))
+                checks.append((
+                    held >= need,
+                    f"{gate} gate held in only {held}/{trials} trials",
+                ))
+
+    result = _grade(checks)
+    result.detail = {"trials": trials, "per_trial": details}
+    return result

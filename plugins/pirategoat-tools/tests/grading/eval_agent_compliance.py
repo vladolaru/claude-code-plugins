@@ -38,6 +38,7 @@ from helpers.graders import (
     grade_error_exit,
     grade_signal_format,
     merge_grades,
+    aggregate_detection_trials,
 )
 
 # Import agent config
@@ -546,6 +547,13 @@ def main():
         "--scenario",
         help="Run only a specific scenario (default: all)",
     )
+    parser.add_argument(
+        "--trials",
+        type=int,
+        default=1,
+        help="Dispatch each keyed agent N times and majority-vote the detection "
+             "checks (nondeterminism control; multiplies model cost by N)",
+    )
 
     args = parser.parse_args()
 
@@ -570,7 +578,17 @@ def main():
             scenario_agents = [a for a in agents if a in scenario["agents"]]
             for agent_name in scenario_agents:
                 print(f"Running: {scenario_name} / {agent_name}...", flush=True)
-                result = run_dispatch_scenario(scenario_name, scenario, agent_name)
+                key = (scenario.get("expected") or {}).get(agent_name)
+                if args.trials > 1 and key is not None:
+                    trial_grades = [
+                        run_dispatch_scenario(scenario_name, scenario, agent_name)
+                        for _ in range(args.trials)
+                    ]
+                    result = aggregate_detection_trials(
+                        [g.detail for g in trial_grades], key,
+                    )
+                else:
+                    result = run_dispatch_scenario(scenario_name, scenario, agent_name)
                 agent_results[agent_name] = result
             if agent_results:
                 all_results[scenario_name] = agent_results
