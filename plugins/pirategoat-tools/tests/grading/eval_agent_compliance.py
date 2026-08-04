@@ -568,11 +568,14 @@ def main():
 
     # Pre-flight only where a report will actually be written (dispatch mode) —
     # touching it in other modes would leave a 0-byte file that reads as an
-    # empty result set.
+    # empty result set. Append-mode open proves write access (touch() only
+    # updates metadata, which the owner may do even on a read-only file)
+    # without truncating an existing report before the run completes.
     if args.report_out and args.dispatch:
         report_path = Path(args.report_out)
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.touch()
+        with open(report_path, "a"):
+            pass
 
     if args.grade_only:
         results = run_grade_only(args.grade_only)
@@ -590,12 +593,19 @@ def main():
             scenarios = {args.scenario: SCENARIOS[args.scenario]}
 
         all_results = {}
+        # Per-entry dispatch count: unkeyed agents run once regardless of
+        # --trials, so the report-level trials field alone cannot tell a
+        # consumer which detail shape each result carries.
+        applied_trials = {}
         for scenario_name, scenario in scenarios.items():
             agent_results = {}
             scenario_agents = [a for a in agents if a in scenario["agents"]]
             for agent_name in scenario_agents:
                 print(f"Running: {scenario_name} / {agent_name}...", flush=True)
                 key = (scenario.get("expected") or {}).get(agent_name)
+                applied_trials[(scenario_name, agent_name)] = (
+                    args.trials if args.trials > 1 and key is not None else 1
+                )
                 if args.trials > 1 and key is not None:
                     trial_grades = [
                         run_dispatch_scenario(scenario_name, scenario, agent_name)
@@ -621,6 +631,7 @@ def main():
                     {
                         "scenario": scenario_name,
                         "agent": agent_name,
+                        "trials": applied_trials[(scenario_name, agent_name)],
                         "passed": r.passed,
                         "checks_run": r.checks_run,
                         "checks_passed": r.checks_passed,

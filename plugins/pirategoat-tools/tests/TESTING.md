@@ -204,11 +204,14 @@ with single-trial check counts (compliance + detection checks), so don't mix
 `--trials` settings when comparing reports.
 
 **Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
-`trials`, and `results[]` with `scenario`, `agent`, `passed`, `checks_run`,
-`checks_passed`, `failures`, `detail`. `detail` is polymorphic — single-trial
-entries carry `{verdict, match, gates, compliance_passed}`; multi-trial
-entries carry `{trials, per_trial, per_trial_failures}`. Discriminate on the
-top-level `trials` field.
+`trials` (the requested count), and `results[]` with `scenario`, `agent`,
+`trials` (dispatches actually run for this entry), `passed`, `checks_run`,
+`checks_passed`, `failures`, `detail`. `detail` is polymorphic — discriminate
+per result, never on the top-level `trials` (unkeyed agents run once even
+under `--trials N`): `detail: null` means a compliance-only (unkeyed) entry;
+result `trials` of 1 means single-trial detail
+`{verdict, match, gates, compliance_passed}`; result `trials` above 1 means
+aggregate detail `{trials, per_trial, per_trial_failures}`.
 
 ## Design Principles
 

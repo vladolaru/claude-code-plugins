@@ -106,6 +106,19 @@ def test_answer_key_is_well_formed(name, agent, key):
         assert key["max_severity"] in SEVERITY_RANK, (
             f"{name}/{agent}: invalid max_severity {key['max_severity']!r}"
         )
+    max_unexpected = key.get("max_unexpected")
+    if max_unexpected is not None:
+        # grade_detection compares len(unexpected) <= max_unexpected — a
+        # string raises TypeError after paid dispatches, a negative makes
+        # the gate unsatisfiable, and bool is an int subclass in disguise.
+        assert (
+            isinstance(max_unexpected, int)
+            and not isinstance(max_unexpected, bool)
+            and max_unexpected >= 0
+        ), (
+            f"{name}/{agent}: max_unexpected must be a non-negative int, "
+            f"got {max_unexpected!r}"
+        )
     if key.get("expect_not_applicable"):
         for field in _NA_INCOMPATIBLE:
             assert key.get(field) is None, (
