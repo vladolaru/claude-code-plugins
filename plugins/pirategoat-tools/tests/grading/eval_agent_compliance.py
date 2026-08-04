@@ -256,6 +256,30 @@ SCENARIOS = {
         "agents": ALL_AGENTS,
         "diff": str(FIXTURES_DIR / "multi-file-realistic.diff"),
         "grader": "output_pair",
+        "expected": {
+            "security-reviewer": {
+                "verdict_in": ["approve", "comment"],
+                "max_severity": "medium",
+            },
+            "php-tests-reviewer": {
+                "verdict_in": ["block", "request_changes", "comment"],
+                "required_findings": [
+                    {"id": "weak-assertion", "file": "tests/ProductManagerTest.php",
+                     "match_any": [r"assertNotNull", r"meaning", r"weak", r"assert"]},
+                ],
+            },
+            "js-tests-reviewer": {
+                "verdict_in": ["block", "request_changes", "comment"],
+                "required_findings": [
+                    {"id": "count-only-assertion",
+                     "file": "src/components/__tests__/ProductList.test.tsx",
+                     "match_any": [r"toHaveLength", r"count", r"content", r"name", r"price"]},
+                ],
+            },
+            "python-tests-reviewer": {"expect_not_applicable": True},
+            "go-tests-reviewer": {"expect_not_applicable": True},
+            "rust-tests-reviewer": {"expect_not_applicable": True},
+        },
     },
     "php_clean_review": {
         "description": "Well-written WP PHP (capability, nonce, prepared query, escaping) — false-positive probe",
