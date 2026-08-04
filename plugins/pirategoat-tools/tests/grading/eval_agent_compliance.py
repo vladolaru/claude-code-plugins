@@ -563,6 +563,11 @@ def main():
 
     args = parser.parse_args()
 
+    if args.report_out:
+        report_path = Path(args.report_out)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.touch()
+
     if args.grade_only:
         results = run_grade_only(args.grade_only)
         all_results = {"grade_existing": results}
