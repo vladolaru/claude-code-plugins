@@ -352,7 +352,10 @@ def grade_review_baseline(path: str) -> GradeResult:
 # deterministic: repo-relative file path, optional line window, and
 # case-insensitive keyword regexes over title + description + category.
 # One issue can satisfy at most one key spec (claimed-set), so keys must not
-# split a plausibly-merged finding across two required specs.
+# split a plausibly-merged finding across two required specs. Keys must also
+# not write overlapping specs — match_any patterns for specs targeting the
+# same file should be mutually exclusive, because first-match claiming is
+# order-dependent and can under-match overlapping specs.
 
 DEFAULT_LINE_TOLERANCE = 2
 
@@ -372,7 +375,7 @@ def _finding_matches(issue: dict, spec: dict) -> bool:
     expected_line = spec.get("line")
     if expected_line is not None:
         line = issue.get("line")
-        if not isinstance(line, int):
+        if not isinstance(line, int) or isinstance(line, bool):
             return False
         if abs(line - expected_line) > spec.get("line_tolerance", DEFAULT_LINE_TOLERANCE):
             return False

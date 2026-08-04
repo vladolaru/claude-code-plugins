@@ -526,3 +526,24 @@ class TestMatchFindings:
         issues = [self._issue(title="Bad query", description="should use prepare()")]
         m = match_findings(issues, self.KEY)
         assert m["matched_required"] == {"sql-injection": 0}
+
+    def test_keyword_in_category_matches(self):
+        issues = [self._issue(title="", description="", category="sql injection")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}
+
+    def test_line_tolerance_override(self):
+        key = {
+            "required_findings": [
+                {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+                 "line_tolerance": 0, "match_any": [r"sql\s*inject"]},
+            ],
+            "acceptable_findings": [],
+        }
+        issues = [self._issue(line=7, title="SQL injection via $_GET")]
+        m = match_findings(issues, key)
+        assert m["missing_required"] == ["sql-injection"]
+
+        issues = [self._issue(line=6, title="SQL injection via $_GET")]
+        m = match_findings(issues, key)
+        assert m["matched_required"] == {"sql-injection": 0}
