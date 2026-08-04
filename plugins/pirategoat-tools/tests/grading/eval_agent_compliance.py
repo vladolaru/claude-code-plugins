@@ -554,6 +554,12 @@ def main():
         help="Dispatch each keyed agent N times and majority-vote the detection "
              "checks (nondeterminism control; multiplies model cost by N)",
     )
+    parser.add_argument(
+        "--report-out",
+        metavar="PATH",
+        help="Write a structured JSON benchmark report (per scenario/agent: "
+             "pass state, check counts, failures, detection detail)",
+    )
 
     args = parser.parse_args()
 
@@ -595,6 +601,29 @@ def main():
                 all_results[scenario_name] = agent_results
 
         print_results(all_results)
+
+        if args.report_out:
+            report = {
+                "mode": "dispatch",
+                "trials": args.trials,
+                "results": [
+                    {
+                        "scenario": scenario_name,
+                        "agent": agent_name,
+                        "passed": r.passed,
+                        "checks_run": r.checks_run,
+                        "checks_passed": r.checks_passed,
+                        "failures": r.failures,
+                        "detail": r.detail,
+                    }
+                    for scenario_name, agents in all_results.items()
+                    for agent_name, r in agents.items()
+                ],
+            }
+            with open(args.report_out, "w") as f:
+                json.dump(report, f, indent=2)
+            print(f"Report written: {args.report_out}")
+
         # Exit with failure if any eval failed
         any_failed = any(
             not r.passed
