@@ -22,7 +22,7 @@ class GradeResult:
     failures: list = field(default_factory=list)  # description of each failure
     checks_run: int = 0
     checks_passed: int = 0
-    detail: Optional[dict] = None  # detection grading detail (verdict, match result)
+    detail: Optional[dict] = None  # grader-specific detail payload (detection match, trial aggregation)
 
 
 VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
@@ -482,15 +482,18 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
     return result
 
 
-def merge_grades(a: GradeResult, b: GradeResult) -> GradeResult:
-    """Combine two grades (e.g. compliance + detection) into one result."""
-    total = a.checks_run + b.checks_run
-    passed_count = a.checks_passed + b.checks_passed
+def merge_grades(compliance: GradeResult, detection: GradeResult) -> GradeResult:
+    """Combine two grades (e.g. compliance + detection) into one result.
+
+    Precedence: detection.detail wins when not None, else compliance.detail.
+    """
+    total = compliance.checks_run + detection.checks_run
+    passed_count = compliance.checks_passed + detection.checks_passed
     return GradeResult(
-        passed=a.passed and b.passed,
+        passed=compliance.passed and detection.passed,
         score=passed_count / total if total else 0.0,
-        failures=a.failures + b.failures,
+        failures=compliance.failures + detection.failures,
         checks_run=total,
         checks_passed=passed_count,
-        detail=b.detail if b.detail is not None else a.detail,
+        detail=detection.detail if detection.detail is not None else compliance.detail,
     )

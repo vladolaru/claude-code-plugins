@@ -591,6 +591,8 @@ class TestGradeDetection:
         key = {"verdict_in": ["approve"], "max_severity": "low"}
         clean = self._review("approve", [])
         assert grade_detection(clean, key).passed
+        boundary = self._review("approve", [self._issue(severity="low")])
+        assert grade_detection(boundary, key).passed
         noisy = self._review("approve", [self._issue(severity="medium")])
         r = grade_detection(noisy, key)
         assert not r.passed
@@ -603,10 +605,16 @@ class TestGradeDetection:
         assert not r.passed
         assert any("unexpected" in f for f in r.failures)
 
+        key_allow_one = dict(self.KEY, max_unexpected=1)
+        r = grade_detection(self._review("block", [self._issue(), extra]), key_allow_one)
+        assert r.passed, r.failures
+
     def test_expect_not_applicable(self):
         key = {"expect_not_applicable": True}
         assert grade_detection(self._review("not_applicable", []), key).passed
         r = grade_detection(self._review("comment", [self._issue()]), key)
+        assert not r.passed
+        r = grade_detection(self._review("not_applicable", [self._issue()]), key)
         assert not r.passed
 
 
@@ -619,4 +627,13 @@ class TestMergeGrades:
         assert not m.passed
         assert m.checks_run == 5 and m.checks_passed == 4
         assert m.failures == ["x"]
+        assert m.score == 0.8
         assert m.detail == {"verdict": "block"}
+
+    def test_merge_detail_falls_back_to_first(self):
+        a = GradeResult(passed=True, score=1.0, failures=[], checks_run=1,
+                        checks_passed=1, detail={"verdict": "x"})
+        b = GradeResult(passed=True, score=1.0, failures=[], checks_run=1,
+                        checks_passed=1, detail=None)
+        m = merge_grades(a, b)
+        assert m.detail == {"verdict": "x"}
