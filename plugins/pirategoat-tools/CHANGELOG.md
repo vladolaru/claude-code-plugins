@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sanitized free text blocks control and format characters.** Terminal escapes and zero-width characters are removed while newlines and tabs remain allowed, including inside scalar maps that previously bypassed sanitization.
 - **Telemetry accounts for damaged JSONL records.** JSON parse and invalid-encoding gaps now increment `event_parse_gaps` instead of making a damaged log appear shorter.
 - **Refresh integration tests ignore real user settings.** A developer's machine-local trust declaration can no longer alter test outcomes.
+- **Agent compliance eval dispatch mode runs end-to-end.** Live-dispatch evals had never produced a green run: the temp repo shape left scope detection with `NO_CHANGES` for every scope-using agent, the security sample diff was a corrupt patch, content-triggered permission asks silently denied the builder call in the non-interactive child session, and graders false-positived on the bootstrap's own return-signal template. Dispatch now uses a main-plus-feature-branch repo, skips permission prompts in the throwaway eval repo, materializes derived Markdown before pair-grading, preserves each agent's final message for postmortem, and grades only real column-0 signals and non-placeholder severity counts.
 
 ## [1.113.0] - 2026-08-01
 
