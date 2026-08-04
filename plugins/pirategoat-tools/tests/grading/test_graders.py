@@ -30,6 +30,8 @@ from helpers.graders import (
     grade_output_pair,
     grade_review_baseline,
     match_findings,
+    grade_detection,
+    merge_grades,
 )
 
 from review.agent.output import ReviewOutputBuilder
@@ -547,3 +549,74 @@ class TestMatchFindings:
         issues = [self._issue(line=6, title="SQL injection via $_GET")]
         m = match_findings(issues, key)
         assert m["matched_required"] == {"sql-injection": 0}
+
+
+class TestGradeDetection:
+    """Answer-key grading of a parsed review JSON."""
+
+    def _review(self, verdict="request_changes", issues=None):
+        return {"verdict": verdict, "issues": issues or []}
+
+    def _issue(self, **kw):
+        base = {"file": "src/UserHandler.php", "line": 6, "title": "SQL injection",
+                "description": "", "category": "sql-injection", "severity": "critical"}
+        base.update(kw)
+        return base
+
+    KEY = {
+        "verdict_in": ["block", "request_changes"],
+        "required_findings": [
+            {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+             "match_any": [r"sql\s*inject"]},
+        ],
+    }
+
+    def test_pass_when_required_found_and_verdict_acceptable(self):
+        r = grade_detection(self._review("block", [self._issue()]), self.KEY)
+        assert r.passed, r.failures
+        assert r.detail["verdict"] == "block"
+        assert r.detail["match"]["matched_required"] == {"sql-injection": 0}
+
+    def test_fail_when_required_missing(self):
+        r = grade_detection(self._review("block", []), self.KEY)
+        assert not r.passed
+        assert any("sql-injection" in f for f in r.failures)
+
+    def test_fail_on_unacceptable_verdict(self):
+        r = grade_detection(self._review("approve", [self._issue()]), self.KEY)
+        assert not r.passed
+        assert any("verdict" in f for f in r.failures)
+
+    def test_max_severity_gate(self):
+        key = {"verdict_in": ["approve"], "max_severity": "low"}
+        clean = self._review("approve", [])
+        assert grade_detection(clean, key).passed
+        noisy = self._review("approve", [self._issue(severity="medium")])
+        r = grade_detection(noisy, key)
+        assert not r.passed
+        assert any("max severity" in f for f in r.failures)
+
+    def test_max_unexpected_gate(self):
+        key = dict(self.KEY, max_unexpected=0)
+        extra = self._issue(file="src/Other.php", title="Unrelated claim")
+        r = grade_detection(self._review("block", [self._issue(), extra]), key)
+        assert not r.passed
+        assert any("unexpected" in f for f in r.failures)
+
+    def test_expect_not_applicable(self):
+        key = {"expect_not_applicable": True}
+        assert grade_detection(self._review("not_applicable", []), key).passed
+        r = grade_detection(self._review("comment", [self._issue()]), key)
+        assert not r.passed
+
+
+class TestMergeGrades:
+    def test_merge_combines_counts_and_failures(self):
+        a = GradeResult(passed=True, score=1.0, failures=[], checks_run=3, checks_passed=3)
+        b = GradeResult(passed=False, score=0.5, failures=["x"], checks_run=2,
+                        checks_passed=1, detail={"verdict": "block"})
+        m = merge_grades(a, b)
+        assert not m.passed
+        assert m.checks_run == 5 and m.checks_passed == 4
+        assert m.failures == ["x"]
+        assert m.detail == {"verdict": "block"}

@@ -22,6 +22,7 @@ class GradeResult:
     failures: list = field(default_factory=list)  # description of each failure
     checks_run: int = 0
     checks_passed: int = 0
+    detail: Optional[dict] = None  # detection grading detail (verdict, match result)
 
 
 VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
@@ -421,3 +422,75 @@ def match_findings(issues: List[dict], key: dict) -> dict:
         "missing_required": missing,
         "unexpected": unexpected,
     }
+
+
+def grade_detection(review: dict, key: dict) -> GradeResult:
+    """Grade a parsed review JSON against a scenario answer key.
+
+    Key fields (all optional except that at least one gate must be present —
+    enforced by tests/grading/test_answer_keys.py):
+      verdict_in:            list of acceptable verdict strings
+      required_findings:     specs the reviewer MUST report (recall gate)
+      acceptable_findings:   legitimate secondary findings (never punished)
+      max_severity:          highest allowed severity for ANY finding
+      max_unexpected:        cap on findings no spec claimed
+      expect_not_applicable: the correct answer is abstention
+    """
+    verdict = review.get("verdict")
+    issues = [i for i in (review.get("issues") or []) if isinstance(i, dict)]
+
+    if key.get("expect_not_applicable"):
+        result = _grade([
+            (verdict == "not_applicable", f"expected not_applicable, got '{verdict}'"),
+            (len(issues) == 0,
+             f"expected zero findings with not_applicable, got {len(issues)}"),
+        ])
+        result.detail = {"verdict": verdict, "match": None}
+        return result
+
+    match = match_findings(issues, key)
+    checks = []
+
+    verdict_in = key.get("verdict_in")
+    if verdict_in:
+        checks.append((verdict in verdict_in, f"verdict '{verdict}' not in {verdict_in}"))
+
+    for spec in key.get("required_findings", []):
+        checks.append((
+            spec["id"] in match["matched_required"],
+            f"required finding not detected: {spec['id']}",
+        ))
+
+    max_severity = key.get("max_severity")
+    if max_severity is not None:
+        limit = SEVERITY_RANK[max_severity]
+        over = sorted({
+            str(i.get("severity")) for i in issues
+            if SEVERITY_RANK.get(i.get("severity"), 0) > limit
+        })
+        checks.append((not over, f"findings above max severity '{max_severity}': {over}"))
+
+    max_unexpected = key.get("max_unexpected")
+    if max_unexpected is not None:
+        checks.append((
+            len(match["unexpected"]) <= max_unexpected,
+            f"{len(match['unexpected'])} unexpected findings exceed cap {max_unexpected}",
+        ))
+
+    result = _grade(checks)
+    result.detail = {"verdict": verdict, "match": match}
+    return result
+
+
+def merge_grades(a: GradeResult, b: GradeResult) -> GradeResult:
+    """Combine two grades (e.g. compliance + detection) into one result."""
+    total = a.checks_run + b.checks_run
+    passed_count = a.checks_passed + b.checks_passed
+    return GradeResult(
+        passed=a.passed and b.passed,
+        score=passed_count / total if total else 0.0,
+        failures=a.failures + b.failures,
+        checks_run=total,
+        checks_passed=passed_count,
+        detail=b.detail if b.detail is not None else a.detail,
+    )
