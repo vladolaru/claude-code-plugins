@@ -103,10 +103,12 @@ def test_answer_key_is_well_formed(name, agent, key):
     for verdict in key.get("verdict_in", []):
         assert verdict in VALID_VERDICTS, f"{name}/{agent}: invalid verdict {verdict}"
     if key.get("max_severity") is not None:
-        assert key["max_severity"] in SEVERITY_RANK
+        assert key["max_severity"] in SEVERITY_RANK, (
+            f"{name}/{agent}: invalid max_severity {key['max_severity']!r}"
+        )
     if key.get("expect_not_applicable"):
         for field in _NA_INCOMPATIBLE:
-            assert not key.get(field), (
+            assert key.get(field) is None, (
                 f"{name}/{agent}: expect_not_applicable silently disables {field}"
             )
 
@@ -133,6 +135,11 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
             assert 1 <= line <= new_files[spec["file"]], (
                 f"{name}/{agent}/{spec_id}: line {line} outside "
                 f"1..{new_files[spec['file']]} of {spec['file']}"
+            )
+            tol = spec.get("line_tolerance", 2)
+            assert line + tol <= new_files[spec["file"]], (
+                f"{name}/{agent}/{spec_id}: line {line} + tolerance {tol} exceeds "
+                f"{new_files[spec['file']]}-line span of {spec['file']}"
             )
         assert spec.get("match_any"), f"{name}/{agent}/{spec_id}: empty match_any"
         for pattern in spec["match_any"]:
