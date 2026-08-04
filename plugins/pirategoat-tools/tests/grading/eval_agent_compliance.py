@@ -30,12 +30,14 @@ FIXTURES_DIR = TESTS_DIR / "fixtures"
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.graders import (
     GradeResult,
+    grade_detection,
     grade_output_pair,
     grade_review_json,
     grade_review_markdown,
     grade_no_domain_files,
     grade_error_exit,
     grade_signal_format,
+    merge_grades,
 )
 
 # Import agent config
@@ -296,7 +298,31 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         # (see review/agent/output.py), so materialize it before the pair grade.
         if scenario["grader"] == "output_pair":
             _materialize_missing_markdown(output_dir)
-            return grade_output_pair(output_dir, _mod.derive_reviewer_name(agent_name))
+            reviewer_name = _mod.derive_reviewer_name(agent_name)
+            compliance = grade_output_pair(output_dir, reviewer_name)
+
+            key = (scenario.get("expected") or {}).get(agent_name)
+            if key is None:
+                return compliance
+
+            review_path = os.path.join(output_dir, f"{reviewer_name}-review.json")
+            try:
+                with open(review_path) as f:
+                    review = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                detection = GradeResult(
+                    passed=False, score=0.0,
+                    failures=[f"review JSON unreadable for detection grading: {exc}"],
+                    checks_run=1, checks_passed=0,
+                    detail={"verdict": None, "match": None},
+                )
+            else:
+                detection = grade_detection(review, key)
+
+            detection.failures = [f"detection: {msg}" for msg in detection.failures]
+            # Carried so multi-trial aggregation can vote on compliance separately.
+            detection.detail = dict(detection.detail or {}, compliance_passed=compliance.passed)
+            return merge_grades(compliance, detection)
         elif scenario["grader"] == "signal_format":
             return grade_signal_format(agent_output)
         else:
