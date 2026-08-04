@@ -7,7 +7,7 @@ Two modes:
   --dispatch --agent <name>   Full eval: temp repo -> bootstrap -> dispatch agent -> grade
   --dispatch --all            Run full eval for all 11 agents
 
-Scenarios define: agent name, setup (git state), expected outcome.
+Scenarios define: agent name, setup (git state), grader, and optional detection answer keys ("expected").
 """
 
 import argparse
@@ -91,6 +91,9 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
     return tmp
 
 
+# Scenario "expected" blocks are detection answer keys graded by
+# helpers.graders.grade_detection — see its docstring for key fields and the
+# matcher's claimed-set rule (one issue satisfies at most one spec).
 SCENARIOS = {
     "no_domain_files_approve": {
         "description": "Docs-only changes should yield APPROVE with zero findings",
@@ -146,7 +149,7 @@ SCENARIOS = {
                     {"id": "sql-injection-insert", "file": "src/PaymentHandler.php",
                      "match_any": [r"interpolat", r"\bINSERT\b", r"\bprepare\b", r"inject"]},
                     {"id": "idor-access-control", "file": "src/PaymentHandler.php",
-                     "match_any": [r"access control", r"authoriz", r"\bIDOR\b", r"user_id"]},
+                     "match_any": [r"access control", r"authoriz", r"\bIDOR\b", r"ownership"]},
                     {"id": "unvalidated-order", "file": "src/OrderProcessor.php",
                      "match_any": [r"validat", r"untrusted", r"authoriz"]},
                 ],
@@ -196,8 +199,8 @@ SCENARIOS = {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
                     {"id": "meaningless-assertion", "file": "tests/PaymentHandlerTest.php",
-                     "line": 15, "line_tolerance": 5,
-                     "match_any": [r"assertNotNull", r"meaning", r"weak assert", r"behavior"]},
+                     "line": 15,
+                     "match_any": [r"assertNotNull", r"meaning", r"weak assert"]},
                     {"id": "no-assertions", "file": "tests/OrderProcessorTest.php",
                      "match_any": [r"assert"]},
                 ],
@@ -218,14 +221,11 @@ SCENARIOS = {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
                     {"id": "hardcoded-wait", "file": "e2e/checkout.spec.ts",
-                     "line": 9, "line_tolerance": 3,
                      "match_any": [r"waitForTimeout", r"hard-?coded wait", r"fixed wait"]},
                 ],
                 "acceptable_findings": [
-                    {"id": "second-wait", "file": "e2e/checkout.spec.ts",
-                     "match_any": [r"waitForTimeout", r"wait"]},
                     {"id": "pom-wait", "file": "e2e/pages/CheckoutPage.ts",
-                     "match_any": [r"waitForTimeout", r"wait"]},
+                     "match_any": [r"waitForTimeout", r"\bwait"]},
                     {"id": "brittle-locators", "file": "e2e/checkout.spec.ts",
                      "match_any": [r"locator", r"selector", r"getByRole", r"test.?id"]},
                 ],
