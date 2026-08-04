@@ -196,11 +196,14 @@ def grade_no_domain_files(text: str) -> GradeResult:
     Checks: APPROVE verdict, zero findings.
     """
     text_upper = text.upper()
+    # A severity mention only counts as a finding when it is followed by
+    # something other than a zero count or the literal "N" placeholder from
+    # the bootstrap's return-signal template ("COUNTS: critical: N, ...").
+    finding_mention = re.search(r"(CRITICAL|HIGH|MEDIUM):\s*(?!0\b|N\b)\S", text_upper)
     checks = [
         ("APPROVE" in text_upper, "Missing APPROVE verdict"),
         (
-            not any(sev in text_upper for sev in ["CRITICAL:", "HIGH:", "MEDIUM:"])
-            or "CRITICAL: 0" in text.upper(),
+            finding_mention is None,
             "Expected zero findings but found severity mentions"
         ),
     ]
@@ -213,10 +216,14 @@ def grade_error_exit(text: str) -> GradeResult:
     Checks: contains error report, no review findings, no output files written.
     """
     text_upper = text.upper()
+    # Match only an actual return signal (column 0). Bootstrap output embeds
+    # an indented "  STATUS: FINISHED" line inside its return-signal template,
+    # which is instructional text, not a claim of completion.
+    finished_signal = re.search(r"^STATUS: FINISHED", text, re.MULTILINE)
     checks = [
         ("ERROR" in text_upper, "Missing error indication"),
         (
-            "STATUS: FINISHED" not in text,
+            finished_signal is None,
             "Should NOT have STATUS: FINISHED in error scenario"
         ),
     ]

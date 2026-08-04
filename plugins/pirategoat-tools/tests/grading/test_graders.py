@@ -237,6 +237,39 @@ class TestGradeNoDomainFiles:
         result = grade_no_domain_files(text)
         assert not result.passed
 
+    def test_bootstrap_signal_template_is_not_a_finding(self):
+        # Bootstrap output embeds the return-signal template; its "N"
+        # placeholders and explicit zero counts are not severity findings.
+        text = (
+            "STATUS: NO_DOMAIN_FILES\nACTION: APPROVE and exit\n"
+            "COUNTS: critical: N, high: N, medium: N\n"
+            "critical: 0, high: 0, medium: 0"
+        )
+        result = grade_no_domain_files(text)
+        assert result.passed, f"Failures: {result.failures}"
+
+    def test_nonzero_count_fails(self):
+        text = "VERDICT: APPROVE\nCOUNTS: critical: 0, high: 2, medium: 0"
+        result = grade_no_domain_files(text)
+        assert not result.passed
+
+
+class TestGradeErrorExitTemplate:
+    """The bootstrap return-signal template must not read as a FINISHED claim."""
+
+    def test_indented_template_line_passes(self):
+        text = (
+            "STATUS: ERROR\nERROR: NO_CHANGES\n"
+            "Return signal format:\n  STATUS: FINISHED\n  OUTPUT_FILES:"
+        )
+        result = grade_error_exit(text)
+        assert result.passed, f"Failures: {result.failures}"
+
+    def test_column_zero_finished_signal_fails(self):
+        text = "ERROR: something\nSTATUS: FINISHED\nCOUNTS: critical: 0"
+        result = grade_error_exit(text)
+        assert not result.passed
+
 
 class TestGradeOutputPair:
     """Tests for grade_output_pair."""
