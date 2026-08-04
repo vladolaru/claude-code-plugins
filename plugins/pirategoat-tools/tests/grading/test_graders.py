@@ -29,6 +29,7 @@ from helpers.graders import (
     grade_error_exit,
     grade_output_pair,
     grade_review_baseline,
+    match_findings,
 )
 
 from review.agent.output import ReviewOutputBuilder
@@ -451,3 +452,77 @@ def test_issue_behavior_evidence_rejects_speculative():
             file="f.php", line=1, recommendation="r",
             behavior_evidence="speculative",
         )
+
+
+class TestMatchFindings:
+    """Pure matcher: file + line-window + keyword regexes, claimed-set semantics."""
+
+    KEY = {
+        "required_findings": [
+            {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+             "match_any": [r"sql\s*inject", r"\bprepare\b"]},
+        ],
+        "acceptable_findings": [
+            {"id": "csrf-nonce", "file": "src/UserHandler.php",
+             "match_any": [r"\bnonce\b", r"csrf"]},
+        ],
+    }
+
+    def _issue(self, **kw):
+        base = {"file": "src/UserHandler.php", "line": 6, "title": "",
+                "description": "", "category": "", "severity": "high"}
+        base.update(kw)
+        return base
+
+    def test_required_matches_on_file_line_and_keyword(self):
+        issues = [self._issue(title="SQL injection via $_GET")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}
+        assert m["missing_required"] == []
+        assert m["unexpected"] == []
+
+    def test_line_outside_tolerance_does_not_match(self):
+        issues = [self._issue(line=20, title="SQL injection via $_GET")]
+        m = match_findings(issues, self.KEY)
+        assert m["missing_required"] == ["sql-injection"]
+        assert m["unexpected"] == [0]
+
+    def test_keyword_miss_does_not_match(self):
+        issues = [self._issue(title="Something unrelated entirely")]
+        m = match_findings(issues, self.KEY)
+        assert m["missing_required"] == ["sql-injection"]
+
+    def test_key_without_line_matches_any_line_including_null(self):
+        issues = [self._issue(line=None, title="Missing nonce verification")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_acceptable"] == {"csrf-nonce": 0}
+        assert m["unexpected"] == []
+
+    def test_issue_with_null_line_cannot_satisfy_line_bearing_key(self):
+        issues = [self._issue(line=None, title="SQL injection via $_GET")]
+        m = match_findings(issues, self.KEY)
+        assert m["missing_required"] == ["sql-injection"]
+
+    def test_one_issue_claims_only_one_spec(self):
+        # A single issue mentioning both injection and nonce satisfies the
+        # required spec (matched first) and leaves the acceptable one unmatched.
+        issues = [self._issue(title="SQL injection; also missing nonce")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}
+        assert m["matched_acceptable"] == {}
+
+    def test_wrong_file_never_matches(self):
+        issues = [self._issue(file="src/Other.php", title="SQL injection")]
+        m = match_findings(issues, self.KEY)
+        assert m["missing_required"] == ["sql-injection"]
+        assert m["unexpected"] == [0]
+
+    def test_dot_slash_prefix_is_normalized(self):
+        issues = [self._issue(file="./src/UserHandler.php", title="SQL injection")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}
+
+    def test_matching_searches_description_and_category_too(self):
+        issues = [self._issue(title="Bad query", description="should use prepare()")]
+        m = match_findings(issues, self.KEY)
+        assert m["matched_required"] == {"sql-injection": 0}

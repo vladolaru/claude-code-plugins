@@ -342,3 +342,79 @@ def grade_review_baseline(path: str) -> GradeResult:
     )
 
     return _grade(checks)
+
+
+# =============================================================================
+# Detection grading (answer-key based)
+# =============================================================================
+#
+# Answer keys assert which planted defects a reviewer must find. Matching is
+# deterministic: repo-relative file path, optional line window, and
+# case-insensitive keyword regexes over title + description + category.
+# One issue can satisfy at most one key spec (claimed-set), so keys must not
+# split a plausibly-merged finding across two required specs.
+
+DEFAULT_LINE_TOLERANCE = 2
+
+
+def _norm_path(path) -> str:
+    text = str(path or "")
+    return text[2:] if text.startswith("./") else text
+
+
+def _issue_text(issue: dict) -> str:
+    return " ".join(str(issue.get(k) or "") for k in ("title", "description", "category"))
+
+
+def _finding_matches(issue: dict, spec: dict) -> bool:
+    if _norm_path(issue.get("file")) != _norm_path(spec["file"]):
+        return False
+    expected_line = spec.get("line")
+    if expected_line is not None:
+        line = issue.get("line")
+        if not isinstance(line, int):
+            return False
+        if abs(line - expected_line) > spec.get("line_tolerance", DEFAULT_LINE_TOLERANCE):
+            return False
+    text = _issue_text(issue)
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in spec["match_any"])
+
+
+def match_findings(issues: List[dict], key: dict) -> dict:
+    """Match reviewer issues against an answer key.
+
+    Returns a dict with:
+      matched_required:   {spec_id: issue_index}
+      matched_acceptable: {spec_id: issue_index}
+      missing_required:   [spec_id, ...]
+      unexpected:         [issue_index, ...]  (issues no spec claimed)
+    """
+    issues = [i for i in issues if isinstance(i, dict)]
+    matched_required: dict = {}
+    matched_acceptable: dict = {}
+    claimed: set = set()
+
+    for bucket, matched in (
+        ("required_findings", matched_required),
+        ("acceptable_findings", matched_acceptable),
+    ):
+        for spec in key.get(bucket, []):
+            for idx, issue in enumerate(issues):
+                if idx in claimed:
+                    continue
+                if _finding_matches(issue, spec):
+                    matched[spec["id"]] = idx
+                    claimed.add(idx)
+                    break
+
+    missing = [
+        spec["id"] for spec in key.get("required_findings", [])
+        if spec["id"] not in matched_required
+    ]
+    unexpected = [idx for idx in range(len(issues)) if idx not in claimed]
+    return {
+        "matched_required": matched_required,
+        "matched_acceptable": matched_acceptable,
+        "missing_required": missing,
+        "unexpected": unexpected,
+    }
