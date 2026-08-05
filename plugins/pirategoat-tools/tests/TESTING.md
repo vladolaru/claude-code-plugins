@@ -205,13 +205,18 @@ with single-trial check counts (compliance + detection checks), so don't mix
 
 **Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
 `trials` (the requested count), and `results[]` with `scenario`, `agent`,
-`trials` (dispatches actually run for this entry), `passed`, `checks_run`,
-`checks_passed`, `failures`, `detail`. `detail` is polymorphic — discriminate
-per result, never on the top-level `trials` (unkeyed agents run once even
-under `--trials N`): `detail: null` means a compliance-only (unkeyed) entry;
-result `trials` of 1 means single-trial detail
+`trials` (dispatches actually run for this entry), `keyed` (whether an
+answer key exists for this entry), `passed`, `checks_run`, `checks_passed`,
+`failures`, `detail`. `detail` is polymorphic — discriminate per result,
+never on the top-level `trials` (unkeyed agents run once even under
+`--trials N`): `detail: null` with `keyed: false` is a compliance-only
+(unkeyed) entry; `detail: null` with `keyed: true` is a keyed run that
+failed before detection grading (e.g. bootstrap failure — see `failures`);
+result `trials` of 1 with detail means single-trial detail
 `{verdict, match, gates, compliance_passed}`; result `trials` above 1 means
-aggregate detail `{trials, per_trial, per_trial_failures}`.
+aggregate detail `{trials, per_trial, per_trial_failures}`. An invalid or
+empty scenario/agent selection exits nonzero before the report file is
+created.
 
 ## Design Principles
 

@@ -566,17 +566,6 @@ def main():
     if args.trials < 1:
         parser.error(f"--trials must be >= 1, got {args.trials}")
 
-    # Pre-flight only where a report will actually be written (dispatch mode) —
-    # touching it in other modes would leave a 0-byte file that reads as an
-    # empty result set. Append-mode open proves write access (touch() only
-    # updates metadata, which the owner may do even on a read-only file)
-    # without truncating an existing report before the run completes.
-    if args.report_out and args.dispatch:
-        report_path = Path(args.report_out)
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(report_path, "a"):
-            pass
-
     if args.grade_only:
         results = run_grade_only(args.grade_only)
         all_results = {"grade_existing": results}
@@ -592,20 +581,49 @@ def main():
                 sys.exit(1)
             scenarios = {args.scenario: SCENARIOS[args.scenario]}
 
+        # Resolve the selection before any side effect. A selection that
+        # matches nothing (e.g. --scenario php_clean_review --agent
+        # js-tests-reviewer) must not masquerade as a green run — TOTAL: 0/0
+        # with exit 0 and an empty report reads as success to benchmark
+        # automation — and must not leave a zero-byte report behind either.
+        selection = [
+            (scenario_name, scenario, [a for a in agents if a in scenario["agents"]])
+            for scenario_name, scenario in scenarios.items()
+        ]
+        if not any(scenario_agents for _, _, scenario_agents in selection):
+            print(
+                "ERROR: selection matched no scenario/agent pairs "
+                f"(scenario: {args.scenario or 'all'}, "
+                f"agent: {args.agent or 'all'})."
+            )
+            sys.exit(2)
+
+        # Pre-flight the report path only once the selection is valid —
+        # append-mode open proves write access (touch() only updates
+        # metadata, which the owner may do even on a read-only file) without
+        # truncating an existing report, so a non-writable path fails before
+        # any paid dispatch.
+        if args.report_out:
+            report_path = Path(args.report_out)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(report_path, "a"):
+                pass
+
         all_results = {}
-        # Per-entry dispatch count: unkeyed agents run once regardless of
-        # --trials, so the report-level trials field alone cannot tell a
-        # consumer which detail shape each result carries.
-        applied_trials = {}
-        for scenario_name, scenario in scenarios.items():
+        # Per-entry report metadata: unkeyed agents run once regardless of
+        # --trials, and a keyed run can fail before producing detection
+        # detail, so neither the report-level trials field nor detail alone
+        # tells a consumer what kind of result an entry is.
+        entry_meta = {}
+        for scenario_name, scenario, scenario_agents in selection:
             agent_results = {}
-            scenario_agents = [a for a in agents if a in scenario["agents"]]
             for agent_name in scenario_agents:
                 print(f"Running: {scenario_name} / {agent_name}...", flush=True)
                 key = (scenario.get("expected") or {}).get(agent_name)
-                applied_trials[(scenario_name, agent_name)] = (
-                    args.trials if args.trials > 1 and key is not None else 1
-                )
+                entry_meta[(scenario_name, agent_name)] = {
+                    "trials": args.trials if args.trials > 1 and key is not None else 1,
+                    "keyed": key is not None,
+                }
                 if args.trials > 1 and key is not None:
                     trial_grades = [
                         run_dispatch_scenario(scenario_name, scenario, agent_name)
@@ -621,18 +639,6 @@ def main():
             if agent_results:
                 all_results[scenario_name] = agent_results
 
-        # A selection that matches nothing (e.g. --scenario php_clean_review
-        # --agent js-tests-reviewer) must not masquerade as a green run:
-        # TOTAL: 0/0 with exit 0 and an empty report reads as success to
-        # benchmark automation.
-        if not all_results:
-            print(
-                "ERROR: selection matched no scenario/agent pairs "
-                f"(scenario: {args.scenario or 'all'}, "
-                f"agent: {args.agent or 'all'})."
-            )
-            sys.exit(2)
-
         print_results(all_results)
 
         if args.report_out:
@@ -643,7 +649,8 @@ def main():
                     {
                         "scenario": scenario_name,
                         "agent": agent_name,
-                        "trials": applied_trials[(scenario_name, agent_name)],
+                        "trials": entry_meta[(scenario_name, agent_name)]["trials"],
+                        "keyed": entry_meta[(scenario_name, agent_name)]["keyed"],
                         "passed": r.passed,
                         "checks_run": r.checks_run,
                         "checks_passed": r.checks_passed,
