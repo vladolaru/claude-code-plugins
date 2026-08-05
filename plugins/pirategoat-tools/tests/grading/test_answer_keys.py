@@ -157,3 +157,84 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
         assert spec.get("match_any"), f"{name}/{agent}/{spec_id}: empty match_any"
         for pattern in spec["match_any"]:
             re.compile(pattern)
+
+
+# Fixture-integrity guards below cover EVERY fixture diff, keyed or not.
+# git apply silently drops +-lines beyond a hunk header's declared count, so
+# an off-by-one header truncates the applied file without any error — the
+# resulting syntax break is an extra, unkeyed defect that contaminates
+# reviewer findings (found live in ten hand-authored fixtures, 2026-08-06).
+
+ALL_FIXTURE_DIFFS = sorted(_mod.FIXTURES_DIR.glob("*.diff")) + [
+    _mod.PLUGIN_ROOT / "test-samples" / "json-output-test" / "test-pr-security.diff",
+]
+
+# Balance-checked extensions: code formats whose fixture content never carries
+# unbalanced delimiters legitimately. Prose formats (.md, .txt) are excluded —
+# list markers and links make delimiter counting meaningless there.
+_BALANCED_EXTS = {".php", ".ts", ".tsx", ".js", ".jsx", ".go", ".tf", ".py"}
+_PAIRS = {"}": "{", ")": "(", "]": "["}
+
+
+def _diff_new_file_contents(diff_text: str) -> dict:
+    """Map each new-file path in a unified diff to its full content lines."""
+    files, current = {}, None
+    for line in diff_text.splitlines():
+        header = re.match(r"^\+\+\+ b/(.+)$", line)
+        if header:
+            current = header.group(1)
+            files[current] = []
+        elif current is not None and line.startswith("+") and not line.startswith("+++"):
+            files[current].append(line[1:])
+    return files
+
+
+@pytest.mark.parametrize("diff_path", ALL_FIXTURE_DIFFS, ids=[p.name for p in ALL_FIXTURE_DIFFS])
+def test_fixture_hunk_counts_are_exact(diff_path):
+    """Every hunk's declared new-line count must equal its actual +-lines."""
+    current, declared, actual = None, 0, 0
+
+    def check():
+        assert declared == actual, (
+            f"{diff_path.name}: {current} hunk declares {declared} new lines "
+            f"but carries {actual} — git apply silently drops the excess"
+        )
+
+    for line in diff_path.read_text().splitlines():
+        header = re.match(r"^\+\+\+ b/(.+)$", line)
+        hunk = re.match(r"^@@ -\d+(?:,\d+)? \+\d+(?:,(\d+))? @@", line)
+        if header:
+            check()
+            current, declared, actual = header.group(1), 0, 0
+        elif hunk:
+            check()
+            declared, actual = int(hunk.group(1) or 1), 0
+        elif line.startswith("+") and not line.startswith("+++"):
+            actual += 1
+    check()
+
+
+@pytest.mark.parametrize("diff_path", ALL_FIXTURE_DIFFS, ids=[p.name for p in ALL_FIXTURE_DIFFS])
+def test_fixture_sources_are_balanced(diff_path):
+    """New source files must close every delimiter they open.
+
+    A truncation tripwire, not a parser: fixture sources are simple enough
+    that unbalanced braces/parens/brackets always mean dropped lines.
+    """
+    for path, lines in _diff_new_file_contents(diff_path.read_text()).items():
+        if Path(path).suffix not in _BALANCED_EXTS:
+            continue
+        stack = []
+        for n, line in enumerate(lines, start=1):
+            for ch in line:
+                if ch in "{([":
+                    stack.append((ch, n))
+                elif ch in _PAIRS:
+                    assert stack and stack[-1][0] == _PAIRS[ch], (
+                        f"{diff_path.name}: {path}:{n} closes {ch!r} without opener"
+                    )
+                    stack.pop()
+        assert not stack, (
+            f"{diff_path.name}: {path} leaves {stack[-1][0]!r} from line "
+            f"{stack[-1][1]} unclosed — likely truncated content"
+        )

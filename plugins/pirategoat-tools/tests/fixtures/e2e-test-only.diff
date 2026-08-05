@@ -1,9 +1,9 @@
 diff --git a/e2e/checkout.spec.ts b/e2e/checkout.spec.ts
 new file mode 100644
-index 0000000..55a2e89
+index 0000000..5a84636
 --- /dev/null
 +++ b/e2e/checkout.spec.ts
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,23 @@
 +import { test, expect } from '@playwright/test';
 +
 +test.describe( 'Checkout flow', () => {
@@ -26,6 +26,7 @@ index 0000000..55a2e89
 +        const confirmation = page.locator( '.order-confirmation' );
 +        await expect( confirmation ).toBeVisible();
 +    } );
++} );
 diff --git a/e2e/pages/CheckoutPage.ts b/e2e/pages/CheckoutPage.ts
 new file mode 100644
 index 0000000..7eab21c

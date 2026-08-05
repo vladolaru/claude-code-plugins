@@ -1,9 +1,9 @@
 diff --git a/tests/OrderProcessorTest.php b/tests/OrderProcessorTest.php
 new file mode 100644
-index 0000000..a833e48
+index 0000000..8944228
 --- /dev/null
 +++ b/tests/OrderProcessorTest.php
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,23 @@
 +<?php
 +
 +use PHPUnit\Framework\TestCase;
@@ -26,6 +26,7 @@ index 0000000..a833e48
 +        ];
 +        $processor->process( $order );
 +    }
++}
 diff --git a/tests/PaymentHandlerTest.php b/tests/PaymentHandlerTest.php
 new file mode 100644
 index 0000000..e264708

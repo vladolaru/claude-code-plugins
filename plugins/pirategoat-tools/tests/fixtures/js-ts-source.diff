@@ -30,10 +30,10 @@ index 0000000..19180d5
 +}
 diff --git a/src/components/UserForm.tsx b/src/components/UserForm.tsx
 new file mode 100644
-index 0000000..e94fcd8
+index 0000000..3705ee1
 --- /dev/null
 +++ b/src/components/UserForm.tsx
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,28 @@
 +import React, { useState } from 'react';
 +
 +interface UserFormProps {
@@ -61,3 +61,4 @@ index 0000000..e94fcd8
 +            <button onClick={ () => onSubmit( name ) }>Submit</button>
 +        </div>
 +    );
++};

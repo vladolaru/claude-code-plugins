@@ -1,5 +1,6 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 new file mode 100644
+index 0000000..e8c8ef5
 --- /dev/null
 +++ b/.github/workflows/ci.yml
 @@ -0,0 +1,32 @@
@@ -37,6 +38,7 @@ new file mode 100644
 +
 diff --git a/Dockerfile b/Dockerfile
 new file mode 100644
+index 0000000..26417a9
 --- /dev/null
 +++ b/Dockerfile
 @@ -0,0 +1,18 @@
@@ -60,9 +62,10 @@ new file mode 100644
 +CMD ["node", "dist/index.js"]
 diff --git a/terraform/main.tf b/terraform/main.tf
 new file mode 100644
+index 0000000..f8f4957
 --- /dev/null
 +++ b/terraform/main.tf
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,24 @@
 +terraform {
 +  required_providers {
 +    aws = {

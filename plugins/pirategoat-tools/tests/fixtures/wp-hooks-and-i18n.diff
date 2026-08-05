@@ -1,9 +1,9 @@
 diff --git a/includes/class-payment-gateway.php b/includes/class-payment-gateway.php
 new file mode 100644
-index 0000000..a942722
+index 0000000..703e83d
 --- /dev/null
 +++ b/includes/class-payment-gateway.php
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,51 @@
 +<?php
 +
 +class Payment_Gateway {
@@ -53,3 +53,5 @@ index 0000000..a942722
 +        echo '<div class="status">' . $payment->status . '</div>';
 +
 +        echo '<div class="amount">' . esc_html( $payment->amount ) . '</div>';
++    }
++}
