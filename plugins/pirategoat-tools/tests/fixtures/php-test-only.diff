@@ -1,34 +1,6 @@
-diff --git a/tests/PaymentHandlerTest.php b/tests/PaymentHandlerTest.php
-new file mode 100644
---- /dev/null
-+++ b/tests/PaymentHandlerTest.php
-@@ -0,0 +1,24 @@
-+<?php
-+
-+use PHPUnit\Framework\TestCase;
-+
-+class PaymentHandlerTest extends TestCase {
-+
-+    public function test_process_payment() {
-+        $mock_db = $this->createMock( Database::class );
-+        $mock_db->method( 'query' )->willReturn( true );
-+
-+        $handler = new PaymentHandler( $mock_db );
-+        $result = $handler->process_payment( 1, 100 );
-+
-+        // Missing assertion: test passes without checking anything meaningful
-+        $this->assertNotNull( $result );
-+    }
-+
-+    public function test_it_works() {
-+        // Over-mocking: every dependency mocked, no real behavior tested
-+        $mock_db = $this->createMock( Database::class );
-+        $handler = new PaymentHandler( $mock_db );
-+        $this->assertInstanceOf( PaymentHandler::class, $handler );
-+    }
-+}
 diff --git a/tests/OrderProcessorTest.php b/tests/OrderProcessorTest.php
 new file mode 100644
+index 0000000..a833e48
 --- /dev/null
 +++ b/tests/OrderProcessorTest.php
 @@ -0,0 +1,22 @@
@@ -53,5 +25,32 @@ new file mode 100644
 +            'product_id' => 7,
 +        ];
 +        $processor->process( $order );
++    }
+diff --git a/tests/PaymentHandlerTest.php b/tests/PaymentHandlerTest.php
+new file mode 100644
+index 0000000..e264708
+--- /dev/null
++++ b/tests/PaymentHandlerTest.php
+@@ -0,0 +1,22 @@
++<?php
++
++use PHPUnit\Framework\TestCase;
++
++class PaymentHandlerTest extends TestCase {
++
++    public function test_process_payment() {
++        $mock_db = $this->createMock( Database::class );
++        $mock_db->method( 'query' )->willReturn( true );
++
++        $handler = new PaymentHandler( $mock_db );
++        $result = $handler->process_payment( 1, 100 );
++
++        $this->assertNotNull( $result );
++    }
++
++    public function test_it_works() {
++        $mock_db = $this->createMock( Database::class );
++        $handler = new PaymentHandler( $mock_db );
++        $this->assertInstanceOf( PaymentHandler::class, $handler );
 +    }
 +}

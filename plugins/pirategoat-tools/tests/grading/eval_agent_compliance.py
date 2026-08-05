@@ -143,7 +143,7 @@ SCENARIOS = {
             "security-reviewer": {
                 "verdict_in": ["block", "request_changes"],
                 "required_findings": [
-                    {"id": "sql-injection-get", "file": "src/PaymentHandler.php", "line": 14,
+                    {"id": "sql-injection-get", "file": "src/PaymentHandler.php", "line": 13,
                      "match_any": [r"sql[\s-]*inject", r"\$_GET", r"concatenat", r"\bprepare\b"]},
                 ],
                 "acceptable_findings": [
@@ -178,7 +178,7 @@ SCENARIOS = {
             "security-reviewer": {
                 "verdict_in": ["block", "request_changes"],
                 "required_findings": [
-                    {"id": "dom-xss", "file": "src/components/UserForm.tsx", "line": 14,
+                    {"id": "dom-xss", "file": "src/components/UserForm.tsx", "line": 13,
                      "match_any": [r"\bxss\b", r"innerHTML", r"sanitiz"]},
                     {"id": "hardcoded-api-key", "file": "src/api/client.ts", "line": 1,
                      "match_any": [r"hard-?coded", r"api.?key", r"secret", r"credential"]},
@@ -200,7 +200,7 @@ SCENARIOS = {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
                     {"id": "meaningless-assertion", "file": "tests/PaymentHandlerTest.php",
-                     "line": 15,
+                     "line": 14,
                      "match_any": [r"assertNotNull", r"meaning", r"weak assert"]},
                     {"id": "no-assertions", "file": "tests/OrderProcessorTest.php",
                      "match_any": [r"assert"]},
@@ -243,7 +243,7 @@ SCENARIOS = {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
                     {"id": "unescaped-output", "file": "includes/class-payment-gateway.php",
-                     "line": 48, "line_tolerance": 3,
+                     "line": 47, "line_tolerance": 2,
                      "match_any": [r"esc_html", r"escap", r"\bxss\b"]},
                 ],
             },
@@ -620,6 +620,18 @@ def main():
                 agent_results[agent_name] = result
             if agent_results:
                 all_results[scenario_name] = agent_results
+
+        # A selection that matches nothing (e.g. --scenario php_clean_review
+        # --agent js-tests-reviewer) must not masquerade as a green run:
+        # TOTAL: 0/0 with exit 0 and an empty report reads as success to
+        # benchmark automation.
+        if not all_results:
+            print(
+                "ERROR: selection matched no scenario/agent pairs "
+                f"(scenario: {args.scenario or 'all'}, "
+                f"agent: {args.agent or 'all'})."
+            )
+            sys.exit(2)
 
         print_results(all_results)
 

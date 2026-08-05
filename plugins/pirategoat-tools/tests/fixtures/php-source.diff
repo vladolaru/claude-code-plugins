@@ -1,35 +1,6 @@
-diff --git a/src/PaymentHandler.php b/src/PaymentHandler.php
-new file mode 100644
---- /dev/null
-+++ b/src/PaymentHandler.php
-@@ -0,0 +1,25 @@
-+<?php
-+
-+class PaymentHandler {
-+
-+    private $db;
-+
-+    public function __construct( $db ) {
-+        $this->db = $db;
-+    }
-+
-+    public function process_payment( $user_id, $amount ) {
-+        // SQL injection: unsanitized user input in query
-+        $result = $this->db->query(
-+            "SELECT * FROM payments WHERE user_id = " . $_GET['user_id']
-+        );
-+
-+        if ( $result ) {
-+            $this->db->query(
-+                "INSERT INTO payments (user_id, amount) VALUES ($user_id, $amount)"
-+            );
-+        }
-+
-+        return $result;
-+    }
-+}
 diff --git a/src/OrderProcessor.php b/src/OrderProcessor.php
 new file mode 100644
+index 0000000..0fd3eaf
 --- /dev/null
 +++ b/src/OrderProcessor.php
 @@ -0,0 +1,22 @@
@@ -54,5 +25,34 @@ new file mode 100644
 +        $this->inventory->decrement( $order['product_id'] );
 +        $this->email_service->send_confirmation( $order['user_id'] );
 +        $this->logger->info( 'Order processed: ' . $order['id'] );
++    }
+diff --git a/src/PaymentHandler.php b/src/PaymentHandler.php
+new file mode 100644
+index 0000000..fb50023
+--- /dev/null
++++ b/src/PaymentHandler.php
+@@ -0,0 +1,24 @@
++<?php
++
++class PaymentHandler {
++
++    private $db;
++
++    public function __construct( $db ) {
++        $this->db = $db;
++    }
++
++    public function process_payment( $user_id, $amount ) {
++        $result = $this->db->query(
++            "SELECT * FROM payments WHERE user_id = " . $_GET['user_id']
++        );
++
++        if ( $result ) {
++            $this->db->query(
++                "INSERT INTO payments (user_id, amount) VALUES ($user_id, $amount)"
++            );
++        }
++
++        return $result;
 +    }
 +}
