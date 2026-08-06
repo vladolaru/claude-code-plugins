@@ -14,11 +14,13 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 # Path setup
 TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
@@ -373,45 +375,63 @@ def split_agent_definition(agent_def: str) -> tuple:
     return body.lstrip("\n"), model_match.group(1) if model_match else None
 
 
-def build_dispatch_prompt(agent_name: str, bootstrap_output: str, definition_body: str) -> str:
-    """Build the reviewer prompt: specialist definition first, bootstrap after.
-
-    The real pipeline dispatches reviewers via the Agent tool, which loads the
-    agent .md as the subagent's system prompt. This subprocess equivalent must
-    embed the same definition — grading a generic Claude session with only the
-    shared bootstrap protocol would measure the wrong instrument.
-    """
-    definition_section = ""
-    if definition_body.strip():
-        definition_section = (
-            f"Your agent definition — follow it as your operating instructions:\n\n"
-            f"{definition_body}\n\n"
-        )
-    return (
-        f"You are the {agent_name} agent. {definition_section}"
-        f"Here is your bootstrap output:\n\n"
-        f"{bootstrap_output}\n\n"
-        f"Now perform your review per your definition. "
-        f"Write output files as specified in the bootstrap output."
-    )
-
-
-# Model values the claude CLI accepts as --model shorthands. Frontmatter
-# `inherit` (or a missing field) means "use the caller's model" — for this
-# subprocess harness that is the CLI's ambient default, so no flag is passed.
+# Model values the Agent tool accepts as routing shorthands. Frontmatter
+# `inherit` (or a missing field) means "use the caller's model".
 _DISPATCHABLE_MODELS = {"sonnet", "haiku", "opus"}
 
 
-def dispatch_agent(agent_name: str, bootstrap_output: str, agent_def: str, cwd: str) -> tuple:
-    """Dispatch an agent via claude -p subprocess.
+def check_model_routing(agent_name: str, agent_def: str) -> Optional[str]:
+    """Return an error when frontmatter routing diverges from the registry.
 
-    Embeds the agent's canonical .md definition in the prompt and honors its
-    frontmatter model routing, mirroring how the real pipeline's Agent tool
-    dispatches reviewers (definition as system prompt, frontmatter model wins
-    over inherit). Returns (exit_code, stdout).
+    agent_registry.json is the single source of truth for agent
+    configuration; the Agent tool routes on the .md frontmatter. When the two
+    disagree, dispatching would silently exercise a model production planning
+    does not declare — refuse to run rather than measure the wrong tier.
     """
-    definition_body, model = split_agent_definition(agent_def)
-    prompt = build_dispatch_prompt(agent_name, bootstrap_output, definition_body)
+    _, fm_model = split_agent_definition(agent_def)
+    tier = AGENT_CONFIG.get(agent_name, {}).get("model_tier") or "inherit"
+    if (fm_model or "inherit") != tier:
+        return (
+            f"model routing drift for {agent_name}: frontmatter model "
+            f"{fm_model!r} vs registry model_tier {tier!r} — the registry is "
+            f"canonical; refusing to dispatch an unrepresentative model"
+        )
+    return None
+
+
+def build_dispatch_prompt(agent_name: str, bootstrap_cmd: str) -> str:
+    """Build the orchestrator prompt that dispatches the real reviewer.
+
+    Mirrors the production step 6 briefing: the parent session dispatches the
+    plugin's canonical subagent via the Agent tool with no model override
+    (frontmatter routes it — pinned equal to the registry by
+    check_model_routing), and the subagent runs bootstrap itself and follows
+    the emitted scope and output contract. The parent does no review work —
+    grading anything but the configured subagent measures the wrong
+    instrument.
+    """
+    return (
+        f"Dispatch the `pirategoat-tools:{agent_name}` subagent via the Agent "
+        f"tool now. Do not perform any review work yourself and do not "
+        f"override the subagent's model.\n\n"
+        f"The subagent's prompt must be exactly:\n\n"
+        f"Run this exact bootstrap command and follow the emitted scope and "
+        f"output contract:\n```\n{bootstrap_cmd}\n```\n\n"
+        f"Wait for the subagent to finish, then output its final message "
+        f"verbatim as your entire reply — no commentary of your own."
+    )
+
+
+def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
+    """Dispatch the configured reviewer subagent via a claude -p parent.
+
+    `--plugin-dir` loads this plugin so the parent's Agent tool dispatches
+    the reviewer natively — canonical .md as the subagent's system prompt
+    with its full frontmatter contract (model, effort, tools) applied by the
+    host, exactly as the production pipeline dispatches it. Returns
+    (exit_code, stdout).
+    """
+    prompt = build_dispatch_prompt(agent_name, bootstrap_cmd)
 
     # Check if claude CLI is available
     claude_path = shutil.which("claude")
@@ -419,21 +439,23 @@ def dispatch_agent(agent_name: str, bootstrap_output: str, agent_def: str, cwd: 
         return 1, "ERROR: claude CLI not found in PATH"
 
     # The real pipeline runs reviewers via the Agent tool under an interactive
-    # parent that can answer permission prompts. A bare `claude -p` cannot, so
-    # a content-triggered "ask" (e.g. destructive SQL quoted in finding prose)
-    # would silently deny the builder call and no output would be written.
-    # The eval repo is a throwaway tempdir, so skip permission prompts.
-    cmd = [claude_path, "-p", "--dangerously-skip-permissions"]
-    if model in _DISPATCHABLE_MODELS:
-        cmd += ["--model", model]
-    cmd.append(prompt)
+    # parent that can answer permission prompts. A headless `claude -p` cannot,
+    # so a content-triggered "ask" (e.g. destructive SQL quoted in finding
+    # prose) would silently deny the builder call and no output would be
+    # written. The eval repo is a throwaway tempdir, so skip permission
+    # prompts.
+    cmd = [
+        claude_path, "-p", "--dangerously-skip-permissions",
+        "--plugin-dir", str(PLUGIN_ROOT),
+        prompt,
+    ]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600, cwd=cwd,
+            cmd, capture_output=True, text=True, timeout=900, cwd=cwd,
         )
         return result.returncode, result.stdout
     except subprocess.TimeoutExpired:
-        return 1, "ERROR: Agent dispatch timed out after 600s"
+        return 1, "ERROR: Agent dispatch timed out after 900s"
     except FileNotFoundError:
         return 1, "ERROR: claude CLI not found"
 
@@ -481,14 +503,31 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 checks_run=1, checks_passed=1,
             )
 
-        # Read agent definition
+        # Refuse to dispatch when frontmatter routing has drifted from the
+        # canonical registry — the run would measure an unrepresentative
+        # model. Checked before dispatch so the drift costs nothing.
         agent_def_path = PLUGIN_ROOT / "agents" / f"{agent_name}.md"
-        agent_def = ""
-        if agent_def_path.is_file():
-            agent_def = agent_def_path.read_text()
+        if not agent_def_path.is_file():
+            return GradeResult(
+                passed=False, score=0.0,
+                failures=[f"agent definition missing: {agent_def_path}"],
+                checks_run=1, checks_passed=0,
+            )
+        drift = check_model_routing(agent_name, agent_def_path.read_text())
+        if drift:
+            return GradeResult(
+                passed=False, score=0.0, failures=[drift],
+                checks_run=1, checks_passed=0,
+            )
 
-        # Dispatch agent
-        rc, agent_output = dispatch_agent(agent_name, bootstrap_out, agent_def, cwd)
+        # Dispatch the configured reviewer. The subagent re-runs bootstrap
+        # itself (mirroring the production step 6 briefing); the direct run
+        # above stays for short-circuit grading and fail-fast.
+        bootstrap_cmd = (
+            f'{shlex.quote(sys.executable)} {shlex.quote(str(BOOTSTRAP_SCRIPT))} '
+            f'--agent {shlex.quote(agent_name)} --output-dir {shlex.quote(output_dir)}'
+        )
+        rc, agent_output = dispatch_agent(agent_name, bootstrap_cmd, cwd)
 
         # Keep the agent's final message for postmortem — without it a
         # missing output file is undiagnosable.

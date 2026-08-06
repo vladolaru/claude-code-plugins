@@ -185,13 +185,18 @@ python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_re
 python3 tests/grading/eval_agent_compliance.py --dispatch --report-out "$TMPDIR/detection-report.json"
 ```
 
-**Dispatch identity.** Each dispatch embeds the agent's canonical
-`agents/<name>.md` definition body in the prompt and honors its frontmatter
-`model:` routing (`--model sonnet|haiku|opus`; `inherit` uses the CLI's
-ambient default) — mirroring how the real pipeline's Agent tool loads the
-definition as the subagent's system prompt. `TestDispatchIdentity` pins this:
-a run that graded a bare-bootstrap generic session would measure the wrong
-instrument.
+**Dispatch identity.** Each dispatch spawns a `claude -p` parent with
+`--plugin-dir` pointing at this plugin and instructs it to dispatch the
+`pirategoat-tools:<agent>` subagent via the Agent tool — the production
+mechanism, so the canonical `agents/<name>.md` becomes the subagent's system
+prompt and its full frontmatter contract (model, effort, tools) is applied
+natively by the host with no re-encoding. The subagent runs bootstrap itself,
+mirroring the production step 6 briefing. Model routing is pinned to
+`agent_registry.json` (the single source of truth): `check_model_routing`
+refuses to dispatch when frontmatter drifts from the registry tier, and a
+`TestDispatchIdentity` guard requires the two to stay equal for every agent.
+A run that graded a bare-bootstrap generic session, or an unrepresentative
+model, would measure the wrong instrument.
 
 Grading is deterministic (file + line-window + keyword regexes over
 title/description/category — no model judge). A correct finding the patterns

@@ -126,11 +126,14 @@ class TestGradeOnlyMode:
 class TestDispatchIdentity:
     """The benchmark must dispatch the configured reviewer, not generic Claude.
 
-    These pin the measurement instrument itself: the agent .md body must
-    reach the dispatch prompt and its frontmatter model routing must be
-    honored — a keyed run that silently grades a bare-bootstrap session
-    measures the wrong thing (found live 2026-08-06, after every layer
-    above this one had been reviewed diff-by-diff).
+    These pin the measurement instrument itself: the dispatch prompt must
+    route through the plugin's canonical subagent via the Agent tool (the
+    production mechanism — full frontmatter contract: system prompt, model,
+    effort, tools applied by the host), and frontmatter model routing must
+    match the canonical registry — a keyed run that silently grades a
+    bare-bootstrap session, or an unrepresentative model, measures the wrong
+    thing (found live 2026-08-06, after every layer above this one had been
+    reviewed diff-by-diff).
     """
 
     AGENT_MD = (
@@ -154,17 +157,34 @@ class TestDispatchIdentity:
         assert body == "Just instructions."
         assert model is None
 
-    def test_prompt_embeds_definition_before_bootstrap(self):
+    def test_prompt_dispatches_namespaced_subagent_with_bootstrap_cmd(self):
         prompt = _eval_mod.build_dispatch_prompt(
-            "security-reviewer", "BOOTSTRAP-CONTENT", "Trace attack paths.",
+            "security-reviewer", "python3 /x/bootstrap.py --agent security-reviewer",
         )
-        assert "Trace attack paths." in prompt
-        assert prompt.index("Trace attack paths.") < prompt.index("BOOTSTRAP-CONTENT")
+        assert "`pirategoat-tools:security-reviewer`" in prompt
+        assert "Agent tool" in prompt
+        assert "python3 /x/bootstrap.py --agent security-reviewer" in prompt
+        # The parent must not review, must not re-route the model, and must
+        # relay the subagent's final message so signal grading stays valid.
+        assert "Do not perform any review work yourself" in prompt
+        assert "do not override the subagent's model" in prompt
+        assert "verbatim" in prompt
 
-    def test_empty_definition_omits_definition_section(self):
-        prompt = _eval_mod.build_dispatch_prompt("x-reviewer", "BOOT", "")
-        assert "BOOT" in prompt
-        assert "agent definition" not in prompt
+    def test_model_routing_drift_is_refused(self):
+        drifted = self.AGENT_MD.replace("model: sonnet", "model: opus")
+        agent = next(
+            a for a in _eval_mod.ALL_AGENTS
+            if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit") != "opus"
+        )
+        error = _eval_mod.check_model_routing(agent, drifted)
+        assert error is not None and "drift" in error
+
+    def test_matching_model_routing_passes(self):
+        for agent in _eval_mod.ALL_AGENTS:
+            path = _eval_mod.PLUGIN_ROOT / "agents" / f"{agent}.md"
+            assert _eval_mod.check_model_routing(agent, path.read_text()) is None, (
+                f"{agent}: routing check rejects its own canonical definition"
+            )
 
     def test_every_eval_agent_definition_resolves(self):
         # A benchmark agent whose .md goes missing or empty would silently
@@ -177,3 +197,16 @@ class TestDispatchIdentity:
             assert model is None or model == "inherit" or (
                 model in _eval_mod._DISPATCHABLE_MODELS
             ), f"{agent}: frontmatter model {model!r} is not dispatchable"
+
+    def test_frontmatter_model_matches_registry_for_all_agents(self):
+        # agent_registry.json is the single source of truth; the Agent tool
+        # routes on frontmatter. This guard makes silent divergence
+        # impossible: change one, and CI demands the other.
+        for agent in _eval_mod.ALL_AGENTS:
+            path = _eval_mod.PLUGIN_ROOT / "agents" / f"{agent}.md"
+            _, fm_model = _eval_mod.split_agent_definition(path.read_text())
+            tier = _eval_mod.AGENT_CONFIG[agent].get("model_tier") or "inherit"
+            assert (fm_model or "inherit") == tier, (
+                f"{agent}: frontmatter model {fm_model!r} != registry "
+                f"model_tier {tier!r} — registry is canonical (AGENTS.md)"
+            )
