@@ -5,7 +5,7 @@ Agent compliance eval runner.
 Two modes:
   --grade-only <output_dir>   Grade existing review output files
   --dispatch --agent <name>   Full eval: temp repo -> bootstrap -> dispatch agent -> grade
-  --dispatch --all            Run full eval for all 11 agents
+  --dispatch --all            Run full eval for all dispatchable agents (EVAL_AGENTS)
 
 Scenarios define: agent name, setup (git state), grader, and optional detection answer keys ("expected").
 """
@@ -53,6 +53,17 @@ _spec.loader.exec_module(_mod)
 AGENT_CONFIG = _mod.AGENT_CONFIG
 ALL_AGENTS = sorted(AGENT_CONFIG.keys())
 
+# Agents the production pipeline can actually dispatch as reviewers. The
+# registry also carries special orchestration agents (decision-reviewer,
+# repo-reviewer-adapter — needs ref-mode args this harness never passes) and
+# manual-only agents (tests-mutation-reviewer — must run SOLO); dispatching
+# those burns model calls on runs that cannot produce a gradeable review and
+# pollutes the benchmark denominator.
+EVAL_AGENTS = sorted(
+    name for name, cfg in AGENT_CONFIG.items()
+    if cfg.get("dispatch_class") in ("always", "conditional")
+)
+
 
 # =============================================================================
 # Scenario Definitions
@@ -78,7 +89,13 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
     subprocess.run(["git", "add", "."], cwd=tmp, capture_output=True)
     subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp, capture_output=True)
 
-    if diff_file and os.path.isfile(diff_file):
+    if diff_file and not os.path.isfile(diff_file):
+        # A missing fixture must fail loudly: silently skipping the apply
+        # yields a repo where main == HEAD, every agent sees NO_CHANGES, and
+        # the scenario measures nothing while reporting normally.
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise FileNotFoundError(f"scenario fixture missing: {diff_file}")
+    if diff_file:
         subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp, capture_output=True)
         result = subprocess.run(
             ["git", "apply", str(diff_file)],
@@ -100,8 +117,10 @@ def setup_temp_git_repo(diff_file: str = None) -> str:
 # matcher's claimed-set rule (one issue satisfies at most one spec).
 SCENARIOS = {
     "no_domain_files_approve": {
-        "description": "Docs-only changes should yield APPROVE with zero findings",
-        "agents": ALL_AGENTS,
+        "description": "Docs-only changes: every non-docs reviewer must short-circuit",
+        # docs-drift-reviewer legitimately owns docs-only diffs (its domain
+        # HAS files here), so the short-circuit assertion cannot apply to it.
+        "agents": [a for a in EVAL_AGENTS if a != "docs-drift-reviewer"],
         "diff": str(FIXTURES_DIR / "no-code-changes.diff"),
         "grader": "no_domain_files",
     },
@@ -115,7 +134,7 @@ SCENARIOS = {
                 "verdict_in": ["block", "request_changes"],
                 "required_findings": [
                     {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
-                     "match_any": [r"sql[\s-]*inject", r"\bprepare\b", r"interpolat", r"unsanitiz"]},
+                     "match_any": [r"sql[\s-]*inject", r"\bprepare\b", r"interpolat"]},
                 ],
                 "acceptable_findings": [
                     {"id": "missing-capability-check", "file": "src/UserHandler.php",
@@ -146,16 +165,20 @@ SCENARIOS = {
             "security-reviewer": {
                 "verdict_in": ["block", "request_changes"],
                 "required_findings": [
-                    # Injection evidence only — no standalone source token like
-                    # \$_GET, or an IDOR/access-control finding at the same
-                    # line would satisfy this spec without any injection
-                    # having been reported.
+                    # Injection technique/sink evidence only — no standalone
+                    # source token (\$_GET) and no generic input-handling
+                    # vocabulary (unsanitiz), or an IDOR/access-control
+                    # finding at the same line would satisfy this spec
+                    # without any injection having been reported.
                     {"id": "sql-injection-get", "file": "src/PaymentHandler.php", "line": 13,
-                     "match_any": [r"sql[\s-]*inject", r"concatenat", r"unsanitiz", r"\bprepare\b"]},
+                     "match_any": [r"sql[\s-]*inject", r"concatenat", r"\bprepare\b"]},
                 ],
                 "acceptable_findings": [
+                    # Disjoint from the required spec's patterns (mutual
+                    # exclusivity rule in match_findings) — prepare/inject
+                    # belong to the required injection spec.
                     {"id": "sql-injection-insert", "file": "src/PaymentHandler.php",
-                     "match_any": [r"interpolat", r"\bINSERT\b", r"\bprepare\b", r"inject"]},
+                     "match_any": [r"interpolat", r"\bINSERT\b"]},
                     {"id": "idor-access-control", "file": "src/PaymentHandler.php",
                      "match_any": [r"access control", r"authoriz", r"\bIDOR\b", r"ownership"]},
                     {"id": "unvalidated-order", "file": "src/OrderProcessor.php",
@@ -163,10 +186,17 @@ SCENARIOS = {
                 ],
             },
             "architecture-reviewer": {
+                # architecture-reviewer.md "Mixed Abstraction Levels" mandates
+                # flagging a method that interleaves orchestration with raw
+                # SQL assembly, with concrete symptoms — process_payment is
+                # its exact example, which earns the no-approve verdict gate.
                 "verdict_in": ["comment", "request_changes", "block"],
-                "acceptable_findings": [
+                "required_findings": [
                     {"id": "handler-owns-queries", "file": "src/PaymentHandler.php",
-                     "match_any": [r"coupl", r"abstraction", r"repository", r"separation", r"respons"]},
+                     "match_any": [r"coupl", r"abstraction", r"repositor",
+                                   r"separat", r"data.?access", r"extract"]},
+                ],
+                "acceptable_findings": [
                     {"id": "no-failure-handling", "file": "src/OrderProcessor.php",
                      "match_any": [r"error handling", r"failure", r"transaction", r"partial"]},
                 ],
@@ -178,8 +208,11 @@ SCENARIOS = {
                 # behavior, not a false positive.
                 "verdict_in": ["comment", "request_changes", "block"],
                 "required_findings": [
+                    # No select\* token — a SELECT-*-over-fetch finding is a
+                    # different genuine defect and must not claim the
+                    # unbounded-query recall gate.
                     {"id": "unbounded-query", "file": "src/PaymentHandler.php",
-                     "match_any": [r"\bLIMIT\b", r"unbounded", r"select\s*\*"]},
+                     "match_any": [r"\bLIMIT\b", r"unbounded", r"paginat"]},
                 ],
             },
         },
@@ -195,7 +228,10 @@ SCENARIOS = {
                 "required_findings": [
                     {"id": "dom-xss", "file": "src/components/UserForm.tsx", "line": 13,
                      "match_any": [r"\bxss\b", r"innerHTML", r"sanitiz"]},
-                    {"id": "hardcoded-api-key", "file": "src/api/client.ts", "line": 1,
+                    # No line pin: the reviewer may anchor at the declaration
+                    # (line 1) or the transmission sink (line 11); the file is
+                    # 24 lines and the patterns are already specific.
+                    {"id": "hardcoded-api-key", "file": "src/api/client.ts",
                      "match_any": [r"hard-?coded", r"api.?key", r"secret", r"credential"]},
                 ],
                 "acceptable_findings": [
@@ -217,8 +253,15 @@ SCENARIOS = {
                     {"id": "meaningless-assertion", "file": "tests/PaymentHandlerTest.php",
                      "line": 14,
                      "match_any": [r"assertNotNull", r"meaning", r"weak assert"]},
+                    # Explicit absent-assertion phrasings only — a bare
+                    # "assert" token lets the co-located over-mocking finding
+                    # claim this recall gate without the assertion gap ever
+                    # being reported.
                     {"id": "no-assertions", "file": "tests/OrderProcessorTest.php",
-                     "match_any": [r"assert"]},
+                     "match_any": [r"no\s+assert", r"assert\w*\s+nothing",
+                                   r"without\s+(any\s+)?assert", r"missing\s+assert",
+                                   r"zero\s+assert", r"lacks\s+assert",
+                                   r"doesn'?t\s+assert", r"never\s+assert"]},
                 ],
                 "acceptable_findings": [
                     {"id": "over-mocking", "file": "tests/PaymentHandlerTest.php",
@@ -269,16 +312,19 @@ SCENARIOS = {
                 # blocking verdict correct behavior.
                 "verdict_in": ["comment", "request_changes", "block"],
                 "required_findings": [
+                    # (?<!->) excludes findings that merely quote the
+                    # fixture's correct `$wpdb->prefix` usage — a direct-db
+                    # api-bypass finding must not claim this recall gate.
                     {"id": "namespace-pollution",
                      "file": "includes/class-payment-gateway.php",
-                     "match_any": [r"prefix", r"namespac", r"collision"]},
+                     "match_any": [r"(?<!->)prefix", r"namespac", r"collision"]},
                 ],
             },
         },
     },
     "realistic_multi_file": {
         "description": "Realistic multi-file PR touching all domains",
-        "agents": ALL_AGENTS,
+        "agents": EVAL_AGENTS,
         "diff": str(FIXTURES_DIR / "multi-file-realistic.diff"),
         "grader": "output_pair",
         "expected": {
@@ -289,16 +335,20 @@ SCENARIOS = {
             "php-tests-reviewer": {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
+                    # No bare "assert" token — any assertion-adjacent finding
+                    # on this file would claim the gate vacuously.
                     {"id": "weak-assertion", "file": "tests/ProductManagerTest.php",
-                     "match_any": [r"assertNotNull", r"meaning", r"weak", r"assert"]},
+                     "match_any": [r"assertNotNull", r"meaning", r"weak"]},
                 ],
             },
             "js-tests-reviewer": {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
+                    # No "name" token — a test-naming finding on the same
+                    # file must not claim the assertion-quality gate.
                     {"id": "count-only-assertion",
                      "file": "src/components/__tests__/ProductList.test.tsx",
-                     "match_any": [r"toHaveLength", r"count", r"content", r"name", r"price"]},
+                     "match_any": [r"toHaveLength", r"\bcount\b", r"\bcontent\b", r"\bprice\b"]},
                 ],
             },
             "python-tests-reviewer": {"expect_not_applicable": True},
@@ -436,26 +486,98 @@ def build_dispatch_prompt(agent_name: str, bootstrap_cmd: str) -> str:
     )
 
 
+_PLUGIN_SHIM_DIR = None
+
+
+def ensure_plugin_shim() -> str:
+    """Create (once per process) a loadable plugin dir for the WORKTREE agents.
+
+    The plugin directory itself carries no `.claude-plugin/plugin.json` (the
+    repo-root marketplace.json is the canonical manifest, and the CLI loads
+    neither form as a --plugin-dir target — verified: --agent fails to
+    resolve with either path). Without a resolvable --plugin-dir the agent
+    name is answered by the user-scope INSTALLED plugin, so the benchmark
+    would grade a stale release instead of the branch under test. The shim
+    is a tempdir with a minimal manifest and a symlink to the worktree's
+    agents/ — sentinel-verified to make the branch definitions win.
+    """
+    global _PLUGIN_SHIM_DIR
+    if _PLUGIN_SHIM_DIR is None:
+        shim = tempfile.mkdtemp(prefix="eval-plugin-shim-")
+        os.makedirs(os.path.join(shim, ".claude-plugin"))
+        with open(os.path.join(shim, ".claude-plugin", "plugin.json"), "w") as f:
+            json.dump({
+                "name": "pirategoat-tools",
+                "version": "0.0.0-eval-worktree",
+                "description": "eval shim exposing the worktree agent definitions",
+            }, f)
+        os.symlink(str(PLUGIN_ROOT / "agents"), os.path.join(shim, "agents"))
+        _PLUGIN_SHIM_DIR = shim
+    return _PLUGIN_SHIM_DIR
+
+
 def build_dispatch_cmd(claude_path: str, agent_name: str, prompt: str) -> list:
-    """Assemble the claude -p invocation that runs the configured reviewer."""
+    """Assemble the claude -p invocation that runs the configured reviewer.
+
+    --setting-sources project excludes user-scope configuration — the
+    installed copy of this plugin (which would silently shadow the worktree
+    definitions; verified by a negative-control probe), user hooks that can
+    block the reviewer's builder call, and user memory that contaminates the
+    context. The temp eval repo carries no project settings, so the session
+    is effectively clean and machine-independent.
+    """
     return [
         claude_path, "-p", "--dangerously-skip-permissions",
-        "--plugin-dir", str(PLUGIN_ROOT),
+        "--setting-sources", "project",
+        "--plugin-dir", ensure_plugin_shim(),
         "--agent", f"pirategoat-tools:{agent_name}",
         "--output-format", "json",
         prompt,
     ]
 
 
-def check_dispatched_models(agent_name: str, models: list) -> Optional[str]:
+def _primary_model(model_usage: dict) -> Optional[str]:
+    """Best-effort primary model: the entry with the largest numeric usage.
+
+    modelUsage is a session-wide accumulator including auxiliary calls
+    (verified live: a sonnet reviewer session also reports a haiku entry),
+    so membership alone cannot attribute the main loop. Weight each model by
+    the sum of its numeric usage fields; None when no usable weights exist.
+    """
+    best, best_weight = None, 0
+    for model, usage in model_usage.items():
+        weight = 0
+        if isinstance(usage, dict):
+            weight = sum(
+                v for v in usage.values()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            )
+        if weight > best_weight:
+            best, best_weight = model, weight
+    return best
+
+
+def check_dispatched_models(agent_name: str, model_usage: dict) -> Optional[str]:
     """Return an error when the run's model usage contradicts the registry.
 
-    JSON output reports modelUsage per run — hard evidence of which model
-    actually executed. A routed tier (sonnet/haiku/opus) must appear in the
-    used-model IDs; `inherit` accepts whatever the ambient default was.
+    A routed tier (sonnet/haiku/opus) must match the PRIMARY model — the one
+    that did the bulk of the work — not merely appear somewhere in the
+    session accumulator, or an auxiliary call in the right family would
+    vouch for a main loop that ran elsewhere. Falls back to membership when
+    usage carries no numeric weights; `inherit` accepts any model.
     """
     tier = AGENT_CONFIG.get(agent_name, {}).get("model_tier") or "inherit"
     if tier not in _DISPATCHABLE_MODELS:
+        return None
+    models = sorted(model_usage.keys())
+    primary = _primary_model(model_usage)
+    if primary is not None:
+        if tier not in primary:
+            return (
+                f"primary dispatched model {primary!r} (of {models}) does not "
+                f"match registry tier {tier!r} for {agent_name} — model "
+                f"routing was not applied"
+            )
         return None
     if not any(tier in model for model in models):
         return (
@@ -491,6 +613,7 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=900, cwd=cwd,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return 1, "ERROR: Agent dispatch timed out after 900s", {}
@@ -502,15 +625,20 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
     except json.JSONDecodeError:
         return 1, f"ERROR: non-JSON dispatch output:\n{result.stdout[:2000]}", {}
 
-    models = sorted((payload.get("modelUsage") or {}).keys())
+    model_usage = payload.get("modelUsage") or {}
     evidence = {
-        "models": models,
+        "models": sorted(model_usage.keys()),
+        "primary_model": _primary_model(model_usage),
         "is_error": bool(payload.get("is_error")),
         "session_id": payload.get("session_id"),
+        # Under --dangerously-skip-permissions any denial comes from a hook;
+        # recorded so a hook-blocked builder call is distinguishable from a
+        # reviewer that chose to write nothing.
+        "permission_denials": len(payload.get("permission_denials") or []),
     }
     text = payload.get("result") or ""
 
-    model_error = check_dispatched_models(agent_name, models)
+    model_error = check_dispatched_models(agent_name, model_usage)
     if model_error:
         return 1, f"ERROR: {model_error}\n\n{text}", evidence
 
@@ -547,18 +675,23 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
             # there is no agent output to grade. grade_no_domain_files targets
             # agent return signals — running it against the full bootstrap
             # prompt false-positives on protocol prose that teaches severity
-            # vocabulary. The short-circuit itself is the pass condition.
+            # vocabulary. The short-circuit itself is the pass condition —
+            # and the ONLY pass condition: an unconditional pass on the
+            # fallthrough made this scenario structurally unable to fail,
+            # granting free credit to every entry.
             if "NO_DOMAIN_FILES" in bootstrap_out:
                 return GradeResult(
                     passed=True, score=1.0, failures=[],
                     checks_run=1, checks_passed=1,
                 )
-            # If scope was OK (no domain filtering at bootstrap level), we need dispatch
-            # For dispatch mode, we'd send to agent and grade output
-            # In non-dispatch bootstrap-only mode, just check the bootstrap succeeded
             return GradeResult(
-                passed=True, score=1.0, failures=[],
-                checks_run=1, checks_passed=1,
+                passed=False, score=0.0,
+                failures=[
+                    "bootstrap did not short-circuit on a docs-only diff — "
+                    "either scope routing regressed or this agent's domain "
+                    "covers docs and it must be excluded from this scenario"
+                ],
+                checks_run=1, checks_passed=0,
             )
 
         # Refuse to dispatch when frontmatter routing has drifted from the
@@ -597,15 +730,42 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 f"{agent_output}"
             )
 
-        # Grade. Reviewers publish JSON only — Markdown is a derived artifact
-        # (see review/agent/output.py), so materialize it before the pair grade.
+        # A dispatch the harness rejected — model-routing violation, session
+        # error, timeout, non-JSON output — must never be graded: the
+        # reviewer may have written a plausible artifact before the rejection
+        # surfaced, and grading it would attribute an untrusted run to the
+        # agent. Fail the entry with the rejection as evidence.
+        if rc != 0:
+            return GradeResult(
+                passed=False, score=0.0,
+                failures=[f"dispatch rejected: {agent_output.splitlines()[0][:300] if agent_output else 'no output'}"],
+                checks_run=1, checks_passed=0,
+                detail={
+                    "dispatch_rejected": True,
+                    "dispatch_evidence": dispatch_evidence,
+                    "output_dir": output_dir,
+                },
+            )
+
+        # Grade the reviewer's JSON only. Reviewers publish JSON — Markdown is
+        # a derived artifact the HARNESS materializes below for human
+        # inspection; grading the pair would count 5 markdown checks that
+        # ReviewOutputBuilder.to_markdown() structurally guarantees, inflating
+        # every compliance score with tautological credit.
         if scenario["grader"] == "output_pair":
             _materialize_missing_markdown(output_dir)
             reviewer_name = _mod.derive_reviewer_name(agent_name)
-            compliance = grade_output_pair(output_dir, reviewer_name)
+            compliance = grade_review_json(
+                os.path.join(output_dir, f"{reviewer_name}-review.json")
+            )
 
             key = (scenario.get("expected") or {}).get(agent_name)
             if key is None:
+                # Unkeyed entries still leave artifacts (review JSON,
+                # dispatch transcript) worth pointing at from the report.
+                compliance.detail = dict(
+                    compliance.detail or {}, output_dir=output_dir,
+                )
                 return compliance
 
             review_path = os.path.join(output_dir, f"{reviewer_name}-review.json")
@@ -724,6 +884,17 @@ def main():
 
     if args.trials < 1:
         parser.error(f"--trials must be >= 1, got {args.trials}")
+    if args.all and args.agent:
+        parser.error("--all and --agent are mutually exclusive")
+    if args.grade_only and (
+        args.dispatch or args.report_out or args.trials != 1
+        or args.scenario or args.agent or args.all
+    ):
+        parser.error(
+            "--grade-only cannot be combined with dispatch-mode flags "
+            "(--dispatch/--report-out/--trials/--scenario/--agent/--all) — "
+            "they would be silently ignored"
+        )
 
     if args.grade_only:
         results = run_grade_only(args.grade_only)
@@ -732,12 +903,14 @@ def main():
         return
 
     if args.dispatch:
-        agents = ALL_AGENTS if args.all else ([args.agent] if args.agent else ALL_AGENTS)
+        agents = EVAL_AGENTS if args.all else ([args.agent] if args.agent else EVAL_AGENTS)
         scenarios = SCENARIOS
         if args.scenario:
             if args.scenario not in SCENARIOS:
+                # Exit 2 like every other configuration error — exit 1 is
+                # reserved for "the eval ran and something failed".
                 print(f"ERROR: Unknown scenario '{args.scenario}'. Available: {list(SCENARIOS.keys())}")
-                sys.exit(1)
+                sys.exit(2)
             scenarios = {args.scenario: SCENARIOS[args.scenario]}
 
         # Resolve the selection before any side effect. A selection that
@@ -764,9 +937,13 @@ def main():
         # any paid dispatch.
         if args.report_out:
             report_path = Path(args.report_out)
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(report_path, "a"):
-                pass
+            try:
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(report_path, "a"):
+                    pass
+            except OSError as exc:
+                print(f"ERROR: report path {args.report_out!r} is not writable: {exc}")
+                sys.exit(2)
 
         all_results = {}
         # Per-entry report metadata: unkeyed agents run once regardless of
@@ -782,18 +959,48 @@ def main():
                 entry_meta[(scenario_name, agent_name)] = {
                     "trials": args.trials if args.trials > 1 and key is not None else 1,
                     "keyed": key is not None,
+                    "dispatched": scenario["grader"] in ("output_pair", "signal_format"),
                 }
-                if args.trials > 1 and key is not None:
-                    trial_grades = [
-                        run_dispatch_scenario(scenario_name, scenario, agent_name)
-                        for _ in range(args.trials)
-                    ]
-                    result = aggregate_detection_trials(
-                        [g.detail for g in trial_grades], key,
+                # One broken entry (bad fixture, bootstrap timeout) must not
+                # abort the run and discard every completed paid dispatch —
+                # record it as a failed entry and continue.
+                try:
+                    if args.trials > 1 and key is not None:
+                        trial_grades = [
+                            run_dispatch_scenario(scenario_name, scenario, agent_name)
+                            for _ in range(args.trials)
+                        ]
+                        result = aggregate_detection_trials(
+                            [g.detail for g in trial_grades], key,
+                        )
+                        result.detail["per_trial_failures"] = [g.failures for g in trial_grades]
+                        result.detail["per_trial_passed"] = [g.passed for g in trial_grades]
+                        result.detail["models"] = sorted({
+                            m for g in trial_grades
+                            for m in ((g.detail or {}).get("models") or [])
+                        })
+                        # Per-check majorities can be assembled from DIFFERENT
+                        # trials (verdict from trials 1+3, finding from 2+3)
+                        # even when no single trial passed — the aggregate
+                        # must also demand that a majority of trials passed
+                        # outright.
+                        need = args.trials // 2 + 1
+                        passing = sum(1 for g in trial_grades if g.passed)
+                        if result.passed and passing < need:
+                            result.passed = False
+                            result.failures.append(
+                                f"only {passing}/{args.trials} trials passed "
+                                f"individually (need {need}) despite per-check "
+                                f"majorities holding"
+                            )
+                    else:
+                        result = run_dispatch_scenario(scenario_name, scenario, agent_name)
+                except Exception as exc:
+                    result = GradeResult(
+                        passed=False, score=0.0,
+                        failures=[f"harness error: {exc}"],
+                        checks_run=1, checks_passed=0,
                     )
-                    result.detail["per_trial_failures"] = [g.failures for g in trial_grades]
-                else:
-                    result = run_dispatch_scenario(scenario_name, scenario, agent_name)
                 agent_results[agent_name] = result
             if agent_results:
                 all_results[scenario_name] = agent_results
@@ -810,6 +1017,7 @@ def main():
                         "agent": agent_name,
                         "trials": entry_meta[(scenario_name, agent_name)]["trials"],
                         "keyed": entry_meta[(scenario_name, agent_name)]["keyed"],
+                        "dispatched": entry_meta[(scenario_name, agent_name)]["dispatched"],
                         "passed": r.passed,
                         "checks_run": r.checks_run,
                         "checks_passed": r.checks_passed,

@@ -23,7 +23,7 @@ new file mode 100644
 +            : 0;
 +
 +        if ( $interval > 0 ) {
-+            update_option( 'my_plugin_sync_interval', $interval );
++            update_option( 'my_plugin_sync_interval', $interval, false );
 +        }
 +
 +        wp_safe_redirect( admin_url( 'options-general.php?page=my-plugin' ) );
@@ -48,7 +48,7 @@ new file mode 100644
 +
 +        return $wpdb->get_results(
 +            $wpdb->prepare(
-+                "SELECT id, message, created_at FROM {$wpdb->prefix}my_plugin_log ORDER BY created_at DESC LIMIT %d",
++                "SELECT id, message, created_at FROM {$wpdb->prefix}my_plugin_log ORDER BY id DESC LIMIT %d",
 +                absint( $limit )
 +            )
 +        );

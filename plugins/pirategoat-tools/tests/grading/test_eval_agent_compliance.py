@@ -166,17 +166,26 @@ class TestDispatchIdentity:
 
     def test_dispatch_cmd_runs_the_session_as_the_plugin_agent(self):
         # --agent makes the session BE the reviewer (no orchestrating parent
-        # whose artifacts could be misattributed); --plugin-dir resolves the
-        # namespaced agent; JSON output carries per-run model-usage evidence.
+        # whose artifacts could be misattributed); the shim --plugin-dir
+        # resolves the namespaced agent to the WORKTREE definitions (the
+        # plugin dir itself carries no manifest, so pointing at it resolves
+        # nothing and the installed user-scope copy would answer instead);
+        # --setting-sources project excludes that installed copy plus user
+        # hooks/memory; JSON output carries per-run model-usage evidence.
         cmd = _eval_mod.build_dispatch_cmd("/bin/claude", "security-reviewer", "P")
         assert cmd[0] == "/bin/claude"
         agent_flag = cmd.index("--agent")
         assert cmd[agent_flag + 1] == "pirategoat-tools:security-reviewer"
-        plugin_flag = cmd.index("--plugin-dir")
-        assert cmd[plugin_flag + 1] == str(_eval_mod.PLUGIN_ROOT)
+        sources_flag = cmd.index("--setting-sources")
+        assert cmd[sources_flag + 1] == "project"
         fmt_flag = cmd.index("--output-format")
         assert cmd[fmt_flag + 1] == "json"
         assert cmd[-1] == "P"
+        shim = Path(cmd[cmd.index("--plugin-dir") + 1])
+        manifest = json.loads((shim / ".claude-plugin" / "plugin.json").read_text())
+        assert manifest["name"] == "pirategoat-tools"
+        agents_link = shim / "agents"
+        assert agents_link.resolve() == (_eval_mod.PLUGIN_ROOT / "agents").resolve()
 
     def test_dispatched_model_evidence_must_match_registry_tier(self):
         routed = next(
@@ -185,9 +194,36 @@ class TestDispatchIdentity:
             in _eval_mod._DISPATCHABLE_MODELS
         )
         tier = _eval_mod.AGENT_CONFIG[routed]["model_tier"]
-        assert _eval_mod.check_dispatched_models(routed, [f"claude-{tier}-5"]) is None
-        error = _eval_mod.check_dispatched_models(routed, ["claude-other-model"])
+        assert _eval_mod.check_dispatched_models(
+            routed, {f"claude-{tier}-5": {"outputTokens": 100}},
+        ) is None
+        error = _eval_mod.check_dispatched_models(
+            routed, {"claude-other-model": {"outputTokens": 100}},
+        )
         assert error is not None and "routing was not applied" in error
+
+    def test_primary_model_attribution_beats_membership(self):
+        # modelUsage is a session accumulator including auxiliary calls — a
+        # small right-family aux call must not vouch for a main loop that
+        # ran on another model.
+        routed = next(
+            a for a in _eval_mod.ALL_AGENTS
+            if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit")
+            in _eval_mod._DISPATCHABLE_MODELS
+        )
+        tier = _eval_mod.AGENT_CONFIG[routed]["model_tier"]
+        usage = {
+            f"claude-{tier}-5": {"outputTokens": 10},
+            "claude-other-model": {"outputTokens": 90000},
+        }
+        error = _eval_mod.check_dispatched_models(routed, usage)
+        assert error is not None and "primary" in error
+        # Membership fallback still applies when usage carries no weights.
+        assert _eval_mod.check_dispatched_models(
+            routed, {f"claude-{tier}-5": {}},
+        ) is None
+        # Empty usage fails closed for a routed tier.
+        assert _eval_mod.check_dispatched_models(routed, {}) is not None
 
     def test_inherit_tier_accepts_any_dispatched_model(self):
         inherit_agents = [
@@ -195,7 +231,9 @@ class TestDispatchIdentity:
             if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit") == "inherit"
         ]
         for agent in inherit_agents:
-            assert _eval_mod.check_dispatched_models(agent, ["anything"]) is None
+            assert _eval_mod.check_dispatched_models(
+                agent, {"anything": {"outputTokens": 5}},
+            ) is None
 
     def test_model_routing_drift_is_refused(self):
         drifted = self.AGENT_MD.replace("model: sonnet", "model: opus")

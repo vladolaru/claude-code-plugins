@@ -41,6 +41,7 @@ KEYED_ENTRIES = [
 # short-circuit — their presence alongside it is always an authoring error.
 _NA_INCOMPATIBLE = (
     "required_findings", "acceptable_findings", "max_severity", "max_unexpected",
+    "verdict_in",
 )
 
 
@@ -144,6 +145,20 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
             f"{name}/{agent}/{spec_id}: file {spec['file']} not in fixture diff"
         )
         line = spec.get("line")
+        if "line_tolerance" in spec:
+            tol_present = spec["line_tolerance"]
+            assert (
+                isinstance(tol_present, int)
+                and not isinstance(tol_present, bool)
+                and tol_present >= 0
+            ), (
+                f"{name}/{agent}/{spec_id}: line_tolerance must be a "
+                f"non-negative int, got {tol_present!r}"
+            )
+            assert line is not None, (
+                f"{name}/{agent}/{spec_id}: line_tolerance without line is "
+                f"silently inert"
+            )
         if line is not None:
             assert 1 <= line <= new_files[spec["file"]], (
                 f"{name}/{agent}/{spec_id}: line {line} outside "
@@ -166,6 +181,16 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
         assert spec.get("match_any"), f"{name}/{agent}/{spec_id}: empty match_any"
         for pattern in spec["match_any"]:
             re.compile(pattern)
+            # The matcher searches a multi-field concatenation, so ^/$
+            # anchors can never match a mid-text field and silently disable
+            # the pattern.
+            anchored = pattern.startswith("^") or (
+                pattern.endswith("$") and not pattern.endswith(r"\$")
+            )
+            assert not anchored, (
+                f"{name}/{agent}/{spec_id}: pattern {pattern!r} uses ^/$ "
+                f"anchors, which cannot match the concatenated issue text"
+            )
 
 
 # Fixture-integrity guards below cover EVERY fixture diff, keyed or not.
@@ -186,13 +211,23 @@ _PAIRS = {"}": "{", ")": "(", "]": "["}
 
 
 def _diff_new_file_contents(diff_text: str) -> dict:
-    """Map each new-file path in a unified diff to its full content lines."""
-    files, current = {}, None
+    """Map each NEW-file path (--- /dev/null) to its full content lines.
+
+    Modification hunks are excluded — their content cannot be reconstructed
+    from +-lines alone, so balance checking them is meaningless. Duplicate
+    sections for one path extend rather than overwrite (a diff may touch one
+    file in several sections).
+    """
+    files, current, is_new = {}, None, False
     for line in diff_text.splitlines():
+        if line.startswith("--- "):
+            is_new = line == "--- /dev/null"
+            continue
         header = re.match(r"^\+\+\+ b/(.+)$", line)
         if header:
-            current = header.group(1)
-            files[current] = []
+            current = header.group(1) if is_new else None
+            if current is not None:
+                files.setdefault(current, [])
         elif current is not None and line.startswith("+") and not line.startswith("+++"):
             files[current].append(line[1:])
     return files
@@ -200,13 +235,19 @@ def _diff_new_file_contents(diff_text: str) -> dict:
 
 @pytest.mark.parametrize("diff_path", ALL_FIXTURE_DIFFS, ids=[p.name for p in ALL_FIXTURE_DIFFS])
 def test_fixture_hunk_counts_are_exact(diff_path):
-    """Every hunk's declared new-line count must equal its actual +-lines."""
-    current, declared, actual = None, 0, 0
+    """Every hunk's declared new-side count must equal its carried lines.
+
+    The new-side count in `+start,count` covers context PLUS added lines;
+    comparing against +-lines alone would reject every legitimate
+    modification hunk. A short count makes git apply silently drop the
+    trailing lines.
+    """
+    current, declared, actual, in_hunk = None, 0, 0, False
 
     def check():
         assert declared == actual, (
-            f"{diff_path.name}: {current} hunk declares {declared} new lines "
-            f"but carries {actual} — git apply silently drops the excess"
+            f"{diff_path.name}: {current} hunk declares {declared} new-side "
+            f"lines but carries {actual} — git apply silently drops the excess"
         )
 
     for line in diff_path.read_text().splitlines():
@@ -214,13 +255,20 @@ def test_fixture_hunk_counts_are_exact(diff_path):
         hunk = re.match(r"^@@ -\d+(?:,\d+)? \+\d+(?:,(\d+))? @@", line)
         if header:
             check()
-            current, declared, actual = header.group(1), 0, 0
+            current, declared, actual, in_hunk = header.group(1), 0, 0, False
         elif hunk:
             check()
-            declared, actual = int(hunk.group(1) or 1), 0
-        elif line.startswith("+") and not line.startswith("+++"):
+            declared, actual, in_hunk = int(hunk.group(1) or 1), 0, True
+        elif in_hunk and line.startswith("+") and not line.startswith("+++"):
             actual += 1
+        elif in_hunk and (line.startswith(" ") or line == ""):
+            actual += 1  # context lines count toward the new-side span
     check()
+
+
+# Comment tails may legitimately carry unbalanced delimiters in prose; URLs
+# (no whitespace before //) are preserved.
+_COMMENT_TAIL = re.compile(r"(^|\s)//.*$")
 
 
 @pytest.mark.parametrize("diff_path", ALL_FIXTURE_DIFFS, ids=[p.name for p in ALL_FIXTURE_DIFFS])
@@ -235,7 +283,7 @@ def test_fixture_sources_are_balanced(diff_path):
             continue
         stack = []
         for n, line in enumerate(lines, start=1):
-            for ch in line:
+            for ch in _COMMENT_TAIL.sub("", line):
                 if ch in "{([":
                     stack.append((ch, n))
                 elif ch in _PAIRS:

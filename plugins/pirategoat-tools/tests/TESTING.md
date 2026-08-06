@@ -185,22 +185,32 @@ python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_re
 python3 tests/grading/eval_agent_compliance.py --dispatch --report-out "$TMPDIR/detection-report.json"
 ```
 
-**Dispatch identity.** Each dispatch runs
-`claude -p --plugin-dir <plugin> --agent pirategoat-tools:<name>` — the
-session IS the reviewer, so the canonical `agents/<name>.md` is its system
-prompt and its full frontmatter contract (model, effort, tools) is applied
-natively by the host with no re-encoding, and there is no orchestrating
-parent whose artifacts could be misattributed to the agent. The reviewer
-runs bootstrap itself, mirroring the production step 6 subagent prompt.
-Model routing is pinned to `agent_registry.json` (the single source of
-truth) at three layers: `check_model_routing` refuses to dispatch when
-frontmatter drifts from the registry tier, a `TestDispatchIdentity` guard
-requires the two to stay equal for every agent, and each run's JSON
-`modelUsage` is verified post-hoc — a run whose used models contradict the
-registry tier fails (`check_dispatched_models`) and the verified model list
-lands in the report's detection detail. A run that graded a bare-bootstrap
-generic session, or an unrepresentative model, would measure the wrong
-instrument.
+**Dispatch identity.** Each dispatch runs `claude -p
+--dangerously-skip-permissions --setting-sources project --plugin-dir <shim>
+--agent pirategoat-tools:<name> --output-format json` — the session IS the
+reviewer, so the canonical `agents/<name>.md` is its system prompt and its
+full frontmatter contract (model, effort, tools) is applied natively by the
+host with no re-encoding, and there is no orchestrating parent whose
+artifacts could be misattributed to the agent. The reviewer runs bootstrap
+itself, mirroring the production step 6 subagent prompt. The `<shim>` is a
+per-process tempdir with a minimal plugin manifest and a symlink to the
+WORKTREE `agents/` (`ensure_plugin_shim`) — the plugin directory itself
+carries no manifest, so pointing `--plugin-dir` at it resolves nothing and
+the user-scope INSTALLED plugin would silently answer instead
+(sentinel-verified). `--setting-sources project` excludes that installed
+copy plus user hooks and memory, making runs machine-independent. Model
+routing is pinned to `agent_registry.json` (the single source of truth) at
+three layers: `check_model_routing` refuses to dispatch when frontmatter
+drifts from the registry tier, a `TestDispatchIdentity` guard requires the
+two to stay equal for every agent, and each run's JSON `modelUsage` is
+verified post-hoc — the PRIMARY model (largest numeric usage; `modelUsage`
+is a session accumulator that includes auxiliary calls) must match the
+registry tier (`check_dispatched_models`), and any nonzero dispatch exit —
+model mismatch, session error, timeout, non-JSON output — fails the entry
+before grading (`dispatch_rejected` in its detail), because the reviewer
+may have written a plausible artifact before the rejection surfaced. A run
+that graded a bare-bootstrap generic session, or an unrepresentative model,
+would measure the wrong instrument.
 
 **Authoring answer keys: derive from the agent's doctrine, not intuition.**
 The dispatched agent's `.md` states explicit severity doctrines (e.g.
@@ -234,24 +244,41 @@ re-dispatches are silent) and majority-votes every check: compliance, verdict,
 each required finding, each severity/unexpected gate, and both abstention
 conditions. The threshold is strictly more than half (`N // 2 + 1`), so
 `--trials 2` demands both trials pass. An unreadable trial counts as a miss on
-every check. Note that aggregate check counts (~3-6 votes) are not comparable
+every check. Because per-check majorities can be assembled from DIFFERENT
+trials, the aggregate additionally requires that a majority of trials passed
+outright — per-check votes are diagnostics, not the pass condition on their
+own. Note that aggregate check counts (~3-6 votes) are not comparable
 with single-trial check counts (compliance + detection checks), so don't mix
 `--trials` settings when comparing reports.
+
+**Abstention keys.** `expect_not_applicable` accepts BOTH `not_applicable`
+and `approve` verdicts (each with zero findings): the shared reviewer
+protocol mandates `mark_not_applicable` on `NO_DOMAIN_FILES` while the
+tests-reviewer agent definitions instruct APPROVE on the same status — a
+live doctrine conflict in the plugin's own definitions. Until that is
+reconciled, punishing either compliant reading would grade a documentation
+inconsistency, not reviewer quality.
 
 **Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
 `trials` (the requested count), and `results[]` with `scenario`, `agent`,
 `trials` (dispatches actually run for this entry), `keyed` (whether an
-answer key exists for this entry), `passed`, `checks_run`, `checks_passed`,
-`failures`, `detail`. `detail` is polymorphic — discriminate per result,
-never on the top-level `trials` (unkeyed agents run once even under
-`--trials N`): `detail: null` with `keyed: false` is a compliance-only
-(unkeyed) entry; `detail: null` with `keyed: true` is a keyed run that
-failed before detection grading (e.g. bootstrap failure — see `failures`);
-result `trials` of 1 with detail means single-trial detail
-`{verdict, match, gates, compliance_passed}`; result `trials` above 1 means
-aggregate detail `{trials, per_trial, per_trial_failures}`. An invalid or
-empty scenario/agent selection exits nonzero before the report file is
-created.
+answer key exists), `dispatched` (whether a live model ran — deterministic
+bootstrap-only entries like `no_domain_files_approve` and
+`error_no_git_repo` carry `false`, so pass rates over reviewer behavior
+must filter on it), `passed`, `checks_run`, `checks_passed`, `failures`,
+`detail`. `detail` is polymorphic — discriminate per result, never on the
+top-level `trials` (unkeyed agents run once even under `--trials N`):
+`detail: null` with `keyed: false` is a compliance-only entry (dispatched
+unkeyed entries carry `{output_dir}` instead of null); `keyed: true` with
+`dispatch_rejected` or null detail is a keyed run that failed before
+detection grading (see `failures`); result `trials` of 1 otherwise means
+single-trial detail `{verdict, match, gates, compliance_passed, output_dir,
+models}` — abstention keys carry `issue_count` and no `gates`/`match` keys;
+result `trials` above 1 means aggregate detail `{trials, per_trial,
+per_trial_failures, per_trial_passed, models}`. Exit codes: 2 for any
+configuration error (unknown scenario, empty selection, invalid flags,
+unwritable report path — always before artifacts exist), 1 when the eval
+ran and at least one entry failed, 0 on full pass.
 
 ## Design Principles
 

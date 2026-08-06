@@ -748,3 +748,67 @@ class TestAggregateDetectionTrials:
         details = [self._detail(), None, None]
         r = aggregate_detection_trials(details, self.KEY)
         assert not r.passed
+
+
+class TestReviewRoundHardening:
+    """Behaviors added by the 2026-08-06 independent review round."""
+
+    def test_paths_match_normalizes_real_world_variants(self):
+        from helpers.graders import _paths_match
+        spec = "src/UserHandler.php"
+        assert _paths_match("/tmp/eval-x/src/UserHandler.php", spec)  # absolute
+        assert _paths_match("b/src/UserHandler.php", spec)            # diff prefix
+        assert _paths_match("src\\UserHandler.php", spec)             # backslash
+        assert _paths_match("src//UserHandler.php", spec)             # double slash
+        assert _paths_match("./src/./UserHandler.php", spec)          # dot segments
+        assert not _paths_match("src/Other.php", spec)
+        assert not _paths_match("vendor/src/OtherHandler.php", spec)
+        # Suffix matching must respect segment boundaries.
+        assert not _paths_match("notsrc/UserHandler.php", "rc/UserHandler.php")
+
+    def test_unknown_severity_fails_max_severity_gate(self):
+        from helpers.graders import grade_detection
+        key = {"max_severity": "low"}
+        review = {"verdict": "approve",
+                  "issues": [{"severity": "blocker", "file": "f", "title": "t",
+                              "description": "", "category": ""}]}
+        result = grade_detection(review, key)
+        assert not result.passed
+        assert result.detail["gates"]["max_severity"] is False
+
+    def test_missing_severity_fails_max_severity_gate(self):
+        from helpers.graders import grade_detection
+        key = {"max_severity": "low"}
+        review = {"verdict": "approve",
+                  "issues": [{"file": "f", "title": "t", "description": "", "category": ""}]}
+        assert not grade_detection(review, key).passed
+
+    def test_abstention_accepts_both_doctrine_readings(self):
+        from helpers.graders import grade_detection
+        key = {"expect_not_applicable": True}
+        for verdict in ("not_applicable", "approve"):
+            review = {"verdict": verdict, "issues": []}
+            assert grade_detection(review, key).passed, verdict
+        assert not grade_detection({"verdict": "comment", "issues": []}, key).passed
+        assert not grade_detection(
+            {"verdict": "approve", "issues": [{"severity": "low", "file": "f",
+                                              "title": "t", "description": "", "category": ""}]},
+            key,
+        ).passed
+
+    def test_patterns_cannot_bridge_field_boundaries(self):
+        from helpers.graders import _finding_matches
+        spec = {"file": "f.php", "match_any": [r"sql\s*inject"]}
+        issue = {"file": "f.php", "title": "Uses raw SQL",
+                 "description": "injection unrelated word appears here",
+                 "category": ""}
+        assert not _finding_matches(issue, spec)
+        issue["description"] = "clear SQL injection via concatenation"
+        assert _finding_matches(issue, spec)
+
+    def test_unexpected_title_is_truncated(self):
+        from helpers.graders import match_findings
+        issues = [{"file": "g.php", "line": 1, "severity": "low",
+                   "category": "c", "title": "x" * 5000, "description": "d"}]
+        u = match_findings(issues, {"required_findings": []})["unexpected"][0]
+        assert len(u["title"]) == 300

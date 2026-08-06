@@ -360,18 +360,59 @@ def grade_review_baseline(path: str) -> GradeResult:
 
 DEFAULT_LINE_TOLERANCE = 2
 
+# Verdicts accepted as correct abstention on a NO_DOMAIN_FILES scenario.
+# The shared reviewer protocol mandates not_applicable; the tests-reviewer
+# agent definitions mandate approve — a live doctrine conflict inside the
+# plugin. Keys accept both compliant readings; the conflict itself is a
+# production-definition fix, not a benchmark one.
+_ABSTENTION_VERDICTS = frozenset({"not_applicable", "approve"})
+
 
 def _norm_path(path) -> str:
-    text = str(path or "")
-    return text[2:] if text.startswith("./") else text
+    """Normalize a reviewer-reported path for comparison against a spec path.
+
+    Reviewers are not contractually bound to repo-relative POSIX paths, and
+    absolute tempdir paths / backslashes / diff-style a|b prefixes occur in
+    practice (scripts/review/telemetry.py normalizes the same variants). A
+    correct finding must not score as a miss over path spelling.
+    """
+    text = str(path or "").replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    parts = [p for p in text.split("/") if p not in ("", ".")]
+    if parts and parts[0] in ("a", "b") and len(parts) > 1:
+        parts = parts[1:]
+    return "/".join(parts)
+
+
+def _paths_match(issue_path, spec_path: str) -> bool:
+    """Exact match after normalization, or suffix match for absolute paths.
+
+    An issue reported as /tmp/eval-x/src/File.php cannot be reduced to
+    repo-relative without knowing the repo root, so a normalized path that
+    ENDS with the spec path (on a segment boundary) also matches.
+    """
+    issue_norm = _norm_path(issue_path)
+    spec_norm = _norm_path(spec_path)
+    if not issue_norm or not spec_norm:
+        return False
+    return issue_norm == spec_norm or issue_norm.endswith("/" + spec_norm)
+
+
+# Field separator that \s-bridging regexes cannot cross — a plain space would
+# let a pattern like r"sql\s*inject" match "…raw SQL" + "injection …" across
+# the title/description boundary.
+_FIELD_SEP = " ¦ "
 
 
 def _issue_text(issue: dict) -> str:
-    return " ".join(str(issue.get(k) or "") for k in ("title", "description", "category"))
+    return _FIELD_SEP.join(
+        str(issue.get(k) or "") for k in ("title", "description", "category")
+    )
 
 
 def _finding_matches(issue: dict, spec: dict) -> bool:
-    if _norm_path(issue.get("file")) != _norm_path(spec["file"]):
+    if not _paths_match(issue.get("file"), spec["file"]):
         return False
     expected_line = spec.get("line")
     if expected_line is not None:
@@ -429,7 +470,7 @@ def match_findings(issues: List[dict], key: dict) -> dict:
             "line": issues[idx].get("line"),
             "severity": issues[idx].get("severity"),
             "category": issues[idx].get("category"),
-            "title": issues[idx].get("title"),
+            "title": str(issues[idx].get("title") or "")[:300],
             "description": str(issues[idx].get("description") or "")[:300],
         }
         for idx in range(len(issues))
@@ -459,10 +500,18 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
     issues = [i for i in (review.get("issues") or []) if isinstance(i, dict)]
 
     if key.get("expect_not_applicable"):
+        # Both abstention spellings are doctrine-compliant: the shared
+        # reviewer protocol mandates mark_not_applicable on NO_DOMAIN_FILES,
+        # while the tests-reviewer agent definitions instruct APPROVE on the
+        # same status. Until that conflict is reconciled in the definitions,
+        # punishing either reading would grade an internal doc inconsistency,
+        # not reviewer quality. The zero-findings requirement carries the
+        # actual behavioral content.
         result = _grade([
-            (verdict == "not_applicable", f"expected not_applicable, got '{verdict}'"),
+            (verdict in _ABSTENTION_VERDICTS,
+             f"expected abstention ({'/'.join(sorted(_ABSTENTION_VERDICTS))}), got '{verdict}'"),
             (len(issues) == 0,
-             f"expected zero findings with not_applicable, got {len(issues)}"),
+             f"expected zero findings on abstention, got {len(issues)}"),
         ])
         result.detail = {"verdict": verdict, "match": None, "issue_count": len(issues)}
         return result
@@ -485,9 +534,14 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
     max_severity = key.get("max_severity")
     if max_severity is not None:
         limit = SEVERITY_RANK[max_severity]
+        # Unknown severities fail closed: ranking them as info would let an
+        # issue with severity "blocker" (or a missing field) sail under any
+        # cap, and this gate is the sole check the false-positive probes
+        # rely on.
         over = sorted({
             str(i.get("severity")) for i in issues
-            if SEVERITY_RANK.get(i.get("severity"), 0) > limit
+            if i.get("severity") not in SEVERITY_RANK
+            or SEVERITY_RANK[i.get("severity")] > limit
         })
         checks.append((not over, f"findings above max severity '{max_severity}': {over}"))
         gates["max_severity"] = not over
@@ -543,10 +597,10 @@ def aggregate_detection_trials(details: List[dict], key: dict) -> GradeResult:
     ))
 
     if key.get("expect_not_applicable"):
-        abstained = sum(1 for d in details if d.get("verdict") == "not_applicable")
+        abstained = sum(1 for d in details if d.get("verdict") in _ABSTENTION_VERDICTS)
         checks.append((
             abstained >= need,
-            f"not_applicable verdict in only {abstained}/{trials} trials",
+            f"abstention verdict in only {abstained}/{trials} trials",
         ))
         clean = sum(1 for d in details if d.get("issue_count") == 0)
         checks.append((
