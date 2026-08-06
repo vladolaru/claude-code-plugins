@@ -157,18 +157,45 @@ class TestDispatchIdentity:
         assert body == "Just instructions."
         assert model is None
 
-    def test_prompt_dispatches_namespaced_subagent_with_bootstrap_cmd(self):
+    def test_prompt_carries_bootstrap_cmd_and_contract(self):
         prompt = _eval_mod.build_dispatch_prompt(
             "security-reviewer", "python3 /x/bootstrap.py --agent security-reviewer",
         )
-        assert "`pirategoat-tools:security-reviewer`" in prompt
-        assert "Agent tool" in prompt
         assert "python3 /x/bootstrap.py --agent security-reviewer" in prompt
-        # The parent must not review, must not re-route the model, and must
-        # relay the subagent's final message so signal grading stays valid.
-        assert "Do not perform any review work yourself" in prompt
-        assert "do not override the subagent's model" in prompt
-        assert "verbatim" in prompt
+        assert "scope and output contract" in prompt
+
+    def test_dispatch_cmd_runs_the_session_as_the_plugin_agent(self):
+        # --agent makes the session BE the reviewer (no orchestrating parent
+        # whose artifacts could be misattributed); --plugin-dir resolves the
+        # namespaced agent; JSON output carries per-run model-usage evidence.
+        cmd = _eval_mod.build_dispatch_cmd("/bin/claude", "security-reviewer", "P")
+        assert cmd[0] == "/bin/claude"
+        agent_flag = cmd.index("--agent")
+        assert cmd[agent_flag + 1] == "pirategoat-tools:security-reviewer"
+        plugin_flag = cmd.index("--plugin-dir")
+        assert cmd[plugin_flag + 1] == str(_eval_mod.PLUGIN_ROOT)
+        fmt_flag = cmd.index("--output-format")
+        assert cmd[fmt_flag + 1] == "json"
+        assert cmd[-1] == "P"
+
+    def test_dispatched_model_evidence_must_match_registry_tier(self):
+        routed = next(
+            a for a in _eval_mod.ALL_AGENTS
+            if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit")
+            in _eval_mod._DISPATCHABLE_MODELS
+        )
+        tier = _eval_mod.AGENT_CONFIG[routed]["model_tier"]
+        assert _eval_mod.check_dispatched_models(routed, [f"claude-{tier}-5"]) is None
+        error = _eval_mod.check_dispatched_models(routed, ["claude-other-model"])
+        assert error is not None and "routing was not applied" in error
+
+    def test_inherit_tier_accepts_any_dispatched_model(self):
+        inherit_agents = [
+            a for a in _eval_mod.ALL_AGENTS
+            if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit") == "inherit"
+        ]
+        for agent in inherit_agents:
+            assert _eval_mod.check_dispatched_models(agent, ["anything"]) is None
 
     def test_model_routing_drift_is_refused(self):
         drifted = self.AGENT_MD.replace("model: sonnet", "model: opus")

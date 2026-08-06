@@ -146,8 +146,12 @@ SCENARIOS = {
             "security-reviewer": {
                 "verdict_in": ["block", "request_changes"],
                 "required_findings": [
+                    # Injection evidence only — no standalone source token like
+                    # \$_GET, or an IDOR/access-control finding at the same
+                    # line would satisfy this spec without any injection
+                    # having been reported.
                     {"id": "sql-injection-get", "file": "src/PaymentHandler.php", "line": 13,
-                     "match_any": [r"sql[\s-]*inject", r"\$_GET", r"concatenat", r"\bprepare\b"]},
+                     "match_any": [r"sql[\s-]*inject", r"concatenat", r"unsanitiz", r"\bprepare\b"]},
                 ],
                 "acceptable_findings": [
                     {"id": "sql-injection-insert", "file": "src/PaymentHandler.php",
@@ -168,7 +172,15 @@ SCENARIOS = {
                 ],
             },
             "performance-reviewer": {
-                "verdict_in": ["approve", "comment"],
+                # performance-reviewer.md classifies missing LIMIT in raw
+                # queries as CRITICAL (Unbounded Queries) — the fixture's
+                # SELECT * with no LIMIT makes a blocking verdict correct
+                # behavior, not a false positive.
+                "verdict_in": ["comment", "request_changes", "block"],
+                "required_findings": [
+                    {"id": "unbounded-query", "file": "src/PaymentHandler.php",
+                     "match_any": [r"\bLIMIT\b", r"unbounded", r"select\s*\*"]},
+                ],
             },
         },
     },
@@ -251,7 +263,16 @@ SCENARIOS = {
                 ],
             },
             "wp-architecture-reviewer": {
-                "verdict_in": ["approve", "comment", "request_changes"],
+                # wp-architecture-reviewer.md classifies unprefixed global
+                # classes/CPT names as CRITICAL namespace pollution — the
+                # fixture's global Payment_Gateway / payment_log make a
+                # blocking verdict correct behavior.
+                "verdict_in": ["comment", "request_changes", "block"],
+                "required_findings": [
+                    {"id": "namespace-pollution",
+                     "file": "includes/class-payment-gateway.php",
+                     "match_any": [r"prefix", r"namespac", r"collision"]},
+                ],
             },
         },
     },
@@ -400,43 +421,65 @@ def check_model_routing(agent_name: str, agent_def: str) -> Optional[str]:
 
 
 def build_dispatch_prompt(agent_name: str, bootstrap_cmd: str) -> str:
-    """Build the orchestrator prompt that dispatches the real reviewer.
+    """Build the reviewer prompt for a session running AS the agent.
 
-    Mirrors the production step 6 briefing: the parent session dispatches the
-    plugin's canonical subagent via the Agent tool with no model override
-    (frontmatter routes it — pinned equal to the registry by
-    check_model_routing), and the subagent runs bootstrap itself and follows
-    the emitted scope and output contract. The parent does no review work —
-    grading anything but the configured subagent measures the wrong
-    instrument.
+    The session is invoked with `--agent pirategoat-tools:<name>`, so the
+    canonical .md is its system prompt and its frontmatter contract (model,
+    effort, tools) is applied by the host — there is no orchestrating parent
+    whose output could be misattributed to the reviewer. The prompt mirrors
+    the production step 6 subagent prompt: run bootstrap, follow its
+    contract.
     """
     return (
-        f"Dispatch the `pirategoat-tools:{agent_name}` subagent via the Agent "
-        f"tool now. Do not perform any review work yourself and do not "
-        f"override the subagent's model.\n\n"
-        f"The subagent's prompt must be exactly:\n\n"
         f"Run this exact bootstrap command and follow the emitted scope and "
-        f"output contract:\n```\n{bootstrap_cmd}\n```\n\n"
-        f"Wait for the subagent to finish, then output its final message "
-        f"verbatim as your entire reply — no commentary of your own."
+        f"output contract:\n```\n{bootstrap_cmd}\n```"
     )
 
 
-def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
-    """Dispatch the configured reviewer subagent via a claude -p parent.
+def build_dispatch_cmd(claude_path: str, agent_name: str, prompt: str) -> list:
+    """Assemble the claude -p invocation that runs the configured reviewer."""
+    return [
+        claude_path, "-p", "--dangerously-skip-permissions",
+        "--plugin-dir", str(PLUGIN_ROOT),
+        "--agent", f"pirategoat-tools:{agent_name}",
+        "--output-format", "json",
+        prompt,
+    ]
 
-    `--plugin-dir` loads this plugin so the parent's Agent tool dispatches
-    the reviewer natively — canonical .md as the subagent's system prompt
-    with its full frontmatter contract (model, effort, tools) applied by the
-    host, exactly as the production pipeline dispatches it. Returns
-    (exit_code, stdout).
+
+def check_dispatched_models(agent_name: str, models: list) -> Optional[str]:
+    """Return an error when the run's model usage contradicts the registry.
+
+    JSON output reports modelUsage per run — hard evidence of which model
+    actually executed. A routed tier (sonnet/haiku/opus) must appear in the
+    used-model IDs; `inherit` accepts whatever the ambient default was.
+    """
+    tier = AGENT_CONFIG.get(agent_name, {}).get("model_tier") or "inherit"
+    if tier not in _DISPATCHABLE_MODELS:
+        return None
+    if not any(tier in model for model in models):
+        return (
+            f"dispatched models {models} do not include registry tier "
+            f"{tier!r} for {agent_name} — model routing was not applied"
+        )
+    return None
+
+
+def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
+    """Run the configured reviewer directly via `claude -p --agent`.
+
+    Returns (exit_code, result_text, evidence). The session IS the reviewer
+    (canonical definition as system prompt, frontmatter model/effort/tools
+    applied natively), JSON output provides per-run model-usage evidence,
+    and a run whose used models contradict the registry tier fails instead
+    of being silently graded as the wrong instrument.
     """
     prompt = build_dispatch_prompt(agent_name, bootstrap_cmd)
 
     # Check if claude CLI is available
     claude_path = shutil.which("claude")
     if not claude_path:
-        return 1, "ERROR: claude CLI not found in PATH"
+        return 1, "ERROR: claude CLI not found in PATH", {}
 
     # The real pipeline runs reviewers via the Agent tool under an interactive
     # parent that can answer permission prompts. A headless `claude -p` cannot,
@@ -444,20 +487,35 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
     # prose) would silently deny the builder call and no output would be
     # written. The eval repo is a throwaway tempdir, so skip permission
     # prompts.
-    cmd = [
-        claude_path, "-p", "--dangerously-skip-permissions",
-        "--plugin-dir", str(PLUGIN_ROOT),
-        prompt,
-    ]
+    cmd = build_dispatch_cmd(claude_path, agent_name, prompt)
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=900, cwd=cwd,
         )
-        return result.returncode, result.stdout
     except subprocess.TimeoutExpired:
-        return 1, "ERROR: Agent dispatch timed out after 900s"
+        return 1, "ERROR: Agent dispatch timed out after 900s", {}
     except FileNotFoundError:
-        return 1, "ERROR: claude CLI not found"
+        return 1, "ERROR: claude CLI not found", {}
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return 1, f"ERROR: non-JSON dispatch output:\n{result.stdout[:2000]}", {}
+
+    models = sorted((payload.get("modelUsage") or {}).keys())
+    evidence = {
+        "models": models,
+        "is_error": bool(payload.get("is_error")),
+        "session_id": payload.get("session_id"),
+    }
+    text = payload.get("result") or ""
+
+    model_error = check_dispatched_models(agent_name, models)
+    if model_error:
+        return 1, f"ERROR: {model_error}\n\n{text}", evidence
+
+    rc = 1 if payload.get("is_error") else result.returncode
+    return rc, text, evidence
 
 
 def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -> GradeResult:
@@ -527,13 +585,17 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
             f'{shlex.quote(sys.executable)} {shlex.quote(str(BOOTSTRAP_SCRIPT))} '
             f'--agent {shlex.quote(agent_name)} --output-dir {shlex.quote(output_dir)}'
         )
-        rc, agent_output = dispatch_agent(agent_name, bootstrap_cmd, cwd)
+        rc, agent_output, dispatch_evidence = dispatch_agent(agent_name, bootstrap_cmd, cwd)
 
         # Keep the agent's final message for postmortem — without it a
         # missing output file is undiagnosable.
         transcript_path = os.path.join(output_dir, f"{agent_name}-dispatch-transcript.txt")
         with open(transcript_path, "w") as f:
-            f.write(f"exit_code: {rc}\n\n{agent_output}")
+            f.write(
+                f"exit_code: {rc}\n"
+                f"dispatch_evidence: {json.dumps(dispatch_evidence)}\n\n"
+                f"{agent_output}"
+            )
 
         # Grade. Reviewers publish JSON only — Markdown is a derived artifact
         # (see review/agent/output.py), so materialize it before the pair grade.
@@ -565,10 +627,13 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
             # compliance separately. output_dir: the artifact directory (review
             # JSON, dispatch transcript) — without it, diagnosing a matcher
             # false negative across hidden per-trial tempdirs is impossible.
+            # models: the run's verified model usage, so reports carry the
+            # dispatch-identity evidence, not just the pass/fail outcome.
             detection.detail = dict(
                 detection.detail or {},
                 compliance_passed=compliance.passed,
                 output_dir=output_dir,
+                models=dispatch_evidence.get("models"),
             )
             return merge_grades(compliance, detection)
         elif scenario["grader"] == "signal_format":

@@ -185,18 +185,35 @@ python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_re
 python3 tests/grading/eval_agent_compliance.py --dispatch --report-out "$TMPDIR/detection-report.json"
 ```
 
-**Dispatch identity.** Each dispatch spawns a `claude -p` parent with
-`--plugin-dir` pointing at this plugin and instructs it to dispatch the
-`pirategoat-tools:<agent>` subagent via the Agent tool — the production
-mechanism, so the canonical `agents/<name>.md` becomes the subagent's system
+**Dispatch identity.** Each dispatch runs
+`claude -p --plugin-dir <plugin> --agent pirategoat-tools:<name>` — the
+session IS the reviewer, so the canonical `agents/<name>.md` is its system
 prompt and its full frontmatter contract (model, effort, tools) is applied
-natively by the host with no re-encoding. The subagent runs bootstrap itself,
-mirroring the production step 6 briefing. Model routing is pinned to
-`agent_registry.json` (the single source of truth): `check_model_routing`
-refuses to dispatch when frontmatter drifts from the registry tier, and a
-`TestDispatchIdentity` guard requires the two to stay equal for every agent.
-A run that graded a bare-bootstrap generic session, or an unrepresentative
-model, would measure the wrong instrument.
+natively by the host with no re-encoding, and there is no orchestrating
+parent whose artifacts could be misattributed to the agent. The reviewer
+runs bootstrap itself, mirroring the production step 6 subagent prompt.
+Model routing is pinned to `agent_registry.json` (the single source of
+truth) at three layers: `check_model_routing` refuses to dispatch when
+frontmatter drifts from the registry tier, a `TestDispatchIdentity` guard
+requires the two to stay equal for every agent, and each run's JSON
+`modelUsage` is verified post-hoc — a run whose used models contradict the
+registry tier fails (`check_dispatched_models`) and the verified model list
+lands in the report's detection detail. A run that graded a bare-bootstrap
+generic session, or an unrepresentative model, would measure the wrong
+instrument.
+
+**Authoring answer keys: derive from the agent's doctrine, not intuition.**
+The dispatched agent's `.md` states explicit severity doctrines (e.g.
+performance-reviewer: missing `LIMIT` in raw queries is CRITICAL;
+wp-architecture-reviewer: unprefixed global classes are CRITICAL). A key's
+`verdict_in` and finding specs must be derived from what the *configured
+reviewer* mandates for the fixture content — read the definition before
+keying, and cite the doctrine in a key comment. A key written from generic
+reviewer intuition can reject the agent's correct behavior (mandated `block`
+not in `verdict_in`) or reward a miss (a required spec whose `match_any`
+accepts a mere source token, e.g. `\$_GET`, lets an access-control finding
+satisfy an injection spec — require technique/sink evidence). Whenever a
+fixture, key, or agent definition changes, re-walk this derivation.
 
 Grading is deterministic (file + line-window + keyword regexes over
 title/description/category — no model judge). A correct finding the patterns
