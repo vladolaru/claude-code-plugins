@@ -391,7 +391,14 @@ def match_findings(issues: List[dict], key: dict) -> dict:
       matched_required:   {spec_id: issue_index}
       matched_acceptable: {spec_id: issue_index}
       missing_required:   [spec_id, ...]
-      unexpected:         [issue_index, ...]  (issues no spec claimed)
+      unexpected:         [{index, file, line, severity, category, title,
+                            description}, ...]  (issues no spec claimed)
+
+    Unexpected entries carry the fields match_any patterns grep over
+    (title/description/category, description truncated) plus location —
+    without them a correct finding that misses every pattern is
+    undiagnosable from the report, and the documented widen-the-regex
+    workflow needs to see what the reviewer actually wrote.
     """
     issues = [i for i in issues if isinstance(i, dict)]
     matched_required: dict = {}
@@ -415,7 +422,19 @@ def match_findings(issues: List[dict], key: dict) -> dict:
         spec["id"] for spec in key.get("required_findings", [])
         if spec["id"] not in matched_required
     ]
-    unexpected = [idx for idx in range(len(issues)) if idx not in claimed]
+    unexpected = [
+        {
+            "index": idx,
+            "file": issues[idx].get("file"),
+            "line": issues[idx].get("line"),
+            "severity": issues[idx].get("severity"),
+            "category": issues[idx].get("category"),
+            "title": issues[idx].get("title"),
+            "description": str(issues[idx].get("description") or "")[:300],
+        }
+        for idx in range(len(issues))
+        if idx not in claimed
+    ]
     return {
         "matched_required": matched_required,
         "matched_acceptable": matched_acceptable,

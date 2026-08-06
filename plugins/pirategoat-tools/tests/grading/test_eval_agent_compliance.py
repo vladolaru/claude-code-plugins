@@ -121,3 +121,59 @@ class TestGradeOnlyMode:
 
         assert "Traceback" not in result.stderr, result.stderr
         assert "--grade-only" in result.stdout
+
+
+class TestDispatchIdentity:
+    """The benchmark must dispatch the configured reviewer, not generic Claude.
+
+    These pin the measurement instrument itself: the agent .md body must
+    reach the dispatch prompt and its frontmatter model routing must be
+    honored — a keyed run that silently grades a bare-bootstrap session
+    measures the wrong thing (found live 2026-08-06, after every layer
+    above this one had been reviewed diff-by-diff).
+    """
+
+    AGENT_MD = (
+        "---\n"
+        "name: security-reviewer\n"
+        "description: reviews security\n"
+        "model: sonnet\n"
+        "---\n"
+        "\n"
+        "Trace attack paths before reporting.\n"
+    )
+
+    def test_frontmatter_splits_into_body_and_model(self):
+        body, model = _eval_mod.split_agent_definition(self.AGENT_MD)
+        assert model == "sonnet"
+        assert "Trace attack paths" in body
+        assert "description:" not in body
+
+    def test_definition_without_frontmatter_passes_through(self):
+        body, model = _eval_mod.split_agent_definition("Just instructions.")
+        assert body == "Just instructions."
+        assert model is None
+
+    def test_prompt_embeds_definition_before_bootstrap(self):
+        prompt = _eval_mod.build_dispatch_prompt(
+            "security-reviewer", "BOOTSTRAP-CONTENT", "Trace attack paths.",
+        )
+        assert "Trace attack paths." in prompt
+        assert prompt.index("Trace attack paths.") < prompt.index("BOOTSTRAP-CONTENT")
+
+    def test_empty_definition_omits_definition_section(self):
+        prompt = _eval_mod.build_dispatch_prompt("x-reviewer", "BOOT", "")
+        assert "BOOT" in prompt
+        assert "agent definition" not in prompt
+
+    def test_every_eval_agent_definition_resolves(self):
+        # A benchmark agent whose .md goes missing or empty would silently
+        # regress the dispatch back into grading generic Claude.
+        for agent in _eval_mod.ALL_AGENTS:
+            path = _eval_mod.PLUGIN_ROOT / "agents" / f"{agent}.md"
+            assert path.is_file(), f"{agent}: no agent definition at {path}"
+            body, model = _eval_mod.split_agent_definition(path.read_text())
+            assert body.strip(), f"{agent}: definition body is empty"
+            assert model is None or model == "inherit" or (
+                model in _eval_mod._DISPATCHABLE_MODELS
+            ), f"{agent}: frontmatter model {model!r} is not dispatchable"

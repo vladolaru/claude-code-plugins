@@ -488,7 +488,23 @@ class TestMatchFindings:
         issues = [self._issue(line=20, title="SQL injection via $_GET")]
         m = match_findings(issues, self.KEY)
         assert m["missing_required"] == ["sql-injection"]
-        assert m["unexpected"] == [0]
+        assert [u["index"] for u in m["unexpected"]] == [0]
+
+    def test_unexpected_entries_carry_diagnosable_evidence(self):
+        # The widen-the-regex workflow needs to see what the reviewer wrote:
+        # the matcher greps title/description/category, so an unexpected entry
+        # must expose those fields plus location, not a bare index.
+        issues = [self._issue(
+            line=20, title="SQL injection via $_GET",
+            description="Query concatenates raw input" + "x" * 400,
+        )]
+        u = match_findings(issues, self.KEY)["unexpected"][0]
+        assert u["file"] == "src/UserHandler.php"
+        assert u["line"] == 20
+        assert u["title"] == "SQL injection via $_GET"
+        assert u["description"].startswith("Query concatenates raw input")
+        assert len(u["description"]) == 300
+        assert "severity" in u and "category" in u
 
     def test_keyword_miss_does_not_match(self):
         issues = [self._issue(title="Something unrelated entirely")]
@@ -518,7 +534,7 @@ class TestMatchFindings:
         issues = [self._issue(file="src/Other.php", title="SQL injection")]
         m = match_findings(issues, self.KEY)
         assert m["missing_required"] == ["sql-injection"]
-        assert m["unexpected"] == [0]
+        assert [u["index"] for u in m["unexpected"]] == [0]
 
     def test_dot_slash_prefix_is_normalized(self):
         issues = [self._issue(file="./src/UserHandler.php", title="SQL injection")]

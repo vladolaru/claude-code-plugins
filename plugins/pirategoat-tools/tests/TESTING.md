@@ -185,9 +185,22 @@ python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_re
 python3 tests/grading/eval_agent_compliance.py --dispatch --report-out "$TMPDIR/detection-report.json"
 ```
 
+**Dispatch identity.** Each dispatch embeds the agent's canonical
+`agents/<name>.md` definition body in the prompt and honors its frontmatter
+`model:` routing (`--model sonnet|haiku|opus`; `inherit` uses the CLI's
+ambient default) — mirroring how the real pipeline's Agent tool loads the
+definition as the subagent's system prompt. `TestDispatchIdentity` pins this:
+a run that graded a bare-bootstrap generic session would measure the wrong
+instrument.
+
 Grading is deterministic (file + line-window + keyword regexes over
 title/description/category — no model judge). A correct finding the patterns
-miss shows up unmatched in the report; widen that spec's `match_any`. Keys are
+miss shows up under `match.unexpected` in the report with its location and
+the matcher-visible fields (title, category, truncated description); widen
+that spec's `match_any` from what the reviewer actually wrote. Each detection
+detail also records `output_dir` — the per-dispatch artifact directory
+(review JSON, dispatch transcript) — so multi-trial misses are traceable to
+their trial. Keys are
 validated against their fixtures by `tests/grading/test_answer_keys.py` (pure
 pytest, no model calls): files must exist in the diff, lines must be in range,
 regexes must compile, fixtures must apply, and every key needs at least one

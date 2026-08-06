@@ -13,6 +13,7 @@ Scenarios define: agent name, setup (git state), grader, and optional detection 
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -357,16 +358,60 @@ def run_bootstrap_for_agent(agent_name: str, cwd: str, output_dir: str) -> tuple
     return result.returncode, result.stdout
 
 
+def split_agent_definition(agent_def: str) -> tuple:
+    """Split an agent .md into (body, model) from its YAML frontmatter.
+
+    Returns the definition body without frontmatter and the frontmatter's
+    `model:` value (None when absent). Definitions without frontmatter come
+    back verbatim with model None.
+    """
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", agent_def, re.DOTALL)
+    if not m:
+        return agent_def, None
+    frontmatter, body = m.group(1), m.group(2)
+    model_match = re.search(r"^model:\s*(\S+)\s*$", frontmatter, re.MULTILINE)
+    return body.lstrip("\n"), model_match.group(1) if model_match else None
+
+
+def build_dispatch_prompt(agent_name: str, bootstrap_output: str, definition_body: str) -> str:
+    """Build the reviewer prompt: specialist definition first, bootstrap after.
+
+    The real pipeline dispatches reviewers via the Agent tool, which loads the
+    agent .md as the subagent's system prompt. This subprocess equivalent must
+    embed the same definition — grading a generic Claude session with only the
+    shared bootstrap protocol would measure the wrong instrument.
+    """
+    definition_section = ""
+    if definition_body.strip():
+        definition_section = (
+            f"Your agent definition — follow it as your operating instructions:\n\n"
+            f"{definition_body}\n\n"
+        )
+    return (
+        f"You are the {agent_name} agent. {definition_section}"
+        f"Here is your bootstrap output:\n\n"
+        f"{bootstrap_output}\n\n"
+        f"Now perform your review per your definition. "
+        f"Write output files as specified in the bootstrap output."
+    )
+
+
+# Model values the claude CLI accepts as --model shorthands. Frontmatter
+# `inherit` (or a missing field) means "use the caller's model" — for this
+# subprocess harness that is the CLI's ambient default, so no flag is passed.
+_DISPATCHABLE_MODELS = {"sonnet", "haiku", "opus"}
+
+
 def dispatch_agent(agent_name: str, bootstrap_output: str, agent_def: str, cwd: str) -> tuple:
     """Dispatch an agent via claude -p subprocess.
 
-    Returns (exit_code, stdout).
+    Embeds the agent's canonical .md definition in the prompt and honors its
+    frontmatter model routing, mirroring how the real pipeline's Agent tool
+    dispatches reviewers (definition as system prompt, frontmatter model wins
+    over inherit). Returns (exit_code, stdout).
     """
-    prompt = (
-        f"You are the {agent_name} agent. Here is your bootstrap output:\n\n"
-        f"{bootstrap_output}\n\n"
-        f"Now perform your review. Write output files as specified in the bootstrap output."
-    )
+    definition_body, model = split_agent_definition(agent_def)
+    prompt = build_dispatch_prompt(agent_name, bootstrap_output, definition_body)
 
     # Check if claude CLI is available
     claude_path = shutil.which("claude")
@@ -378,7 +423,10 @@ def dispatch_agent(agent_name: str, bootstrap_output: str, agent_def: str, cwd: 
     # a content-triggered "ask" (e.g. destructive SQL quoted in finding prose)
     # would silently deny the builder call and no output would be written.
     # The eval repo is a throwaway tempdir, so skip permission prompts.
-    cmd = [claude_path, "-p", "--dangerously-skip-permissions", prompt]
+    cmd = [claude_path, "-p", "--dangerously-skip-permissions"]
+    if model in _DISPATCHABLE_MODELS:
+        cmd += ["--model", model]
+    cmd.append(prompt)
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=600, cwd=cwd,
@@ -474,8 +522,15 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 detection = grade_detection(review, key)
 
             detection.failures = [f"detection: {msg}" for msg in detection.failures]
-            # Carried so multi-trial aggregation can vote on compliance separately.
-            detection.detail = dict(detection.detail or {}, compliance_passed=compliance.passed)
+            # compliance_passed: carried so multi-trial aggregation can vote on
+            # compliance separately. output_dir: the artifact directory (review
+            # JSON, dispatch transcript) — without it, diagnosing a matcher
+            # false negative across hidden per-trial tempdirs is impossible.
+            detection.detail = dict(
+                detection.detail or {},
+                compliance_passed=compliance.passed,
+                output_dir=output_dir,
+            )
             return merge_grades(compliance, detection)
         elif scenario["grader"] == "signal_format":
             return grade_signal_format(agent_output)
