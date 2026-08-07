@@ -178,6 +178,11 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
                 f"{name}/{agent}/{spec_id}: line {line} + tolerance {tol} exceeds "
                 f"{new_files[spec['file']]}-line span of {spec['file']}"
             )
+        if "min_severity" in spec:
+            assert spec["min_severity"] in SEVERITY_RANK, (
+                f"{name}/{agent}/{spec_id}: invalid min_severity "
+                f"{spec['min_severity']!r}"
+            )
         assert spec.get("match_any"), f"{name}/{agent}/{spec_id}: empty match_any"
         for pattern in spec["match_any"]:
             re.compile(pattern)

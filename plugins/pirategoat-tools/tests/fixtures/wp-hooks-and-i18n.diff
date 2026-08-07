@@ -50,7 +50,7 @@ index 0000000..703e83d
 +    }
 +
 +    public function render_payment_status( $payment ) {
-+        echo '<div class="status">' . $payment->status . '</div>';
++        echo '<div class="status">' . $_GET['status'] . '</div>';
 +
 +        echo '<div class="amount">' . esc_html( $payment->amount ) . '</div>';
 +    }

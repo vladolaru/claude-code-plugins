@@ -812,3 +812,16 @@ class TestReviewRoundHardening:
                    "category": "c", "title": "x" * 5000, "description": "d"}]
         u = match_findings(issues, {"required_findings": []})["unexpected"][0]
         assert len(u["title"]) == 300
+
+    def test_min_severity_floor_rejects_underclassified_findings(self):
+        from helpers.graders import _finding_matches
+        spec = {"file": "f.php", "min_severity": "critical",
+                "match_any": [r"sql\s*inject"]}
+        issue = {"file": "f.php", "title": "SQL injection", "description": "",
+                 "category": "", "severity": "high"}
+        assert not _finding_matches(issue, spec)
+        issue["severity"] = "critical"
+        assert _finding_matches(issue, spec)
+        # Unknown severity fails the floor closed.
+        issue["severity"] = "blocker"
+        assert not _finding_matches(issue, spec)

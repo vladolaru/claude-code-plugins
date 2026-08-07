@@ -131,9 +131,13 @@ SCENARIOS = {
         "grader": "output_pair",
         "expected": {
             "security-reviewer": {
-                "verdict_in": ["block", "request_changes"],
+                # security-reviewer.md classifies SQL injection as CRITICAL,
+                # which the builder maps to block — accepting a softer
+                # verdict or severity would reward under-classification.
+                "verdict_in": ["block"],
                 "required_findings": [
                     {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
+                     "min_severity": "critical",
                      "match_any": [r"sql[\s-]*inject", r"\bprepare\b", r"interpolat"]},
                 ],
                 "acceptable_findings": [
@@ -163,7 +167,9 @@ SCENARIOS = {
         "grader": "output_pair",
         "expected": {
             "security-reviewer": {
-                "verdict_in": ["block", "request_changes"],
+                # SQL injection is CRITICAL per security-reviewer.md, which
+                # the builder maps to block.
+                "verdict_in": ["block"],
                 "required_findings": [
                     # Injection technique/sink evidence only — no standalone
                     # source token (\$_GET) and no generic input-handling
@@ -171,6 +177,7 @@ SCENARIOS = {
                     # finding at the same line would satisfy this spec
                     # without any injection having been reported.
                     {"id": "sql-injection-get", "file": "src/PaymentHandler.php", "line": 13,
+                     "min_severity": "critical",
                      "match_any": [r"sql[\s-]*inject", r"concatenat", r"\bprepare\b"]},
                 ],
                 "acceptable_findings": [
@@ -224,9 +231,13 @@ SCENARIOS = {
         "grader": "output_pair",
         "expected": {
             "security-reviewer": {
-                "verdict_in": ["block", "request_changes"],
+                # XSS is CRITICAL per security-reviewer.md → verdict block.
+                # The api-key finding is HIGH (Sensitive Data Exposure), so
+                # it carries no severity floor.
+                "verdict_in": ["block"],
                 "required_findings": [
                     {"id": "dom-xss", "file": "src/components/UserForm.tsx", "line": 13,
+                     "min_severity": "critical",
                      "match_any": [r"\bxss\b", r"innerHTML", r"sanitiz"]},
                     # No line pin: the reviewer may anchor at the declaration
                     # (line 1) or the transmission sink (line 11); the file is
@@ -298,10 +309,14 @@ SCENARIOS = {
         "grader": "output_pair",
         "expected": {
             "security-reviewer": {
-                "verdict_in": ["block", "request_changes", "comment"],
+                # Missing context-appropriate escaping is CRITICAL XSS per
+                # security-reviewer.md (unqualified by data provenance) →
+                # verdict block; a softer classification is a calibration
+                # miss the benchmark must measure.
+                "verdict_in": ["block"],
                 "required_findings": [
                     {"id": "unescaped-output", "file": "includes/class-payment-gateway.php",
-                     "line": 47, "line_tolerance": 2,
+                     "line": 47, "line_tolerance": 2, "min_severity": "critical",
                      "match_any": [r"esc_html", r"escap", r"\bxss\b"]},
                 ],
             },
@@ -816,8 +831,17 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
 
 
 def print_results(all_results: dict):
-    """Print formatted eval results."""
+    """Print formatted eval results.
+
+    The headline metric is ENTRIES passed — check counts vary with reviewer
+    verbosity (compliance adds checks per schema-valid issue), so a
+    check-ratio percentage would score a noisier reviewer higher for
+    identical detection performance. Check counts remain per-entry
+    diagnostics only.
+    """
     print("\n=== EVAL RESULTS ===")
+    entries_passed = 0
+    entries_total = 0
     total_passed = 0
     total_checks = 0
 
@@ -829,11 +853,16 @@ def print_results(all_results: dict):
             if not result.passed:
                 for failure in result.failures[:3]:
                     print(f"    - {failure}")
+            entries_total += 1
+            entries_passed += 1 if result.passed else 0
             total_passed += result.checks_passed
             total_checks += result.checks_run
 
-    pct = (total_passed / total_checks * 100) if total_checks > 0 else 0
-    print(f"\nTOTAL: {total_passed}/{total_checks} passed ({pct:.0f}%)")
+    print(
+        f"\nTOTAL: {entries_passed}/{entries_total} entries passed "
+        f"({total_passed}/{total_checks} checks — diagnostic only, not "
+        f"comparable across entries)"
+    )
 
 
 # =============================================================================

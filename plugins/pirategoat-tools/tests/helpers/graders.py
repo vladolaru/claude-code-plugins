@@ -414,6 +414,17 @@ def _issue_text(issue: dict) -> str:
 def _finding_matches(issue: dict, spec: dict) -> bool:
     if not _paths_match(issue.get("file"), spec["file"]):
         return False
+    # Severity floor: when the agent's doctrine mandates a classification
+    # (e.g. SQL injection = CRITICAL for security-reviewer), an
+    # under-classified finding is a calibration miss and must not satisfy
+    # the spec. Unknown severities fail closed.
+    min_severity = spec.get("min_severity")
+    if min_severity is not None:
+        severity = issue.get("severity")
+        if severity not in SEVERITY_RANK or (
+            SEVERITY_RANK[severity] < SEVERITY_RANK[min_severity]
+        ):
+            return False
     expected_line = spec.get("line")
     if expected_line is not None:
         line = issue.get("line")

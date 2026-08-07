@@ -222,8 +222,13 @@ keying, and cite the doctrine in a key comment. A key written from generic
 reviewer intuition can reject the agent's correct behavior (mandated `block`
 not in `verdict_in`) or reward a miss (a required spec whose `match_any`
 accepts a mere source token, e.g. `\$_GET`, lets an access-control finding
-satisfy an injection spec — require technique/sink evidence). Whenever a
-fixture, key, or agent definition changes, re-walk this derivation.
+satisfy an injection spec — require technique/sink evidence). When the
+doctrine mandates a severity class (SQL injection/XSS are CRITICAL for
+security-reviewer), set `min_severity` on the required spec and derive
+`verdict_in` from the builder's auto-verdict (any critical → `block`) — an
+under-classified finding is a calibration miss the benchmark must measure,
+not a match. Whenever a fixture, key, or agent definition changes, re-walk
+this derivation.
 
 Grading is deterministic (file + line-window + keyword regexes over
 title/description/category — no model judge). A correct finding the patterns
@@ -278,7 +283,11 @@ result `trials` above 1 means aggregate detail `{trials, per_trial,
 per_trial_failures, per_trial_passed, models}`. Exit codes: 2 for any
 configuration error (unknown scenario, empty selection, invalid flags,
 unwritable report path — always before artifacts exist), 1 when the eval
-ran and at least one entry failed, 0 on full pass.
+ran and at least one entry failed, 0 on full pass. The comparative metric
+is per-entry `passed` (and detection detail) — check counts and ratios are
+per-entry diagnostics only, because compliance adds checks per schema-valid
+issue and would score a more verbose reviewer higher for identical
+detection performance.
 
 ## Design Principles
 
