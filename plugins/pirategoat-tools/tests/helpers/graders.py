@@ -51,11 +51,14 @@ def _grade(checks: List[tuple]) -> GradeResult:
     )
 
 
-def grade_review_json(path: str) -> GradeResult:
+def grade_review_json(path: str, expected_reviewer: str = None) -> GradeResult:
     """Grade a reviewer JSON output file.
 
     Checks: file exists, valid JSON, required fields, valid severities,
-    valid verdict, issue schema, summary structure.
+    valid verdict, issue schema, summary structure. When expected_reviewer
+    is given, the JSON's reviewer field must match it — a valid artifact at
+    the expected path but labeled as ANOTHER reviewer must not pass
+    compliance and proceed to detection scoring under the wrong identity.
     """
     checks = []
 
@@ -80,6 +83,13 @@ def grade_review_json(path: str) -> GradeResult:
         checks.append(
             (field_name in data, f"Missing required field: {field_name}")
         )
+
+    if expected_reviewer is not None:
+        checks.append((
+            data.get("reviewer") == expected_reviewer,
+            f"Reviewer name {data.get('reviewer')!r} does not match "
+            f"expected '{expected_reviewer}'",
+        ))
 
     # Check verdict is valid
     verdict = data.get("verdict", "")

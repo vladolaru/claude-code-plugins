@@ -267,11 +267,13 @@ inconsistency, not reviewer quality.
 **Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
 `trials` (the requested count), and `results[]` with `scenario`, `agent`,
 `trials` (dispatches actually run for this entry), `keyed` (whether an
-answer key exists), `dispatched` (whether a live model ran — deterministic
-bootstrap-only entries like `no_domain_files_approve` and
-`error_no_git_repo` carry `false`, so pass rates over reviewer behavior
-must filter on it), `passed`, `checks_run`, `checks_passed`, `failures`,
-`detail`. `detail` is polymorphic — discriminate per result, never on the
+answer key exists), `dispatched` (whether a live model call demonstrably
+occurred, derived from dispatch evidence — deterministic bootstrap-only
+entries AND runs that failed before any model call, e.g. bootstrap
+failure, routing drift, or a missing CLI, carry `false`; timeouts and
+unparseable dispatch output conservatively report `false`; pass rates over
+reviewer behavior must filter on it), `passed`, `checks_run`,
+`checks_passed`, `failures`, `detail`. `detail` is polymorphic — discriminate per result, never on the
 top-level `trials` (unkeyed agents run once even under `--trials N`):
 `detail: null` with `keyed: false` is a compliance-only entry (dispatched
 unkeyed entries carry `{output_dir}` instead of null); `keyed: true` with

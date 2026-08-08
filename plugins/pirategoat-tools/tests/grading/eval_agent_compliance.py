@@ -209,16 +209,21 @@ SCENARIOS = {
                 ],
             },
             "performance-reviewer": {
-                # performance-reviewer.md classifies missing LIMIT in raw
-                # queries as CRITICAL (Unbounded Queries) — the fixture's
-                # SELECT * with no LIMIT makes a blocking verdict correct
-                # behavior, not a false positive.
+                # performance-reviewer.md lists missing LIMIT in raw queries
+                # under CRITICAL (Unbounded Queries), but that bucket's
+                # exemplars are flagrant full-table fetches (-1 flags) and
+                # THIS query is WHERE-bounded per user — live calibration
+                # shows the reviewer judging it below critical on that
+                # ground. Floor medium (blocks vacuous low/info matches)
+                # rather than enforcing the literal-CRITICAL reading against
+                # a defensible instance judgment.
                 "verdict_in": ["comment", "request_changes", "block"],
                 "required_findings": [
                     # No select\* token — a SELECT-*-over-fetch finding is a
                     # different genuine defect and must not claim the
                     # unbounded-query recall gate.
                     {"id": "unbounded-query", "file": "src/PaymentHandler.php",
+                     "min_severity": "medium",
                      "match_any": [r"\bLIMIT\b", r"unbounded", r"paginat"]},
                 ],
             },
@@ -259,16 +264,24 @@ SCENARIOS = {
         "grader": "output_pair",
         "expected": {
             "php-tests-reviewer": {
-                "verdict_in": ["block", "request_changes", "comment"],
+                # tests-reviewer-protocol.md classifies zero-assertion tests
+                # as CRITICAL, so the builder's auto-verdict is block. The
+                # assertNotNull is the protocol's mock-return tautology ONLY
+                # if the reviewer can see PaymentHandler's implementation —
+                # this fixture is deliberately test-only, so the provable
+                # classification caps at weak-assertion/HIGH (live-confirmed:
+                # the reviewer files it high on exactly that ground).
+                "verdict_in": ["block"],
                 "required_findings": [
                     {"id": "meaningless-assertion", "file": "tests/PaymentHandlerTest.php",
-                     "line": 14,
+                     "line": 14, "min_severity": "high",
                      "match_any": [r"assertNotNull", r"meaning", r"weak assert"]},
                     # Explicit absent-assertion phrasings only — a bare
                     # "assert" token lets the co-located over-mocking finding
                     # claim this recall gate without the assertion gap ever
                     # being reported.
                     {"id": "no-assertions", "file": "tests/OrderProcessorTest.php",
+                     "min_severity": "critical",
                      "match_any": [r"no\s+assert", r"assert\w*\s+nothing",
                                    r"without\s+(any\s+)?assert", r"missing\s+assert",
                                    r"zero\s+assert", r"lacks\s+assert",
@@ -288,9 +301,13 @@ SCENARIOS = {
         "grader": "output_pair",
         "expected": {
             "e2e-tests-reviewer": {
-                "verdict_in": ["block", "request_changes", "comment"],
+                # Fixed waits are HIGH per tests-reviewer-protocol.md (flaky
+                # tests) — one high already forces request_changes, and the
+                # fixture's three wait sites can reach block as 3+ highs.
+                "verdict_in": ["request_changes", "block"],
                 "required_findings": [
                     {"id": "hardcoded-wait", "file": "e2e/checkout.spec.ts",
+                     "min_severity": "high",
                      "match_any": [r"waitForTimeout", r"hard-?coded wait", r"fixed wait"]},
                 ],
                 "acceptable_findings": [
@@ -324,14 +341,16 @@ SCENARIOS = {
                 # wp-architecture-reviewer.md classifies unprefixed global
                 # classes/CPT names as CRITICAL namespace pollution — the
                 # fixture's global Payment_Gateway / payment_log make a
-                # blocking verdict correct behavior.
-                "verdict_in": ["comment", "request_changes", "block"],
+                # blocking verdict correct behavior (auto-verdict: any
+                # critical → block; live-confirmed).
+                "verdict_in": ["block"],
                 "required_findings": [
                     # (?<!->) excludes findings that merely quote the
                     # fixture's correct `$wpdb->prefix` usage — a direct-db
                     # api-bypass finding must not claim this recall gate.
                     {"id": "namespace-pollution",
                      "file": "includes/class-payment-gateway.php",
+                     "min_severity": "critical",
                      "match_any": [r"(?<!->)prefix", r"namespac", r"collision"]},
                 ],
             },
@@ -353,6 +372,7 @@ SCENARIOS = {
                     # No bare "assert" token — any assertion-adjacent finding
                     # on this file would claim the gate vacuously.
                     {"id": "weak-assertion", "file": "tests/ProductManagerTest.php",
+                     "min_severity": "medium",
                      "match_any": [r"assertNotNull", r"meaning", r"weak"]},
                 ],
             },
@@ -363,6 +383,7 @@ SCENARIOS = {
                     # file must not claim the assertion-quality gate.
                     {"id": "count-only-assertion",
                      "file": "src/components/__tests__/ProductList.test.tsx",
+                     "min_severity": "medium",
                      "match_any": [r"toHaveLength", r"\bcount\b", r"\bcontent\b", r"\bprice\b"]},
                 ],
             },
@@ -750,6 +771,11 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         # reviewer may have written a plausible artifact before the rejection
         # surfaced, and grading it would attribute an untrusted run to the
         # agent. Fail the entry with the rejection as evidence.
+        # A live model call demonstrably occurred only when the CLI returned
+        # a parseable JSON payload (evidence non-empty) — CLI-missing,
+        # timeout, and non-JSON paths report False conservatively.
+        model_dispatched = bool(dispatch_evidence)
+
         if rc != 0:
             return GradeResult(
                 passed=False, score=0.0,
@@ -759,6 +785,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                     "dispatch_rejected": True,
                     "dispatch_evidence": dispatch_evidence,
                     "output_dir": output_dir,
+                    "model_dispatched": model_dispatched,
                 },
             )
 
@@ -771,7 +798,8 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
             _materialize_missing_markdown(output_dir)
             reviewer_name = _mod.derive_reviewer_name(agent_name)
             compliance = grade_review_json(
-                os.path.join(output_dir, f"{reviewer_name}-review.json")
+                os.path.join(output_dir, f"{reviewer_name}-review.json"),
+                expected_reviewer=reviewer_name,
             )
 
             key = (scenario.get("expected") or {}).get(agent_name)
@@ -779,7 +807,9 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 # Unkeyed entries still leave artifacts (review JSON,
                 # dispatch transcript) worth pointing at from the report.
                 compliance.detail = dict(
-                    compliance.detail or {}, output_dir=output_dir,
+                    compliance.detail or {},
+                    output_dir=output_dir,
+                    model_dispatched=model_dispatched,
                 )
                 return compliance
 
@@ -809,10 +839,15 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 compliance_passed=compliance.passed,
                 output_dir=output_dir,
                 models=dispatch_evidence.get("models"),
+                model_dispatched=model_dispatched,
             )
             return merge_grades(compliance, detection)
         elif scenario["grader"] == "signal_format":
-            return grade_signal_format(agent_output)
+            result = grade_signal_format(agent_output)
+            result.detail = dict(
+                result.detail or {}, model_dispatched=model_dispatched,
+            )
+            return result
         else:
             return GradeResult(
                 passed=False, score=0.0,
@@ -924,6 +959,15 @@ def main():
             "(--dispatch/--report-out/--trials/--scenario/--agent/--all) — "
             "they would be silently ignored"
         )
+    if not args.dispatch and not args.grade_only and (
+        args.report_out or args.trials != 1
+        or args.scenario or args.agent or args.all
+    ):
+        parser.error(
+            "--report-out/--trials/--scenario/--agent/--all require "
+            "--dispatch — without it they would be silently ignored and "
+            "the command would exit 0 having done nothing"
+        )
 
     if args.grade_only:
         results = run_grade_only(args.grade_only)
@@ -988,11 +1032,11 @@ def main():
                 entry_meta[(scenario_name, agent_name)] = {
                     "trials": args.trials if args.trials > 1 and key is not None else 1,
                     "keyed": key is not None,
-                    "dispatched": scenario["grader"] in ("output_pair", "signal_format"),
                 }
                 # One broken entry (bad fixture, bootstrap timeout) must not
                 # abort the run and discard every completed paid dispatch —
                 # record it as a failed entry and continue.
+                trial_grades = []
                 try:
                     if args.trials > 1 and key is not None:
                         trial_grades = [
@@ -1030,6 +1074,18 @@ def main():
                         failures=[f"harness error: {exc}"],
                         checks_run=1, checks_passed=0,
                     )
+                # `dispatched` is evidence-derived, never assumed from the
+                # scenario type: a run that failed before any model call
+                # (bootstrap failure, routing drift, missing CLI) must not
+                # be counted as reviewer behavior by report consumers.
+                if trial_grades:
+                    dispatched_any = any(
+                        (g.detail or {}).get("model_dispatched", False)
+                        for g in trial_grades
+                    )
+                else:
+                    dispatched_any = (result.detail or {}).get("model_dispatched", False)
+                entry_meta[(scenario_name, agent_name)]["dispatched"] = dispatched_any
                 agent_results[agent_name] = result
             if agent_results:
                 all_results[scenario_name] = agent_results

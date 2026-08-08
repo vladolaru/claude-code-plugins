@@ -825,3 +825,14 @@ class TestReviewRoundHardening:
         # Unknown severity fails the floor closed.
         issue["severity"] = "blocker"
         assert not _finding_matches(issue, spec)
+
+    def test_reviewer_identity_mismatch_fails_json_grade(self, tmp_dir):
+        # A valid artifact at the expected path but labeled as another
+        # reviewer must not pass compliance under the wrong identity.
+        path = _make_valid_json(tmp_dir, reviewer="security")
+        assert grade_review_json(path, expected_reviewer="security").passed
+        mismatch = grade_review_json(path, expected_reviewer="performance")
+        assert not mismatch.passed
+        assert any("does not match expected" in f for f in mismatch.failures)
+        # Omitting the expectation keeps prior behavior.
+        assert grade_review_json(path).passed
