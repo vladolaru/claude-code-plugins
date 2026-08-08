@@ -961,7 +961,7 @@ def main():
     parser.add_argument(
         "--trials",
         type=int,
-        default=1,
+        default=None,
         help="Dispatch each keyed agent N times and majority-vote the detection "
              "checks (nondeterminism control; multiplies model cost by N)",
     )
@@ -974,12 +974,12 @@ def main():
 
     args = parser.parse_args()
 
-    if args.trials < 1:
+    if args.trials is not None and args.trials < 1:
         parser.error(f"--trials must be >= 1, got {args.trials}")
     if args.all and args.agent:
         parser.error("--all and --agent are mutually exclusive")
     if args.grade_only and (
-        args.dispatch or args.report_out or args.trials != 1
+        args.dispatch or args.report_out or args.trials is not None
         or args.scenario or args.agent or args.all
     ):
         parser.error(
@@ -988,7 +988,7 @@ def main():
             "they would be silently ignored"
         )
     if not args.dispatch and not args.grade_only and (
-        args.report_out or args.trials != 1
+        args.report_out or args.trials is not None
         or args.scenario or args.agent or args.all
     ):
         parser.error(
@@ -996,6 +996,9 @@ def main():
             "--dispatch — without it they would be silently ignored and "
             "the command would exit 0 having done nothing"
         )
+
+    if args.trials is None:
+        args.trials = 1
 
     if args.grade_only:
         results = run_grade_only(args.grade_only)

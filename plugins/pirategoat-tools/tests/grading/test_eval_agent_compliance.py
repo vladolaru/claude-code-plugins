@@ -123,6 +123,22 @@ class TestGradeOnlyMode:
         assert "--grade-only" in result.stdout
 
 
+class TestCliModes:
+    def test_explicit_default_trials_requires_dispatch(self, tmp_path):
+        result = _run_eval("--trials", "1", cwd=tmp_path)
+
+        assert result.returncode == 2
+        assert "require --dispatch" in result.stderr
+
+    def test_grade_only_rejects_explicit_default_trials(self, tmp_path):
+        result = _run_eval(
+            "--grade-only", str(tmp_path), "--trials", "1", cwd=tmp_path,
+        )
+
+        assert result.returncode == 2
+        assert "--grade-only cannot be combined" in result.stderr
+
+
 class TestDispatchIdentity:
     """The benchmark must dispatch the configured reviewer, not generic Claude.
 
