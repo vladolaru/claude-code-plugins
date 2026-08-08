@@ -225,6 +225,49 @@ class TestDispatchIdentity:
         # Empty usage fails closed for a routed tier.
         assert _eval_mod.check_dispatched_models(routed, {}) is not None
 
+    def test_capacity_metadata_does_not_affect_primary_model_attribution(self):
+        routed = next(
+            a for a in _eval_mod.ALL_AGENTS
+            if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit")
+            in _eval_mod._DISPATCHABLE_MODELS
+        )
+        tier = _eval_mod.AGENT_CONFIG[routed]["model_tier"]
+        primary = f"claude-{tier}-5"
+        usage = {
+            primary: {
+                "inputTokens": 6000,
+                "outputTokens": 5000,
+                "contextWindow": 200000,
+                "maxOutputTokens": 64000,
+            },
+            "auxiliary": {
+                "inputTokens": 1,
+                "outputTokens": 1,
+                "contextWindow": 1000000,
+                "maxOutputTokens": 128000,
+            },
+        }
+        assert _eval_mod._primary_model(usage) == primary
+        assert _eval_mod.check_dispatched_models(routed, usage) is None
+
+    def test_canonical_model_identity_is_used_for_routing(self):
+        routed = next(
+            a for a in _eval_mod.ALL_AGENTS
+            if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit")
+            in _eval_mod._DISPATCHABLE_MODELS
+        )
+        tier = _eval_mod.AGENT_CONFIG[routed]["model_tier"]
+        canonical = f"claude-{tier}-5"
+        usage = {
+            "gateway-primary": {
+                "canonicalModel": canonical,
+                "inputTokens": 6000,
+                "outputTokens": 5000,
+            },
+        }
+        assert _eval_mod._primary_model(usage) == canonical
+        assert _eval_mod.check_dispatched_models(routed, usage) is None
+
     def test_inherit_tier_accepts_any_dispatched_model(self):
         inherit_agents = [
             a for a in _eval_mod.ALL_AGENTS

@@ -577,24 +577,40 @@ def build_dispatch_cmd(claude_path: str, agent_name: str, prompt: str) -> list:
     ]
 
 
+_MODEL_USAGE_TOKEN_FIELDS = (
+    "inputTokens",
+    "outputTokens",
+    "cacheReadInputTokens",
+    "cacheCreationInputTokens",
+)
+
+
+def _model_identity(model: str, usage: object) -> str:
+    if isinstance(usage, dict):
+        canonical = usage.get("canonicalModel")
+        if isinstance(canonical, str) and canonical:
+            return canonical
+    return model
+
+
 def _primary_model(model_usage: dict) -> Optional[str]:
-    """Best-effort primary model: the entry with the largest numeric usage.
+    """Best-effort primary model: the entry with the largest token usage.
 
     modelUsage is a session-wide accumulator including auxiliary calls
     (verified live: a sonnet reviewer session also reports a haiku entry),
     so membership alone cannot attribute the main loop. Weight each model by
-    the sum of its numeric usage fields; None when no usable weights exist.
+    its token counters; None when no usable weights exist.
     """
     best, best_weight = None, 0
     for model, usage in model_usage.items():
         weight = 0
         if isinstance(usage, dict):
-            weight = sum(
-                v for v in usage.values()
-                if isinstance(v, (int, float)) and not isinstance(v, bool)
-            )
+            for field in _MODEL_USAGE_TOKEN_FIELDS:
+                value = usage.get(field)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    weight += value
         if weight > best_weight:
-            best, best_weight = model, weight
+            best, best_weight = _model_identity(model, usage), weight
     return best
 
 
@@ -610,7 +626,9 @@ def check_dispatched_models(agent_name: str, model_usage: dict) -> Optional[str]
     tier = AGENT_CONFIG.get(agent_name, {}).get("model_tier") or "inherit"
     if tier not in _DISPATCHABLE_MODELS:
         return None
-    models = sorted(model_usage.keys())
+    models = sorted(
+        _model_identity(model, usage) for model, usage in model_usage.items()
+    )
     primary = _primary_model(model_usage)
     if primary is not None:
         if tier not in primary:
@@ -668,7 +686,10 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
 
     model_usage = payload.get("modelUsage") or {}
     evidence = {
-        "models": sorted(model_usage.keys()),
+        "models": sorted(
+            _model_identity(model, usage)
+            for model, usage in model_usage.items()
+        ),
         "primary_model": _primary_model(model_usage),
         "is_error": bool(payload.get("is_error")),
         "session_id": payload.get("session_id"),

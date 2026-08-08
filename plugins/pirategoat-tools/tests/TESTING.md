@@ -203,9 +203,10 @@ routing is pinned to `agent_registry.json` (the single source of truth) at
 three layers: `check_model_routing` refuses to dispatch when frontmatter
 drifts from the registry tier, a `TestDispatchIdentity` guard requires the
 two to stay equal for every agent, and each run's JSON `modelUsage` is
-verified post-hoc — the PRIMARY model (largest numeric usage; `modelUsage`
-is a session accumulator that includes auxiliary calls) must match the
-registry tier (`check_dispatched_models`), and any nonzero dispatch exit —
+verified post-hoc — the PRIMARY model sums only `inputTokens`,
+`outputTokens`, `cacheReadInputTokens`, and `cacheCreationInputTokens`, then
+resolves `canonicalModel` before registry-tier validation (`modelUsage` is a
+session accumulator that includes auxiliary calls). Any nonzero dispatch exit —
 model mismatch, session error, timeout, non-JSON output — fails the entry
 before grading (`dispatch_rejected` in its detail), because the reviewer
 may have written a plausible artifact before the rejection surfaced. A run
