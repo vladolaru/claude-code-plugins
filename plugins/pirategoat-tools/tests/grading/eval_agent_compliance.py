@@ -237,17 +237,22 @@ SCENARIOS = {
         "expected": {
             "security-reviewer": {
                 # XSS is CRITICAL per security-reviewer.md → verdict block.
-                # The api-key finding is HIGH (Sensitive Data Exposure), so
-                # it carries no severity floor.
+                # The api-key finding is HIGH (Sensitive Data Exposure) —
+                # its floor is high accordingly.
                 "verdict_in": ["block"],
                 "required_findings": [
-                    {"id": "dom-xss", "file": "src/components/UserForm.tsx", "line": 13,
+                    # No line pin: live evidence shows the reviewer anchoring
+                    # anywhere in the handler (state hook, handler decl, or
+                    # the sink itself); the patterns are sink-specific and
+                    # the file holds no competing XSS-adjacent finding.
+                    {"id": "dom-xss", "file": "src/components/UserForm.tsx",
                      "min_severity": "critical",
                      "match_any": [r"\bxss\b", r"innerHTML", r"sanitiz"]},
                     # No line pin: the reviewer may anchor at the declaration
                     # (line 1) or the transmission sink (line 11); the file is
                     # 24 lines and the patterns are already specific.
                     {"id": "hardcoded-api-key", "file": "src/api/client.ts",
+                     "min_severity": "high",
                      "match_any": [r"hard-?coded", r"api.?key", r"secret", r"credential"]},
                 ],
                 "acceptable_findings": [
@@ -771,10 +776,12 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         # reviewer may have written a plausible artifact before the rejection
         # surfaced, and grading it would attribute an untrusted run to the
         # agent. Fail the entry with the rejection as evidence.
-        # A live model call demonstrably occurred only when the CLI returned
-        # a parseable JSON payload (evidence non-empty) — CLI-missing,
-        # timeout, and non-JSON paths report False conservatively.
-        model_dispatched = bool(dispatch_evidence)
+        # A live model call demonstrably occurred only when the payload
+        # records actual model usage — a parseable JSON error emitted BEFORE
+        # model invocation (auth/startup failure) carries evidence fields
+        # but an empty modelUsage, and must not count as dispatched.
+        # CLI-missing, timeout, and non-JSON paths report False too.
+        model_dispatched = bool(dispatch_evidence.get("models"))
 
         if rc != 0:
             return GradeResult(
@@ -1039,10 +1046,24 @@ def main():
                 trial_grades = []
                 try:
                     if args.trials > 1 and key is not None:
-                        trial_grades = [
-                            run_dispatch_scenario(scenario_name, scenario, agent_name)
-                            for _ in range(args.trials)
-                        ]
+                        # Per-trial fault isolation: a trial that raises
+                        # (bootstrap timeout, fixture error) becomes a failed
+                        # grade — it votes as a miss on every check — while
+                        # the completed paid trials keep their evidence and
+                        # the remaining trials still run. A shared
+                        # list-comprehension would discard everything on the
+                        # first raise.
+                        for _ in range(args.trials):
+                            try:
+                                trial_grades.append(
+                                    run_dispatch_scenario(scenario_name, scenario, agent_name)
+                                )
+                            except Exception as exc:
+                                trial_grades.append(GradeResult(
+                                    passed=False, score=0.0,
+                                    failures=[f"harness error: {exc}"],
+                                    checks_run=1, checks_passed=0,
+                                ))
                         result = aggregate_detection_trials(
                             [g.detail for g in trial_grades], key,
                         )

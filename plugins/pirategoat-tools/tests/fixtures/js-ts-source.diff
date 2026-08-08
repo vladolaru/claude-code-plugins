@@ -46,7 +46,7 @@ index 0000000..3705ee1
 +
 +    const handleChange = ( e: React.ChangeEvent<HTMLInputElement> ) => {
 +        setName( e.target.value );
-+        document.getElementById( 'preview' )!.innerHTML = e.target.value;
++        document.getElementById( 'preview' )!.innerHTML = new URLSearchParams( window.location.search ).get( 'name' ) ?? e.target.value;
 +    };
 +
 +    return (
