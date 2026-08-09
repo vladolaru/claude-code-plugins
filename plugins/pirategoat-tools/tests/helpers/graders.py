@@ -625,6 +625,13 @@ def aggregate_detection_trials(trial_grades: List[GradeResult]) -> GradeResult:
         (passing >= need,
          f"only {passing}/{trials} trials passed outright (need {need})"),
     ])
+    if not result.passed:
+        # Carry trial-indexed diagnostics in failures — the console prints
+        # failures only, so without this a failed --trials run without
+        # --report-out would say how many trials failed but never why.
+        for idx, grade in enumerate(trial_grades):
+            for msg in grade.failures[:3] if not grade.passed else []:
+                result.failures.append(f"trial {idx + 1}: {msg}")
     result.detail = {
         "trials": trials,
         "per_trial": [grade.detail or {} for grade in trial_grades],

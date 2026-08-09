@@ -706,6 +706,20 @@ class TestAggregateDetectionTrials:
         assert not result.passed
         assert any("1/3" in f for f in result.failures)
 
+    def test_failed_aggregate_carries_trial_indexed_diagnostics(self):
+        # The console prints failures only — a failed --trials run without
+        # --report-out must still say WHY trials failed, not just how many.
+        grades = [self._grade(True), self._grade(False), self._grade(False)]
+        result = aggregate_detection_trials(grades)
+        assert "trial 2: some check failed" in result.failures
+        assert "trial 3: some check failed" in result.failures
+        # A passing aggregate keeps failures empty — nonempty failures on a
+        # passed result would confuse consumers.
+        passing = aggregate_detection_trials(
+            [self._grade(True), self._grade(True), self._grade(False)])
+        assert passing.passed
+        assert passing.failures == []
+
     def test_even_trials_require_strict_majority(self):
         # --trials 2: one pass is not "more than half" — both must pass.
         grades = [self._grade(True), self._grade(False)]

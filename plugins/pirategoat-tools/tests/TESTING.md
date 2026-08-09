@@ -286,7 +286,8 @@ rejected is not a graded trial.
 
 `detail` shapes follow the entry: single-run graded entries carry
 `{verdict, match, gates, compliance_passed, output_dir, models, status}`
-(abstention keys carry `issue_count` and no `gates`/`match` keys; unkeyed
+(abstention keys carry `issue_count` and `match: null`, and no `gates`
+key — discriminate on `gates`, not on `match` presence; unkeyed
 entries carry compliance detail plus `{output_dir, status}`); rejected
 dispatches carry `{dispatch_rejected, dispatch_evidence, output_dir,
 status}`; aggregates (result `trials` above 1) carry `{trials, per_trial,
