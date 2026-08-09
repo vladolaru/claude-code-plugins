@@ -1008,19 +1008,17 @@ def main():
         parser.error(f"--trials must be >= 1, got {args.trials}")
     if args.all and args.agent:
         parser.error("--all and --agent are mutually exclusive")
-    if args.grade_only and (
-        args.dispatch or args.report_out is not None or args.trials is not None
+    dispatch_only_flags = bool(
+        args.report_out is not None or args.trials is not None
         or args.scenario or args.agent or args.all
-    ):
+    )
+    if args.grade_only and (args.dispatch or dispatch_only_flags):
         parser.error(
             "--grade-only cannot be combined with dispatch-mode flags "
             "(--dispatch/--report-out/--trials/--scenario/--agent/--all) — "
             "they would be silently ignored"
         )
-    if not args.dispatch and not args.grade_only and (
-        args.report_out is not None or args.trials is not None
-        or args.scenario or args.agent or args.all
-    ):
+    if not args.dispatch and not args.grade_only and dispatch_only_flags:
         parser.error(
             "--report-out/--trials/--scenario/--agent/--all require "
             "--dispatch — without it they would be silently ignored and "
