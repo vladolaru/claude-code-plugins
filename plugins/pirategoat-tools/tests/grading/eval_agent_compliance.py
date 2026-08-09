@@ -918,7 +918,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                     detail={"verdict": None, "match": None},
                 )
             else:
-                detection = grade_detection(review, key)
+                detection = grade_detection(review, key, repo_root=cwd)
 
             # compliance_passed: carried so multi-trial aggregation can vote on
             # compliance separately. output_dir: the artifact directory (review

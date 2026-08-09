@@ -395,25 +395,29 @@ def _norm_path(path) -> str:
     return "/".join(parts)
 
 
-def _paths_match(issue_path, spec_path: str) -> bool:
-    """Exact match after normalization, or suffix match for absolute paths.
+def _repo_relative_issue_path(path, repo_root) -> str:
+    """Normalize one reported path relative to the known repository root."""
+    text = str(path or "")
+    normalized = _norm_path(text)
+    is_absolute = (
+        PurePosixPath(text.replace("\\", "/")).is_absolute()
+        or PureWindowsPath(text).is_absolute()
+    )
+    if not is_absolute:
+        return normalized
 
-    An issue reported as /tmp/eval-x/src/File.php cannot be reduced to
-    repo-relative without knowing the repo root, so a normalized path that
-    ENDS with the spec path (on a segment boundary) also matches.
-    """
-    issue_text = str(issue_path or "")
-    issue_is_absolute = (
-        PurePosixPath(issue_text.replace("\\", "/")).is_absolute()
-        or PureWindowsPath(issue_text).is_absolute()
-    )
-    issue_norm = _norm_path(issue_text)
+    root = _norm_path(repo_root)
+    prefix = f"{root}/" if root else ""
+    if prefix and normalized.startswith(prefix):
+        return normalized[len(prefix):]
+    return normalized
+
+
+def _paths_match(issue_path, spec_path: str) -> bool:
+    """Match canonical paths exactly after spelling normalization."""
+    issue_norm = _norm_path(issue_path)
     spec_norm = _norm_path(spec_path)
-    if not issue_norm or not spec_norm:
-        return False
-    return issue_norm == spec_norm or (
-        issue_is_absolute and issue_norm.endswith("/" + spec_norm)
-    )
+    return bool(issue_norm and spec_norm and issue_norm == spec_norm)
 
 
 # Field separator that \s-bridging regexes cannot cross — a plain space would
@@ -512,7 +516,7 @@ def match_findings(issues: List[dict], key: dict) -> dict:
     }
 
 
-def grade_detection(review: dict, key: dict) -> GradeResult:
+def grade_detection(review: dict, key: dict, repo_root=None) -> GradeResult:
     """Grade a parsed review JSON against a scenario answer key.
 
     Key fields (all optional except that at least one gate must be present —
@@ -523,9 +527,21 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
       max_severity:          highest allowed severity for ANY finding
       max_unexpected:        cap on findings no spec claimed
       expect_not_applicable: the correct answer is abstention
+
+    When repo_root is known, absolute issue paths are canonicalized against it
+    once before matching. The matcher itself compares repository-relative
+    identities exactly and never infers identity from a path suffix.
     """
     verdict = review.get("verdict")
     issues = [i for i in (review.get("issues") or []) if isinstance(i, dict)]
+    if repo_root is not None:
+        issues = [
+            dict(
+                issue,
+                file=_repo_relative_issue_path(issue.get("file"), repo_root),
+            )
+            for issue in issues
+        ]
 
     if key.get("expect_not_applicable"):
         # Both abstention spellings are doctrine-compliant: the shared

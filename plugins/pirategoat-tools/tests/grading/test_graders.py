@@ -785,13 +785,14 @@ class TestReviewRoundHardening:
     def test_paths_match_normalizes_real_world_variants(self):
         from helpers.graders import _paths_match
         spec = "src/UserHandler.php"
-        assert _paths_match("/tmp/eval-x/src/UserHandler.php", spec)  # absolute
         assert _paths_match("b/src/UserHandler.php", spec)            # diff prefix
         assert _paths_match("src\\UserHandler.php", spec)             # backslash
         assert _paths_match("src//UserHandler.php", spec)             # double slash
         assert _paths_match("./src/./UserHandler.php", spec)          # dot segments
         assert not _paths_match("src/Other.php", spec)
         assert not _paths_match("vendor/src/OtherHandler.php", spec)
+        # Absolute paths require repository context before pure matching.
+        assert not _paths_match("/tmp/eval-x/src/UserHandler.php", spec)
         # Suffix matching must respect segment boundaries.
         assert not _paths_match("notsrc/UserHandler.php", "rc/UserHandler.php")
 
@@ -801,6 +802,58 @@ class TestReviewRoundHardening:
         assert not _paths_match(
             "vendor/src/UserHandler.php", "src/UserHandler.php",
         )
+
+    def test_detection_matches_absolute_path_relative_to_repo_root(self, tmp_path):
+        expected = "src/UserHandler.php"
+        issue = {
+            "file": str(tmp_path / expected),
+            "severity": "high",
+            "title": "SQL injection",
+            "description": "Raw input reaches a query",
+            "category": "sql-injection",
+            "line": 10,
+        }
+        key = {
+            "required_findings": [{
+                "id": "sql-injection",
+                "file": expected,
+                "line": 10,
+                "match_any": [r"sql.?injection"],
+            }],
+        }
+
+        assert grade_detection(
+            {"verdict": "block", "issues": [issue]},
+            key,
+            repo_root=tmp_path,
+        ).passed
+
+    def test_detection_rejects_absolute_path_to_different_repo_file(
+        self, tmp_path
+    ):
+        expected = "src/UserHandler.php"
+        issue = {
+            "file": str(tmp_path / "vendor" / expected),
+            "severity": "high",
+            "title": "SQL injection",
+            "description": "Raw input reaches a query",
+            "category": "sql-injection",
+            "line": 10,
+        }
+        key = {
+            "required_findings": [{
+                "id": "sql-injection",
+                "file": expected,
+                "line": 10,
+                "match_any": [r"sql.?injection"],
+            }],
+        }
+
+        assert not grade_detection(
+            {"verdict": "block", "issues": [issue]},
+            key,
+            repo_root=tmp_path,
+        ).passed
 
     def test_unknown_severity_fails_max_severity_gate(self):
         from helpers.graders import grade_detection
