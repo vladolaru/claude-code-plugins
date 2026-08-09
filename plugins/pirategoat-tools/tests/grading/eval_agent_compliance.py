@@ -853,9 +853,9 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         if scenario["grader"] == "output_pair":
             _materialize_missing_markdown(output_dir)
             reviewer_name = _mod.derive_reviewer_name(agent_name)
+            review_path = os.path.join(output_dir, f"{reviewer_name}-review.json")
             compliance = grade_review_json(
-                os.path.join(output_dir, f"{reviewer_name}-review.json"),
-                expected_reviewer=reviewer_name,
+                review_path, expected_reviewer=reviewer_name,
             )
 
             key = (scenario.get("expected") or {}).get(agent_name)
@@ -869,7 +869,6 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 )
                 return compliance
 
-            review_path = os.path.join(output_dir, f"{reviewer_name}-review.json")
             try:
                 with open(review_path) as f:
                     review = json.load(f)
