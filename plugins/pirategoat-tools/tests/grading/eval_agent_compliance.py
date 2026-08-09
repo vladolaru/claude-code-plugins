@@ -1088,29 +1088,13 @@ def main():
                                     failures=[f"harness error: {exc}"],
                                     checks_run=1, checks_passed=0,
                                 ))
-                        result = aggregate_detection_trials(
-                            [g.detail for g in trial_grades], key,
-                        )
+                        result = aggregate_detection_trials(trial_grades, key)
                         result.detail["per_trial_failures"] = [g.failures for g in trial_grades]
                         result.detail["per_trial_passed"] = [g.passed for g in trial_grades]
                         result.detail["models"] = sorted({
                             m for g in trial_grades
                             for m in ((g.detail or {}).get("models") or [])
                         })
-                        # Per-check majorities can be assembled from DIFFERENT
-                        # trials (verdict from trials 1+3, finding from 2+3)
-                        # even when no single trial passed — the aggregate
-                        # must also demand that a majority of trials passed
-                        # outright.
-                        need = args.trials // 2 + 1
-                        passing = sum(1 for g in trial_grades if g.passed)
-                        if result.passed and passing < need:
-                            result.passed = False
-                            result.failures.append(
-                                f"only {passing}/{args.trials} trials passed "
-                                f"individually (need {need}) despite per-check "
-                                f"majorities holding"
-                            )
                     else:
                         result = run_dispatch_scenario(scenario_name, scenario, agent_name)
                 except Exception as exc:

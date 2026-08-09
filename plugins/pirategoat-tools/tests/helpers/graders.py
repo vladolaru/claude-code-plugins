@@ -9,7 +9,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
 
@@ -402,11 +402,18 @@ def _paths_match(issue_path, spec_path: str) -> bool:
     repo-relative without knowing the repo root, so a normalized path that
     ENDS with the spec path (on a segment boundary) also matches.
     """
-    issue_norm = _norm_path(issue_path)
+    issue_text = str(issue_path or "")
+    issue_is_absolute = (
+        PurePosixPath(issue_text.replace("\\", "/")).is_absolute()
+        or PureWindowsPath(issue_text).is_absolute()
+    )
+    issue_norm = _norm_path(issue_text)
     spec_norm = _norm_path(spec_path)
     if not issue_norm or not spec_norm:
         return False
-    return issue_norm == spec_norm or issue_norm.endswith("/" + spec_norm)
+    return issue_norm == spec_norm or (
+        issue_is_absolute and issue_norm.endswith("/" + spec_norm)
+    )
 
 
 # Field separator that \s-bridging regexes cannot cross — a plain space would
@@ -598,16 +605,16 @@ def merge_grades(compliance: GradeResult, detection: GradeResult) -> GradeResult
     )
 
 
-def aggregate_detection_trials(details: List[dict], key: dict) -> GradeResult:
-    """Majority vote across trial details (GradeResult.detail dicts).
+def aggregate_detection_trials(trial_grades: List[GradeResult], key: dict) -> GradeResult:
+    """Majority vote across complete trial grades.
 
     A trial with a None/empty detail counts as a miss on every check —
     an unreadable trial must never improve the aggregate. With an even
     trial count the majority threshold requires strictly more than half,
     so --trials 2 demands both trials pass every check.
     """
-    details = [d or {} for d in details]
-    trials = len(details)
+    details = [grade.detail or {} for grade in trial_grades]
+    trials = len(trial_grades)
     need = trials // 2 + 1
     checks = []
 
@@ -615,6 +622,15 @@ def aggregate_detection_trials(details: List[dict], key: dict) -> GradeResult:
     checks.append((
         compliant >= need,
         f"output-contract compliance held in only {compliant}/{trials} trials",
+    ))
+
+    # Per-check majorities can come from different trials even when too few
+    # complete trial grades passed. Keep that gate in the same grading path
+    # so its failure is reflected in counters and score as well as verdict.
+    passing = sum(1 for grade in trial_grades if grade.passed)
+    checks.append((
+        passing >= need,
+        f"only {passing}/{trials} trials passed individually (need {need})",
     ))
 
     if key.get("expect_not_applicable"):

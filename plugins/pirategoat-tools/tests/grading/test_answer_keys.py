@@ -64,14 +64,19 @@ def _diff_new_files(diff_text: str) -> dict:
     """Map each new-file path in a unified diff to its maximum new line number."""
     files: dict = {}
     current = None
+    in_hunk = False
     for line in diff_text.splitlines():
-        header = re.match(r"^\+\+\+ b/(.+)$", line)
+        if line.startswith("diff --git "):
+            current, in_hunk = None, False
+            continue
+        header = None if in_hunk else re.match(r"^\+\+\+ b/(.+)$", line)
         if header:
             current = header.group(1)
             files.setdefault(current, 0)
             continue
         hunk = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
         if hunk and current:
+            in_hunk = True
             start = int(hunk.group(1))
             count = int(hunk.group(2) or 1)
             files[current] = max(files[current], start + count - 1)
@@ -223,19 +228,49 @@ def _diff_new_file_contents(diff_text: str) -> dict:
     sections for one path extend rather than overwrite (a diff may touch one
     file in several sections).
     """
-    files, current, is_new = {}, None, False
+    files, current, is_new, in_hunk = {}, None, False, False
     for line in diff_text.splitlines():
-        if line.startswith("--- "):
+        if line.startswith("diff --git "):
+            current, is_new, in_hunk = None, False, False
+            continue
+        if line.startswith("@@ "):
+            in_hunk = True
+            continue
+        if not in_hunk and line.startswith("--- "):
             is_new = line == "--- /dev/null"
             continue
-        header = re.match(r"^\+\+\+ b/(.+)$", line)
+        header = None if in_hunk else re.match(r"^\+\+\+ b/(.+)$", line)
         if header:
             current = header.group(1) if is_new else None
             if current is not None:
                 files.setdefault(current, [])
-        elif current is not None and line.startswith("+") and not line.startswith("+++"):
+        elif in_hunk and current is not None and line.startswith("+"):
             files[current].append(line[1:])
     return files
+
+
+_DOUBLE_PLUS_SOURCE_DIFF = """\
+diff --git a/src/counter.php b/src/counter.php
+new file mode 100644
+--- /dev/null
++++ b/src/counter.php
+@@ -0,0 +1,3 @@
++++$counter;
++++ b/not-a-header
++echo $counter;
+"""
+
+
+def test_new_file_contents_preserve_lines_beginning_with_double_plus():
+    assert _diff_new_file_contents(_DOUBLE_PLUS_SOURCE_DIFF) == {
+        "src/counter.php": [
+            "++$counter;", "++ b/not-a-header", "echo $counter;",
+        ],
+    }
+
+
+def test_new_file_spans_ignore_header_shaped_hunk_content():
+    assert _diff_new_files(_DOUBLE_PLUS_SOURCE_DIFF) == {"src/counter.php": 3}
 
 
 @pytest.mark.parametrize("diff_path", ALL_FIXTURE_DIFFS, ids=[p.name for p in ALL_FIXTURE_DIFFS])
@@ -256,7 +291,11 @@ def test_fixture_hunk_counts_are_exact(diff_path):
         )
 
     for line in diff_path.read_text().splitlines():
-        header = re.match(r"^\+\+\+ b/(.+)$", line)
+        if line.startswith("diff --git "):
+            check()
+            current, declared, actual, in_hunk = None, 0, 0, False
+            continue
+        header = None if in_hunk else re.match(r"^\+\+\+ b/(.+)$", line)
         hunk = re.match(r"^@@ -\d+(?:,\d+)? \+\d+(?:,(\d+))? @@", line)
         if header:
             check()
@@ -264,11 +303,18 @@ def test_fixture_hunk_counts_are_exact(diff_path):
         elif hunk:
             check()
             declared, actual, in_hunk = int(hunk.group(1) or 1), 0, True
-        elif in_hunk and line.startswith("+") and not line.startswith("+++"):
+        elif in_hunk and line.startswith("+"):
             actual += 1
         elif in_hunk and (line.startswith(" ") or line == ""):
             actual += 1  # context lines count toward the new-side span
     check()
+
+
+def test_hunk_counts_include_source_lines_beginning_with_double_plus(tmp_path):
+    diff_path = tmp_path / "double-plus.diff"
+    diff_path.write_text(_DOUBLE_PLUS_SOURCE_DIFF)
+
+    test_fixture_hunk_counts_are_exact(diff_path)
 
 
 # Comment tails may legitimately carry unbalanced delimiters in prose; URLs

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Detection benchmark grading stays tied to the evidence it measures.** Relative reviewer paths no longer satisfy answer keys through suffix matching, whole-trial majority failures now participate in aggregate counters and score, and fixture guards preserve added source lines beginning with `++` instead of mistaking them for diff headers.
 - **Dependency refresh preserves pre-existing tracked edits.** Step 3 now stashes tracked worktree changes under a dedicated refresh identity before installs, restores installer-created tracked changes as failure evidence from a known-clean baseline, and reapplies only the recorded stash even when installation fails.
 - **Dependency detection decodes Git-quoted paths correctly.** The C-quote decoder's success flag was read as a malformed flag, silently dropping changed manifests under non-ASCII paths and reporting nothing to refresh beneath the `detection_failed` channel.
 - **Refresh evidence handling is bounded without losing independent signals.** Malformed, oversized, overlong-command-list, invalid-UTF, and decoder-limit report inputs are rejected from recorded report evidence; the independent status check ignores untracked files while retaining tracked submodule changes. Restoration guidance preserves intentional edits, and dirty-tree, disallowed-command, and verifier-failure evidence can surface together.

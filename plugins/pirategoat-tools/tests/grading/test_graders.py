@@ -685,51 +685,102 @@ class TestAggregateDetectionTrials:
         ],
     }
 
-    def _detail(self, verdict="block", found=True, compliant=True, gates=None):
+    def _trial(
+        self, verdict="block", found=True, compliant=True, gates=None,
+        trial_passed=True,
+    ):
         matched = {"sql-injection": 0} if found else {}
-        return {
-            "verdict": verdict,
-            "compliance_passed": compliant,
-            "gates": gates if gates is not None else {},
-            "match": {"matched_required": matched, "matched_acceptable": {},
-                      "missing_required": [] if found else ["sql-injection"],
-                      "unexpected": []},
-        }
+        return GradeResult(
+            passed=trial_passed,
+            score=1.0 if trial_passed else 0.0,
+            detail={
+                "verdict": verdict,
+                "compliance_passed": compliant,
+                "gates": gates if gates is not None else {},
+                "match": {
+                    "matched_required": matched,
+                    "matched_acceptable": {},
+                    "missing_required": [] if found else ["sql-injection"],
+                    "unexpected": [],
+                },
+            },
+        )
 
     def test_majority_detection_passes(self):
-        details = [self._detail(), self._detail(), self._detail(found=False)]
+        details = [
+            self._trial(), self._trial(),
+            self._trial(found=False, trial_passed=False),
+        ]
         r = aggregate_detection_trials(details, self.KEY)
         assert r.passed, r.failures
 
+    def test_whole_trial_majority_is_a_counted_check(self):
+        details = [
+            self._trial(found=False, trial_passed=False),
+            self._trial(verdict="approve", trial_passed=False),
+            self._trial(compliant=False, trial_passed=False),
+        ]
+
+        r = aggregate_detection_trials(details, self.KEY)
+
+        assert not r.passed
+        assert r.checks_run == 4
+        assert r.checks_passed == 3
+        assert r.score == 0.75
+        assert any("individually" in failure for failure in r.failures)
+
     def test_minority_detection_fails(self):
-        details = [self._detail(found=False), self._detail(found=False), self._detail()]
+        details = [
+            self._trial(found=False, trial_passed=False),
+            self._trial(found=False, trial_passed=False), self._trial(),
+        ]
         r = aggregate_detection_trials(details, self.KEY)
         assert not r.passed
         assert any("1/3" in f for f in r.failures)
 
     def test_compliance_must_hold_in_majority(self):
-        details = [self._detail(compliant=False), self._detail(compliant=False), self._detail()]
+        details = [
+            self._trial(compliant=False, trial_passed=False),
+            self._trial(compliant=False, trial_passed=False), self._trial(),
+        ]
         r = aggregate_detection_trials(details, self.KEY)
         assert not r.passed
         assert any("compliance" in f for f in r.failures)
 
     def test_not_applicable_majority(self):
         key = {"expect_not_applicable": True}
-        na = {"verdict": "not_applicable", "compliance_passed": True, "match": None, "issue_count": 0}
-        wrong = {"verdict": "comment", "compliance_passed": True, "match": None}
+        na = GradeResult(
+            passed=True, score=1.0,
+            detail={
+                "verdict": "not_applicable", "compliance_passed": True,
+                "match": None, "issue_count": 0,
+            },
+        )
+        wrong = GradeResult(
+            passed=False, score=0.0,
+            detail={
+                "verdict": "comment", "compliance_passed": True, "match": None,
+            },
+        )
         assert aggregate_detection_trials([na, na, wrong], key).passed
         assert not aggregate_detection_trials([na, wrong, wrong], key).passed
 
     def test_abstention_with_findings_fails_across_trials(self):
         key = {"expect_not_applicable": True}
-        clean_trial = {
-            "verdict": "not_applicable", "compliance_passed": True,
-            "match": None, "issue_count": 0,
-        }
-        dirty_trial = {
-            "verdict": "not_applicable", "compliance_passed": True,
-            "match": None, "issue_count": 1,
-        }
+        clean_trial = GradeResult(
+            passed=True, score=1.0,
+            detail={
+                "verdict": "not_applicable", "compliance_passed": True,
+                "match": None, "issue_count": 0,
+            },
+        )
+        dirty_trial = GradeResult(
+            passed=False, score=0.0,
+            detail={
+                "verdict": "not_applicable", "compliance_passed": True,
+                "match": None, "issue_count": 1,
+            },
+        )
         details = [dirty_trial, dirty_trial, clean_trial]
         r = aggregate_detection_trials(details, key)
         assert not r.passed
@@ -737,15 +788,19 @@ class TestAggregateDetectionTrials:
 
     def test_severity_gate_votes_across_trials(self):
         key = {"verdict_in": ["approve"], "max_severity": "low"}
-        good = self._detail(verdict="approve", gates={"max_severity": True})
-        bad = self._detail(verdict="approve", gates={"max_severity": False})
+        good = self._trial(verdict="approve", gates={"max_severity": True})
+        bad = self._trial(
+            verdict="approve", gates={"max_severity": False}, trial_passed=False,
+        )
         assert aggregate_detection_trials([good, good, bad], key).passed
         r = aggregate_detection_trials([good, bad, bad], key)
         assert not r.passed
         assert any("max_severity" in f for f in r.failures)
 
     def test_unreadable_trial_counts_against_every_check(self):
-        details = [self._detail(), None, None]
+        details = [
+            self._trial(), GradeResult(False, 0.0), GradeResult(False, 0.0),
+        ]
         r = aggregate_detection_trials(details, self.KEY)
         assert not r.passed
 
@@ -765,6 +820,13 @@ class TestReviewRoundHardening:
         assert not _paths_match("vendor/src/OtherHandler.php", spec)
         # Suffix matching must respect segment boundaries.
         assert not _paths_match("notsrc/UserHandler.php", "rc/UserHandler.php")
+
+    def test_paths_match_rejects_extra_prefix_on_relative_path(self):
+        from helpers.graders import _paths_match
+
+        assert not _paths_match(
+            "vendor/src/UserHandler.php", "src/UserHandler.php",
+        )
 
     def test_unknown_severity_fails_max_severity_gate(self):
         from helpers.graders import grade_detection
