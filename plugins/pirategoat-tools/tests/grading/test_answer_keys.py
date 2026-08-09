@@ -176,6 +176,9 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
         line = spec.get("line")
         if "line_tolerance" in spec:
             tol_present = spec["line_tolerance"]
+            # _finding_matches evaluates abs(line - expected) > tolerance, so
+            # a negative tolerance makes the spec impossible to satisfy — and
+            # bool is an int subclass in disguise.
             assert (
                 isinstance(tol_present, int)
                 and not isinstance(tol_present, bool)
@@ -194,15 +197,6 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
                 f"1..{new_files[spec['file']]} of {spec['file']}"
             )
             tol = spec.get("line_tolerance", DEFAULT_LINE_TOLERANCE)
-            # _finding_matches evaluates abs(line - expected) > tolerance, so
-            # a negative tolerance makes the spec impossible to satisfy — and
-            # bool is an int subclass in disguise.
-            assert (
-                isinstance(tol, int) and not isinstance(tol, bool) and tol >= 0
-            ), (
-                f"{name}/{agent}/{spec_id}: line_tolerance must be a "
-                f"non-negative int, got {tol!r}"
-            )
             assert line + tol <= new_files[spec["file"]], (
                 f"{name}/{agent}/{spec_id}: line {line} + tolerance {tol} exceeds "
                 f"{new_files[spec['file']]}-line span of {spec['file']}"
