@@ -10,7 +10,7 @@ fixture must actually apply. Runs in pytest with zero model calls.
 
 import importlib.util
 import re
-import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -110,16 +110,14 @@ def _diff_new_files(diff_text: str) -> dict:
 
 
 @pytest.mark.parametrize("name,scenario", KEYED_SCENARIOS, ids=[n for n, _ in KEYED_SCENARIOS])
-def test_keyed_scenario_fixture_applies(name, scenario, tmp_path):
+def test_keyed_scenario_fixture_applies(name, scenario):
     diff = scenario.get("diff")
     assert diff, f"{name}: keyed scenario has no fixture diff"
-    assert Path(diff).is_file(), f"{name}: fixture missing: {diff}"
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
-    check = subprocess.run(
-        ["git", "apply", "--check", str(diff)],
-        cwd=tmp_path, capture_output=True, text=True,
-    )
-    assert check.returncode == 0, f"{name}: fixture does not apply: {check.stderr}"
+    # setup_temp_git_repo is the harness's own repo-setup path — it raises
+    # FileNotFoundError on a missing fixture and RuntimeError on apply
+    # failure, so calling it validates "fixture applies" on the exact repo
+    # layout the eval uses instead of a parallel re-implementation.
+    shutil.rmtree(_mod.setup_temp_git_repo(diff), ignore_errors=True)
 
 
 @pytest.mark.parametrize(
