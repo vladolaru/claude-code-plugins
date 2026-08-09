@@ -974,12 +974,14 @@ def main():
 
     args = parser.parse_args()
 
+    if args.report_out == "":
+        parser.error("--report-out path must not be empty")
     if args.trials is not None and args.trials < 1:
         parser.error(f"--trials must be >= 1, got {args.trials}")
     if args.all and args.agent:
         parser.error("--all and --agent are mutually exclusive")
     if args.grade_only and (
-        args.dispatch or args.report_out or args.trials is not None
+        args.dispatch or args.report_out is not None or args.trials is not None
         or args.scenario or args.agent or args.all
     ):
         parser.error(
@@ -988,7 +990,7 @@ def main():
             "they would be silently ignored"
         )
     if not args.dispatch and not args.grade_only and (
-        args.report_out or args.trials is not None
+        args.report_out is not None or args.trials is not None
         or args.scenario or args.agent or args.all
     ):
         parser.error(
@@ -1039,7 +1041,7 @@ def main():
         # metadata, which the owner may do even on a read-only file) without
         # truncating an existing report, so a non-writable path fails before
         # any paid dispatch.
-        if args.report_out:
+        if args.report_out is not None:
             report_path = Path(args.report_out)
             try:
                 report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1103,25 +1105,25 @@ def main():
                         failures=[f"harness error: {exc}"],
                         checks_run=1, checks_passed=0,
                     )
-                # `dispatched` is evidence-derived, never assumed from the
-                # scenario type: a run that failed before any model call
-                # (bootstrap failure, routing drift, missing CLI) must not
-                # be counted as reviewer behavior by report consumers.
-                if trial_grades:
-                    dispatched_any = any(
-                        (g.detail or {}).get("model_dispatched", False)
-                        for g in trial_grades
-                    )
-                else:
-                    dispatched_any = (result.detail or {}).get("model_dispatched", False)
-                entry_meta[(scenario_name, agent_name)]["dispatched"] = dispatched_any
+                # Preserve partial evidence explicitly. `dispatched` means
+                # every requested trial reached a live model call, so an
+                # infrastructure-damaged aggregate cannot enter reviewer
+                # pass rates merely because one trial dispatched.
+                observed_grades = trial_grades or [result]
+                dispatch_count = sum(
+                    bool((grade.detail or {}).get("model_dispatched", False))
+                    for grade in observed_grades
+                )
+                meta = entry_meta[(scenario_name, agent_name)]
+                meta["dispatch_count"] = dispatch_count
+                meta["dispatched"] = dispatch_count == meta["trials"]
                 agent_results[agent_name] = result
             if agent_results:
                 all_results[scenario_name] = agent_results
 
         print_results(all_results)
 
-        if args.report_out:
+        if args.report_out is not None:
             report = {
                 "mode": "dispatch",
                 "trials": args.trials,
@@ -1131,6 +1133,7 @@ def main():
                         "agent": agent_name,
                         "trials": entry_meta[(scenario_name, agent_name)]["trials"],
                         "keyed": entry_meta[(scenario_name, agent_name)]["keyed"],
+                        "dispatch_count": entry_meta[(scenario_name, agent_name)]["dispatch_count"],
                         "dispatched": entry_meta[(scenario_name, agent_name)]["dispatched"],
                         "passed": r.passed,
                         "checks_run": r.checks_run,

@@ -267,13 +267,13 @@ inconsistency, not reviewer quality.
 
 **Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
 `trials` (the requested count), and `results[]` with `scenario`, `agent`,
-`trials` (dispatches actually run for this entry), `keyed` (whether an
-answer key exists), `dispatched` (whether a live model call demonstrably
-occurred, derived from dispatch evidence — deterministic bootstrap-only
-entries AND runs that failed before any model call, e.g. bootstrap
-failure, routing drift, or a missing CLI, carry `false`; timeouts and
-unparseable dispatch output conservatively report `false`; pass rates over
-reviewer behavior must filter on it), `passed`, `checks_run`,
+`trials` (trial attempts run for this entry), `keyed` (whether an answer
+key exists), `dispatch_count` (attempts with evidence of a live model call),
+`dispatched` (whether `dispatch_count == trials`; deterministic bootstrap-only
+entries, pre-model failures, and partially dispatched multi-trial entries
+carry `false`; timeouts and unparseable dispatch output conservatively lack
+dispatch evidence; pass rates over reviewer behavior must filter on this
+complete-dispatch flag), `passed`, `checks_run`,
 `checks_passed`, `failures`, `detail`. `detail` is polymorphic — discriminate per result, never on the
 top-level `trials` (unkeyed agents run once even under `--trials N`):
 `detail: null` with `keyed: false` is a compliance-only entry (dispatched
@@ -283,7 +283,8 @@ detection grading (see `failures`); result `trials` of 1 otherwise means
 single-trial detail `{verdict, match, gates, compliance_passed, output_dir,
 models}` — abstention keys carry `issue_count` and no `gates`/`match` keys;
 result `trials` above 1 means aggregate detail `{trials, per_trial,
-per_trial_failures, per_trial_passed, models}`. Exit codes: 2 for any
+per_trial_failures, per_trial_passed, models}`; each `per_trial` entry retains
+its `model_dispatched` evidence when available. Exit codes: 2 for any
 configuration error (unknown scenario, empty selection, invalid flags,
 unwritable report path — always before artifacts exist), 1 when the eval
 ran and at least one entry failed, 0 on full pass. The comparative metric

@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 EVAL_SCRIPT = TESTS_DIR / "grading" / "eval_agent_compliance.py"
@@ -124,6 +126,13 @@ class TestGradeOnlyMode:
 
 
 class TestCliModes:
+    def test_explicit_empty_report_path_is_rejected(self, tmp_path):
+        result = _run_eval("--report-out", "", cwd=tmp_path)
+
+        assert result.returncode == 2
+        assert "--report-out" in result.stderr
+        assert "empty" in result.stderr
+
     def test_explicit_default_trials_requires_dispatch(self, tmp_path):
         result = _run_eval("--trials", "1", cwd=tmp_path)
 
@@ -137,6 +146,79 @@ class TestCliModes:
 
         assert result.returncode == 2
         assert "--grade-only cannot be combined" in result.stderr
+
+    def test_empty_report_path_is_rejected_before_dispatch(
+        self, tmp_path, monkeypatch,
+    ):
+        calls = []
+        agent = "security-reviewer"
+        scenario = {
+            "agents": [agent],
+            "expected": {agent: {"verdict_in": ["approve"]}},
+        }
+
+        def fake_dispatch(*args):
+            calls.append(args)
+            return _eval_mod.GradeResult(
+                passed=True, score=1.0, detail={"model_dispatched": False},
+            )
+
+        monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
+        monkeypatch.setattr(_eval_mod, "run_dispatch_scenario", fake_dispatch)
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                str(EVAL_SCRIPT), "--dispatch", "--scenario", "sample",
+                "--agent", agent, "--report-out", "",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
+
+        assert exc.value.code == 2
+        assert calls == []
+
+
+class TestDispatchReportMetadata:
+    def test_partial_multitrial_dispatch_is_not_reviewer_behavior(
+        self, tmp_path, monkeypatch,
+    ):
+        agent = "security-reviewer"
+        scenario = {
+            "agents": [agent],
+            "expected": {agent: {"verdict_in": ["approve"]}},
+        }
+        trial_grades = iter([
+            _eval_mod.GradeResult(
+                passed=False, score=0.0,
+                detail={"model_dispatched": True},
+            ),
+            _eval_mod.GradeResult(passed=False, score=0.0),
+            _eval_mod.GradeResult(passed=False, score=0.0),
+        ])
+        report_path = tmp_path / "report.json"
+
+        monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
+        monkeypatch.setattr(
+            _eval_mod, "run_dispatch_scenario", lambda *args: next(trial_grades),
+        )
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                str(EVAL_SCRIPT), "--dispatch", "--scenario", "sample",
+                "--agent", agent, "--trials", "3",
+                "--report-out", str(report_path),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
+
+        assert exc.value.code == 1
+        entry = json.loads(report_path.read_text())["results"][0]
+        assert entry.get("dispatch_count") == 1
+        assert entry["dispatched"] is False
 
 
 class TestDispatchIdentity:
