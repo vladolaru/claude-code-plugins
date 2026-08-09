@@ -431,6 +431,46 @@ class TestDispatchIdentity:
         )
         assert error is not None and "routing was not applied" in error
 
+    @pytest.mark.parametrize(
+        "returncode,is_error",
+        [
+            pytest.param(0, True, id="json-session-error"),
+            pytest.param(1, False, id="nonzero-cli-exit"),
+        ],
+    )
+    def test_cli_failure_precedes_model_validation(
+        self, monkeypatch, tmp_path, returncode, is_error
+    ):
+        routed = next(
+            agent for agent in _eval_mod.ALL_AGENTS
+            if (_eval_mod.AGENT_CONFIG[agent].get("model_tier") or "inherit")
+            in _eval_mod._DISPATCHABLE_MODELS
+        )
+        payload = {
+            "is_error": is_error,
+            "result": "authentication failed",
+            "modelUsage": {},
+        }
+        completed = subprocess.CompletedProcess(
+            args=["claude"],
+            returncode=returncode,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+        monkeypatch.setattr(_eval_mod.shutil, "which", lambda _: "/bin/claude")
+        monkeypatch.setattr(
+            _eval_mod, "build_dispatch_cmd", lambda *_: ["/bin/claude"]
+        )
+        monkeypatch.setattr(_eval_mod.subprocess, "run", lambda *_, **__: completed)
+
+        rc, text, evidence = _eval_mod.dispatch_agent(
+            routed, "bootstrap", str(tmp_path)
+        )
+
+        assert rc == 1
+        assert text == "authentication failed"
+        assert evidence["status"] == "dispatch_error"
+
     def test_primary_model_attribution_beats_membership(self):
         # modelUsage is a session accumulator including auxiliary calls — a
         # small right-family aux call must not vouch for a main loop that

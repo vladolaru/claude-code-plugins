@@ -757,16 +757,20 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
     }
     text = payload.get("result") or ""
 
+    rc = 1 if payload.get("is_error") else result.returncode
+    if rc != 0:
+        evidence["status"] = "dispatch_error"
+        return rc, text, evidence
+
     model_error = check_dispatched_models(agent_name, model_usage)
     if model_error:
         evidence["status"] = "model_mismatch"
         return 1, f"ERROR: {model_error}\n\n{text}", evidence
 
-    rc = 1 if payload.get("is_error") else result.returncode
     # "completed" is internal to dispatch_agent: run_dispatch_scenario
     # upgrades it to "graded" once grading actually runs.
-    evidence["status"] = "dispatch_error" if rc != 0 else "completed"
-    return rc, text, evidence
+    evidence["status"] = "completed"
+    return 0, text, evidence
 
 
 def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -> GradeResult:
