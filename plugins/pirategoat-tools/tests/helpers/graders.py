@@ -628,6 +628,11 @@ def aggregate_detection_trials(trial_grades: List[GradeResult]) -> GradeResult:
     strictly more than half, so --trials 2 demands both trials pass. A
     trial with an unreadable/None detail is simply a failed trial —
     unreadable evidence never improves the aggregate.
+
+    The detail payload is the full aggregate schema consumers rely on:
+    {trials, per_trial, per_trial_failures, per_trial_passed,
+    per_trial_status, models} — per-trial diagnostics live here, in the
+    aggregate itself, so every caller gets the same evidence shape.
     """
     trials = len(trial_grades)
     need = trials // 2 + 1
@@ -646,5 +651,15 @@ def aggregate_detection_trials(trial_grades: List[GradeResult]) -> GradeResult:
     result.detail = {
         "trials": trials,
         "per_trial": [grade.detail or {} for grade in trial_grades],
+        "per_trial_failures": [grade.failures for grade in trial_grades],
+        "per_trial_passed": [grade.passed for grade in trial_grades],
+        "per_trial_status": [
+            (grade.detail or {}).get("status", "harness_error")
+            for grade in trial_grades
+        ],
+        "models": sorted({
+            m for grade in trial_grades
+            for m in ((grade.detail or {}).get("models") or [])
+        }),
     }
     return result

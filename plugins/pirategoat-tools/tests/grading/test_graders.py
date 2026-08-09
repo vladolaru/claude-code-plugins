@@ -762,6 +762,22 @@ class TestAggregateDetectionTrials:
         assert result.detail["trials"] == 1
         assert result.detail["per_trial"] == [d0]
 
+    def test_detail_carries_full_aggregate_diagnostics(self):
+        # The aggregate itself emits the documented detail schema — every
+        # caller gets per-trial diagnostics without post-hoc assembly.
+        grades = [
+            self._grade(True, {"status": "graded", "models": ["claude-b-5"]}),
+            self._grade(False, {"status": "timed_out"}),
+            self._grade(False, None),
+        ]
+        detail = aggregate_detection_trials(grades).detail
+        assert detail["per_trial_passed"] == [True, False, False]
+        assert detail["per_trial_failures"] == [
+            [], ["some check failed"], ["some check failed"]]
+        assert detail["per_trial_status"] == [
+            "graded", "timed_out", "harness_error"]
+        assert detail["models"] == ["claude-b-5"]
+
 
 class TestReviewRoundHardening:
     """Behaviors added by the 2026-08-06 independent review round."""
