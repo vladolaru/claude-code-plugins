@@ -513,6 +513,40 @@ ENTRY_STATUSES = {
 }
 
 
+def entry_status(result: GradeResult) -> str:
+    """Derive a report entry's status from the RESULT's detail only — never
+    from the trial list directly — so a harness error raised AFTER trials
+    completed cannot masquerade as graded. An aggregate detail
+    (per_trial_status present) is "graded" only when every trial reached
+    graded, else "degraded": gradability, not spend — a trial that dispatched
+    and was then rejected is not a graded trial.
+
+    ENTRY_STATUSES is load-bearing here: an out-of-vocabulary stamp (a typo,
+    or a leaked internal sentinel like dispatch_agent's "completed") is a
+    harness bug and reports as harness_error instead of flowing into
+    status-filtered pass rates as a novel value.
+    """
+    detail = result.detail or {}
+    if "per_trial_status" in detail:
+        status = (
+            "graded"
+            if all(s == "graded" for s in detail["per_trial_status"])
+            else "degraded"
+        )
+    else:
+        status = detail.get("status", "harness_error")
+    return status if status in ENTRY_STATUSES else "harness_error"
+
+
+def scenario_key(scenario: dict, agent_name: str) -> Optional[dict]:
+    """The detection answer key for this scenario/agent pair, or None.
+
+    The single definition of "keyed" — dispatch trial counts, detection
+    grading, and report metadata must never disagree on it.
+    """
+    return (scenario.get("expected") or {}).get(agent_name)
+
+
 def check_model_routing(agent_name: str, agent_def: str) -> Optional[str]:
     """Return an error when frontmatter routing diverges from the registry.
 
@@ -858,7 +892,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 review_path, expected_reviewer=reviewer_name,
             )
 
-            key = (scenario.get("expected") or {}).get(agent_name)
+            key = scenario_key(scenario, agent_name)
             if key is None:
                 # Unkeyed entries still leave artifacts (review JSON,
                 # dispatch transcript) worth pointing at from the report.
@@ -1076,27 +1110,31 @@ def main():
                 print(f"ERROR: report path {args.report_out!r} is not writable: {exc}")
                 sys.exit(2)
 
+        def harness_error_grade(exc: Exception) -> GradeResult:
+            return GradeResult(
+                passed=False, score=0.0,
+                failures=[f"harness error: {exc}"],
+                checks_run=1, checks_passed=0,
+                detail={"status": "harness_error"},
+            )
+
         all_results = {}
-        # Per-entry report metadata: unkeyed agents run once regardless of
-        # --trials, and a keyed run can fail before producing detection
-        # detail, so neither the report-level trials field nor detail alone
-        # tells a consumer what kind of result an entry is.
-        entry_meta = {}
         for scenario_name, scenario, scenario_agents in selection:
             agent_results = {}
             for agent_name in scenario_agents:
                 print(f"Running: {scenario_name} / {agent_name}...", flush=True)
-                key = (scenario.get("expected") or {}).get(agent_name)
-                entry_meta[(scenario_name, agent_name)] = {
-                    "trials": args.trials if args.trials > 1 and key is not None else 1,
-                    "keyed": key is not None,
-                }
+                # Unkeyed agents run once regardless of --trials — there is
+                # no detection key to vote on.
+                run_trials = (
+                    args.trials
+                    if scenario_key(scenario, agent_name) is not None
+                    else 1
+                )
                 # One broken entry (bad fixture, bootstrap timeout) must not
                 # abort the run and discard every completed paid dispatch —
                 # record it as a failed entry and continue.
-                trial_grades = []
                 try:
-                    if args.trials > 1 and key is not None:
+                    if run_trials > 1:
                         # Per-trial fault isolation: a trial that raises
                         # (bootstrap timeout, fixture error) becomes a failed
                         # grade — it votes as a miss on every check — while
@@ -1104,55 +1142,19 @@ def main():
                         # the remaining trials still run. A shared
                         # list-comprehension would discard everything on the
                         # first raise.
-                        for _ in range(args.trials):
+                        trial_grades = []
+                        for _ in range(run_trials):
                             try:
                                 trial_grades.append(
                                     run_dispatch_scenario(scenario_name, scenario, agent_name)
                                 )
                             except Exception as exc:
-                                trial_grades.append(GradeResult(
-                                    passed=False, score=0.0,
-                                    failures=[f"harness error: {exc}"],
-                                    checks_run=1, checks_passed=0,
-                                    detail={"status": "harness_error"},
-                                ))
+                                trial_grades.append(harness_error_grade(exc))
                         result = aggregate_detection_trials(trial_grades)
-                        result.detail["per_trial_failures"] = [g.failures for g in trial_grades]
-                        result.detail["per_trial_passed"] = [g.passed for g in trial_grades]
-                        result.detail["per_trial_status"] = [
-                            (g.detail or {}).get("status", "harness_error")
-                            for g in trial_grades
-                        ]
-                        result.detail["models"] = sorted({
-                            m for g in trial_grades
-                            for m in ((g.detail or {}).get("models") or [])
-                        })
                     else:
                         result = run_dispatch_scenario(scenario_name, scenario, agent_name)
                 except Exception as exc:
-                    result = GradeResult(
-                        passed=False, score=0.0,
-                        failures=[f"harness error: {exc}"],
-                        checks_run=1, checks_passed=0,
-                        detail={"status": "harness_error"},
-                    )
-                # Entry status derives from the RESULT's detail only — never
-                # from the trial list directly — so a harness error raised
-                # AFTER trials completed cannot masquerade as graded. An
-                # aggregate detail (per_trial_status present) is "graded"
-                # only when every trial reached graded, else "degraded":
-                # gradability, not spend — a trial that dispatched and was
-                # then rejected is not a graded trial.
-                meta = entry_meta[(scenario_name, agent_name)]
-                detail = result.detail or {}
-                if "per_trial_status" in detail:
-                    meta["status"] = (
-                        "graded"
-                        if all(s == "graded" for s in detail["per_trial_status"])
-                        else "degraded"
-                    )
-                else:
-                    meta["status"] = detail.get("status", "harness_error")
+                    result = harness_error_grade(exc)
                 agent_results[agent_name] = result
             if agent_results:
                 all_results[scenario_name] = agent_results
@@ -1167,17 +1169,26 @@ def main():
                     {
                         "scenario": scenario_name,
                         "agent": agent_name,
-                        "trials": entry_meta[(scenario_name, agent_name)]["trials"],
-                        "keyed": entry_meta[(scenario_name, agent_name)]["keyed"],
-                        "status": entry_meta[(scenario_name, agent_name)]["status"],
+                        # Unkeyed agents run once regardless of --trials, and
+                        # a keyed run can fail before producing detection
+                        # detail, so neither the report-level trials field
+                        # nor detail alone tells a consumer what kind of
+                        # result an entry is.
+                        "trials": (
+                            args.trials
+                            if scenario_key(scenarios[scenario_name], agent_name) is not None
+                            else 1
+                        ),
+                        "keyed": scenario_key(scenarios[scenario_name], agent_name) is not None,
+                        "status": entry_status(r),
                         "passed": r.passed,
                         "checks_run": r.checks_run,
                         "checks_passed": r.checks_passed,
                         "failures": r.failures,
                         "detail": r.detail,
                     }
-                    for scenario_name, agents in all_results.items()
-                    for agent_name, r in agents.items()
+                    for scenario_name, scenario_results in all_results.items()
+                    for agent_name, r in scenario_results.items()
                 ],
             }
             with open(args.report_out, "w") as f:

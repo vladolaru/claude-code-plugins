@@ -343,6 +343,19 @@ class TestDispatchReportMetadata:
             "model_mismatch", "harness_error", "degraded",
         }
 
+    def test_out_of_vocabulary_status_reports_as_harness_error(self):
+        # ENTRY_STATUSES is load-bearing: a typo'd stamp or a leaked internal
+        # sentinel ("completed") must not flow into status-filtered pass
+        # rates as a novel value.
+        result = _eval_mod.GradeResult(
+            passed=True, score=1.0, detail={"status": "completed"},
+        )
+        assert _eval_mod.entry_status(result) == "harness_error"
+        graded = _eval_mod.GradeResult(
+            passed=True, score=1.0, detail={"status": "graded"},
+        )
+        assert _eval_mod.entry_status(graded) == "graded"
+
 
 class TestDispatchIdentity:
     """The benchmark must dispatch the configured reviewer, not generic Claude.
