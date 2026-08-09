@@ -472,19 +472,19 @@ def run_bootstrap_for_agent(agent_name: str, cwd: str, output_dir: str) -> tuple
     return result.returncode, result.stdout
 
 
-def split_agent_definition(agent_def: str) -> tuple:
-    """Split an agent .md into (body, model) from its YAML frontmatter.
+_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 
-    Returns the definition body without frontmatter and the frontmatter's
-    `model:` value (None when absent). Definitions without frontmatter come
-    back verbatim with model None.
+
+def frontmatter_model(agent_def: str) -> Optional[str]:
+    """Return the `model:` value from an agent .md's YAML frontmatter.
+
+    None when the definition has no frontmatter or no model field.
     """
-    m = re.match(r"^---\n(.*?)\n---\n(.*)$", agent_def, re.DOTALL)
+    m = _FRONTMATTER_RE.match(agent_def)
     if not m:
-        return agent_def, None
-    frontmatter, body = m.group(1), m.group(2)
-    model_match = re.search(r"^model:\s*(\S+)\s*$", frontmatter, re.MULTILINE)
-    return body.lstrip("\n"), model_match.group(1) if model_match else None
+        return None
+    model_match = re.search(r"^model:\s*(\S+)\s*$", m.group(1), re.MULTILINE)
+    return model_match.group(1) if model_match else None
 
 
 # Model values the Agent tool accepts as routing shorthands. Frontmatter
@@ -521,7 +521,7 @@ def check_model_routing(agent_name: str, agent_def: str) -> Optional[str]:
     disagree, dispatching would silently exercise a model production planning
     does not declare — refuse to run rather than measure the wrong tier.
     """
-    _, fm_model = split_agent_definition(agent_def)
+    fm_model = frontmatter_model(agent_def)
     tier = AGENT_CONFIG.get(agent_name, {}).get("model_tier") or "inherit"
     if (fm_model or "inherit") != tier:
         return (

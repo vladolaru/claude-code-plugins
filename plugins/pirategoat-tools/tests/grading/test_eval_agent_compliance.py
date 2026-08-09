@@ -367,16 +367,11 @@ class TestDispatchIdentity:
         "Trace attack paths before reporting.\n"
     )
 
-    def test_frontmatter_splits_into_body_and_model(self):
-        body, model = _eval_mod.split_agent_definition(self.AGENT_MD)
-        assert model == "sonnet"
-        assert "Trace attack paths" in body
-        assert "description:" not in body
+    def test_frontmatter_model_is_extracted(self):
+        assert _eval_mod.frontmatter_model(self.AGENT_MD) == "sonnet"
 
-    def test_definition_without_frontmatter_passes_through(self):
-        body, model = _eval_mod.split_agent_definition("Just instructions.")
-        assert body == "Just instructions."
-        assert model is None
+    def test_definition_without_frontmatter_has_no_model(self):
+        assert _eval_mod.frontmatter_model("Just instructions.") is None
 
     def test_prompt_carries_bootstrap_cmd_and_contract(self):
         prompt = _eval_mod.build_dispatch_prompt(
@@ -521,8 +516,10 @@ class TestDispatchIdentity:
         for agent in _eval_mod.ALL_AGENTS:
             path = _eval_mod.PLUGIN_ROOT / "agents" / f"{agent}.md"
             assert path.is_file(), f"{agent}: no agent definition at {path}"
-            body, model = _eval_mod.split_agent_definition(path.read_text())
+            text = path.read_text()
+            body = _eval_mod._FRONTMATTER_RE.sub("", text, count=1)
             assert body.strip(), f"{agent}: definition body is empty"
+            model = _eval_mod.frontmatter_model(text)
             assert model is None or model == "inherit" or (
                 model in _eval_mod._DISPATCHABLE_MODELS
             ), f"{agent}: frontmatter model {model!r} is not dispatchable"
@@ -533,7 +530,7 @@ class TestDispatchIdentity:
         # impossible: change one, and CI demands the other.
         for agent in _eval_mod.ALL_AGENTS:
             path = _eval_mod.PLUGIN_ROOT / "agents" / f"{agent}.md"
-            _, fm_model = _eval_mod.split_agent_definition(path.read_text())
+            fm_model = _eval_mod.frontmatter_model(path.read_text())
             tier = _eval_mod.AGENT_CONFIG[agent].get("model_tier") or "inherit"
             assert (fm_model or "inherit") == tier, (
                 f"{agent}: frontmatter model {fm_model!r} != registry "
