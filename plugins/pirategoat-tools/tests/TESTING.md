@@ -178,7 +178,7 @@ python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_re
 # Restrict to one agent of a scenario
 python3 tests/grading/eval_agent_compliance.py --dispatch --scenario realistic_multi_file --agent php-tests-reviewer
 
-# Nondeterminism-controlled benchmark: majority vote across 3 dispatches
+# Nondeterminism-controlled benchmark: 3 dispatches, majority must pass outright
 python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_review --trials 3
 
 # Structured report for cross-version comparison
@@ -246,16 +246,14 @@ gate. When editing a fixture or key, run that guard first.
 
 **Multi-trial semantics.** `--trials N` re-dispatches each *keyed* agent N
 times (unkeyed agents always run once; the `Running:` line prints once, so
-re-dispatches are silent) and majority-votes every check: compliance, verdict,
-each required finding, each severity/unexpected gate, and both abstention
-conditions. The threshold is strictly more than half (`N // 2 + 1`), so
-`--trials 2` demands both trials pass. An unreadable trial counts as a miss on
-every check. Because per-check majorities can be assembled from DIFFERENT
-trials, the aggregate additionally requires that a majority of trials passed
-outright — per-check votes are diagnostics, not the pass condition on their
-own. Note that aggregate check counts (~3-6 votes) are not comparable
-with single-trial check counts (compliance + detection checks), so don't mix
-`--trials` settings when comparing reports.
+re-dispatches are silent). The aggregate passes when a strict majority of
+trials (`N // 2 + 1`) passed outright — so `--trials 2` demands both trials
+pass. There are no per-check votes: an outright majority implies a per-check
+majority for every check (the same passing trials passed each one), and
+per-trial diagnostics live in `per_trial_failures`. An unreadable or raising
+trial is simply a failed trial. The aggregate is a single check, so its check
+counts are not comparable with single-trial check counts — the comparative
+metric remains per-entry `passed`.
 
 **Abstention keys.** `expect_not_applicable` accepts BOTH `not_applicable`
 and `approve` verdicts (each with zero findings): the shared reviewer

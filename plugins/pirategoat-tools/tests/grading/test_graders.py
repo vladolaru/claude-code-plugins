@@ -678,131 +678,65 @@ class TestGradeDetectionGates:
 
 
 class TestAggregateDetectionTrials:
-    KEY = {
-        "verdict_in": ["block"],
-        "required_findings": [
-            {"id": "sql-injection", "file": "f.php", "match_any": [r"inject"]},
-        ],
-    }
+    """Aggregation = strict majority of trials passing outright.
 
-    def _trial(
-        self, verdict="block", found=True, compliant=True, gates=None,
-        trial_passed=True,
-    ):
-        matched = {"sql-injection": 0} if found else {}
+    Per-check majority votes were removed (2026-08-09): an outright majority
+    implies a per-check majority for every check (the same passing trials
+    passed each one), so per-check votes could never be the sole failure and
+    only duplicated the diagnostics per_trial_failures already carries.
+    """
+
+    @staticmethod
+    def _grade(passed, detail=None):
         return GradeResult(
-            passed=trial_passed,
-            score=1.0 if trial_passed else 0.0,
-            detail={
-                "verdict": verdict,
-                "compliance_passed": compliant,
-                "gates": gates if gates is not None else {},
-                "match": {
-                    "matched_required": matched,
-                    "matched_acceptable": {},
-                    "missing_required": [] if found else ["sql-injection"],
-                    "unexpected": [],
-                },
-            },
+            passed=passed, score=1.0 if passed else 0.0,
+            failures=[] if passed else ["some check failed"],
+            checks_run=1, checks_passed=1 if passed else 0,
+            detail=detail,
         )
 
-    def test_majority_detection_passes(self):
-        details = [
-            self._trial(), self._trial(),
-            self._trial(found=False, trial_passed=False),
-        ]
-        r = aggregate_detection_trials(details, self.KEY)
-        assert r.passed, r.failures
+    def test_majority_passing_trials_pass(self):
+        grades = [self._grade(True), self._grade(True), self._grade(False)]
+        result = aggregate_detection_trials(grades)
+        assert result.passed, result.failures
 
-    def test_whole_trial_majority_is_a_counted_check(self):
-        details = [
-            self._trial(found=False, trial_passed=False),
-            self._trial(verdict="approve", trial_passed=False),
-            self._trial(compliant=False, trial_passed=False),
-        ]
+    def test_minority_passing_trials_fail(self):
+        grades = [self._grade(True), self._grade(False), self._grade(False)]
+        result = aggregate_detection_trials(grades)
+        assert not result.passed
+        assert any("1/3" in f for f in result.failures)
 
-        r = aggregate_detection_trials(details, self.KEY)
+    def test_even_trials_require_strict_majority(self):
+        # --trials 2: one pass is not "more than half" — both must pass.
+        grades = [self._grade(True), self._grade(False)]
+        assert not aggregate_detection_trials(grades).passed
+        assert aggregate_detection_trials(
+            [self._grade(True), self._grade(True)]).passed
 
-        assert not r.passed
-        assert r.checks_run == 4
-        assert r.checks_passed == 3
-        assert r.score == 0.75
-        assert any("individually" in failure for failure in r.failures)
+    def test_aggregate_is_a_single_check(self):
+        # No per-check votes: check counts must not scale with key
+        # complexity, so single- and multi-trial counts are never mixed up.
+        result = aggregate_detection_trials([self._grade(True)])
+        assert result.checks_run == 1
+        assert result.checks_passed == 1
+        assert result.score == 1.0
 
-    def test_minority_detection_fails(self):
-        details = [
-            self._trial(found=False, trial_passed=False),
-            self._trial(found=False, trial_passed=False), self._trial(),
-        ]
-        r = aggregate_detection_trials(details, self.KEY)
-        assert not r.passed
-        assert any("1/3" in f for f in r.failures)
+    def test_unreadable_trial_detail_never_improves_aggregate(self):
+        # A failed trial with detail=None is simply a failed trial; its
+        # detail slot is preserved as {} so per-trial lists stay
+        # index-aligned with the requested trial count.
+        d0 = {"verdict": "block", "compliance_passed": True}
+        grades = [self._grade(True, d0), self._grade(False, detail=None),
+                  self._grade(False, detail=None)]
+        result = aggregate_detection_trials(grades)
+        assert not result.passed
+        assert result.detail["per_trial"] == [d0, {}, {}]
 
-    def test_compliance_must_hold_in_majority(self):
-        details = [
-            self._trial(compliant=False, trial_passed=False),
-            self._trial(compliant=False, trial_passed=False), self._trial(),
-        ]
-        r = aggregate_detection_trials(details, self.KEY)
-        assert not r.passed
-        assert any("compliance" in f for f in r.failures)
-
-    def test_not_applicable_majority(self):
-        key = {"expect_not_applicable": True}
-        na = GradeResult(
-            passed=True, score=1.0,
-            detail={
-                "verdict": "not_applicable", "compliance_passed": True,
-                "match": None, "issue_count": 0,
-            },
-        )
-        wrong = GradeResult(
-            passed=False, score=0.0,
-            detail={
-                "verdict": "comment", "compliance_passed": True, "match": None,
-            },
-        )
-        assert aggregate_detection_trials([na, na, wrong], key).passed
-        assert not aggregate_detection_trials([na, wrong, wrong], key).passed
-
-    def test_abstention_with_findings_fails_across_trials(self):
-        key = {"expect_not_applicable": True}
-        clean_trial = GradeResult(
-            passed=True, score=1.0,
-            detail={
-                "verdict": "not_applicable", "compliance_passed": True,
-                "match": None, "issue_count": 0,
-            },
-        )
-        dirty_trial = GradeResult(
-            passed=False, score=0.0,
-            detail={
-                "verdict": "not_applicable", "compliance_passed": True,
-                "match": None, "issue_count": 1,
-            },
-        )
-        details = [dirty_trial, dirty_trial, clean_trial]
-        r = aggregate_detection_trials(details, key)
-        assert not r.passed
-        assert any("zero-findings" in f for f in r.failures)
-
-    def test_severity_gate_votes_across_trials(self):
-        key = {"verdict_in": ["approve"], "max_severity": "low"}
-        good = self._trial(verdict="approve", gates={"max_severity": True})
-        bad = self._trial(
-            verdict="approve", gates={"max_severity": False}, trial_passed=False,
-        )
-        assert aggregate_detection_trials([good, good, bad], key).passed
-        r = aggregate_detection_trials([good, bad, bad], key)
-        assert not r.passed
-        assert any("max_severity" in f for f in r.failures)
-
-    def test_unreadable_trial_counts_against_every_check(self):
-        details = [
-            self._trial(), GradeResult(False, 0.0), GradeResult(False, 0.0),
-        ]
-        r = aggregate_detection_trials(details, self.KEY)
-        assert not r.passed
+    def test_detail_carries_trial_count_and_per_trial(self):
+        d0 = {"verdict": "approve", "compliance_passed": True}
+        result = aggregate_detection_trials([self._grade(True, d0)])
+        assert result.detail["trials"] == 1
+        assert result.detail["per_trial"] == [d0]
 
 
 class TestReviewRoundHardening:

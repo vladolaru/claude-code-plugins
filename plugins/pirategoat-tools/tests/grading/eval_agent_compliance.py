@@ -1090,7 +1090,7 @@ def main():
                                     failures=[f"harness error: {exc}"],
                                     checks_run=1, checks_passed=0,
                                 ))
-                        result = aggregate_detection_trials(trial_grades, key)
+                        result = aggregate_detection_trials(trial_grades)
                         result.detail["per_trial_failures"] = [g.failures for g in trial_grades]
                         result.detail["per_trial_passed"] = [g.passed for g in trial_grades]
                         result.detail["models"] = sorted({

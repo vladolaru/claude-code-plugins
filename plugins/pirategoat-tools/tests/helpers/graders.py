@@ -605,70 +605,28 @@ def merge_grades(compliance: GradeResult, detection: GradeResult) -> GradeResult
     )
 
 
-def aggregate_detection_trials(trial_grades: List[GradeResult], key: dict) -> GradeResult:
-    """Majority vote across complete trial grades.
+def aggregate_detection_trials(trial_grades: List[GradeResult]) -> GradeResult:
+    """Aggregate multi-trial dispatches: a strict majority of trials must
+    pass outright.
 
-    A trial with a None/empty detail counts as a miss on every check —
-    an unreadable trial must never improve the aggregate. With an even
-    trial count the majority threshold requires strictly more than half,
-    so --trials 2 demands both trials pass every check.
+    Per-check majority votes were removed (2026-08-09): a majority of
+    outright-passing trials implies a per-check majority for every check —
+    those same trials passed each one — so per-check votes could never be
+    the sole failure and only duplicated the diagnostics per_trial_failures
+    already carries in full. With an even trial count the threshold is
+    strictly more than half, so --trials 2 demands both trials pass. A
+    trial with an unreadable/None detail is simply a failed trial —
+    unreadable evidence never improves the aggregate.
     """
-    details = [grade.detail or {} for grade in trial_grades]
     trials = len(trial_grades)
     need = trials // 2 + 1
-    checks = []
-
-    compliant = sum(1 for d in details if d.get("compliance_passed"))
-    checks.append((
-        compliant >= need,
-        f"output-contract compliance held in only {compliant}/{trials} trials",
-    ))
-
-    # Per-check majorities can come from different trials even when too few
-    # complete trial grades passed. Keep that gate in the same grading path
-    # so its failure is reflected in counters and score as well as verdict.
     passing = sum(1 for grade in trial_grades if grade.passed)
-    checks.append((
-        passing >= need,
-        f"only {passing}/{trials} trials passed individually (need {need})",
-    ))
-
-    if key.get("expect_not_applicable"):
-        abstained = sum(1 for d in details if d.get("verdict") in _ABSTENTION_VERDICTS)
-        checks.append((
-            abstained >= need,
-            f"abstention verdict in only {abstained}/{trials} trials",
-        ))
-        clean = sum(1 for d in details if d.get("issue_count") == 0)
-        checks.append((
-            clean >= need,
-            f"zero-findings abstention in only {clean}/{trials} trials",
-        ))
-    else:
-        verdict_in = key.get("verdict_in")
-        if verdict_in:
-            acceptable = sum(1 for d in details if d.get("verdict") in verdict_in)
-            checks.append((
-                acceptable >= need,
-                f"verdict in {verdict_in} in only {acceptable}/{trials} trials",
-            ))
-        for spec in key.get("required_findings", []):
-            hits = sum(
-                1 for d in details
-                if spec["id"] in ((d.get("match") or {}).get("matched_required") or {})
-            )
-            checks.append((
-                hits >= need,
-                f"required finding '{spec['id']}' detected in only {hits}/{trials} trials",
-            ))
-        for gate in ("max_severity", "max_unexpected"):
-            if key.get(gate) is not None:
-                held = sum(1 for d in details if (d.get("gates") or {}).get(gate))
-                checks.append((
-                    held >= need,
-                    f"{gate} gate held in only {held}/{trials} trials",
-                ))
-
-    result = _grade(checks)
-    result.detail = {"trials": trials, "per_trial": details}
+    result = _grade([
+        (passing >= need,
+         f"only {passing}/{trials} trials passed outright (need {need})"),
+    ])
+    result.detail = {
+        "trials": trials,
+        "per_trial": [grade.detail or {} for grade in trial_grades],
+    }
     return result
