@@ -60,26 +60,52 @@ def _has_gate(key: dict) -> bool:
     )
 
 
-def _diff_new_files(diff_text: str) -> dict:
-    """Map each new-file path in a unified diff to its maximum new line number."""
-    files: dict = {}
-    current = None
-    in_hunk = False
+def _diff_files(diff_text: str) -> list:
+    """Parse a unified diff into per-file records — the single diff walker
+    every fixture/key guard in this file derives from.
+
+    Each record: {"path", "is_new" (--- /dev/null), "hunks"} where a hunk is
+    {"start", "count" (declared new-side), "lines" (raw body lines)}. The
+    `++`-line disambiguation lives here once: a `+++ b/` header only opens a
+    file OUTSIDE a hunk body, so added source lines beginning with `++` are
+    hunk content, never headers.
+    """
+    files: list = []
+    current, is_new, in_hunk = None, False, False
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
-            current, in_hunk = None, False
+            current, is_new, in_hunk = None, False, False
+            continue
+        hunk = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+        if hunk:
+            in_hunk = True
+            if current is not None:
+                current["hunks"].append({
+                    "start": int(hunk.group(1)),
+                    "count": int(hunk.group(2) or 1),
+                    "lines": [],
+                })
+            continue
+        if not in_hunk and line.startswith("--- "):
+            is_new = line == "--- /dev/null"
             continue
         header = None if in_hunk else re.match(r"^\+\+\+ b/(.+)$", line)
         if header:
-            current = header.group(1)
-            files.setdefault(current, 0)
-            continue
-        hunk = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
-        if hunk and current:
-            in_hunk = True
-            start = int(hunk.group(1))
-            count = int(hunk.group(2) or 1)
-            files[current] = max(files[current], start + count - 1)
+            current = {"path": header.group(1), "is_new": is_new, "hunks": []}
+            files.append(current)
+        elif in_hunk and current is not None and current["hunks"]:
+            current["hunks"][-1]["lines"].append(line)
+    return files
+
+
+def _diff_new_files(diff_text: str) -> dict:
+    """Map each file path in a unified diff to its maximum new line number."""
+    files: dict = {}
+    for record in _diff_files(diff_text):
+        span = max(
+            (h["start"] + h["count"] - 1 for h in record["hunks"]), default=0,
+        )
+        files[record["path"]] = max(files.get(record["path"], 0), span)
     return files
 
 
@@ -228,24 +254,15 @@ def _diff_new_file_contents(diff_text: str) -> dict:
     sections for one path extend rather than overwrite (a diff may touch one
     file in several sections).
     """
-    files, current, is_new, in_hunk = {}, None, False, False
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git "):
-            current, is_new, in_hunk = None, False, False
+    files: dict = {}
+    for record in _diff_files(diff_text):
+        if not record["is_new"]:
             continue
-        if line.startswith("@@ "):
-            in_hunk = True
-            continue
-        if not in_hunk and line.startswith("--- "):
-            is_new = line == "--- /dev/null"
-            continue
-        header = None if in_hunk else re.match(r"^\+\+\+ b/(.+)$", line)
-        if header:
-            current = header.group(1) if is_new else None
-            if current is not None:
-                files.setdefault(current, [])
-        elif in_hunk and current is not None and line.startswith("+"):
-            files[current].append(line[1:])
+        lines = files.setdefault(record["path"], [])
+        for hunk in record["hunks"]:
+            lines.extend(
+                line[1:] for line in hunk["lines"] if line.startswith("+")
+            )
     return files
 
 
@@ -282,32 +299,17 @@ def test_fixture_hunk_counts_are_exact(diff_path):
     modification hunk. A short count makes git apply silently drop the
     trailing lines.
     """
-    current, declared, actual, in_hunk = None, 0, 0, False
-
-    def check():
-        assert declared == actual, (
-            f"{diff_path.name}: {current} hunk declares {declared} new-side "
-            f"lines but carries {actual} — git apply silently drops the excess"
-        )
-
-    for line in diff_path.read_text().splitlines():
-        if line.startswith("diff --git "):
-            check()
-            current, declared, actual, in_hunk = None, 0, 0, False
-            continue
-        header = None if in_hunk else re.match(r"^\+\+\+ b/(.+)$", line)
-        hunk = re.match(r"^@@ -\d+(?:,\d+)? \+\d+(?:,(\d+))? @@", line)
-        if header:
-            check()
-            current, declared, actual, in_hunk = header.group(1), 0, 0, False
-        elif hunk:
-            check()
-            declared, actual, in_hunk = int(hunk.group(1) or 1), 0, True
-        elif in_hunk and line.startswith("+"):
-            actual += 1
-        elif in_hunk and (line.startswith(" ") or line == ""):
-            actual += 1  # context lines count toward the new-side span
-    check()
+    for record in _diff_files(diff_path.read_text()):
+        for hunk in record["hunks"]:
+            actual = sum(
+                1 for line in hunk["lines"]
+                if line.startswith(("+", " ")) or line == ""
+            )
+            assert hunk["count"] == actual, (
+                f"{diff_path.name}: {record['path']} hunk declares "
+                f"{hunk['count']} new-side lines but carries {actual} — "
+                f"git apply silently drops the excess"
+            )
 
 
 def test_hunk_counts_include_source_lines_beginning_with_double_plus(tmp_path):
