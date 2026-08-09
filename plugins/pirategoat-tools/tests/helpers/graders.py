@@ -588,17 +588,28 @@ def grade_detection(review: dict, key: dict) -> GradeResult:
     return result
 
 
-def merge_grades(compliance: GradeResult, detection: GradeResult) -> GradeResult:
+def merge_grades(
+    compliance: GradeResult,
+    detection: GradeResult,
+    detection_label: Optional[str] = None,
+) -> GradeResult:
     """Combine two grades (e.g. compliance + detection) into one result.
 
     Precedence: detection.detail wins when not None, else compliance.detail.
+    When detection_label is given, detection failures are prefixed
+    "<label>: " so the merged list stays attributable to its source grader.
     """
+    detection_failures = detection.failures
+    if detection_label is not None:
+        detection_failures = [
+            f"{detection_label}: {msg}" for msg in detection.failures
+        ]
     total = compliance.checks_run + detection.checks_run
     passed_count = compliance.checks_passed + detection.checks_passed
     return GradeResult(
         passed=compliance.passed and detection.passed,
         score=passed_count / total if total else 0.0,
-        failures=compliance.failures + detection.failures,
+        failures=compliance.failures + detection_failures,
         checks_run=total,
         checks_passed=passed_count,
         detail=detection.detail if detection.detail is not None else compliance.detail,

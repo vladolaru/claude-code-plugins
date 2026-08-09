@@ -883,7 +883,6 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
             else:
                 detection = grade_detection(review, key)
 
-            detection.failures = [f"detection: {msg}" for msg in detection.failures]
             # compliance_passed: carried so multi-trial aggregation can vote on
             # compliance separately. output_dir: the artifact directory (review
             # JSON, dispatch transcript) — without it, diagnosing a matcher
@@ -897,7 +896,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 models=dispatch_evidence.get("models"),
                 status="graded",
             )
-            return merge_grades(compliance, detection)
+            return merge_grades(compliance, detection, detection_label="detection")
         elif scenario["grader"] == "signal_format":
             result = grade_signal_format(agent_output)
             result.detail = dict(result.detail or {}, status="graded")

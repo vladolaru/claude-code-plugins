@@ -660,6 +660,16 @@ class TestMergeGrades:
         m = merge_grades(a, b)
         assert m.detail == {"verdict": "x"}
 
+    def test_detection_label_keeps_merged_failures_attributable(self):
+        a = GradeResult(passed=False, score=0.0, failures=["missing field"],
+                        checks_run=1, checks_passed=0)
+        b = GradeResult(passed=False, score=0.0, failures=["verdict wrong"],
+                        checks_run=1, checks_passed=0)
+        m = merge_grades(a, b, detection_label="detection")
+        assert m.failures == ["missing field", "detection: verdict wrong"]
+        # The label must not mutate the input grade.
+        assert b.failures == ["verdict wrong"]
+
 
 class TestGradeDetectionGates:
     """grade_detection records per-gate outcomes for trial aggregation."""
