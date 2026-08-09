@@ -160,7 +160,7 @@ class TestCliModes:
         def fake_dispatch(*args):
             calls.append(args)
             return _eval_mod.GradeResult(
-                passed=True, score=1.0, detail={"model_dispatched": False},
+                passed=True, score=1.0, detail={"status": "graded"},
             )
 
         monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
@@ -181,9 +181,13 @@ class TestCliModes:
 
 
 class TestDispatchReportMetadata:
-    def test_partial_multitrial_dispatch_is_not_reviewer_behavior(
-        self, tmp_path, monkeypatch,
-    ):
+    def test_entry_status_is_explicit_not_inferred(self, tmp_path, monkeypatch):
+        # A multi-trial aggregate where one trial timed out must report
+        # status "degraded" with per-trial statuses — consumers filter
+        # reviewer-behavior pass rates on status == "graded" without
+        # inferring anything from evidence shape. A trial grade with no
+        # detail at all (harness gap) reads as harness_error, never as a
+        # dispatched run.
         agent = "security-reviewer"
         scenario = {
             "agents": [agent],
@@ -191,10 +195,11 @@ class TestDispatchReportMetadata:
         }
         trial_grades = iter([
             _eval_mod.GradeResult(
-                passed=False, score=0.0,
-                detail={"model_dispatched": True},
+                passed=False, score=0.0, detail={"status": "graded"},
             ),
-            _eval_mod.GradeResult(passed=False, score=0.0),
+            _eval_mod.GradeResult(
+                passed=False, score=0.0, detail={"status": "timed_out"},
+            ),
             _eval_mod.GradeResult(passed=False, score=0.0),
         ])
         report_path = tmp_path / "report.json"
@@ -217,8 +222,126 @@ class TestDispatchReportMetadata:
 
         assert exc.value.code == 1
         entry = json.loads(report_path.read_text())["results"][0]
-        assert entry.get("dispatch_count") == 1
-        assert entry["dispatched"] is False
+        assert entry["status"] == "degraded"
+        assert entry["detail"]["per_trial_status"] == [
+            "graded", "timed_out", "harness_error"]
+        assert "dispatched" not in entry
+        assert "dispatch_count" not in entry
+
+    def test_fully_graded_multitrial_entry_reports_graded(
+        self, tmp_path, monkeypatch,
+    ):
+        agent = "security-reviewer"
+        scenario = {
+            "agents": [agent],
+            "expected": {agent: {"verdict_in": ["approve"]}},
+        }
+        report_path = tmp_path / "report.json"
+
+        monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
+        monkeypatch.setattr(
+            _eval_mod, "run_dispatch_scenario",
+            lambda *args: _eval_mod.GradeResult(
+                passed=True, score=1.0, checks_run=1, checks_passed=1,
+                detail={"status": "graded"},
+            ),
+        )
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                str(EVAL_SCRIPT), "--dispatch", "--scenario", "sample",
+                "--agent", agent, "--trials", "3",
+                "--report-out", str(report_path),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
+
+        assert exc.value.code == 0
+        entry = json.loads(report_path.read_text())["results"][0]
+        assert entry["status"] == "graded"
+        assert entry["detail"]["per_trial_status"] == ["graded"] * 3
+
+    def test_single_trial_entry_carries_its_detail_status(
+        self, tmp_path, monkeypatch,
+    ):
+        agent = "security-reviewer"
+        scenario = {"agents": [agent], "expected": {}}
+        report_path = tmp_path / "report.json"
+
+        monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
+        monkeypatch.setattr(
+            _eval_mod, "run_dispatch_scenario",
+            lambda *args: _eval_mod.GradeResult(
+                passed=True, score=1.0, checks_run=1, checks_passed=1,
+                detail={"status": "bootstrap_only"},
+            ),
+        )
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                str(EVAL_SCRIPT), "--dispatch", "--scenario", "sample",
+                "--agent", agent, "--report-out", str(report_path),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
+
+        assert exc.value.code == 0
+        entry = json.loads(report_path.read_text())["results"][0]
+        assert entry["status"] == "bootstrap_only"
+
+    def test_harness_error_after_trials_cannot_masquerade_as_graded(
+        self, tmp_path, monkeypatch,
+    ):
+        # Spec-gate finding: entry status must derive from the RESULT's
+        # detail, never from the trial list directly — an aggregation
+        # exception after all trials completed is a harness_error entry
+        # even though every trial dispatched and graded.
+        agent = "security-reviewer"
+        scenario = {
+            "agents": [agent],
+            "expected": {agent: {"verdict_in": ["approve"]}},
+        }
+        report_path = tmp_path / "report.json"
+
+        def boom(_grades):
+            raise RuntimeError("aggregation bug")
+
+        monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
+        monkeypatch.setattr(
+            _eval_mod, "run_dispatch_scenario",
+            lambda *args: _eval_mod.GradeResult(
+                passed=True, score=1.0, checks_run=1, checks_passed=1,
+                detail={"status": "graded"},
+            ),
+        )
+        monkeypatch.setattr(_eval_mod, "aggregate_detection_trials", boom)
+        monkeypatch.setattr(
+            sys, "argv",
+            [
+                str(EVAL_SCRIPT), "--dispatch", "--scenario", "sample",
+                "--agent", agent, "--trials", "3",
+                "--report-out", str(report_path),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            _eval_mod.main()
+
+        assert exc.value.code == 1
+        entry = json.loads(report_path.read_text())["results"][0]
+        assert entry["status"] == "harness_error"
+        assert entry["passed"] is False
+
+    def test_status_vocabulary_is_pinned(self):
+        assert _eval_mod.ENTRY_STATUSES == {
+            "graded", "bootstrap_only", "agent_missing", "routing_drift",
+            "bootstrap_failed", "cli_missing", "timed_out", "dispatch_error",
+            "model_mismatch", "harness_error", "degraded",
+        }
 
 
 class TestDispatchIdentity:

@@ -266,30 +266,38 @@ inconsistency, not reviewer quality.
 **Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
 `trials` (the requested count), and `results[]` with `scenario`, `agent`,
 `trials` (trial attempts run for this entry), `keyed` (whether an answer
-key exists), `dispatch_count` (attempts with evidence of a live model call),
-`dispatched` (whether `dispatch_count == trials`; deterministic bootstrap-only
-entries, pre-model failures, and partially dispatched multi-trial entries
-carry `false`; timeouts and unparseable dispatch output conservatively lack
-dispatch evidence; pass rates over reviewer behavior must filter on this
-complete-dispatch flag), `passed`, `checks_run`,
-`checks_passed`, `failures`, `detail`. `detail` is polymorphic — discriminate per result, never on the
-top-level `trials` (unkeyed agents run once even under `--trials N`):
-`detail: null` with `keyed: false` is a compliance-only entry (dispatched
-unkeyed entries carry `{output_dir}` instead of null); `keyed: true` with
-`dispatch_rejected` or null detail is a keyed run that failed before
-detection grading (see `failures`); result `trials` of 1 otherwise means
-single-trial detail `{verdict, match, gates, compliance_passed, output_dir,
-models}` — abstention keys carry `issue_count` and no `gates`/`match` keys;
-result `trials` above 1 means aggregate detail `{trials, per_trial,
-per_trial_failures, per_trial_passed, models}`; each `per_trial` entry retains
-its `model_dispatched` evidence when available. Exit codes: 2 for any
-configuration error (unknown scenario, empty selection, invalid flags,
-unwritable report path — always before artifacts exist), 1 when the eval
-ran and at least one entry failed, 0 on full pass. The comparative metric
-is per-entry `passed` (and detection detail) — check counts and ratios are
-per-entry diagnostics only, because compliance adds checks per schema-valid
-issue and would score a more verbose reviewer higher for identical
-detection performance.
+key exists), `status`, `passed`, `checks_run`, `checks_passed`, `failures`,
+`detail`.
+
+`status` is the explicit per-entry outcome, stamped by the code path that
+knows what happened — never inferred from evidence shape (the
+`ENTRY_STATUSES` constant pins the vocabulary): `graded` (live run produced
+a graded artifact), `bootstrap_only` (deterministic entry, no model call by
+design — the no-domain-files and error-exit scenarios), pre-dispatch
+refusals/failures (`agent_missing`, `routing_drift`, `bootstrap_failed`),
+dispatch failures (`cli_missing`, `timed_out`, `dispatch_error`,
+`model_mismatch`), `harness_error`, and — aggregates only — `degraded`
+(not every trial reached `graded`; see `detail.per_trial_status`).
+Reviewer-behavior pass rates filter on `status == "graded"`. `timed_out`
+means model calls likely occurred (money spent) but produced no gradable
+evidence — it is deliberately not conflated with never-dispatched. Status
+describes gradability, not spend: a trial that dispatched and was then
+rejected is not a graded trial.
+
+`detail` shapes follow the entry: single-run graded entries carry
+`{verdict, match, gates, compliance_passed, output_dir, models, status}`
+(abstention keys carry `issue_count` and no `gates`/`match` keys; unkeyed
+entries carry compliance detail plus `{output_dir, status}`); rejected
+dispatches carry `{dispatch_rejected, dispatch_evidence, output_dir,
+status}`; aggregates (result `trials` above 1) carry `{trials, per_trial,
+per_trial_failures, per_trial_passed, per_trial_status, models}`. Exit
+codes: 2 for any configuration error (unknown scenario, empty selection,
+invalid flags, unwritable report path — always before artifacts exist),
+1 when the eval ran and at least one entry failed, 0 on full pass. The
+comparative metric is per-entry `passed` (and detection detail) — check
+counts and ratios are per-entry diagnostics only, because compliance adds
+checks per schema-valid issue and would score a more verbose reviewer
+higher for identical detection performance.
 
 ## Design Principles
 

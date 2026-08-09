@@ -491,6 +491,27 @@ def split_agent_definition(agent_def: str) -> tuple:
 # `inherit` (or a missing field) means "use the caller's model".
 _DISPATCHABLE_MODELS = {"sonnet", "haiku", "opus"}
 
+# Explicit per-entry outcome vocabulary. Each value is stamped by the code
+# path that KNOWS what happened — never inferred from evidence shape.
+# "degraded" is aggregate-only: a multi-trial entry where not every trial
+# reached "graded". Consumers computing reviewer-behavior pass rates filter
+# on status == "graded"; "timed_out" means model calls likely occurred
+# (money spent) but produced no gradable evidence — deliberately not
+# conflated with never-dispatched.
+ENTRY_STATUSES = {
+    "graded",            # live run produced a graded artifact
+    "bootstrap_only",    # deterministic entry, no model call by design
+    "agent_missing",     # pre-dispatch: agent definition file absent
+    "routing_drift",     # pre-dispatch: frontmatter/registry mismatch
+    "bootstrap_failed",  # pre-dispatch: bootstrap exited nonzero
+    "cli_missing",       # claude CLI not found; no model call
+    "timed_out",         # dispatch timeout; no gradable evidence
+    "dispatch_error",    # non-JSON output, session error, nonzero exit
+    "model_mismatch",    # run rejected: wrong model instrument
+    "harness_error",     # eval-harness exception or unknown grader
+    "degraded",          # aggregate: not every trial reached "graded"
+}
+
 
 def check_model_routing(agent_name: str, agent_def: str) -> Optional[str]:
     """Return an error when frontmatter routing diverges from the registry.
@@ -660,7 +681,7 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
     # Check if claude CLI is available
     claude_path = shutil.which("claude")
     if not claude_path:
-        return 1, "ERROR: claude CLI not found in PATH", {}
+        return 1, "ERROR: claude CLI not found in PATH", {"status": "cli_missing"}
 
     # The real pipeline runs reviewers via the Agent tool under an interactive
     # parent that can answer permission prompts. A headless `claude -p` cannot,
@@ -675,14 +696,16 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        return 1, "ERROR: Agent dispatch timed out after 900s", {}
+        return 1, "ERROR: Agent dispatch timed out after 900s", {"status": "timed_out"}
     except FileNotFoundError:
-        return 1, "ERROR: claude CLI not found", {}
+        return 1, "ERROR: claude CLI not found", {"status": "cli_missing"}
 
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return 1, f"ERROR: non-JSON dispatch output:\n{result.stdout[:2000]}", {}
+        return 1, (
+            f"ERROR: non-JSON dispatch output:\n{result.stdout[:2000]}"
+        ), {"status": "dispatch_error"}
 
     model_usage = payload.get("modelUsage") or {}
     evidence = {
@@ -702,9 +725,13 @@ def dispatch_agent(agent_name: str, bootstrap_cmd: str, cwd: str) -> tuple:
 
     model_error = check_dispatched_models(agent_name, model_usage)
     if model_error:
+        evidence["status"] = "model_mismatch"
         return 1, f"ERROR: {model_error}\n\n{text}", evidence
 
     rc = 1 if payload.get("is_error") else result.returncode
+    # "completed" is internal to dispatch_agent: run_dispatch_scenario
+    # upgrades it to "graded" once grading actually runs.
+    evidence["status"] = "dispatch_error" if rc != 0 else "completed"
     return rc, text, evidence
 
 
@@ -723,13 +750,16 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         rc, bootstrap_out = run_bootstrap_for_agent(agent_name, cwd, output_dir)
 
         if scenario["grader"] == "error_exit":
-            return grade_error_exit(bootstrap_out)
+            result = grade_error_exit(bootstrap_out)
+            result.detail = dict(result.detail or {}, status="bootstrap_only")
+            return result
 
         if rc != 0:
             return GradeResult(
                 passed=False, score=0.0,
                 failures=[f"Bootstrap failed (exit {rc}): {bootstrap_out[:200]}"],
                 checks_run=1, checks_passed=0,
+                detail={"status": "bootstrap_failed"},
             )
 
         if scenario["grader"] == "no_domain_files":
@@ -745,6 +775,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 return GradeResult(
                     passed=True, score=1.0, failures=[],
                     checks_run=1, checks_passed=1,
+                    detail={"status": "bootstrap_only"},
                 )
             return GradeResult(
                 passed=False, score=0.0,
@@ -754,6 +785,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                     "covers docs and it must be excluded from this scenario"
                 ],
                 checks_run=1, checks_passed=0,
+                detail={"status": "bootstrap_only"},
             )
 
         # Refuse to dispatch when frontmatter routing has drifted from the
@@ -765,12 +797,14 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 passed=False, score=0.0,
                 failures=[f"agent definition missing: {agent_def_path}"],
                 checks_run=1, checks_passed=0,
+                detail={"status": "agent_missing"},
             )
         drift = check_model_routing(agent_name, agent_def_path.read_text())
         if drift:
             return GradeResult(
                 passed=False, score=0.0, failures=[drift],
                 checks_run=1, checks_passed=0,
+                detail={"status": "routing_drift"},
             )
 
         # Dispatch the configured reviewer. The subagent re-runs bootstrap
@@ -796,14 +830,8 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
         # error, timeout, non-JSON output — must never be graded: the
         # reviewer may have written a plausible artifact before the rejection
         # surfaced, and grading it would attribute an untrusted run to the
-        # agent. Fail the entry with the rejection as evidence.
-        # A live model call demonstrably occurred only when the payload
-        # records actual model usage — a parseable JSON error emitted BEFORE
-        # model invocation (auth/startup failure) carries evidence fields
-        # but an empty modelUsage, and must not count as dispatched.
-        # CLI-missing, timeout, and non-JSON paths report False too.
-        model_dispatched = bool(dispatch_evidence.get("models"))
-
+        # agent. Fail the entry with the rejection as evidence; the status is
+        # whatever dispatch_agent stamped on the failing path.
         if rc != 0:
             return GradeResult(
                 passed=False, score=0.0,
@@ -813,7 +841,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                     "dispatch_rejected": True,
                     "dispatch_evidence": dispatch_evidence,
                     "output_dir": output_dir,
-                    "model_dispatched": model_dispatched,
+                    "status": dispatch_evidence.get("status", "dispatch_error"),
                 },
             )
 
@@ -837,7 +865,7 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 compliance.detail = dict(
                     compliance.detail or {},
                     output_dir=output_dir,
-                    model_dispatched=model_dispatched,
+                    status="graded",
                 )
                 return compliance
 
@@ -867,20 +895,21 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
                 compliance_passed=compliance.passed,
                 output_dir=output_dir,
                 models=dispatch_evidence.get("models"),
-                model_dispatched=model_dispatched,
+                status="graded",
             )
             return merge_grades(compliance, detection)
         elif scenario["grader"] == "signal_format":
             result = grade_signal_format(agent_output)
-            result.detail = dict(
-                result.detail or {}, model_dispatched=model_dispatched,
-            )
+            result.detail = dict(result.detail or {}, status="graded")
             return result
         else:
+            # A grader name the harness does not know is a harness/config
+            # bug, not reviewer behavior.
             return GradeResult(
                 passed=False, score=0.0,
                 failures=[f"Unknown grader: {scenario['grader']}"],
                 checks_run=1, checks_passed=0,
+                detail={"status": "harness_error"},
             )
     finally:
         # Cleanup
@@ -1089,10 +1118,15 @@ def main():
                                     passed=False, score=0.0,
                                     failures=[f"harness error: {exc}"],
                                     checks_run=1, checks_passed=0,
+                                    detail={"status": "harness_error"},
                                 ))
                         result = aggregate_detection_trials(trial_grades)
                         result.detail["per_trial_failures"] = [g.failures for g in trial_grades]
                         result.detail["per_trial_passed"] = [g.passed for g in trial_grades]
+                        result.detail["per_trial_status"] = [
+                            (g.detail or {}).get("status", "harness_error")
+                            for g in trial_grades
+                        ]
                         result.detail["models"] = sorted({
                             m for g in trial_grades
                             for m in ((g.detail or {}).get("models") or [])
@@ -1104,19 +1138,25 @@ def main():
                         passed=False, score=0.0,
                         failures=[f"harness error: {exc}"],
                         checks_run=1, checks_passed=0,
+                        detail={"status": "harness_error"},
                     )
-                # Preserve partial evidence explicitly. `dispatched` means
-                # every requested trial reached a live model call, so an
-                # infrastructure-damaged aggregate cannot enter reviewer
-                # pass rates merely because one trial dispatched.
-                observed_grades = trial_grades or [result]
-                dispatch_count = sum(
-                    bool((grade.detail or {}).get("model_dispatched", False))
-                    for grade in observed_grades
-                )
+                # Entry status derives from the RESULT's detail only — never
+                # from the trial list directly — so a harness error raised
+                # AFTER trials completed cannot masquerade as graded. An
+                # aggregate detail (per_trial_status present) is "graded"
+                # only when every trial reached graded, else "degraded":
+                # gradability, not spend — a trial that dispatched and was
+                # then rejected is not a graded trial.
                 meta = entry_meta[(scenario_name, agent_name)]
-                meta["dispatch_count"] = dispatch_count
-                meta["dispatched"] = dispatch_count == meta["trials"]
+                detail = result.detail or {}
+                if "per_trial_status" in detail:
+                    meta["status"] = (
+                        "graded"
+                        if all(s == "graded" for s in detail["per_trial_status"])
+                        else "degraded"
+                    )
+                else:
+                    meta["status"] = detail.get("status", "harness_error")
                 agent_results[agent_name] = result
             if agent_results:
                 all_results[scenario_name] = agent_results
@@ -1133,8 +1173,7 @@ def main():
                         "agent": agent_name,
                         "trials": entry_meta[(scenario_name, agent_name)]["trials"],
                         "keyed": entry_meta[(scenario_name, agent_name)]["keyed"],
-                        "dispatch_count": entry_meta[(scenario_name, agent_name)]["dispatch_count"],
-                        "dispatched": entry_meta[(scenario_name, agent_name)]["dispatched"],
+                        "status": entry_meta[(scenario_name, agent_name)]["status"],
                         "passed": r.passed,
                         "checks_run": r.checks_run,
                         "checks_passed": r.checks_passed,
