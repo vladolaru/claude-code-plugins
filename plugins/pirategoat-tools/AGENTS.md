@@ -22,6 +22,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8. |
 | `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
 | `scripts/review/manifest_sections.py` | Pure builders for dispatch, coverage, and dependency-refresh sections in durable review manifests. |
+| `scripts/containment.py` | Single implementation for pipeline repo-boundary decisions. Filesystem-resolved callers and telemetry's POSIX-only lexical caller keep their own failure policy while sharing the containment decision. |
 | `scripts/git_paths.py` | Single grammar implementation for Git C-quoted paths. Review-config provenance, telemetry, and scoped-diff parsing keep their caller-specific failure policies while sharing escape and octal decoding. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
 | `agents/shared/tests-reviewer-protocol.md` | Additional rules for test reviewer agents (test quality principles, anti-patterns). |
@@ -100,6 +101,25 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   └─ decision-reviewer agent (independent stress test)
       └─ Produces decision-critic-findings.md with STAND/REVISE/ESCALATE verdict
 ```
+
+### Pipeline-Wide Containment
+
+`scripts/containment.py` is the single enforcement point for repo-boundary
+decisions across the plugin. Advisory host resolvers use `contains()` to avoid
+presenting first-party code as an independent runtime host. Repo-contributed
+review configuration uses the same resolved-path primitive before reading rule
+or reviewer instructions that may execute with real tools.
+
+Telemetry is the deliberate lexical caller: `contains_posix_lexically()`
+canonicalizes recorded measurement paths with POSIX grammar, without resolving
+symlinks or touching paths that may no longer exist. The OS-native
+`contains_lexically()` remains available only for bounding walks. Neither
+lexical primitive may authorize a filesystem read or an execution.
+
+`tests/test_containment_contract.py` preserves the symlink and prefix behavior
+and scans every Python file under `scripts/` for the unambiguous containment
+spellings (`commonpath`, `is_relative_to`, `commonprefix`). Only the exact shared
+module is exempt — do not add inline containment checks or an allowlist.
 
 ### Pipeline Briefing Design
 
@@ -312,7 +332,6 @@ carries the normalized result into `review-context.json` under `review_config`
   `warnings` — the only channel the step-5 briefing renders), and an unknown changed-file
   set fails closed. To test an unmerged reviewer deliberately, dispatch the adapter
   manually via bootstrap ref-mode.
-- **Hosts containment invariant.** Host-context resolution never treats a path outside the repo's resolved root as belonging to the reviewed repo. `scripts/hosts/containment.py` is the single enforcement point (`contains` / `resolve_inside`; `contains_lexically` only for walk bounds, never trust). Do not write inline containment checks under `scripts/hosts/` in ANY spelling — `tests/hosts/test_containment_contract.py` bans the unambiguous ones outright (`commonpath`, `is_relative_to`, `commonprefix`; zero-hit, so no allowlist); general spellings (`realpath`+`startswith`, `relpath`) rely on code review backed by resolver symlink behavior tests.
 - **Path scoping:** a reviewer whose `applies_to.paths` matched dispatches AND receives
   those files in scope — bootstrap ref-mode passes the declared globs to scope.py as
   `--include-path` so the dispatch gate and the scope never disagree.

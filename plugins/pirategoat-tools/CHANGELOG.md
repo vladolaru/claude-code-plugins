@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Repository containment is now a pipeline-wide shared invariant.** Advisory host resolution and repo-contributed rule/reviewer resolution both decide whether a path belongs to the reviewed repo, but the latter gates instructions that can execute with real tools. The primitive lived under `scripts/hosts/` and its drift guard scanned only that package, leaving review configuration with a private copy while telemetry carried a separate, legitimate POSIX-lexical decision. `scripts/containment.py` now owns both resolved-filesystem containment and a distinct POSIX-lexical primitive for recorded telemetry paths; review configuration and telemetry route through it, and the allowlist-free guard scans every Python file under `scripts/`. The existing filesystem primitives were relocated unchanged — including fail-closed `ValueError` handling — and telemetry keeps the same normalization behavior, so this security-hygiene refactor changes no caller behavior.
 - **Transcript failure-recovery analysis is linear for large transcripts.** One reverse traversal now classifies later-success recovery instead of rescanning the remaining calls for every failure.
 
 ### Fixed
