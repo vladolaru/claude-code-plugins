@@ -1599,6 +1599,100 @@ class TestStep9Orchestration:
         assert state.get("inline_coverage_gaps") == {}
 
 
+class TestStep10Orchestration:
+    """Step 10 main() reads the reconciliation verdict and records the
+    quick-mode critic skip decision.
+
+    This class exists because the step-10 orchestration branch had NO
+    execution coverage: the pipeline module split extracted it into
+    _orchestrate_step_10 while its body still referenced the `step`
+    parameter the helper never receives, and the whole integration suite
+    stayed green over a live NameError. Every test here runs the real
+    step, so the branch cannot silently stop executing again.
+    """
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def _findings(self, tmp_path, verdict):
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps({"verdict": verdict, "issues": []})
+        )
+
+    def test_step_10_records_the_reconciliation_verdict(self, tmp_path):
+        self._run("--step", "1", "--mode", "full", "--output-dir", str(tmp_path))
+        self._findings(tmp_path, "block")
+        r = self._run("--step", "10", "--mode", "full", "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state.get("reconciliation_verdict") == "block"
+        # Not quick mode — the critic always runs, so no skip decision.
+        assert "10" not in state.get("step_decisions", {})
+
+    def test_step_10_quick_mode_records_critic_skip(self, tmp_path):
+        self._run("--step", "1", "--mode", "full", "--quick",
+                  "--output-dir", str(tmp_path))
+        self._findings(tmp_path, "approve")
+        r = self._run("--step", "10", "--mode", "full", "--quick",
+                      "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        decision = state.get("step_decisions", {}).get("10")
+        assert decision is not None, "quick-mode critic skip was not recorded"
+        assert decision["critic_skipped"] is True
+        assert "approve" in decision["reason"]
+
+    def test_step_10_quick_mode_keeps_critic_for_blocking_verdict(self, tmp_path):
+        self._run("--step", "1", "--mode", "full", "--quick",
+                  "--output-dir", str(tmp_path))
+        self._findings(tmp_path, "block")
+        r = self._run("--step", "10", "--mode", "full", "--quick",
+                      "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert "10" not in state.get("step_decisions", {})
+
+    def test_step_10_clears_a_stale_skip_decision_on_rerun(self, tmp_path):
+        """A rerun after the verdict escalates must drop the earlier skip.
+
+        This is the exact line the split broke: the decision key is popped
+        before it is conditionally rewritten, so a stale `critic_skipped`
+        cannot survive into a run whose reconciliation now blocks.
+        """
+        self._run("--step", "1", "--mode", "full", "--quick",
+                  "--output-dir", str(tmp_path))
+        self._findings(tmp_path, "approve")
+        self._run("--step", "10", "--mode", "full", "--quick",
+                  "--output-dir", str(tmp_path))
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["step_decisions"]["10"]["critic_skipped"] is True
+
+        self._findings(tmp_path, "block")
+        r = self._run("--step", "10", "--mode", "full", "--quick",
+                      "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert "10" not in state.get("step_decisions", {}), (
+            "stale critic-skip decision survived a verdict escalation"
+        )
+
+    def test_step_10_tolerates_missing_reconciliation_findings(self, tmp_path):
+        self._run("--step", "1", "--mode", "full", "--output-dir", str(tmp_path))
+        r = self._run("--step", "10", "--mode", "full", "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state.get("reconciliation_verdict", "") == ""
+
+    def test_step_10_tolerates_malformed_reconciliation_findings(self, tmp_path):
+        self._run("--step", "1", "--mode", "full", "--output-dir", str(tmp_path))
+        (tmp_path / "review-findings.json").write_text("{not json")
+        r = self._run("--step", "10", "--mode", "full", "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state.get("reconciliation_verdict") == ""
+
+
 class TestStep11Orchestration:
     """Step 11 main() reads review-verdict.json and writes pipeline-result.json."""
 
