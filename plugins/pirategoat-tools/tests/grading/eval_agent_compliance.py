@@ -402,38 +402,45 @@ SCENARIOS = {
             "php-tests-reviewer": {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
-                    # tests-reviewer-protocol.md maps False Confidence to
-                    # CRITICAL, and the reviewer's required test-smells.md
-                    # reference classifies assertNotNull-only tests as false
-                    # positives. This fixture includes the implementation.
+                    # NOT False Confidence: that CRITICAL bucket enumerates
+                    # tests without assertions, assertions on MOCK return
+                    # values (tautology), and disabled assertions. Here the
+                    # assertion exists and get_product() runs a real $wpdb
+                    # SELECT — nothing is mocked, so the assertion is weak,
+                    # not tautological. A value-blind assertion over real
+                    # data lands in MEDIUM (Best Practice).
                     # No bare "assert" token — any assertion-adjacent finding
                     # on this file would claim the gate vacuously.
                     {"id": "weak-assertion", "file": "tests/ProductManagerTest.php",
-                     "min_severity": "critical",
+                     "min_severity": "medium",
                      "severity_basis": "doctrine",
-                     "rationale": "tests-reviewer-protocol.md maps False Confidence "
-                                  "to CRITICAL, and its required test-smells.md "
-                                  "reference classifies assertNotNull-only tests as "
-                                  "false-positive tests; ProductManager is visible.",
+                     "rationale": "tests-reviewer-protocol.md -> MEDIUM (Best "
+                                  "Practice). Explicitly NOT CRITICAL (False "
+                                  "Confidence): that bucket requires a missing, "
+                                  "mocked, or disabled assertion, and this test "
+                                  "asserts against a real $wpdb read.",
                      "match_any": [r"assertNotNull", r"meaning", r"weak"]},
                 ],
             },
             "js-tests-reviewer": {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
-                    # tests-reviewer-protocol.md classifies
-                    # implementation-detail verification as HIGH; this test
-                    # couples its only assertion to querySelectorAll('li').
+                    # Asserting a count instead of content is UNDER-assertion,
+                    # not the HIGH bucket's implementation-detail
+                    # verification (which is over-coupling to internals). The
+                    # separate querySelectorAll('li') smell is the
+                    # implementation-detail one and is not this gate.
                     # No "name" token — a test-naming finding on the same
                     # file must not claim the assertion-quality gate.
                     {"id": "count-only-assertion",
                      "file": "src/components/__tests__/ProductList.test.tsx",
-                     "min_severity": "high",
+                     "min_severity": "medium",
                      "severity_basis": "doctrine",
-                     "rationale": "tests-reviewer-protocol.md -> implementation-detail "
-                                  "verification = HIGH; the fixture exposes "
-                                  "container.querySelectorAll('li') and its "
-                                  "count-only assertion.",
+                     "rationale": "tests-reviewer-protocol.md -> MEDIUM (Best "
+                                  "Practice). Explicitly NOT HIGH: the count-only "
+                                  "assertion verifies too little, whereas HIGH's "
+                                  "implementation-detail verification is verifying "
+                                  "internals too closely.",
                      "match_any": [r"toHaveLength", r"\bcount\b", r"\bcontent\b", r"\bprice\b"]},
                 ],
             },
