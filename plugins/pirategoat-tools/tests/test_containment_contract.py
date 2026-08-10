@@ -6,6 +6,7 @@ Every containment decision routes through scripts/containment.py.
 import os
 from pathlib import Path
 
+import containment
 from containment import contains, contains_lexically, resolve_inside
 
 
@@ -107,31 +108,43 @@ class TestContainsLexically:
         assert not contains_lexically("relative/repo", "/absolute/candidate")
 
 
+class TestContainsPosixLexically:
+    def test_normalizes_recorded_paths_without_filesystem_access(self):
+        assert containment.contains_posix_lexically(
+            "/recorded/repo", "/recorded/repo/missing/../src/file.py"
+        )
+        assert not containment.contains_posix_lexically(
+            "/recorded/repo", "/recorded/repo-sibling/file.py"
+        )
+
+    def test_mixed_forms_fail_closed(self):
+        assert not containment.contains_posix_lexically(
+            "recorded/repo", "/recorded/repo/file.py"
+        )
+
+
 class TestDriftGuard:
     # Spellings with unambiguous containment intent and ZERO legitimate
-    # uses under scripts/hosts/ today — the bans stay allowlist-free, so a
-    # hit is always a real re-derivation, never a false positive to wave
-    # through. General primitives (realpath, startswith, relpath) are
-    # deliberately NOT banned: they have many non-containment uses here
-    # (cache identity, YAML parsing, path-spelling classification) and a
-    # ban would breed an allowlist that decays into ritual.
+    # uses outside scripts/containment.py — the bans stay allowlist-free,
+    # so a hit is always a real re-derivation, never a false positive to
+    # wave through. General primitives (realpath, startswith, relpath) are
+    # deliberately NOT banned: they have many non-containment uses across
+    # scripts/ and a ban would breed an allowlist that decays into ritual.
     _BANNED_SPELLINGS = ("commonpath", "is_relative_to", "commonprefix")
 
     def test_containment_spellings_are_centralized(self):
-        """Every containment decision under scripts/hosts/ goes through
-        containment.py. A new inline check is exactly how the
-        symlinked-dep-root and escaped-bin-dir bypasses were born, and a
-        realpath+startswith variant in the wp-env resolver survived the
-        first consolidation pass because only commonpath was banned.
-        Catches the commonpath, is_relative_to, and commonprefix spellings
-        specifically; other re-derivations (startswith, relpath) rely on
-        code review — the resolver symlink behavior tests pin the outcomes
-        those spellings would have to reproduce."""
-        hosts_dir = Path(__file__).parents[1] / "scripts" / "hosts"
+        """Every containment decision under scripts/ goes through the
+        shared module. Inline checks previously left higher-stakes review
+        execution gates outside the hosts-only guard. Catches the
+        commonpath, is_relative_to, and commonprefix spellings specifically;
+        other re-derivations (startswith, relpath) rely on code review backed
+        by the resolver symlink pins and review-config boundary tests."""
+        scripts_dir = Path(__file__).parents[1] / "scripts"
+        containment_module = scripts_dir / "containment.py"
         offenders = [
-            f"{path.relative_to(hosts_dir)}: {spelling}"
-            for path in sorted(hosts_dir.rglob("*.py"))
-            if path.name != "containment.py"
+            f"{path.relative_to(scripts_dir)}: {spelling}"
+            for path in sorted(scripts_dir.rglob("*.py"))
+            if path != containment_module
             for spelling in self._BANNED_SPELLINGS
             if spelling in path.read_text()
         ]

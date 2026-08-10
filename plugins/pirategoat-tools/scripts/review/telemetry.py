@@ -43,6 +43,7 @@ except ImportError:
     )
     from review.agent.output import _VALID_SEVERITIES
 
+from containment import contains_posix_lexically
 from git_paths import decode_git_c_quoted_path
 
 
@@ -562,12 +563,9 @@ class ReviewTelemetry:
                 return None
             normalized_root = posixpath.normpath(root)
             normalized_absolute = posixpath.normpath(candidate)
-            try:
-                if posixpath.commonpath(
-                    [normalized_root, normalized_absolute]
-                ) != normalized_root:
-                    return None
-            except ValueError:
+            if not contains_posix_lexically(
+                normalized_root, normalized_absolute
+            ):
                 return None
             candidate = posixpath.relpath(normalized_absolute, normalized_root)
 

@@ -11,6 +11,7 @@ or an execution.
 """
 
 import os
+import posixpath
 from typing import Optional
 
 
@@ -26,6 +27,22 @@ def contains_lexically(repo_path: str, candidate: str) -> bool:
     module docstring for why this must never gate a read or an execution.
     """
     return _is_prefix(os.path.normpath(repo_path), os.path.normpath(candidate))
+
+
+def contains_posix_lexically(root: str, candidate: str) -> bool:
+    """True when a recorded POSIX path spelling is lexically inside root.
+
+    This pure spelling check does not resolve symlinks or establish filesystem
+    trust. It exists for canonicalizing recorded evidence on every host OS.
+    """
+    normalized_root = posixpath.normpath(root)
+    normalized_candidate = posixpath.normpath(candidate)
+    try:
+        return posixpath.commonpath(
+            [normalized_root, normalized_candidate]
+        ) == normalized_root
+    except ValueError:  # mixed absolute-relative forms
+        return False
 
 
 def resolve_inside(repo_path: str, rel_path: str) -> Optional[str]:
