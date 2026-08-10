@@ -2818,6 +2818,38 @@ class TestDependencyRefreshManifest:
             "verification_failed": False,
         }
 
+    def test_skipped_refresh_is_distinct_from_successful_verification(
+        self, mod, tmp_path
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        (out_dir / "dependency-refresh-verification.json").write_text(
+            json.dumps({
+                "skipped": True,
+                "skipped_reason": "dirty_worktree",
+                "dirty_files": [
+                    *(f"tracked-{index:02d}.txt" for index in range(25)),
+                    42,
+                ],
+            })
+        )
+
+        t.log_step(step=5, phase="EXECUTION", title="Dispatch Plan + Triage")
+
+        manifest = json.loads(Path(t.manifest_path).read_text())
+        section = manifest["dependency_refresh"]
+        assert section == {
+            "requested": True,
+            "reported": False,
+            "skipped": True,
+            "skipped_reason": "dirty_worktree",
+            "dirty_files": [
+                f"tracked-{index:02d}.txt" for index in range(20)
+            ],
+        }
+        assert "verification" not in section
+
     def test_unhashable_status_preserves_report_and_verification(
         self, mod, tmp_path
     ):

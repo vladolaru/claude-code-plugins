@@ -81,13 +81,21 @@ ALLOWED_INSTALL_FLAGS = frozenset({
 _MAX_DIRTY_FILES = 20
 _MAX_REPORT_BYTES = 1024 * 1024
 _MAX_REPORTED_COMMANDS = 128
+SKIP_REASON_DIRTY_WORKTREE = "dirty_worktree"
+SKIP_REASON_WORKTREE_STATUS_FAILED = "worktree_status_failed"
+DEPENDENCY_REFRESH_SKIP_REASONS = frozenset({
+    SKIP_REASON_DIRTY_WORKTREE,
+    SKIP_REASON_WORKTREE_STATUS_FAILED,
+})
 
 
 def detect_dependency_refresh(repo_root, changed_files):
-    """Return ``{"signals": [...]}`` describing dependency roots to refresh.
+    """Describe dependency roots to refresh and whether refresh is safe.
 
     ``changed_files`` are repo-relative paths from the reviewed range (Git
-    C-quoted spellings tolerated; malformed entries are skipped). Read-only.
+    C-quoted spellings tolerated; malformed entries are skipped). A dirty or
+    unknowable tracked worktree returns a fail-closed ``skipped_reason`` while
+    preserving the detected signals. Read-only.
     """
     root = Path(repo_root)
     changed_by_dir = {}
@@ -140,7 +148,21 @@ def detect_dependency_refresh(repo_root, changed_files):
                         signals.append(signal)
                     break
 
-    return {"signals": signals}
+    result = {"signals": signals}
+    if not signals:
+        return result
+    dirty_files, status_failed = _tracked_worktree_status(root)
+    if status_failed:
+        result.update({
+            "skipped_reason": SKIP_REASON_WORKTREE_STATUS_FAILED,
+            "dirty_files": [],
+        })
+    elif dirty_files:
+        result.update({
+            "skipped_reason": SKIP_REASON_DIRTY_WORKTREE,
+            "dirty_files": dirty_files,
+        })
+    return result
 
 
 def _signal(directory, spec, changed, installed):
@@ -160,6 +182,30 @@ def _signal(directory, spec, changed, installed):
         "installed_state_present": installed,
         "suggested_command": spec["suggested_command"],
     }
+
+
+def _tracked_worktree_status(repo_root):
+    """Return ``(bounded_dirty_files, failed)`` for tracked Git state."""
+    try:
+        git_status = subprocess.run(
+            [
+                "git", "-C", str(repo_root), "status", "--porcelain",
+                "--untracked-files=no",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if git_status.returncode != 0:
+            raise OSError(git_status.stderr.strip())
+        dirty_files = [
+            line[3:]
+            for line in git_status.stdout.splitlines()
+            if line and not line.startswith("??")
+        ]
+        return dirty_files[:_MAX_DIRTY_FILES], False
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return [], True
 
 
 def _command_allowed(command):
@@ -252,26 +298,11 @@ def verify_dependency_refresh(repo_root, output_dir):
         else:
             result["verification_failed"] = True
 
-    try:
-        git_status = subprocess.run(
-            [
-                "git", "-C", str(repo_root), "status", "--porcelain",
-                "--untracked-files=no",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if git_status.returncode != 0:
-            raise OSError(git_status.stderr.strip())
-        dirty_files = [
-            line[3:]
-            for line in git_status.stdout.splitlines()
-            if line and not line.startswith("??")
-        ]
+    dirty_files, status_failed = _tracked_worktree_status(repo_root)
+    if not status_failed:
         result["tracked_files_dirty"] = bool(dirty_files)
-        result["dirty_files"] = dirty_files[:_MAX_DIRTY_FILES]
-    except (OSError, subprocess.SubprocessError, UnicodeError):
+        result["dirty_files"] = dirty_files
+    else:
         result["verification_failed"] = True
 
     return result

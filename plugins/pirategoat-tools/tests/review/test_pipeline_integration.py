@@ -642,6 +642,42 @@ class TestStep5Orchestration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["dependency_refresh_verification"] == verification
 
+    def test_step_5_records_skip_without_running_refresh_verification(
+        self, tmp_path
+    ):
+        repo = self._make_repo(tmp_path)
+        self._run(
+            "--step", "1", "--mode", "full",
+            "--output-dir", str(tmp_path), "--git-range", "HEAD~1..HEAD",
+            "--refresh-deps", cwd=str(repo),
+        )
+        state_path = tmp_path / "pipeline-state.json"
+        state = json.loads(state_path.read_text())
+        state["dependency_refresh"] = {
+            "signals": [{"manager": "npm"}],
+            "skipped_reason": "dirty_worktree",
+            "dirty_files": ["tracked.txt"],
+        }
+        state_path.write_text(json.dumps(state))
+
+        result = self._run(
+            "--step", "5", "--mode", "full",
+            "--output-dir", str(tmp_path), cwd=str(repo),
+        )
+
+        assert result.returncode == 0
+        skipped = json.loads(
+            (tmp_path / "dependency-refresh-verification.json").read_text()
+        )
+        assert skipped == {
+            "dirty_files": ["tracked.txt"],
+            "skipped": True,
+            "skipped_reason": "dirty_worktree",
+        }
+        state = json.loads(state_path.read_text())
+        assert state["dependency_refresh_verification"] == skipped
+        assert "verified clean" not in result.stdout.lower()
+
     def test_step_5_skips_dependency_refresh_verification_without_opt_in(
         self, tmp_path
     ):

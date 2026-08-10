@@ -44,6 +44,10 @@ try:
         validate_dispatch_plan_agents,
     )
     from .dependency_refresh import (
+        _MAX_DIRTY_FILES,
+        DEPENDENCY_REFRESH_SKIP_REASONS,
+        SKIP_REASON_DIRTY_WORKTREE,
+        SKIP_REASON_WORKTREE_STATUS_FAILED,
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
@@ -59,6 +63,10 @@ except ImportError:
         validate_dispatch_plan_agents,
     )
     from review.dependency_refresh import (
+        _MAX_DIRTY_FILES,
+        DEPENDENCY_REFRESH_SKIP_REASONS,
+        SKIP_REASON_DIRTY_WORKTREE,
+        SKIP_REASON_WORKTREE_STATUS_FAILED,
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
@@ -820,7 +828,27 @@ def _dependency_refresh_briefing(state, config, output_dir):
             [],
             [],
         )
-
+    if detection.get("skipped_reason") == SKIP_REASON_DIRTY_WORKTREE:
+        return (
+            ["**Dependency refresh:** enabled, but refresh skipped — stale "
+             "dependency roots were detected and the tracked worktree has "
+             "pre-existing tracked changes. The review will proceed with "
+             "degraded host context; the requester can commit or stash those "
+             "changes, then re-run.", ""],
+            [],
+            [],
+        )
+    if detection.get("skipped_reason") == SKIP_REASON_WORKTREE_STATUS_FAILED:
+        return (
+            ["**Dependency refresh:** enabled, but refresh skipped — stale "
+             "dependency roots were detected, but the pipeline could not "
+             "verify that the tracked worktree is clean. The review will "
+             "proceed with degraded host context; resolve the Git status "
+             "failure and re-run.",
+             ""],
+            [],
+            [],
+        )
     situation = [
         "**Dependency refresh (trusted-branch mode):** the requester "
         "authorized refreshing installed dependencies in this worktree. "
@@ -2182,18 +2210,33 @@ def _orchestrate_step(step, mode, config, state, context, output_dir):
 
     if step == 5:
         if config.get("refresh_dependencies"):
-            try:
-                repo_root = _git_output("rev-parse", "--show-toplevel")
-                verification = verify_dependency_refresh(repo_root, output_dir)
-            except Exception:
+            detection = state.get("dependency_refresh") or {}
+            skipped_reason = detection.get("skipped_reason")
+            if skipped_reason in DEPENDENCY_REFRESH_SKIP_REASONS:
+                dirty_files = detection.get("dirty_files")
                 verification = {
-                    "report_present": False,
-                    "commands_allowed": None,
-                    "disallowed_commands": [],
-                    "tracked_files_dirty": None,
-                    "dirty_files": [],
-                    "verification_failed": True,
+                    "skipped": True,
+                    "skipped_reason": skipped_reason,
+                    "dirty_files": [
+                        path for path in (
+                            dirty_files if isinstance(dirty_files, list) else []
+                        )
+                        if isinstance(path, str)
+                    ][:_MAX_DIRTY_FILES],
                 }
+            else:
+                try:
+                    repo_root = _git_output("rev-parse", "--show-toplevel")
+                    verification = verify_dependency_refresh(repo_root, output_dir)
+                except Exception:
+                    verification = {
+                        "report_present": False,
+                        "commands_allowed": None,
+                        "disallowed_commands": [],
+                        "tracked_files_dirty": None,
+                        "dirty_files": [],
+                        "verification_failed": True,
+                    }
             with open(
                 os.path.join(output_dir, "dependency-refresh-verification.json"),
                 "w",

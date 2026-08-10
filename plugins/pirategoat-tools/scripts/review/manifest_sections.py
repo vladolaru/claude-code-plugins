@@ -12,7 +12,11 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
-    from .dependency_refresh import load_dependency_refresh_report
+    from .dependency_refresh import (
+        _MAX_DIRTY_FILES,
+        DEPENDENCY_REFRESH_SKIP_REASONS,
+        load_dependency_refresh_report,
+    )
     from .dispatch_status import (
         AGENT_NAME_RE,
         DISPATCHED_STATUSES,
@@ -22,7 +26,11 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.dependency_refresh import load_dependency_refresh_report
+    from review.dependency_refresh import (
+        _MAX_DIRTY_FILES,
+        DEPENDENCY_REFRESH_SKIP_REASONS,
+        load_dependency_refresh_report,
+    )
     from review.dispatch_status import (
         AGENT_NAME_RE,
         DISPATCHED_STATUSES,
@@ -413,7 +421,24 @@ def build_dependency_refresh_manifest(output_dir: str):
         return None
     result = {"requested": requested, "reported": report is not None}
 
-    if verification is not None:
+    if verification is not None and verification.get("skipped") is True:
+        skipped_reason = verification.get("skipped_reason")
+        dirty_files = verification.get("dirty_files")
+        result.update({
+            "skipped": True,
+            "skipped_reason": (
+                skipped_reason
+                if skipped_reason in DEPENDENCY_REFRESH_SKIP_REASONS
+                else "invalid"
+            ),
+            "dirty_files": [
+                path for path in (
+                    dirty_files if isinstance(dirty_files, list) else []
+                )
+                if isinstance(path, str)
+            ][:_MAX_DIRTY_FILES],
+        })
+    elif verification is not None:
         commands_allowed = verification.get("commands_allowed")
         tracked_files_dirty = verification.get("tracked_files_dirty")
         disallowed_commands = verification.get("disallowed_commands")

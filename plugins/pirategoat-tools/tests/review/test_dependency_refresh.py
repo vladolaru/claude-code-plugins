@@ -29,6 +29,24 @@ def _make_root(tmp_path, files=(), dirs=()):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{}\n")
+    subprocess.run(
+        ["git", "init", str(tmp_path)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "--all"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git", "-C", str(tmp_path),
+            "-c", "user.name=Dependency Refresh Test",
+            "-c", "user.email=dependency-refresh@example.com",
+            "commit", "--allow-empty", "-m", "Initial dependency state",
+        ],
+        check=True,
+        capture_output=True,
+    )
     return tmp_path
 
 
@@ -47,6 +65,19 @@ class TestComposerDetection:
         assert signal["installed_state_present"] is True
         assert signal["suggested_command"] == \
             "composer install --no-scripts --no-plugins --prefer-dist --no-interaction"
+
+    def test_clean_worktree_does_not_skip_refresh(self, tmp_path):
+        root = _make_root(
+            tmp_path,
+            files=("composer.json", "composer.lock"),
+            dirs=("vendor",),
+        )
+
+        result = detect_dependency_refresh(str(root), ["composer.lock"])
+
+        assert len(result["signals"]) == 1
+        assert "skipped_reason" not in result
+        assert "dirty_files" not in result
 
     def test_missing_vendor_signals_even_without_range_change(self, tmp_path):
         root = _make_root(tmp_path, files=("composer.json", "composer.lock"))
@@ -179,6 +210,24 @@ class TestPathSafety:
         dep_dir.mkdir()
         (dep_dir / "composer.json").write_text("{}")
         (dep_dir / "composer.lock").write_text("{}")
+        subprocess.run(
+            ["git", "init", str(tmp_path)], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "--all"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(tmp_path),
+                "-c", "user.name=Dependency Refresh Test",
+                "-c", "user.email=dependency-refresh@example.com",
+                "commit", "-m", "Initial dependency state",
+            ],
+            check=True,
+            capture_output=True,
+        )
 
         result = detect_dependency_refresh(
             str(tmp_path), ['"caf\\303\\251/composer.json"']
@@ -205,6 +254,127 @@ class TestPathSafety:
             str(root), ["b/composer.lock", "a/composer.lock"]
         )
         assert [s["directory"] for s in result["signals"]] == ["a", "b"]
+
+
+class TestDetectionWorktreePrecondition:
+    def test_dirty_tracked_worktree_skips_but_preserves_signals(self, tmp_path):
+        root = _make_root(
+            tmp_path,
+            files=("composer.json", "composer.lock"),
+            dirs=("vendor",),
+        )
+        (root / "composer.lock").write_text('{"dirty": true}\n')
+
+        result = detect_dependency_refresh(str(root), ["composer.lock"])
+
+        assert len(result["signals"]) == 1
+        assert result["skipped_reason"] == "dirty_worktree"
+        assert result["dirty_files"] == ["composer.lock"]
+
+    def test_untracked_only_files_do_not_skip_refresh(self, tmp_path):
+        root = _make_root(
+            tmp_path,
+            files=("composer.json", "composer.lock"),
+            dirs=("vendor",),
+        )
+        (root / "scratch.txt").write_text("untracked\n")
+
+        result = detect_dependency_refresh(str(root), ["composer.lock"])
+
+        assert len(result["signals"]) == 1
+        assert "skipped_reason" not in result
+
+    def test_dirty_worktree_without_stale_roots_remains_a_noop(self, tmp_path):
+        root = _make_root(
+            tmp_path,
+            files=("composer.json", "composer.lock", "tracked.txt"),
+            dirs=("vendor",),
+        )
+        (root / "tracked.txt").write_text("dirty\n")
+
+        result = detect_dependency_refresh(str(root), ["src/main.php"])
+
+        assert result == {"signals": []}
+
+    def test_dirty_file_evidence_is_bounded(self, tmp_path):
+        tracked_files = tuple(f"tracked-{index:02d}.txt" for index in range(25))
+        root = _make_root(
+            tmp_path,
+            files=("composer.json", "composer.lock", *tracked_files),
+            dirs=("vendor",),
+        )
+        for filename in tracked_files:
+            (root / filename).write_text("dirty\n")
+
+        result = detect_dependency_refresh(str(root), ["composer.lock"])
+
+        assert result["skipped_reason"] == "dirty_worktree"
+        assert len(result["dirty_files"]) == 20
+        assert result["dirty_files"] == list(tracked_files[:20])
+
+    def test_tracked_submodule_changes_skip_refresh(self, tmp_path):
+        parent, submodule = TestVerifyDependencyRefresh._init_repo_with_submodule(
+            tmp_path
+        )
+        (parent / "composer.json").write_text("{}\n")
+        (parent / "composer.lock").write_text("{}\n")
+        subprocess.run(
+            ["git", "-C", str(parent), "add", "composer.json", "composer.lock"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(parent),
+                "-c", "user.name=Dependency Refresh Test",
+                "-c", "user.email=dependency-refresh@example.com",
+                "commit", "-m", "Add dependency manifests",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        (submodule / "tracked.txt").write_text("mutated\n", encoding="utf-8")
+
+        result = detect_dependency_refresh(str(parent), ["composer.lock"])
+
+        assert result["skipped_reason"] == "dirty_worktree"
+        assert result["dirty_files"] == ["dependency"]
+
+    def test_nonzero_git_status_fails_closed(self, tmp_path, monkeypatch):
+        root = _make_root(
+            tmp_path,
+            files=("composer.json", "composer.lock"),
+            dirs=("vendor",),
+        )
+
+        def fail_status(*args, **kwargs):
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="broken")
+
+        monkeypatch.setattr(dependency_refresh.subprocess, "run", fail_status)
+
+        result = detect_dependency_refresh(str(root), ["composer.lock"])
+
+        assert len(result["signals"]) == 1
+        assert result["skipped_reason"] == "worktree_status_failed"
+        assert result["dirty_files"] == []
+
+    def test_git_status_timeout_fails_closed(self, tmp_path, monkeypatch):
+        root = _make_root(
+            tmp_path,
+            files=("composer.json", "composer.lock"),
+            dirs=("vendor",),
+        )
+
+        def timeout_status(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=args[0], timeout=30)
+
+        monkeypatch.setattr(dependency_refresh.subprocess, "run", timeout_status)
+
+        result = detect_dependency_refresh(str(root), ["composer.lock"])
+
+        assert len(result["signals"]) == 1
+        assert result["skipped_reason"] == "worktree_status_failed"
+        assert result["dirty_files"] == []
 
 
 class TestLoadDependencyRefreshReport:

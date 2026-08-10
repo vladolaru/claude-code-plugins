@@ -2091,6 +2091,54 @@ class TestStep3DependencyRefresh:
         text = self._text(g)
         assert "detection failed" in text
 
+    def test_dirty_worktree_skips_refresh_with_honest_degradation(
+        self, mod, tmp_path
+    ):
+        state = {
+            "dependency_refresh": {
+                **self._SIGNAL_STATE["dependency_refresh"],
+                "skipped_reason": "dirty_worktree",
+                "dirty_files": ["composer.lock"],
+            }
+        }
+        config = {"refresh_dependencies": True}
+
+        situation, actions, handoff = mod._dependency_refresh_briefing(
+            state, config, str(tmp_path)
+        )
+
+        text = "\n".join(situation)
+        assert "refresh skipped" in text.lower()
+        assert "pre-existing tracked changes" in text
+        assert "degraded host context" in text
+        assert "commit or stash" in text
+        assert "re-run" in text
+        assert actions == []
+        assert handoff == []
+
+    def test_failed_worktree_status_skips_refresh_closed(self, mod, tmp_path):
+        state = {
+            "dependency_refresh": {
+                **self._SIGNAL_STATE["dependency_refresh"],
+                "skipped_reason": "worktree_status_failed",
+                "dirty_files": [],
+            }
+        }
+        config = {"refresh_dependencies": True}
+
+        situation, actions, handoff = mod._dependency_refresh_briefing(
+            state, config, str(tmp_path)
+        )
+
+        text = "\n".join(situation)
+        assert "refresh skipped" in text.lower()
+        assert "could not verify that the tracked worktree is clean" in text
+        assert "degraded host context" in text
+        assert "resolve the Git status failure" in text
+        assert "re-run" in text
+        assert actions == []
+        assert handoff == []
+
     def test_flag_off_renders_nothing(self, mod, tmp_path):
         config = {"mode": "full", "interactive": True}
         g = mod.get_step_guidance(3, "full", dict(self._SIGNAL_STATE), {},
