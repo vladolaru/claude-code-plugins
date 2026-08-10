@@ -244,6 +244,18 @@ under-classified finding is a calibration miss the benchmark must measure,
 not a match. Whenever a fixture, key, or agent definition changes, re-walk
 this derivation.
 
+Every finding spec with `min_severity` must also declare a
+`severity_basis` and a non-empty `rationale`. The allowed bases are
+`doctrine`, when the floor equals the configured reviewer's severity for
+the defect class, and `evidence_capped`, when the available inputs cannot
+support doctrine's higher classification; the rationale cites the doctrine
+or names the missing proof and why the fixture withholds it. A floor below
+doctrine requires an evidentiary reason (what the reviewer could not prove
+from the given inputs), never an observational one (what the model happened
+to output). The offline answer-key guard rejects missing or unknown bases
+and empty rationales. This requirement applies only to `min_severity`;
+`max_severity` remains a false-positive precision cap on clean-code probes.
+
 Grading is deterministic (file + line-window + keyword regexes over
 title/description/category — no model judge). A correct finding the patterns
 miss shows up under `match.unexpected` in the report with its location and
