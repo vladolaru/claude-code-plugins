@@ -36,6 +36,7 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review.dispatch_status import AGENT_NAME_RE
 
+from containment import contains
 from git_paths import decode_git_c_quoted_path
 
 CONFIG_RELPATH = os.path.join(".pirategoat", "config.json")
@@ -98,8 +99,8 @@ def load_review_config(
     result = empty_config()
     config_path = os.path.join(repo_path, CONFIG_RELPATH)
     # Guard the config path itself against a committed symlink that escapes the
-    # repo (nested rule/reviewer paths get the same _path_inside_repo check).
-    if not os.path.isfile(config_path) or not _path_inside_repo(config_path, repo_path):
+    # repo (nested rule/reviewer paths get the same shared containment gate).
+    if not os.path.isfile(config_path) or not contains(repo_path, config_path):
         return result
 
     try:
@@ -335,7 +336,7 @@ def _resolve_repo_file(raw_path, repo_path, kind, rid, field, diagnostics):
         diagnostics.append(f"{kind} '{rid}': missing or non-string '{field}'")
         return None
     abs_path = os.path.abspath(os.path.join(repo_path, raw_path))
-    if not _path_inside_repo(abs_path, repo_path):
+    if not contains(repo_path, abs_path):
         diagnostics.append(f"{kind} '{rid}': {field} escapes the repo: {raw_path}")
         return None
     if not os.path.isfile(abs_path):
@@ -420,15 +421,6 @@ def _provenance_tainted(identities: set, changed_keys: set) -> bool:
             if "/".join(parts[:i]) in changed_keys:
                 return True
     return False
-
-
-def _path_inside_repo(path: str, repo_path: str) -> bool:
-    resolved_path = os.path.realpath(path)
-    resolved_repo = os.path.realpath(repo_path)
-    try:
-        return os.path.commonpath([resolved_path, resolved_repo]) == resolved_repo
-    except ValueError:
-        return False
 
 
 # ---------------------------------------------------------------------------

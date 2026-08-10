@@ -235,6 +235,41 @@ class TestReviewers:
 
 
 class TestSecurityHardening:
+    def test_reviewer_ref_traversal_escape_is_dropped(self, mod, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside-reviewer.md"
+        outside.write_text("review instructions")
+        _write_config(repo, {"review": {"reviewers": [
+            {"id": "escape", "ref": "../outside-reviewer.md"}
+        ]}})
+
+        result = mod.load_review_config(str(repo), changed_files=[])
+
+        assert result["reviewers"] == []
+        assert any(
+            "escape" in item and "escapes" in item
+            for item in result["diagnostics"]
+        )
+
+    def test_reviewer_ref_symlink_escape_is_dropped(self, mod, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside-reviewer.md"
+        outside.write_text("review instructions")
+        (repo / "reviewer.md").symlink_to(outside)
+        _write_config(repo, {"review": {"reviewers": [
+            {"id": "escape", "ref": "reviewer.md"}
+        ]}})
+
+        result = mod.load_review_config(str(repo), changed_files=[])
+
+        assert result["reviewers"] == []
+        assert any(
+            "escape" in item and "escapes" in item
+            for item in result["diagnostics"]
+        )
+
     def test_config_symlink_escaping_repo_is_ignored(self, mod, tmp_path):
         # A committed .pirategoat/config.json symlink pointing outside the repo
         # must not be opened/parsed.
