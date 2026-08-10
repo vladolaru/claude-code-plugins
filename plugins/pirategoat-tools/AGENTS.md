@@ -16,7 +16,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/plan_dispatch.py` | Deterministic dispatch planning. Reads agent registry + changed files → produces which agents to run, skip, and why. Called internally by review/pipeline.py. Also runs the unrecognized-source safety net (`detect_unrecognized_source`) that emits a `warnings[]` entry when a changed source language no domain covers — so coverage gaps fail loudly instead of producing a clean review. |
 | `scripts/review/dispatch_status.py` | Canonical producer/consumer dispatch-status vocabulary and dispatch-plan agent validator. Consumers classify dispatched and skipped states only through its explicit sets; hand-edited invalid statuses fail with the offending agent and value. |
 | `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. `--refresh-host-context` re-runs only host-context discovery against the existing review-context.json (used after a trusted-branch dependency refresh). |
-| `scripts/review/dependency_refresh.py` | Deterministic stale-dependency-root detection for trusted-branch refresh (opt-in `--refresh-deps`). Side-effect free: signals composer/npm/pnpm/yarn roots whose manifest/lockfile changed in range or whose installed state is missing, bounded to repo root + directories containing changed manifest files. Execution belongs to the step 3 briefing, never this module. |
+| `scripts/review/dependency_refresh.py` | Deterministic stale-dependency-root and clean-tracked-baseline detection for trusted-branch refresh (opt-in `--refresh-deps`). Side-effect free: signals composer/npm/pnpm/yarn roots whose manifest/lockfile changed in range or whose installed state is missing, bounded to repo root + directories containing changed manifest files, then refuses refresh when tracked state is dirty or cannot be inspected. Execution belongs to the step 3 briefing, never this module. |
 | `scripts/review/user_settings.py` | Requester-side machine-local settings (`~/.config/pirategoat/config.json` / `$XDG_CONFIG_HOME`). Owns the standing trust declaration `review.refresh_dependencies: true` that defaults trusted-branch refresh on for every interactive run. Deliberately separate from the reviewed repo's `.pirategoat/config.json`: trust is the requester's to declare, never the repo's. |
 | `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, `add_unreviewed()` (declared budget-omission coverage gaps, verified against the bootstrap-written `<reviewer>-deferred-files.json` sidecar when present so an unmatched declaration fails loudly instead of inverting into a reviewed claim), verdict calculation, JSON/Markdown serialization. |
 | `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8. |
@@ -172,32 +172,46 @@ Split of responsibilities:
 
 - **Deterministic detection** (`scripts/review/dependency_refresh.py`, run by
   step 3 orchestration): signals dependency roots whose manifest/lockfile
-  changed in the reviewed range or whose installed state is missing. Failure
-  records `detection_failed` — staleness is reported unknown, never silently
-  clean.
-- **Adaptive execution** (step 3 briefing): the orchestrator runs the
-  suggested install commands (`composer install`, `npm ci`, `pnpm install
-  --frozen-lockfile`, `yarn install --immutable`), checks for tracked-file
-  changes, then re-resolves host context with `context.py
-  --refresh-host-context` and writes `dependency-refresh.json` (a step 3
-  handoff gate).
+  changed in the reviewed range or whose installed state is missing, then
+  requires a clean tracked worktree before offering any install actions.
+  `git status --porcelain --untracked-files=no` ignores untracked files but
+  retains tracked submodule changes. Dirty state records `dirty_worktree` with
+  bounded path evidence; a failed, timed-out, nonzero, or undecodable status
+  check fails closed as `worktree_status_failed`. Both skip states preserve
+  the stale-root signals and proceed with degraded host context. A broader
+  detection failure still records `detection_failed` — staleness is unknown,
+  never silently clean.
+- **Adaptive execution** (step 3 briefing, only after the clean-baseline
+  precondition): the orchestrator runs the suggested install commands
+  (`composer install`, `npm ci`, `pnpm install --frozen-lockfile`, `yarn
+  install --immutable`), checks for tracked-file changes, restores only
+  install-created tracked changes from the known-clean baseline, then
+  re-resolves host context with `context.py --refresh-host-context` and writes
+  `dependency-refresh.json` (a step 3 handoff gate). The pipeline never
+  stashes, reapplies, or otherwise takes custody of the requester's
+  uncommitted work.
 - **Measurement** (`telemetry.py`): the manifest records the sanitized
-  report under `dependency_refresh` — a run reviewed against freshly
-  installed dependencies is not comparable to one with degraded host
+  report under `dependency_refresh`. Refused refreshes carry explicit
+  `skipped` provenance and no `verification` block — a run reviewed against
+  freshly installed dependencies is not comparable to one with degraded host
   context.
 
-Execution governance (requester-trusted with post-hoc evidence, decided
-2026-08-03): requester opt-in is the execution trust boundary, and the
-orchestrator performs the installs adaptively. At step 5, the pipeline records
-post-hoc evidence: it validates the command strings in the self-report against
-its install-command allowlist and independently observes tracked Git dirtiness
-with `git status --porcelain --untracked-files=no`, recording a `verification`
-block beside the self-report in the manifest. Neither check attests which
-commands actually executed. A missing report leaves command evidence unknown
-without marking verification itself failed, and validation failures do not
-block dispatch. Suggested commands carry script-blocking flags as
-defense-in-depth, not as a guarantee that package-manager execution is safe:
-`.pnpmfile.cjs` survives `--ignore-scripts`.
+Execution governance (requester-trusted, clean-baseline enforced; updated
+2026-08-10): requester opt-in is the execution trust boundary, while the
+deterministic clean-worktree gate is the custody boundary. If tracked changes
+exist, the requester decides whether to commit or stash them and rerun; the
+pipeline does not touch them. When installs do run, the orchestrator performs
+them adaptively. At step 5, the pipeline records post-hoc evidence: it validates
+the command strings in the self-report against its install-command allowlist
+and independently observes tracked Git dirtiness with `git status --porcelain
+--untracked-files=no`, recording a `verification` block beside the self-report
+in the manifest. A refused refresh skips verification and records the refusal
+instead. Neither post-hoc check attests which commands actually executed. A
+missing report leaves command evidence unknown without marking verification
+itself failed, and validation failures do not block dispatch. Suggested
+commands carry script-blocking flags as defense-in-depth, not as a guarantee
+that package-manager execution is safe: `.pnpmfile.cjs` survives
+`--ignore-scripts`.
 
 **Hard-off for bots.** `refresh_dependencies` is interactive-only: step 1
 forces it off (with a stderr warning) for `interactive: false` runs whether
@@ -205,7 +219,8 @@ it arrived via CLI or a pre-seeded run-config.json. A bot reviewing
 third-party PRs must never execute reviewed-branch code. The adaptive
 orchestrator solves the *variability* problem (which manager, which
 commands, monorepos); the opt-in gate — and only the gate — solves the
-*trust* problem.
+*trust* problem. The deterministic clean-baseline gate separately ensures the
+pipeline never takes custody of uncommitted tracked work.
 
 ### Shared Protocols
 
