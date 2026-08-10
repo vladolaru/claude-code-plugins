@@ -11,7 +11,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/pipeline.py` | Executable facade for the unified 12-step review pipeline. Owns conditions, routing, state I/O, output formatting, telemetry/Git identity, and the CLI while re-exporting the split pipeline modules. Called by all three review commands with `--mode pr\|full\|incremental` and generated Codex adapters with `--host codex`. |
 | `scripts/review/pipeline_contract.py` | Shared path, host, step-sequence, timeout, and Git vocabulary used across the pipeline modules. |
 | `scripts/review/briefings.py` | Pure curated-context guidance, formatters, mission text, and output templates for the 12 review steps. |
-| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, dependency-refresh detection, and dispatch-plan persistence. |
+| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, dependency-refresh detection, dispatch-plan persistence, and readiness-gated per-reviewer Markdown materialization with outcome state. |
 | `../../scripts/generate_codex_compat.py` | Repository-level generator that converts canonical Claude Code commands into Codex command-skill adapters and emits this plugin's `.codex-plugin/plugin.json`. |
 | `scripts/review/agent_registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
 | `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. When a primary domain matches nothing but a secondary domain does, `resolve_overall_status` flips the status to a scoped `OK` and injects a `COVERAGE NOTE` so the agent reviews the secondary files with an honestly-scoped verdict instead of silently masking the gap. |
@@ -21,10 +21,10 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/context.py` | Unified Ring 1 context collection. Fills git context, PR metadata, reviews, linked issues, staleness, and author name. `--refresh-host-context` re-runs only host-context discovery against the existing review-context.json (used after a trusted-branch dependency refresh). |
 | `scripts/review/dependency_refresh.py` | Deterministic stale-dependency-root and clean-tracked-baseline detection for trusted-branch refresh (opt-in `--refresh-deps`). Side-effect free: signals composer/npm/pnpm/yarn roots whose manifest/lockfile changed in range or whose installed state is missing, bounded to repo root + directories containing changed manifest files, then refuses refresh when tracked state is dirty or cannot be inspected. Execution belongs to the step 3 briefing, never this module. |
 | `scripts/review/user_settings.py` | Requester-side machine-local settings (`~/.config/pirategoat/config.json` / `$XDG_CONFIG_HOME`). Owns the standing trust declaration `review.refresh_dependencies: true` that defaults trusted-branch refresh on for every interactive run. Deliberately separate from the reviewed repo's `.pirategoat/config.json`: trust is the requester's to declare, never the repo's. |
-| `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, `add_unreviewed()` (declared budget-omission coverage gaps, verified against the bootstrap-written `<reviewer>-deferred-files.json` sidecar when present so an unmatched declaration fails loudly instead of inverting into a reviewed claim), verdict calculation, JSON/Markdown serialization. |
-| `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8. |
+| `scripts/review/agent/output.py` | ReviewOutputBuilder — `add_issue()`, `add_recommendation()`, `add_positive()`, `add_unreviewed()` (declared budget-omission coverage gaps, verified against the bootstrap-written `<reviewer>-deferred-files.json` sidecar when present so an unmatched declaration fails loudly instead of inverting into a reviewed claim), verdict calculation, canonical JSON publication, and the derived Markdown `render\|materialize` CLI. |
+| `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8 after per-reviewer Markdown materialization; it does not render those human-facing artifacts itself. |
 | `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
-| `scripts/review/manifest_sections.py` | Pure builders for dispatch, coverage, and dependency-refresh sections in durable review manifests. |
+| `scripts/review/manifest_sections.py` | Pure builders for dispatch, coverage, dependency-refresh, and reviewer-Markdown outcome sections in durable review manifests. |
 | `scripts/containment.py` | Single implementation for pipeline repo-boundary decisions. Filesystem-resolved callers and telemetry's POSIX-only lexical caller keep their own failure policy while sharing the containment decision. |
 | `scripts/git_paths.py` | Single grammar implementation for Git C-quoted paths. Review-config provenance, telemetry, and scoped-diff parsing keep their caller-specific failure policies while sharing escape and octal decoding. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
@@ -98,8 +98,10 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   │           Section 2: REVIEW CONTENT  (middle — processing zone)
   │           Section 3: OUTPUT          (bottom — recency effect)
   │
-  ├─ Step 8: review/reconciliation_context.py
-  │   └─ Gathers all agent JSONs + source snippets + scope annotations
+  ├─ Step 8: review/orchestration.py readiness gate
+  │   ├─ Materializes derived <reviewer>-review.md from settled JSONs
+  │   └─ review/reconciliation_context.py gathers agent JSONs + source
+  │       snippets + scope annotations
   │       → reconciliation-context.json + reconciliation-context.md
   │
   ├─ review-reconciliator agent (semantic dedup + scope check + fact verification)
@@ -156,7 +158,7 @@ These are variations on the mission, not repetitions. Each connects the mission 
 
 ### Step 8 Readiness Gate
 
-Before reconciliation, step 8 checks if all dispatched agents have finished via `review/agents_status.py`. If agents are still running, returns a WAITING briefing. Tracks `first_waiting_at` in pipeline state. If elapsed wait exceeds `agent_timeout_seconds + 60s`, escalates: clears the waiting state and proceeds with reconciliation using available results, instructing the LLM to TaskStop stuck agents first.
+Before reconciliation, step 8 checks if all dispatched agents have finished via `review/agents_status.py`. If agents are still running, returns a WAITING briefing. Once the gate proceeds, orchestration materializes human-facing `<reviewer>-review.md` files from every settled canonical JSON before building reconciliation context and records the complete/partial/failed outcome in pipeline state and the run manifest. Materialization is best-effort and also runs when the status checker itself crashes, because checker failure does not make published JSON unsafe to render; its outcome never changes review verdict or pipeline status. Tracks `first_waiting_at` in pipeline state. If elapsed wait exceeds `agent_timeout_seconds + 60s`, escalates: clears the waiting state and proceeds with reconciliation using available results, instructing the LLM to TaskStop stuck agents first.
 
 ### Trusted-Branch Dependency Refresh (opt-in)
 
@@ -369,7 +371,7 @@ Each reviewer agent publishes one file in `OUTPUT_DIR`:
 
 - `<reviewer>-review.json` — the canonical artifact: structured findings written via `builder.save()` (see `schemas/review-output.ts` for types)
 
-The human-readable `<reviewer>-review.md` is derived from the JSON, not written by reviewers — reconciliation materializes it for humans, and it is renderable on demand via `python3 scripts/review/agent/output.py render|materialize`.
+The human-readable `<reviewer>-review.md` is derived from the canonical JSON, not written by reviewers — the step 8 readiness gate materializes it before reconciliation begins, and it remains renderable on demand via `python3 scripts/review/agent/output.py render|materialize`.
 
 **ReviewOutputBuilder API** (`scripts/review/agent/output.py`):
 
