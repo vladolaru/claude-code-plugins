@@ -209,21 +209,17 @@ SCENARIOS = {
                 ],
             },
             "performance-reviewer": {
-                # performance-reviewer.md lists missing LIMIT in raw queries
-                # under CRITICAL (Unbounded Queries), but that bucket's
-                # exemplars are flagrant full-table fetches (-1 flags) and
-                # THIS query is WHERE-bounded per user — live calibration
-                # shows the reviewer judging it below critical on that
-                # ground. Floor medium (blocks vacuous low/info matches)
-                # rather than enforcing the literal-CRITICAL reading against
-                # a defensible instance judgment.
+                # performance-reviewer.md classifies missing LIMIT in raw
+                # queries as CRITICAL (Unbounded Queries). The fixture's
+                # separate no-WHERE/no-LIMIT query makes that classification
+                # unambiguous.
                 "verdict_in": ["comment", "request_changes", "block"],
                 "required_findings": [
                     # No select\* token — a SELECT-*-over-fetch finding is a
                     # different genuine defect and must not claim the
                     # unbounded-query recall gate.
                     {"id": "unbounded-query", "file": "src/PaymentHandler.php",
-                     "min_severity": "medium",
+                     "min_severity": "critical",
                      "match_any": [r"\bLIMIT\b", r"unbounded", r"paginat"]},
                 ],
             },
