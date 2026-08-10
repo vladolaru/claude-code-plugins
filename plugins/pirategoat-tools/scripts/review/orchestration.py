@@ -474,15 +474,61 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     # Materialize human-facing Markdown from every settled canonical JSON
     # before reconciliation begins. This also runs when the best-effort status
     # checker fails: its failure does not make published JSON unsafe to render.
+    reviewer_markdown = {
+        "ran": True,
+        "written": 0,
+        "expected": 0,
+        "status": "failed",
+    }
+    materialization_failed = False
+    written_markdown = set()
     try:
-        _materialize_reviewer_markdown(
+        written_paths = _materialize_reviewer_markdown(
             output_dir, str(SCRIPTS_DIR / "agent" / "output.py"),
         )
+        written_markdown = {
+            os.path.abspath(os.fspath(path)) for path in written_paths
+        }
     except Exception as err:  # noqa: BLE001 — best-effort by design
+        materialization_failed = True
         print(
             f"reviewer markdown materialization failed: {err}",
             file=sys.stderr,
         )
+
+    expected_markdown = set()
+    try:
+        expected_markdown = {
+            os.path.abspath(os.path.join(
+                output_dir,
+                name[: -len(".json")] + ".md",
+            ))
+            for name in os.listdir(output_dir)
+            if name.endswith("-review.json")
+        }
+    except Exception as err:  # noqa: BLE001 — best-effort by design
+        materialization_failed = True
+        print(
+            f"reviewer markdown materialization failed: {err}",
+            file=sys.stderr,
+        )
+
+    reviewer_markdown["written"] = len(written_markdown)
+    reviewer_markdown["expected"] = len(expected_markdown)
+    if not materialization_failed:
+        reviewer_markdown["status"] = (
+            "complete"
+            if written_markdown == expected_markdown
+            else "partial"
+        )
+    state["reviewer_markdown"] = reviewer_markdown
+    degradation = state.setdefault("degradation", {})
+    if reviewer_markdown["status"] == "complete":
+        degradation.pop("reviewer_markdown_incomplete", None)
+        if not degradation:
+            state.pop("degradation", None)
+    else:
+        degradation["reviewer_markdown_incomplete"] = True
 
     cp_path = os.path.join(output_dir, "change-purpose.md")
     if os.path.isfile(cp_path):

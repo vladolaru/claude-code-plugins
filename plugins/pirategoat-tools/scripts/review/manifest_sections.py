@@ -42,6 +42,9 @@ _DEPENDENCY_REFRESH_STATUSES = frozenset({"completed", "partial", "failed"})
 _MAX_DEPENDENCY_REFRESH_COMMANDS = 32
 _MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS = 200
 _MAX_DEPENDENCY_REFRESH_COMMAND_CHARS = 500
+_REVIEWER_MARKDOWN_STATUSES = frozenset({
+    "not_run", "complete", "partial", "failed",
+})
 
 
 def read_json_file(output_dir: str, name: str) -> Optional[dict]:
@@ -502,3 +505,37 @@ def build_dependency_refresh_manifest(output_dir: str):
             })
     result["commands"] = sanitized
     return result
+
+
+def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
+    """Project the script-owned reviewer-Markdown outcome into the manifest."""
+    state = read_json_file(output_dir, "pipeline-state.json")
+    outcome = state.get("reviewer_markdown") if state is not None else None
+    if not isinstance(outcome, dict):
+        return None
+
+    ran = outcome.get("ran")
+    written = outcome.get("written")
+    expected = outcome.get("expected")
+    status = outcome.get("status")
+    if (
+        not isinstance(ran, bool)
+        or not isinstance(written, int)
+        or isinstance(written, bool)
+        or written < 0
+        or not isinstance(expected, int)
+        or isinstance(expected, bool)
+        or expected < 0
+        or status not in _REVIEWER_MARKDOWN_STATUSES
+        or (ran and status == "not_run")
+        or (not ran and status != "not_run")
+        or (status == "complete" and written != expected)
+    ):
+        return None
+
+    return {
+        "ran": ran,
+        "written": written,
+        "expected": expected,
+        "status": status,
+    }

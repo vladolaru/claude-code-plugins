@@ -1179,6 +1179,20 @@ class TestStep8Orchestration:
         cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
         return subprocess.run(cmd, capture_output=True, text=True)
 
+    def test_step_1_records_that_reviewer_markdown_has_not_run(self, tmp_path):
+        result = self._run(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path)
+        )
+
+        assert result.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state["reviewer_markdown"] == {
+            "ran": False,
+            "written": 0,
+            "expected": 0,
+            "status": "not_run",
+        }
+
     def test_step_8_reads_change_purpose(self, tmp_path):
         """Step 8 should read change-purpose.md into state."""
         self._run("--step", "1", "--mode", "full",
@@ -1241,11 +1255,12 @@ class TestStep8Orchestration:
             reconciliation_succeeds,
         )
 
+        state = {"resolved_params": {}}
         result = mod._orchestrate_step(
             8,
             "full",
             {},
-            {"resolved_params": {}},
+            state,
             {},
             str(tmp_path),
         )
@@ -1253,6 +1268,228 @@ class TestStep8Orchestration:
         assert result == {}
         assert (tmp_path / "code-review.md").is_file()
         assert (tmp_path / "security-review.md").is_file()
+        assert state["reviewer_markdown"] == {
+            "ran": True,
+            "written": 2,
+            "expected": 2,
+            "status": "complete",
+        }
+
+    def test_step_8_materializes_when_status_checker_crashes(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "security-review.json").write_text(
+            json.dumps(_review_json("security"))
+        )
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("checker crashed")
+            ),
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        result = mod._orchestrate_step(
+            8, "full", {}, state, {}, str(tmp_path)
+        )
+
+        assert result == {}
+        assert (tmp_path / "security-review.md").is_file()
+        assert state["reviewer_markdown"]["status"] == "complete"
+
+    def test_step_8_uses_post_render_snapshot_when_json_arrives_during_materialization(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "security-review.json").write_text(
+            json.dumps(_review_json("security"))
+        )
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("checker crashed")
+            ),
+        )
+        original_materialize = mod._orchestrate_step_8.__globals__[
+            "_materialize_reviewer_markdown"
+        ]
+
+        def publish_then_materialize(output_dir, output_builder_path):
+            (tmp_path / "code-review.json").write_text(
+                json.dumps(_review_json("code"))
+            )
+            return original_materialize(output_dir, output_builder_path)
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_reviewer_markdown",
+            publish_then_materialize,
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        result = mod._orchestrate_step(
+            8, "full", {}, state, {}, str(tmp_path)
+        )
+
+        assert result == {}
+        assert (tmp_path / "code-review.md").is_file()
+        assert (tmp_path / "security-review.md").is_file()
+        assert state["reviewer_markdown"] == {
+            "ran": True,
+            "written": 2,
+            "expected": 2,
+            "status": "complete",
+        }
+
+    def test_step_8_compares_materialized_path_identities_not_only_counts(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "security-review.json").write_text(
+            json.dumps(_review_json("security"))
+        )
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+        unrelated_markdown = tmp_path / "code-review.md"
+        unrelated_markdown.write_text("# Different reviewer\n")
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_reviewer_markdown",
+            lambda *_args, **_kwargs: [str(unrelated_markdown)],
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        result = mod._orchestrate_step(
+            8, "full", {}, state, {}, str(tmp_path)
+        )
+
+        assert result == {}
+        assert state["reviewer_markdown"] == {
+            "ran": True,
+            "written": 1,
+            "expected": 1,
+            "status": "partial",
+        }
+        assert state["degradation"]["reviewer_markdown_incomplete"] is True
+
+    def test_step_8_records_materialization_failure_without_aborting(
+        self, mod, tmp_path, monkeypatch, capsys
+    ):
+        (tmp_path / "security-review.json").write_text(
+            json.dumps(_review_json("security"))
+        )
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_materialize_reviewer_markdown",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("renderer crashed")
+            ),
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        result = mod._orchestrate_step(
+            8, "full", {}, state, {}, str(tmp_path)
+        )
+
+        assert result == {}
+        assert state["reviewer_markdown"] == {
+            "ran": True,
+            "written": 0,
+            "expected": 1,
+            "status": "failed",
+        }
+        assert state["degradation"]["reviewer_markdown_incomplete"] is True
+        assert "reviewer markdown materialization failed: renderer crashed" in (
+            capsys.readouterr().err
+        )
+
+    def test_step_8_records_skipped_json_as_partial_materialization(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "security-review.json").write_text("{}")
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+        state = {"resolved_params": {}}
+
+        result = mod._orchestrate_step(
+            8, "full", {}, state, {}, str(tmp_path)
+        )
+
+        assert result == {}
+        assert state["reviewer_markdown"] == {
+            "ran": True,
+            "written": 0,
+            "expected": 1,
+            "status": "partial",
+        }
+        assert state["degradation"]["reviewer_markdown_incomplete"] is True
 
     def test_step_8_reconciliation_failure_happens_after_reviewer_markdown(
         self, mod, tmp_path, monkeypatch

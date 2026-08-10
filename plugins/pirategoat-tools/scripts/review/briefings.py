@@ -1429,6 +1429,29 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 # Step 11: Present Results
 # ---------------------------------------------------------------------------
 
+def _reviewer_markdown_status_line(state, output_dir):
+    """Summarize the derived reviewer-Markdown outcome for a human."""
+    outcome = state.get("reviewer_markdown")
+    if not isinstance(outcome, dict) or outcome.get("ran") is not True:
+        detail = "materialization did not run"
+    else:
+        written = outcome.get("written", 0)
+        expected = outcome.get("expected", 0)
+        if (
+            outcome.get("status") == "complete"
+            and written == expected
+            and written > 0
+        ):
+            return f"Reviewer Markdown: materialized {written}/{expected} files."
+        detail = f"materialization {outcome.get('status', 'incomplete')} ({written}/{expected} files)"
+
+    command = (
+        f"python3 {shlex.quote(str(SCRIPTS_DIR / 'agent' / 'output.py'))} "
+        f"materialize {shlex.quote(str(output_dir))}"
+    )
+    return f"⚠️ Reviewer Markdown: {detail}; regenerate with: `{command}`."
+
+
 def _step_11_present_results(mode, state, context, config, output_dir):
     """Step 11: Present Results — show review output."""
     od = output_dir or "<OUTPUT_DIR>"
@@ -1467,6 +1490,8 @@ def _step_11_present_results(mode, state, context, config, output_dir):
 
         if mode == "incremental":
             actions.append("Baseline saved. Next run reviews only new commits.")
+
+    actions.append(_reviewer_markdown_status_line(state, od))
 
     return {
         "phase": "OUTPUT",

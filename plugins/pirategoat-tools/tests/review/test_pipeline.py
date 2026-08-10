@@ -1774,6 +1774,100 @@ class TestStep11PresentResults:
         assert "pipeline-result.json" in text
         assert "Present to the user" not in text
 
+    @pytest.mark.parametrize("interactive", [True, False])
+    @pytest.mark.parametrize(
+        ("expected", "status"),
+        [(2, "partial"), (0, "complete")],
+    )
+    def test_zero_reviewer_markdown_includes_regeneration_command(
+        self, mod, tmp_path, interactive, expected, status
+    ):
+        config = {"mode": "pr", "interactive": interactive}
+        state = {
+            "completed_steps": [],
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 0,
+                "expected": expected,
+                "status": status,
+            },
+            "degradation": {"reviewer_markdown_incomplete": True},
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {}, config=config, output_dir=str(tmp_path)
+        )
+
+        lines = [
+            line for line in guidance["actions"]
+            if "Reviewer Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert f"0/{expected}" in lines[0]
+        assert (
+            f"python3 {SCRIPT_PATH.parent}/agent/output.py "
+            f"materialize {tmp_path}"
+        ) in lines[0]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_regeneration_command_quotes_paths_with_spaces(
+        self, mod, tmp_path, interactive
+    ):
+        output_dir = tmp_path / "review output"
+        state = {
+            "completed_steps": [],
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 0,
+                "expected": 1,
+                "status": "partial",
+            },
+            "degradation": {"reviewer_markdown_incomplete": True},
+        }
+
+        guidance = mod.get_step_guidance(
+            11,
+            "pr",
+            state,
+            {},
+            config={"mode": "pr", "interactive": interactive},
+            output_dir=str(output_dir),
+        )
+
+        lines = [
+            line for line in guidance["actions"]
+            if "Reviewer Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert f"materialize '{output_dir}'" in lines[0]
+        assert "\n" not in lines[0]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_complete_reviewer_markdown_reports_positive_count_without_command(
+        self, mod, tmp_path, interactive
+    ):
+        config = {"mode": "pr", "interactive": interactive}
+        state = {
+            "completed_steps": [],
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 2,
+                "expected": 2,
+                "status": "complete",
+            },
+        }
+
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {}, config=config, output_dir=str(tmp_path)
+        )
+
+        lines = [
+            line for line in guidance["actions"]
+            if "Reviewer Markdown:" in line
+        ]
+        assert lines == ["Reviewer Markdown: materialized 2/2 files."]
+        assert "agent/output.py materialize" not in lines[0]
+
     def test_incremental_mentions_baseline_saved(self, mod, tmp_path):
         config = {"mode": "incremental", "interactive": True}
         state = {"completed_steps": []}

@@ -2733,6 +2733,91 @@ class TestQuickModeTelemetry:
         assert final["summary"]["quick_mode"] is True
 
 
+class TestReviewerMarkdownManifest:
+    """The manifest records the sanitized reviewer-Markdown outcome."""
+
+    def _telemetry(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        log_dir = tmp_path / "logs"
+        telemetry = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
+        telemetry.start(
+            mode="full",
+            repo_path=str(tmp_path),
+            identifier="branch",
+            run_id="run-1",
+        )
+        return telemetry, out_dir
+
+    def test_absent_state_is_recorded_as_unavailable(self, mod, tmp_path):
+        telemetry, _out_dir = self._telemetry(mod, tmp_path)
+
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["reviewer_markdown"] is None
+
+    def test_state_outcome_is_sanitized_into_manifest(self, mod, tmp_path):
+        telemetry, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 2,
+                "expected": 3,
+                "status": "partial",
+                "ignored": "do not persist",
+            },
+        }))
+
+        telemetry.log_step(step=8, phase="SYNTHESIS", title="Reconcile")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["reviewer_markdown"] == {
+            "ran": True,
+            "written": 2,
+            "expected": 3,
+            "status": "partial",
+        }
+
+    def test_partial_outcome_allows_equal_counts_when_path_identities_differ(
+        self, mod, tmp_path
+    ):
+        telemetry, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 1,
+                "expected": 1,
+                "status": "partial",
+            },
+        }))
+
+        telemetry.log_step(step=8, phase="SYNTHESIS", title="Reconcile")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["reviewer_markdown"] == {
+            "ran": True,
+            "written": 1,
+            "expected": 1,
+            "status": "partial",
+        }
+
+    def test_malformed_state_outcome_is_unavailable(self, mod, tmp_path):
+        telemetry, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "reviewer_markdown": {
+                "ran": "yes",
+                "written": True,
+                "expected": -1,
+                "status": "complete",
+            },
+        }))
+
+        telemetry.log_step(step=8, phase="SYNTHESIS", title="Reconcile")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["reviewer_markdown"] is None
+
+
 class TestDependencyRefreshManifest:
     """The manifest records the sanitized dependency-refresh report."""
 

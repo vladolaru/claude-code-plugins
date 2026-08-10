@@ -327,6 +327,12 @@ _DEFAULT_STATE = {
         "completed": [],
         "failed": [],
     },
+    "reviewer_markdown": {
+        "ran": False,
+        "written": 0,
+        "expected": 0,
+        "status": "not_run",
+    },
     "verdict": None,
 }
 

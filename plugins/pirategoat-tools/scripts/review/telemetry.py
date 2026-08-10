@@ -809,6 +809,9 @@ class ReviewTelemetry:
         manifest["dependency_refresh"] = (
             manifest_sections.build_dependency_refresh_manifest(self.output_dir)
         )
+        manifest["reviewer_markdown"] = (
+            manifest_sections.build_reviewer_markdown_manifest(self.output_dir)
+        )
         if self._event_parse_gaps:
             manifest["event_parse_gaps"] = self._event_parse_gaps
         return manifest
