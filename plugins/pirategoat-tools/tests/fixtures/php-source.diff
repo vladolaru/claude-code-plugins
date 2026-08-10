@@ -32,7 +32,7 @@ new file mode 100644
 index 0000000..fb50023
 --- /dev/null
 +++ b/src/PaymentHandler.php
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,25 @@
 +<?php
 +
 +class PaymentHandler {
@@ -47,6 +47,7 @@ index 0000000..fb50023
 +        $result = $this->db->query(
 +            "SELECT * FROM payments WHERE user_id = " . $_GET['user_id']
 +        );
++        $all_payments = $this->db->query( "SELECT id FROM payments" );
 +
 +        if ( $result ) {
 +            $this->db->query(
