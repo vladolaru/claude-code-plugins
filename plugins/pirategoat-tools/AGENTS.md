@@ -81,6 +81,10 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   │
   └─ review/pipeline.py --step N --mode pr|full|incremental
       │
+      ├─ pipeline_contract.py ← shared host, step, timeout, path, Git vocabulary
+      ├─ briefings.py         ← pure get_step_guidance() + step text
+      ├─ orchestration.py     ← side-effecting _orchestrate_step() dispatch
+      │
       ├─ Step 3: review/context.py → review-context.json
       ├─ Step 5: review/plan_dispatch.py → dispatch-plan.json
       │

@@ -10,9 +10,9 @@ tests/
 ├── __init__.py                       # Package marker
 ├── conftest.py                       # Shared fixtures + sys.path setup (SCRIPTS_DIR on path)
 ├── review/                           # Tests for scripts/review/
-│   ├── test_pipeline.py              # Pipeline briefing tests (get_step_guidance)
-│   ├── test_pipeline_infra.py        # Pipeline infrastructure (step sequence, routing, state, CLI)
-│   ├── test_pipeline_integration.py  # Pipeline orchestration (subprocess, telemetry, integration)
+│   ├── test_pipeline.py              # briefings.py through the pipeline.py compatibility facade
+│   ├── test_pipeline_infra.py        # pipeline.py + pipeline_contract.py routing, state, and CLI
+│   ├── test_pipeline_integration.py  # orchestration.py through the pipeline.py compatibility facade
 │   ├── test_plan_dispatch.py         # Dispatch planning tests
 │   ├── test_context.py               # Review context collection tests
 │   ├── test_agents_status.py         # Agent readiness gate tests
@@ -60,6 +60,19 @@ tests/
     ├── wp-hooks-and-i18n.diff        # WP plugin: hooks, i18n, escaping, $wpdb
     └── multi-file-realistic.diff     # 7 files across all 9 domains
 ```
+
+### Review Pipeline Tests
+
+The review pipeline tests load `scripts/review/pipeline.py` as the stable compatibility facade, then divide assertions along the same ownership boundaries as production:
+
+| Source module | Concern | Test file |
+|---|---|---|
+| `scripts/review/pipeline.py` | Conditions, routing, state I/O, output formatting, telemetry/Git identity, CLI | `review/test_pipeline_infra.py` |
+| `scripts/review/pipeline_contract.py` | Shared host, step-sequence, timeout, path, and Git vocabulary | All three pipeline test files |
+| `scripts/review/briefings.py` | Pure guidance and briefing formatting | `review/test_pipeline.py` |
+| `scripts/review/orchestration.py` | Side-effecting per-step subprocess and artifact work | `review/test_pipeline_integration.py` |
+
+`pipeline_mod` preserves the facade's re-export contract for existing callers. Tests that patch a name resolved by orchestration use `orchestration_mod`, so the patch targets the caller's module globals.
 
 ###Bootstrap Unit Tests (`review/agent/test_bootstrap.py`)
 

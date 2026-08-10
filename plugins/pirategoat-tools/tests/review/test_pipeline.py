@@ -1,4 +1,4 @@
-"""Tests for review/pipeline.py — step briefing output (get_step_guidance)."""
+"""Tests for review/briefings.py through the pipeline.py compatibility facade."""
 
 import json
 import re

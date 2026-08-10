@@ -42,7 +42,7 @@ def _load_pipeline_module():
 
 @pytest.fixture(scope="session")
 def pipeline_mod():
-    """Session-scoped pipeline module — shared across all pipeline test files."""
+    """Load the pipeline compatibility facade shared by all pipeline tests."""
     return _load_pipeline_module()
 
 

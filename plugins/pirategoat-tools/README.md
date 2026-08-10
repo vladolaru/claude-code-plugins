@@ -195,6 +195,10 @@ pirategoat-tools/
 │   └── software-architecture/patterns/   # 87KB design pattern library
 ├── scripts/          # Helper scripts organized by domain
 │   ├── review/             # Review pipeline, dispatch, context, telemetry
+│   │   ├── pipeline.py           # Executable facade: routing, state, output, telemetry, CLI
+│   │   ├── pipeline_contract.py  # Shared host, step, timeout, path, and Git vocabulary
+│   │   ├── briefings.py          # Pure curated guidance and briefing formatters
+│   │   ├── orchestration.py      # Side-effecting per-step subprocess and artifact work
 │   │   ├── dispatch_status.py  # Canonical dispatch vocabulary + plan validation
 │   │   └── agent/          # Agent bootstrap, scope filtering, output builder
 │   ├── hosts/              # Upstream host discovery (host_context CLI, chain, resolvers, ecosystem_cache)

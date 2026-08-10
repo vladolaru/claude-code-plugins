@@ -1,4 +1,4 @@
-"""Tests for review/pipeline.py — infrastructure: step sequence, routing, state, CLI."""
+"""Tests for review/pipeline.py and pipeline_contract.py routing, state, and CLI."""
 
 import json
 import os

@@ -1,4 +1,4 @@
-"""Tests for review/pipeline.py — orchestration: subprocess calls, telemetry, integration."""
+"""Tests for review/orchestration.py through the pipeline.py compatibility facade."""
 
 import importlib.util
 import json

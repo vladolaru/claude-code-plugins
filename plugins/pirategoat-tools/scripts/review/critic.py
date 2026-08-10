@@ -20,7 +20,7 @@ from typing import Optional
 TOTAL_STEPS = 4
 
 # Canonical critic verdict vocabulary. The Step 4 rubric below and the
-# pipeline.py critic briefings present exactly these verdicts, and the
+# briefings.py critic guidance presents exactly these verdicts, and the
 # review_metrics consumer (analysis/review_metrics/contracts.py) classifies
 # manifest critic verdicts against this constant — keep all three aligned.
 CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")

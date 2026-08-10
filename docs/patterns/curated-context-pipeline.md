@@ -234,6 +234,21 @@ Two files with distinct ownership:
 
 **Why split:** Mode and caller config don't change during a run — they're input. Execution state (which steps completed, which workers finished) evolves at every step. Separating them prevents accidental mutation of config and makes it clear what the script owns vs. what the caller provides.
 
+### Module Boundaries
+
+Keep the executable pipeline as a facade over three concern-specific modules:
+
+```text
+pipeline.py  ← conditions, routing, state I/O, output, telemetry, CLI
+├── imports pipeline_contract.py  ← shared vocabulary
+├── imports briefings.py          ← pure guidance and formatting
+│           └── imports pipeline_contract.py
+└── imports orchestration.py      ← side-effecting per-step work
+            └── imports pipeline_contract.py
+```
+
+`briefings.py` and `orchestration.py` are siblings: neither imports the other. Both import shared vocabulary directly from `pipeline_contract.py`; `pipeline.py` imports all three and remains the directly executable compatibility surface. This one-directional dependency graph keeps pure briefing changes separate from subprocess and state-management work while preserving one stable entry point for callers.
+
 ### Step Guidance Function
 
 ```python
@@ -406,6 +421,7 @@ The step-by-step prompt injection pattern remains valid for simpler cases — si
 - [ ] Choose a voice for the script's briefings
 
 **Script**
+- [ ] Shared vocabulary, pure briefings, side-effecting orchestration, and routing/CLI have one-directional module boundaries
 - [ ] `get_step_guidance()` is a pure formatting function — no I/O, no subprocess calls
 - [ ] Orchestration (file reads, subprocess calls) in a separate function, called before guidance
 - [ ] `get_step_guidance()` returns guidance for each step/mode combination

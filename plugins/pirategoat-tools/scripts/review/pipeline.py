@@ -7,10 +7,12 @@ in its analysis, contextual in its focus, accurate in its findings, and actionab
 in its recommendations — maintaining a high quality bar for codebases so they can
 deliver great business results and awesome user experiences.
 
-A single script owns a 12-step universal sequence. Mode (pr|full|incremental) and
-data-driven conditions determine which steps run. The script curates context as
-conversational briefings. Three command .md files are thin wrappers calling this
-script with --mode flags.
+This directly executable facade owns conditions, routing, state I/O, output
+formatting, telemetry/Git identity, and the CLI. Mode (pr|full|incremental) and
+data-driven conditions determine which steps run. Shared vocabulary lives in
+pipeline_contract.py, pure conversational briefings in briefings.py, and
+side-effecting per-step work in orchestration.py. Three command .md files are
+thin wrappers calling this facade with --mode flags.
 
 Split file-based state:
   - run-config.json:     Caller config (mode, pr_number, interactive, output_instructions).
