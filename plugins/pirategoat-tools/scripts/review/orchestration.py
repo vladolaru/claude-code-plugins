@@ -586,11 +586,11 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     # Record critic skip decision for telemetry.
     # Clear any stale decision first (step 10 may be rerun after
     # review-findings.json changes from approve/comment to a higher verdict).
-    state.setdefault("step_decisions", {}).pop(str(step), None)
+    state.setdefault("step_decisions", {}).pop("10", None)
     is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
     if is_quick and recon_verdict.lower() in ("approve", "comment"):
-        state["step_decisions"][str(step)] = {
+        state["step_decisions"]["10"] = {
             "critic_skipped": True,
             "reason": f"quick mode + reconciliation verdict: {recon_verdict}",
         }
