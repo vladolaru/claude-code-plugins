@@ -138,6 +138,8 @@ SCENARIOS = {
                 "required_findings": [
                     {"id": "sql-injection", "file": "src/UserHandler.php", "line": 6,
                      "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "security-reviewer.md -> SQL Injection = CRITICAL.",
                      "match_any": [r"sql[\s-]*inject", r"\bprepare\b", r"interpolat"]},
                 ],
                 "acceptable_findings": [
@@ -178,6 +180,8 @@ SCENARIOS = {
                     # without any injection having been reported.
                     {"id": "sql-injection-get", "file": "src/PaymentHandler.php", "line": 13,
                      "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "security-reviewer.md -> SQL Injection = CRITICAL.",
                      "match_any": [r"sql[\s-]*inject", r"concatenat", r"\bprepare\b"]},
                 ],
                 "acceptable_findings": [
@@ -220,6 +224,9 @@ SCENARIOS = {
                     # unbounded-query recall gate.
                     {"id": "unbounded-query", "file": "src/PaymentHandler.php",
                      "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "performance-reviewer.md -> Unbounded Queries "
+                                  "(raw query missing LIMIT) = CRITICAL.",
                      "match_any": [r"\bLIMIT\b", r"unbounded", r"paginat"]},
                 ],
             },
@@ -243,12 +250,18 @@ SCENARIOS = {
                     # the file holds no competing XSS-adjacent finding.
                     {"id": "dom-xss", "file": "src/components/UserForm.tsx",
                      "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "security-reviewer.md -> Cross-Site Scripting "
+                                  "(missing context-appropriate escaping) = CRITICAL.",
                      "match_any": [r"\bxss\b", r"innerHTML", r"sanitiz"]},
                     # No line pin: the reviewer may anchor at the declaration
                     # (line 1) or the transmission sink (line 11); the file is
                     # 24 lines and the patterns are already specific.
                     {"id": "hardcoded-api-key", "file": "src/api/client.ts",
                      "min_severity": "high",
+                     "severity_basis": "doctrine",
+                     "rationale": "security-reviewer.md -> Sensitive Data Exposure "
+                                  "(API keys or tokens in source) = HIGH.",
                      "match_any": [r"hard-?coded", r"api.?key", r"secret", r"credential"]},
                 ],
                 "acceptable_findings": [
@@ -270,12 +283,18 @@ SCENARIOS = {
                 # assertNotNull is the protocol's mock-return tautology ONLY
                 # if the reviewer can see PaymentHandler's implementation —
                 # this fixture is deliberately test-only, so the provable
-                # classification caps at weak-assertion/HIGH (live-confirmed:
-                # the reviewer files it high on exactly that ground).
+                # classification caps at weak-assertion/HIGH.
                 "verdict_in": ["block"],
                 "required_findings": [
                     {"id": "meaningless-assertion", "file": "tests/PaymentHandlerTest.php",
                      "line": 14, "min_severity": "high",
+                     "severity_basis": "evidence_capped",
+                     "rationale": "tests-reviewer-protocol.md makes mock-return "
+                                  "tautologies CRITICAL, but this test-only fixture "
+                                  "withholds PaymentHandler::process_payment(), so "
+                                  "the reviewer cannot prove $result merely forwards "
+                                  "the configured database mock return; the visible "
+                                  "weak-assertion evidence supports HIGH.",
                      "match_any": [r"assertNotNull", r"meaning", r"weak assert"]},
                     # Explicit absent-assertion phrasings only — a bare
                     # "assert" token lets the co-located over-mocking finding
@@ -283,6 +302,9 @@ SCENARIOS = {
                     # being reported.
                     {"id": "no-assertions", "file": "tests/OrderProcessorTest.php",
                      "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "tests-reviewer-protocol.md -> tests without "
+                                  "assertions (False Confidence) = CRITICAL.",
                      "match_any": [r"no\s+assert", r"assert\w*\s+nothing",
                                    r"without\s+(any\s+)?assert", r"missing\s+assert",
                                    r"zero\s+assert", r"lacks\s+assert",
@@ -309,6 +331,10 @@ SCENARIOS = {
                 "required_findings": [
                     {"id": "hardcoded-wait", "file": "e2e/checkout.spec.ts",
                      "min_severity": "high",
+                     "severity_basis": "doctrine",
+                     "rationale": "tests-reviewer-protocol.md -> flaky/time-dependent "
+                                  "tests = HIGH; e2e-tests-reviewer.md identifies "
+                                  "page.waitForTimeout() as arbitrary-delay flakiness.",
                      "match_any": [r"waitForTimeout", r"hard-?coded wait", r"fixed wait"]},
                 ],
                 "acceptable_findings": [
@@ -335,6 +361,9 @@ SCENARIOS = {
                 "required_findings": [
                     {"id": "unescaped-output", "file": "includes/class-payment-gateway.php",
                      "line": 47, "line_tolerance": 2, "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "security-reviewer.md -> Cross-Site Scripting "
+                                  "(missing context-appropriate escaping) = CRITICAL.",
                      "match_any": [r"esc_html", r"escap", r"\bxss\b"]},
                 ],
             },
@@ -352,6 +381,9 @@ SCENARIOS = {
                     {"id": "namespace-pollution",
                      "file": "includes/class-payment-gateway.php",
                      "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "wp-architecture-reviewer.md -> Global Namespace "
+                                  "Pollution from unprefixed global classes = CRITICAL.",
                      "match_any": [r"(?<!->)prefix", r"namespac", r"collision"]},
                 ],
             },
@@ -370,21 +402,38 @@ SCENARIOS = {
             "php-tests-reviewer": {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
+                    # tests-reviewer-protocol.md maps False Confidence to
+                    # CRITICAL, and the reviewer's required test-smells.md
+                    # reference classifies assertNotNull-only tests as false
+                    # positives. This fixture includes the implementation.
                     # No bare "assert" token — any assertion-adjacent finding
                     # on this file would claim the gate vacuously.
                     {"id": "weak-assertion", "file": "tests/ProductManagerTest.php",
-                     "min_severity": "medium",
+                     "min_severity": "critical",
+                     "severity_basis": "doctrine",
+                     "rationale": "tests-reviewer-protocol.md maps False Confidence "
+                                  "to CRITICAL, and its required test-smells.md "
+                                  "reference classifies assertNotNull-only tests as "
+                                  "false-positive tests; ProductManager is visible.",
                      "match_any": [r"assertNotNull", r"meaning", r"weak"]},
                 ],
             },
             "js-tests-reviewer": {
                 "verdict_in": ["block", "request_changes", "comment"],
                 "required_findings": [
+                    # tests-reviewer-protocol.md classifies
+                    # implementation-detail verification as HIGH; this test
+                    # couples its only assertion to querySelectorAll('li').
                     # No "name" token — a test-naming finding on the same
                     # file must not claim the assertion-quality gate.
                     {"id": "count-only-assertion",
                      "file": "src/components/__tests__/ProductList.test.tsx",
-                     "min_severity": "medium",
+                     "min_severity": "high",
+                     "severity_basis": "doctrine",
+                     "rationale": "tests-reviewer-protocol.md -> implementation-detail "
+                                  "verification = HIGH; the fixture exposes "
+                                  "container.querySelectorAll('li') and its "
+                                  "count-only assertion.",
                      "match_any": [r"toHaveLength", r"\bcount\b", r"\bcontent\b", r"\bprice\b"]},
                 ],
             },

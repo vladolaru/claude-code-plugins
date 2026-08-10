@@ -37,6 +37,8 @@ KEYED_ENTRIES = [
     for agent, key in scenario["expected"].items()
 ]
 
+_SEVERITY_BASES = {"doctrine", "evidence_capped"}
+
 # Keys that expect_not_applicable silently disables in grade_detection's
 # short-circuit — their presence alongside it is always an authoring error.
 _NA_INCOMPATIBLE = (
@@ -205,6 +207,18 @@ def test_finding_specs_resolve_against_fixture(name, agent, key):
             assert spec["min_severity"] in SEVERITY_RANK, (
                 f"{name}/{agent}/{spec_id}: invalid min_severity "
                 f"{spec['min_severity']!r}"
+            )
+            severity_basis = spec.get("severity_basis")
+            assert severity_basis in _SEVERITY_BASES, (
+                f"{name}/{agent}/{spec_id}: min_severity requires "
+                f"severity_basis to be one of {sorted(_SEVERITY_BASES)}, "
+                f"got {severity_basis!r}"
+            )
+            rationale = spec.get("rationale")
+            assert isinstance(rationale, str) and rationale.strip(), (
+                f"{name}/{agent}/{spec_id}: min_severity requires a "
+                "non-empty rationale explaining its doctrine citation or "
+                "evidentiary cap"
             )
         assert spec.get("match_any"), f"{name}/{agent}/{spec_id}: empty match_any"
         for pattern in spec["match_any"]:
