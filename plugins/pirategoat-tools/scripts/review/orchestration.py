@@ -1,5 +1,6 @@
 """Side-effecting step orchestration for the review pipeline."""
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -121,6 +122,21 @@ def _run_subprocess(cmd, cwd=None, timeout=60):
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         print(f"WARNING: {cmd[0]} failed: {e}", file=sys.stderr)
         return "", False
+
+
+def _materialize_reviewer_markdown(output_dir: str, output_builder_path: str) -> list:
+    """Render per-reviewer Markdown from the settled JSONs.
+
+    Loads the output builder by exact adjacent path — the same contract the
+    telemetry and dispatch-status loaders use — so a long-lived process
+    can never render with a foreign checkout's semantics.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_pirategoat_review_output", output_builder_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.materialize_markdown(output_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +470,19 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
         # Gate is best-effort; if checker fails, proceed normally and
         # avoid carrying stale waiting state forward.
         state.pop("waiting_on_agents", None)
+
+    # Materialize human-facing Markdown from every settled canonical JSON
+    # before reconciliation begins. This also runs when the best-effort status
+    # checker fails: its failure does not make published JSON unsafe to render.
+    try:
+        _materialize_reviewer_markdown(
+            output_dir, str(SCRIPTS_DIR / "agent" / "output.py"),
+        )
+    except Exception as err:  # noqa: BLE001 — best-effort by design
+        print(
+            f"reviewer markdown materialization failed: {err}",
+            file=sys.stderr,
+        )
 
     cp_path = os.path.join(output_dir, "change-purpose.md")
     if os.path.isfile(cp_path):

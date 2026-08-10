@@ -19,7 +19,6 @@ Zero external dependencies (stdlib only).
 """
 
 import argparse
-import importlib.util
 import json
 import os
 import posixpath
@@ -892,21 +891,6 @@ def resolve_output_builder_path() -> str:
     return str(SCRIPTS_DIR / "agent" / "output.py")
 
 
-def _materialize_reviewer_markdown(output_dir: str, output_builder_path: str) -> list:
-    """Render per-reviewer Markdown from the settled JSONs.
-
-    Loads the output builder by exact adjacent path — the same contract the
-    telemetry and dispatch-status loaders use — so a long-lived process
-    can never render with a foreign checkout's semantics.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "_pirategoat_review_output", output_builder_path,
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.materialize_markdown(output_dir)
-
-
 def _markdown_fence_for(text: str) -> str:
     """Return a Markdown fence longer than any backtick run in text."""
     max_run = 0
@@ -1627,26 +1611,11 @@ def main() -> int:
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(to_markdown(context))
 
-        # Materialize the per-reviewer Markdown from the settled JSONs.
-        # Derived, human-facing, read by no pipeline consumer — best-effort
-        # by design: a rendering failure must not abort reconciliation.
-        try:
-            reviewer_markdown = _materialize_reviewer_markdown(
-                output_dir, output_builder_path,
-            )
-        except Exception as err:  # noqa: BLE001 — best-effort by design
-            print(
-                f"reviewer markdown materialization failed: {err}",
-                file=sys.stderr,
-            )
-            reviewer_markdown = []
-
         # Print success status
         result = {
             "status": "ok",
             "path": output_path,
             "markdown_path": md_path,
-            "reviewer_markdown": reviewer_markdown,
         }
         print(json.dumps(result))
         return 0

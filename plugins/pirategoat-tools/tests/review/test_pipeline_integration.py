@@ -81,6 +81,37 @@ def _add_commit(path, filename="second.txt"):
     )
 
 
+def _review_json(reviewer):
+    """Return one complete v1 review artifact accepted by render_markdown()."""
+    return {
+        "pr_id": "42",
+        "reviewer": reviewer,
+        "timestamp": "2026-08-10T12:00:00",
+        "version": "1.0.0",
+        "verdict": "approve",
+        "summary": {
+            "total_issues": 0,
+            "by_severity": {
+                "critical": 0,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "info": 0,
+            },
+        },
+        "issues": [],
+        "observations": None,
+        "recommendations": None,
+        "positive_observations": None,
+        "meta": {
+            "files_reviewed": 1,
+            "review_duration_ms": 10,
+            "confidence_score": 1.0,
+            "tool_results_used": None,
+        },
+    }
+
+
 class TestTelemetryIntegration:
     """Verify pipeline calls telemetry at each step."""
 
@@ -1183,6 +1214,78 @@ class TestStep8Orchestration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         review_files = state.get("agents", {}).get("review_files", [])
         assert any("code-review.json" in f for f in review_files)
+
+    def test_step_8_materializes_every_settled_reviewer_json_at_readiness_gate(
+        self, mod, tmp_path, monkeypatch
+    ):
+        for reviewer in ("code", "security"):
+            (tmp_path / f"{reviewer}-review.json").write_text(
+                json.dumps(_review_json(reviewer))
+            )
+
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+
+        def reconciliation_succeeds(*_args, **_kwargs):
+            (tmp_path / "reconciliation-context.md").write_text("# Context\n")
+            return "", True
+
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            reconciliation_succeeds,
+        )
+
+        result = mod._orchestrate_step(
+            8,
+            "full",
+            {},
+            {"resolved_params": {}},
+            {},
+            str(tmp_path),
+        )
+
+        assert result == {}
+        assert (tmp_path / "code-review.md").is_file()
+        assert (tmp_path / "security-review.md").is_file()
+
+    def test_step_8_reconciliation_failure_happens_after_reviewer_markdown(
+        self, mod, tmp_path, monkeypatch
+    ):
+        (tmp_path / "security-review.json").write_text(
+            json.dumps(_review_json("security"))
+        )
+        monkeypatch.setattr(
+            mod.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                args=args[0], returncode=0, stdout="", stderr=""
+            ),
+        )
+        monkeypatch.setitem(
+            mod._orchestrate_step_8.__globals__,
+            "_run_subprocess",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("reconciliation crashed")
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="reconciliation crashed"):
+            mod._orchestrate_step(
+                8,
+                "full",
+                {},
+                {"resolved_params": {}},
+                {},
+                str(tmp_path),
+            )
+
+        assert (tmp_path / "security-review.md").is_file()
 
     def test_step_8_invalid_hand_edited_status_surfaces_value_error(
         self, mod, tmp_path, monkeypatch
