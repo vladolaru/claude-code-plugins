@@ -871,20 +871,7 @@ def _dependency_refresh_briefing(state, config, output_dir):
         "Refresh the stale dependency roots BEFORE writing the "
         "change-purpose summary, so host context reflects what reviewers "
         "will read:",
-        "1. Before any install, inspect pre-existing tracked dirtiness with "
-        "`git status --porcelain --untracked-files=no`.",
-        "2. If tracked edits exist, stash the tracked changes with the "
-        "dedicated message `git stash push --message "
-        "'pirategoat dependency refresh: pre-existing tracked edits'`, then "
-        "record the exact created stash ref immediately (use the commit hash "
-        "from `git rev-parse --verify refs/stash`). Verify "
-        "`git status --porcelain --untracked-files=no` is empty before "
-        "continuing. If stashing fails or does not produce a clean tracked "
-        "worktree, do not install anything; preserve/restore only that "
-        "dedicated stash if one was created and record the refresh as "
-        "failed.",
-        "3. With a clean tracked worktree, Run each suggested command in its "
-        "listed directory. Commands "
+        "1. Run each suggested command in its listed directory. Commands "
         "disable lifecycle scripts on purpose; do not strip flags. Classic "
         "Yarn v1 spelling is `yarn install --frozen-lockfile "
         "--ignore-scripts`.",
@@ -892,20 +879,16 @@ def _dependency_refresh_briefing(state, config, output_dir):
         "(`&&`, `;`); install must not modify tracked files. Pipeline "
         "independently verifies reported commands and worktree state at "
         "next step.",
-        "4. After all install attempts, even when an install command fails, "
+        # Detection proves cleanliness only at the start of step 3. The
+        # retained post-install check catches tracked edits introduced in the
+        # TOCTOU window before or during the orchestrator's install attempts.
+        "2. After all install attempts, even when an install command fails, "
         "run `git status --porcelain --untracked-files=no` again. If tracked "
         "changes appear, first record them as dependency-refresh failure "
-        "evidence, then restore the refresh-created tracked changes with "
-        "`git restore --source=HEAD --staged --worktree -- <path>`. Never "
-        "blindly restore or check out paths while pre-existing tracked "
-        "changes remain unstashed.",
-        "5. After refresh-created changes are cleaned up, restore only the "
-        "dedicated dependency-refresh stash, if one was "
-        "created, by applying its recorded exact ref with `git stash apply "
-        "--index <exact-stash-ref>`; never pop or apply another stash. Do "
-        "this cleanup even when an install command fails. If restoration "
-        "fails, retain the stash and record the refresh as failed.",
-        "6. Re-resolve host context so reviewers see the refreshed state: "
+        "evidence. The tracked worktree was verified clean before installs, "
+        "so restore the refresh-created tracked changes with "
+        "`git restore --source=HEAD --staged --worktree -- <path>`.",
+        "3. Re-resolve host context so reviewers see the refreshed state: "
         f"`python3 {SCRIPTS_DIR / 'context.py'} --output-dir {od} "
         "--refresh-host-context`",
         "",
