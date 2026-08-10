@@ -1,13 +1,12 @@
-"""Contract tests for the hosts/ containment invariant.
+"""Contract tests for the pipeline-wide containment invariant.
 
-Host-context resolution never trusts paths outside the repo's resolved root;
-containment.py is the single enforcement point.
+Every containment decision routes through scripts/containment.py.
 """
 
 import os
 from pathlib import Path
 
-from hosts.containment import contains, contains_lexically, resolve_inside
+from containment import contains, contains_lexically, resolve_inside
 
 
 class TestContains:
@@ -128,7 +127,7 @@ class TestDriftGuard:
         specifically; other re-derivations (startswith, relpath) rely on
         code review — the resolver symlink behavior tests pin the outcomes
         those spellings would have to reproduce."""
-        hosts_dir = Path(__file__).parents[2] / "scripts" / "hosts"
+        hosts_dir = Path(__file__).parents[1] / "scripts" / "hosts"
         offenders = [
             f"{path.relative_to(hosts_dir)}: {spelling}"
             for path in sorted(hosts_dir.rglob("*.py"))

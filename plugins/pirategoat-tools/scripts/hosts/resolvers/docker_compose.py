@@ -10,7 +10,7 @@ try:
 except ImportError:
     yaml = None
 
-from hosts.containment import contains
+from containment import contains
 from hosts.resolvers.base import HostResolver, ResolverResult
 from hosts.types import HostEntry
 

@@ -1,10 +1,13 @@
-"""Containment — the single enforcement point for repo-boundary checks.
+"""Containment — the pipeline-wide enforcement point for repo boundaries.
 
-Invariant: host-context resolution never treats a path outside the
-repo's resolved root as belonging to the repo. Resolvers route every
-containment decision through this module; tests/hosts/
-test_containment_contract.py bans inline re-derivations under
-scripts/hosts/.
+Invariant: no pipeline component treats a path outside the reviewed repo's
+resolved root as belonging to that repo. Advisory host resolvers use this
+boundary to classify source paths; repo-declared rule and reviewer paths use
+it before their instructions can be read and executed with real tools.
+
+``contains_lexically`` is only for bounding walks over path spellings that may
+not exist. It does not resolve symlinks and must never gate a filesystem read
+or an execution.
 """
 
 import os
