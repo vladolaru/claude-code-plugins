@@ -256,6 +256,18 @@ to output). The offline answer-key guard rejects missing or unknown bases
 and empty rationales. This requirement applies only to `min_severity`;
 `max_severity` remains a false-positive precision cap on clean-code probes.
 
+**Changing any `min_severity` requires a dispatch run of the affected
+scenario before the change is trusted.** The offline guard proves only that
+a floor is a valid severity name — it cannot tell you the floor is the right
+one. Two floors on `realistic_multi_file` were once raised on doctrine
+readings that stretched their buckets, passed the whole offline suite, and
+were falsified by one dispatch run each: the reviewer reported both findings
+in 3/3 trials at the original severity, and the doctrine text did not in fact
+cover the raised classification. Read the bucket's enumerated members, not
+its title, and when a floor is deliberately *not* the adjacent bucket, say so
+in the rationale — a negative claim ("NOT False Confidence: the assertion
+exists and nothing is mocked") is the part a future reader cannot reconstruct.
+
 Grading is deterministic (file + line-window + keyword regexes over
 title/description/category — no model judge). A correct finding the patterns
 miss shows up under `match.unexpected` in the report with its location and
