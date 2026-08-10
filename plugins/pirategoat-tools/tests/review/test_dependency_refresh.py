@@ -257,6 +257,30 @@ class TestPathSafety:
 
 
 class TestDetectionWorktreePrecondition:
+    @staticmethod
+    def _repo_with_composer_root_and_submodule(tmp_path):
+        parent, submodule = TestVerifyDependencyRefresh._init_repo_with_submodule(
+            tmp_path
+        )
+        (parent / "composer.json").write_text("{}\n")
+        (parent / "composer.lock").write_text("{}\n")
+        subprocess.run(
+            ["git", "-C", str(parent), "add", "composer.json", "composer.lock"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(parent),
+                "-c", "user.name=Dependency Refresh Test",
+                "-c", "user.email=dependency-refresh@example.com",
+                "commit", "-m", "Add dependency manifests",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return parent, submodule
+
     def test_dirty_tracked_worktree_skips_but_preserves_signals(self, tmp_path):
         root = _make_root(
             tmp_path,
@@ -313,13 +337,28 @@ class TestDetectionWorktreePrecondition:
         assert result["dirty_files"] == list(tracked_files[:20])
 
     def test_tracked_submodule_changes_skip_refresh(self, tmp_path):
-        parent, submodule = TestVerifyDependencyRefresh._init_repo_with_submodule(
-            tmp_path
-        )
-        (parent / "composer.json").write_text("{}\n")
-        (parent / "composer.lock").write_text("{}\n")
+        parent, submodule = self._repo_with_composer_root_and_submodule(tmp_path)
+        (submodule / "tracked.txt").write_text("mutated\n", encoding="utf-8")
+
+        result = detect_dependency_refresh(str(parent), ["composer.lock"])
+
+        assert result["skipped_reason"] == "dirty_worktree"
+        assert result["dirty_files"] == ["dependency"]
+
+    def test_gitmodules_ignore_all_cannot_hide_tracked_submodule_changes(
+        self, tmp_path
+    ):
+        parent, submodule = self._repo_with_composer_root_and_submodule(tmp_path)
         subprocess.run(
-            ["git", "-C", str(parent), "add", "composer.json", "composer.lock"],
+            [
+                "git", "-C", str(parent), "config", "-f", ".gitmodules",
+                "submodule.dependency.ignore", "all",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(parent), "add", ".gitmodules"],
             check=True,
             capture_output=True,
         )
@@ -328,7 +367,26 @@ class TestDetectionWorktreePrecondition:
                 "git", "-C", str(parent),
                 "-c", "user.name=Dependency Refresh Test",
                 "-c", "user.email=dependency-refresh@example.com",
-                "commit", "-m", "Add dependency manifests",
+                "commit", "-m", "Ignore dependency dirtiness",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        (submodule / "tracked.txt").write_text("mutated\n", encoding="utf-8")
+
+        result = detect_dependency_refresh(str(parent), ["composer.lock"])
+
+        assert result["skipped_reason"] == "dirty_worktree"
+        assert result["dirty_files"] == ["dependency"]
+
+    def test_local_ignore_all_cannot_hide_tracked_submodule_changes(
+        self, tmp_path
+    ):
+        parent, submodule = self._repo_with_composer_root_and_submodule(tmp_path)
+        subprocess.run(
+            [
+                "git", "-C", str(parent), "config",
+                "submodule.dependency.ignore", "all",
             ],
             check=True,
             capture_output=True,

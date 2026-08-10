@@ -190,7 +190,7 @@ def _tracked_worktree_status(repo_root):
         git_status = subprocess.run(
             [
                 "git", "-C", str(repo_root), "status", "--porcelain",
-                "--untracked-files=no",
+                "--untracked-files=no", "--ignore-submodules=untracked",
             ],
             capture_output=True,
             text=True,
