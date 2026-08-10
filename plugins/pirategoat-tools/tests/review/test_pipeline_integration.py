@@ -417,7 +417,7 @@ class TestStep3Orchestration:
         assert r.returncode == 0
 
     def test_step_3_allows_known_ecosystem_cache_refreshes_to_finish(
-        self, mod, tmp_path, monkeypatch
+        self, mod, orchestration_mod, tmp_path, monkeypatch
     ):
         """The context wrapper should allow both known host caches to refresh."""
         seen_timeouts = []
@@ -426,7 +426,9 @@ class TestStep3Orchestration:
             seen_timeouts.append(timeout)
             return "", True
 
-        monkeypatch.setattr(mod, "_run_subprocess", fake_run_subprocess)
+        monkeypatch.setattr(
+            orchestration_mod, "_run_subprocess", fake_run_subprocess
+        )
         mod._orchestrate_step(
             3,
             "full",
@@ -909,7 +911,7 @@ class TestStep5Orchestration:
         assert entry["declared_model"] == "opus"
 
     def test_failed_planner_retry_preserves_existing_baseline_and_adjusted_plan(
-        self, mod, tmp_path, monkeypatch
+        self, mod, orchestration_mod, tmp_path, monkeypatch
     ):
         """A failed retry cannot reclassify an adjusted plan as deterministic."""
         initial = {
@@ -931,7 +933,9 @@ class TestStep5Orchestration:
         final_path = tmp_path / "dispatch-plan.json"
         initial_path.write_text(json.dumps(initial))
         final_path.write_text(json.dumps(final))
-        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", False))
+        monkeypatch.setattr(
+            orchestration_mod, "_run_subprocess", lambda *args, **kwargs: ("", False)
+        )
 
         mod._orchestrate_step(
             5,
@@ -946,7 +950,7 @@ class TestStep5Orchestration:
         assert json.loads(final_path.read_text()) == final
 
     def test_failed_planner_without_baseline_does_not_fabricate_one(
-        self, mod, tmp_path, monkeypatch
+        self, mod, orchestration_mod, tmp_path, monkeypatch
     ):
         """A failed planner may reuse a final artifact but never invents a baseline."""
         final = {
@@ -961,7 +965,9 @@ class TestStep5Orchestration:
         }
         final_path = tmp_path / "dispatch-plan.json"
         final_path.write_text(json.dumps(final))
-        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", False))
+        monkeypatch.setattr(
+            orchestration_mod, "_run_subprocess", lambda *args, **kwargs: ("", False)
+        )
 
         mod._orchestrate_step(
             5,
@@ -976,11 +982,13 @@ class TestStep5Orchestration:
         assert not (tmp_path / "dispatch-plan.initial.json").exists()
 
     def test_successful_planner_with_invalid_plan_shape_surfaces_value_error(
-        self, mod, tmp_path, monkeypatch
+        self, mod, orchestration_mod, tmp_path, monkeypatch
     ):
         """Subprocess success cannot hide a malformed planner artifact."""
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(["not", "a", "plan"]))
-        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", True))
+        monkeypatch.setattr(
+            orchestration_mod, "_run_subprocess", lambda *args, **kwargs: ("", True)
+        )
         state = {"resolved_params": {"git_range": "base..head"}}
 
         with pytest.raises(ValueError, match="must be a JSON object"):
@@ -1570,7 +1578,7 @@ class TestStep8ReviewFileStems:
     repo-api-review-v2-review.json and silently excluded valid output."""
 
     def test_mid_string_reviewer_name_counts_as_completed(
-        self, mod, tmp_path, monkeypatch
+        self, mod, orchestration_mod, tmp_path, monkeypatch
     ):
         plan = {"agents": [{
             "name": "repo-api-reviewer-v2-reviewer",
@@ -1590,7 +1598,9 @@ class TestStep8ReviewFileStems:
             (tmp_path / "reconciliation-context.md").write_text("ctx")
             return ("", True)
 
-        monkeypatch.setattr(mod, "_run_subprocess", fake_run_subprocess)
+        monkeypatch.setattr(
+            orchestration_mod, "_run_subprocess", fake_run_subprocess
+        )
         state = {"resolved_params": {"git_range": "base..head"}}
 
         mod._orchestrate_step(

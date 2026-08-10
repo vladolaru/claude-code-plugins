@@ -46,6 +46,14 @@ def pipeline_mod():
     return _load_pipeline_module()
 
 
+@pytest.fixture(scope="session")
+def orchestration_mod():
+    """Session-scoped orchestration module used for caller-local patches."""
+    from review import orchestration
+
+    return orchestration
+
+
 def setup_temp_git_repo(diff_file: str) -> str:
     """Create a temp git repo and apply a diff. Returns repo path."""
     tmp = tempfile.mkdtemp(prefix="test-routing-")

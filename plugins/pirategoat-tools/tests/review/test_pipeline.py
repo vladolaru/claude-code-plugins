@@ -875,7 +875,7 @@ class TestStep6DispatchAgents:
 
     @pytest.mark.parametrize("step", [5, 6])
     def test_dispatch_summaries_use_the_canonical_dispatched_set(
-        self, mod, tmp_path, monkeypatch, step
+        self, mod, orchestration_mod, tmp_path, monkeypatch, step
     ):
         plan = {
             "agents": [
@@ -896,7 +896,9 @@ class TestStep6DispatchAgents:
             ]
         }
         (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
-        monkeypatch.setattr(mod, "_run_subprocess", lambda *args, **kwargs: ("", True))
+        monkeypatch.setattr(
+            orchestration_mod, "_run_subprocess", lambda *args, **kwargs: ("", True)
+        )
         state = {
             "resolved_params": {"git_range": "abc..HEAD"},
             "completed_steps": [1, 2, 3],
