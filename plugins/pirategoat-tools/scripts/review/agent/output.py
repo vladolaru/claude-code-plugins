@@ -50,6 +50,33 @@ _SEVERITY_RANK = {
     'high': 3,
     'critical': 4,
 }
+_VERDICT_RANK = {
+    'approve': 0,
+    'comment': 1,
+    'request_changes': 2,
+    'block': 3,
+}
+
+
+def _verdict_for_issues(issues) -> str:
+    """Calculate a gating verdict for the supplied findings."""
+    counts = {'critical': 0, 'high': 0, 'medium': 0}
+
+    for issue in issues:
+        sev = issue['severity']
+        if sev in counts:
+            counts[sev] += 1
+
+    if counts['critical'] > 0:
+        return 'block'
+    if counts['high'] >= 3:
+        return 'block'
+    if counts['high'] > 0 or counts['medium'] >= 5:
+        return 'request_changes'
+    if counts['medium'] > 0:
+        return 'comment'
+
+    return 'approve'
 
 
 def _coerce_text(value: Any, single_line: bool = False) -> str:
@@ -120,6 +147,23 @@ def render_markdown(data: Dict) -> str:
     md.append("## Executive Summary\n\n")
     md.append(f"**Verdict:** {data['verdict'].upper()}\n")
     md.append(f"**Total Issues:** {data['summary']['total_issues']}\n\n")
+
+    advisory_suppressed = data['summary'].get('advisory_suppressed', 0)
+    if advisory_suppressed:
+        finding_word = "finding" if advisory_suppressed == 1 else "findings"
+        md.append(
+            f"**Advisory suppression:** {advisory_suppressed} {finding_word} "
+            "excluded from the verdict"
+        )
+        verdict_without_advisory = data['summary'].get(
+            'verdict_without_advisory'
+        )
+        if verdict_without_advisory:
+            md.append(
+                " (verdict without suppression: "
+                f"{verdict_without_advisory.upper()})"
+            )
+        md.append("\n\n")
 
     if data['summary']['total_issues'] > 0:
         counts = data['summary']['by_severity']
@@ -601,29 +645,30 @@ class ReviewOutputBuilder:
         if self._not_applicable:
             return 'not_applicable'
 
-        counts = {'critical': 0, 'high': 0, 'medium': 0}
+        # Advisory-channel findings are listed but do not gate the verdict.
+        return _verdict_for_issues(
+            issue for issue in self.issues
+            if issue.get('channel') != 'advisory'
+        )
 
-        for issue in self.issues:
-            # Advisory-channel findings (repo-contributed reviewers on the
-            # advisory channel) never gate the verdict — they are listed but not
-            # enforced. Native agents never set 'channel', so this is a no-op for
-            # them (backward-compatible).
-            if issue.get('channel') == 'advisory':
-                continue
-            sev = issue['severity']
-            if sev in counts:
-                counts[sev] += 1
+    def _advisory_measurement(self, verdict: str) -> Dict[str, Any]:
+        """Measure exact advisory-tag suppression without changing verdicts."""
+        if self._not_applicable:
+            # The not-applicable verdict short-circuits before channel tags are
+            # consulted, so no finding was excluded from its calculation.
+            return {'advisory_suppressed': 0}
 
-        if counts['critical'] > 0:
-            return 'block'
-        if counts['high'] >= 3:
-            return 'block'
-        if counts['high'] > 0 or counts['medium'] >= 5:
-            return 'request_changes'
-        if counts['medium'] > 0:
-            return 'comment'
+        suppressed = sum(
+            issue.get('channel') == 'advisory' for issue in self.issues
+        )
+        measurement: Dict[str, Any] = {'advisory_suppressed': suppressed}
+        if suppressed == 0:
+            return measurement
 
-        return 'approve'
+        verdict_without_advisory = _verdict_for_issues(self.issues)
+        if _VERDICT_RANK[verdict_without_advisory] > _VERDICT_RANK[verdict]:
+            measurement['verdict_without_advisory'] = verdict_without_advisory
+        return measurement
 
     def to_dict(self, *, output_dir: Optional[str] = None) -> Dict:
         """Build as dictionary, revalidating advisory issues when directed.
@@ -639,16 +684,20 @@ class ReviewOutputBuilder:
         for issue in self.issues:
             severity_counts[issue['severity']] += 1
 
+        verdict = self._calculate_verdict()
+        summary = {
+            'total_issues': len(self.issues),
+            'by_severity': severity_counts,
+        }
+        summary.update(self._advisory_measurement(verdict))
+
         result = {
             'pr_id': self.pr_id,
             'reviewer': self.reviewer,
             'timestamp': self.timestamp,
             'version': '1.0.0',
-            'verdict': self._calculate_verdict(),
-            'summary': {
-                'total_issues': len(self.issues),
-                'by_severity': severity_counts
-            },
+            'verdict': verdict,
+            'summary': summary,
             'issues': self.issues,
             'unreviewed': self.unreviewed if self.unreviewed else None,
             'observations': self.observations if self.observations else None,

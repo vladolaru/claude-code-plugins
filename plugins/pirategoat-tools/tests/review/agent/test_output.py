@@ -469,6 +469,15 @@ class TestToDict:
         assert meta["tool_results_used"] == ["grep"]
         assert "review_duration_ms" in meta
 
+    def test_no_channel_records_zero_advisory_suppression(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
+
+        summary = b.to_dict()["summary"]
+
+        assert summary["advisory_suppressed"] == 0
+        assert "verdict_without_advisory" not in summary
+
 
 # =============================================================================
 # TestToMarkdown
@@ -572,6 +581,16 @@ class TestRenderMarkdown:
         rendered = render_markdown(data)
         assert "**File:** `f.py`\n" in rendered
         assert "(file-scoped)" not in rendered
+
+    def test_legacy_summary_without_advisory_measurement_still_renders(self):
+        data = self._rich_builder().to_dict()
+        data["summary"].pop("advisory_suppressed")
+        data["summary"].pop("verdict_without_advisory", None)
+
+        rendered = render_markdown(data)
+
+        assert "# Security Review" in rendered
+        assert "Advisory suppression" not in rendered
 
 
 # =============================================================================
@@ -1414,6 +1433,70 @@ class TestAdvisoryChannel:
         b.add_issue(severity="critical", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
         assert b._calculate_verdict() == "approve"
+
+    def test_critical_advisory_records_stricter_counterfactual(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.add_issue(
+            severity="critical", title="x", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+
+        output = b.to_dict()
+
+        assert output["verdict"] == "approve"
+        assert output["summary"]["advisory_suppressed"] == 1
+        assert output["summary"]["verdict_without_advisory"] == "block"
+        assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
+        assert "verdict without suppression: BLOCK" in render_markdown(output)
+
+    def test_advisory_count_without_verdict_softening_omits_counterfactual(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.add_issue(
+            severity="low", title="x", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+
+        output = b.to_dict()
+
+        assert output["verdict"] == "approve"
+        assert output["summary"]["advisory_suppressed"] == 1
+        assert "verdict_without_advisory" not in output["summary"]
+        assert "Advisory suppression:** 1 finding excluded" in render_markdown(output)
+
+    def test_advisory_count_when_verdict_already_strict_omits_counterfactual(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.add_issue(
+            severity="critical", title="advisory", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+        b.add_issue(
+            severity="critical", title="blocking", file="b.php",
+            description="d", recommendation="r", line=6,
+        )
+
+        output = b.to_dict()
+
+        assert output["verdict"] == "block"
+        assert output["summary"]["advisory_suppressed"] == 1
+        assert "verdict_without_advisory" not in output["summary"]
+
+    def test_not_applicable_does_not_claim_advisory_suppression(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+        b.mark_not_applicable("No relevant changes")
+        b.add_issue(
+            severity="critical", title="advisory", file="a.php",
+            description="d", recommendation="r", line=5,
+            channel="advisory",
+        )
+
+        output = b.to_dict()
+
+        assert output["verdict"] == "not_applicable"
+        assert output["summary"]["advisory_suppressed"] == 0
+        assert "verdict_without_advisory" not in output["summary"]
 
     def test_blocking_channel_is_implicit_and_still_gates(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-runtime")

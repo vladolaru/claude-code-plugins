@@ -2266,6 +2266,94 @@ class TestSnapshot:
         assert agents["security"]["issue_count"] == 2
         assert agents["security"]["severities"]["high"] == 1
 
+    def test_extracts_agent_advisory_measurement(self, mod, output_dir, tmp_path):
+        review = {
+            "verdict": "approve",
+            "summary": {
+                "advisory_suppressed": 2,
+                "verdict_without_advisory": "block",
+            },
+            "issues": [{"severity": "critical", "channel": "advisory"}],
+        }
+        (output_dir / "security-review.json").write_text(json.dumps(review))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+
+        extracted = t._extract_agent_results()["security"]
+
+        assert extracted["advisory_suppressed"] == 2
+        assert extracted["verdict_without_advisory"] == "block"
+
+    @pytest.mark.parametrize(
+        ("verdict", "summary", "expected_count"),
+        [
+            pytest.param(
+                "approve",
+                {"advisory_suppressed": True, "verdict_without_advisory": "block"},
+                None,
+                id="boolean-count",
+            ),
+            pytest.param(
+                "approve",
+                {"advisory_suppressed": -1, "verdict_without_advisory": "block"},
+                None,
+                id="negative-count",
+            ),
+            pytest.param(
+                "approve",
+                {"advisory_suppressed": 1, "verdict_without_advisory": "banana"},
+                1,
+                id="unknown-verdict",
+            ),
+            pytest.param(
+                "approve",
+                {"advisory_suppressed": 1, "verdict_without_advisory": []},
+                1,
+                id="non-string-verdict",
+            ),
+            pytest.param(
+                "approve",
+                {"advisory_suppressed": 1, "verdict_without_advisory": "not_applicable"},
+                1,
+                id="not-applicable-counterfactual",
+            ),
+            pytest.param(
+                "block",
+                {"advisory_suppressed": 1, "verdict_without_advisory": "block"},
+                1,
+                id="equal-counterfactual",
+            ),
+            pytest.param(
+                "request_changes",
+                {"advisory_suppressed": 1, "verdict_without_advisory": "comment"},
+                1,
+                id="softer-counterfactual",
+            ),
+            pytest.param(
+                "banana",
+                {"advisory_suppressed": 1, "verdict_without_advisory": "block"},
+                1,
+                id="unknown-actual-verdict",
+            ),
+        ],
+    )
+    def test_agent_advisory_measurement_omits_malformed_values(
+        self, mod, output_dir, tmp_path, verdict, summary, expected_count
+    ):
+        (output_dir / "security-review.json").write_text(json.dumps({
+            "verdict": verdict,
+            "summary": summary,
+            "issues": [],
+        }))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+
+        extracted = t._extract_agent_results()["security"]
+
+        if expected_count is not None:
+            assert extracted["advisory_suppressed"] == expected_count
+        else:
+            assert "advisory_suppressed" not in extracted
+        assert "verdict_without_advisory" not in extracted
+
     def test_excludes_review_findings_from_agent_results(self, mod, output_dir, tmp_path):
         """review-findings.json is reconciled output, not an agent result."""
         log_dir = tmp_path / "logs"
@@ -2299,6 +2387,69 @@ class TestSnapshot:
         assert f["verdict"] == "comment"
         assert f["total_issues"] == 3
         assert f["severities"]["high"] == 1
+
+    def test_findings_measurement_reaches_summary_and_manifest(
+        self, mod, output_dir, tmp_path
+    ):
+        findings = {
+            "verdict": "approve",
+            "summary": {
+                "advisory_suppressed": 1,
+                "verdict_without_advisory": "block",
+            },
+            "issues": [{"severity": "critical", "channel": "advisory"}],
+        }
+        (output_dir / "review-findings.json").write_text(json.dumps(findings))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+        t.start(pr_number="42")
+
+        t.finalize(step=15, phase="OUTPUT", title="Present Results")
+
+        event = _read_events(t.log_path)[-1]
+        snapshot = event["snapshot"]["findings"]
+        assert snapshot["advisory_suppressed"] == 1
+        assert snapshot["verdict_without_advisory"] == "block"
+        assert event["summary"]["final_advisory_suppressed"] == 1
+        assert event["summary"]["final_verdict_without_advisory"] == "block"
+        manifest_summary = _read_manifest(t)["outcome"]["summary"]
+        assert manifest_summary["final_advisory_suppressed"] == 1
+        assert manifest_summary["final_verdict_without_advisory"] == "block"
+
+    def test_findings_omit_malformed_advisory_measurement(
+        self, mod, output_dir, tmp_path
+    ):
+        (output_dir / "review-findings.json").write_text(json.dumps({
+            "verdict": "approve",
+            "summary": {
+                "advisory_suppressed": True,
+                "verdict_without_advisory": "banana",
+            },
+            "issues": [],
+        }))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+
+        findings = t._extract_findings()
+
+        assert "advisory_suppressed" not in findings
+        assert "verdict_without_advisory" not in findings
+
+    def test_findings_preserve_count_but_reject_impossible_counterfactual(
+        self, mod, output_dir, tmp_path
+    ):
+        (output_dir / "review-findings.json").write_text(json.dumps({
+            "verdict": "block",
+            "summary": {
+                "advisory_suppressed": 1,
+                "verdict_without_advisory": "comment",
+            },
+            "issues": [],
+        }))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+
+        findings = t._extract_findings()
+
+        assert findings["advisory_suppressed"] == 1
+        assert "verdict_without_advisory" not in findings
 
     def test_omits_missing_snapshot_sections(self, telemetry):
         """Snapshot keys are absent when source files don't exist."""

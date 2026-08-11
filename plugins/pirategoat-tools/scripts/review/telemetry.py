@@ -30,7 +30,7 @@ try:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
-    from .agent.output import _VALID_SEVERITIES
+    from .agent.output import _VALID_SEVERITIES, _VERDICT_RANK
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -41,7 +41,7 @@ except ImportError:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
-    from review.agent.output import _VALID_SEVERITIES
+    from review.agent.output import _VALID_SEVERITIES, _VERDICT_RANK
 
 from containment import contains_posix_lexically
 from git_paths import decode_git_c_quoted_path
@@ -84,6 +84,35 @@ _AGENT_COMPLETE_MANIFEST_FIELDS = (
     "issue_count",
 )
 _SEVERITY_FIELDS = _VALID_SEVERITIES
+
+
+def _advisory_measurement(data: Any) -> Dict[str, Any]:
+    """Return typed advisory-suppression facts from a review summary."""
+    if not isinstance(data, dict):
+        return {}
+    summary = data.get("summary")
+    if not isinstance(summary, dict):
+        return {}
+
+    suppressed = summary.get("advisory_suppressed")
+    if (not isinstance(suppressed, int)
+            or isinstance(suppressed, bool)
+            or suppressed < 0):
+        return {}
+
+    measurement: Dict[str, Any] = {"advisory_suppressed": suppressed}
+    verdict = data.get("verdict")
+    verdict_without_advisory = summary.get("verdict_without_advisory")
+    if (
+        suppressed > 0
+        and isinstance(verdict, str)
+        and isinstance(verdict_without_advisory, str)
+        and verdict in _VERDICT_RANK
+        and verdict_without_advisory in _VERDICT_RANK
+        and _VERDICT_RANK[verdict_without_advisory] > _VERDICT_RANK[verdict]
+    ):
+        measurement["verdict_without_advisory"] = verdict_without_advisory
+    return measurement
 
 
 def _incomplete_agent_executions(
@@ -1054,6 +1083,7 @@ class ReviewTelemetry:
                         "issue_count": len(issues),
                         "severities": severities,
                     }
+                    results[base].update(_advisory_measurement(data))
                 except (json.JSONDecodeError, KeyError):
                     results[base] = {"error": "malformed"}
         except OSError:
@@ -1072,11 +1102,13 @@ class ReviewTelemetry:
             severities = dict(Counter(
                 i.get("severity", "medium").lower() for i in issues
             ))
-            return {
+            findings = {
                 "verdict": data.get("verdict"),
                 "total_issues": len(issues),
                 "severities": severities,
             }
+            findings.update(_advisory_measurement(data))
+            return findings
         except (json.JSONDecodeError, KeyError):
             return None
 
@@ -1119,5 +1151,13 @@ class ReviewTelemetry:
             summary["final_verdict"] = findings.get("verdict")
             summary["final_issues"] = findings.get("total_issues")
             summary["final_severities"] = findings.get("severities")
+            if "advisory_suppressed" in findings:
+                summary["final_advisory_suppressed"] = (
+                    findings["advisory_suppressed"]
+                )
+            if "verdict_without_advisory" in findings:
+                summary["final_verdict_without_advisory"] = (
+                    findings["verdict_without_advisory"]
+                )
 
         return summary
