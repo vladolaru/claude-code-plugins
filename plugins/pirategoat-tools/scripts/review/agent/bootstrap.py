@@ -1287,6 +1287,30 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
         pass
 
 
+def persist_advisory_entitlement_sidecar(
+    output_dir, effective_agent_name, advisory_entitled
+):
+    """Write the authoritative advisory entitlement for this reviewer.
+
+    Written for every bootstrap, including explicit false. Fail-open on write
+    errors so the builder falls back to vocabulary-only channel validation.
+    """
+    entitlement_sidecar = os.path.join(
+        output_dir,
+        f"{derive_reviewer_name(effective_agent_name)}-advisory-entitlement.json",
+    )
+    try:
+        with open(entitlement_sidecar, "w", encoding="utf-8") as f:
+            json.dump(
+                {"schema": 1, "advisory_entitled": advisory_entitled}, f
+            )
+    except OSError:
+        try:
+            os.unlink(entitlement_sidecar)
+        except OSError:
+            pass
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Bootstrap Reviewer — single-command setup for reviewer agents.",
@@ -1761,13 +1785,18 @@ def main():
     agent_domains = [
         d for d in [config.get("domain"), *config.get("secondary_domains", [])] if d
     ]
-    repo_review_rules = render_repo_review_rules_section(
-        select_repo_rules(
-            review_config,
-            effective_agent_name,
-            ref_domains if ref_mode else agent_domains,
-            telemetry_scope_paths,
-        )
+    selected_repo_rules = select_repo_rules(
+        review_config,
+        effective_agent_name,
+        ref_domains if ref_mode else agent_domains,
+        telemetry_scope_paths,
+    )
+    repo_review_rules = render_repo_review_rules_section(selected_repo_rules)
+    advisory_entitled = any(
+        rule.get("channel") == "advisory" for rule in selected_repo_rules
+    ) or (ref_mode and args.channel == "advisory")
+    persist_advisory_entitlement_sidecar(
+        output_dir, effective_agent_name, advisory_entitled
     )
 
     # Determine overall status. When the primary domain matched nothing but

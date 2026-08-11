@@ -228,6 +228,8 @@ class ReviewOutputBuilder:
         self._skip_reason = None
         self._deferred_files_loaded = False
         self._deferred_files = None
+        self._advisory_entitlement_loaded = False
+        self._advisory_entitlement = None
 
     def add_issue(
         self,
@@ -298,6 +300,14 @@ class ReviewOutputBuilder:
                 raise ValueError(
                     f"Invalid channel: {channel!r}. "
                     f"Must be one of {_VALID_CHANNELS}."
+                )
+            if (
+                channel == "advisory"
+                and self._known_advisory_entitlement() is False
+            ):
+                raise ValueError(
+                    "Cannot record advisory finding: this reviewer is not "
+                    "entitled to the advisory channel."
                 )
 
         # Validate line — None records a first-class file-scoped issue (loud),
@@ -442,6 +452,65 @@ class ReviewOutputBuilder:
         )
         return self._deferred_files
 
+    @staticmethod
+    def _load_advisory_entitlement(
+        output_dir: Optional[str], reviewer: Optional[str]
+    ) -> Optional[bool]:
+        """Load a bootstrap-declared advisory entitlement when authoritative.
+
+        ``None`` is deliberate fail-open behavior: absent paths, absent files,
+        write failures upstream, malformed JSON, wrong top-level shapes, and
+        non-boolean declarations leave only the already-enforced channel
+        vocabulary validation. Only an explicit boolean false denies advisory
+        findings.
+        """
+        if not output_dir or not reviewer:
+            return None
+        sidecar = os.path.join(
+            output_dir, f"{reviewer}-advisory-entitlement.json"
+        )
+        try:
+            with open(sidecar, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        entitled = data.get("advisory_entitled") if isinstance(data, dict) else None
+        return entitled if isinstance(entitled, bool) else None
+
+    def _known_advisory_entitlement(self) -> Optional[bool]:
+        """Return the cached entitlement from the canonical env envelope.
+
+        This add-time lookup intentionally fails open to vocabulary-only
+        validation when the envelope or a valid boolean sidecar is unavailable.
+        Canonical serialization can independently revalidate against an
+        explicit output directory.
+        """
+        if self._advisory_entitlement_loaded:
+            return self._advisory_entitlement
+        self._advisory_entitlement_loaded = True
+        self._advisory_entitlement = self._load_advisory_entitlement(
+            os.environ.get("PIRATEGOAT_OUTPUT_DIR"),
+            os.environ.get("PIRATEGOAT_REVIEWER_NAME"),
+        )
+        return self._advisory_entitlement
+
+    def _validate_advisory_serialization(
+        self, output_dir: Optional[str]
+    ) -> None:
+        """Reject explicitly unentitled advisory issues at finalization.
+
+        Missing or malformed sidecars remain deliberately fail-open after the
+        channel vocabulary has been validated. An explicit false is the only
+        authoritative denial.
+        """
+        if not any(issue.get("channel") == "advisory" for issue in self.issues):
+            return
+        if self._load_advisory_entitlement(output_dir, self.reviewer) is False:
+            raise ValueError(
+                "Cannot serialize advisory finding: this reviewer is not "
+                "entitled to the advisory channel."
+            )
+
     def add_unreviewed(self, file: str):
         """Declare an in-scope file left unreviewed after budget exhaustion.
 
@@ -556,8 +625,14 @@ class ReviewOutputBuilder:
 
         return 'approve'
 
-    def to_dict(self) -> Dict:
-        """Build as dictionary."""
+    def to_dict(self, *, output_dir: Optional[str] = None) -> Dict:
+        """Build as dictionary, revalidating advisory issues when directed.
+
+        Without an explicit directory, manual and legacy callers retain the
+        deliberate fail-open, vocabulary-only advisory behavior.
+        """
+        if output_dir is not None:
+            self._validate_advisory_serialization(output_dir)
         review_duration = int((datetime.now() - self.review_start).total_seconds() * 1000)
 
         severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0}
@@ -591,9 +666,15 @@ class ReviewOutputBuilder:
             result['skip_reason'] = self._skip_reason
         return result
 
-    def to_json(self, indent: int = 2) -> str:
-        """Generate JSON string."""
-        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
+    def to_json(
+        self, indent: int = 2, *, output_dir: Optional[str] = None
+    ) -> str:
+        """Generate JSON, optionally revalidating advisory entitlement."""
+        return json.dumps(
+            self.to_dict(output_dir=output_dir),
+            indent=indent,
+            ensure_ascii=False,
+        )
 
     def to_markdown(self) -> str:
         """Generate human-readable markdown."""
@@ -611,6 +692,8 @@ class ReviewOutputBuilder:
         os.makedirs(output_dir, exist_ok=True)
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
+        serialized = self.to_json(output_dir=output_dir)
+        output = json.loads(serialized)
 
         # The review JSON is the readiness signal agents_status.py polls,
         # and the pipeline may finalize the telemetry manifest the moment
@@ -625,9 +708,7 @@ class ReviewOutputBuilder:
         staged_json_path = f"{json_path}.{nonce}.tmp"
         try:
             with open(staged_json_path, 'w') as f:
-                f.write(self.to_json())
-
-            output = self.to_dict()
+                f.write(serialized)
 
             # Echo the RECORDED state so the calling agent reconciles its
             # self-reported COUNTS against what was actually saved, not its

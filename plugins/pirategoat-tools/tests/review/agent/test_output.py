@@ -1204,6 +1204,14 @@ class TestNotApplicable:
 class TestAdvisoryChannel:
     """Advisory-channel findings are listed but never gate the verdict."""
 
+    @staticmethod
+    def _arm_entitlement(tmp_path, monkeypatch, reviewer, payload):
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", reviewer)
+        (tmp_path / f"{reviewer}-advisory-entitlement.json").write_text(
+            json.dumps(payload)
+        )
+
     def test_invalid_channel_raises_and_names_value(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
 
@@ -1212,11 +1220,194 @@ class TestAdvisoryChannel:
                         description="d", recommendation="r", line=5,
                         channel="Advisory")
 
-    def test_advisory_high_does_not_gate(self):
+    def test_explicit_entitlement_accepts_advisory_without_gating(
+        self, tmp_path, monkeypatch
+    ):
+        self._arm_entitlement(
+            tmp_path,
+            monkeypatch,
+            "repo-reuse",
+            {"schema": 1, "advisory_entitled": True},
+        )
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.add_issue(severity="high", title="Duplication", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")
         assert b._calculate_verdict() == "approve"
+
+    def test_explicit_false_rejects_advisory(self, tmp_path, monkeypatch):
+        self._arm_entitlement(
+            tmp_path,
+            monkeypatch,
+            "repo-reuse",
+            {"schema": 1, "advisory_entitled": False},
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+
+        with pytest.raises(ValueError, match="advisory.*not entitled"):
+            b.add_issue(
+                severity="high",
+                title="Duplication",
+                file="a.php",
+                description="d",
+                recommendation="r",
+                line=5,
+                channel="advisory",
+            )
+
+    def test_absent_envelope_fails_open_after_vocabulary_validation(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+
+        b.add_issue(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+
+        assert b._calculate_verdict() == "approve"
+
+    def test_absent_sidecar_fails_open_after_vocabulary_validation(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-reuse")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+
+        b.add_issue(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+
+        assert b._calculate_verdict() == "approve"
+
+    def test_malformed_sidecar_fails_open_after_vocabulary_validation(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-reuse")
+        (tmp_path / "repo-reuse-advisory-entitlement.json").write_text(
+            "{not json"
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+
+        b.add_issue(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+
+        assert b._calculate_verdict() == "approve"
+
+    def test_invalid_utf8_sidecar_fails_open_at_add_time(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-reuse")
+        (tmp_path / "repo-reuse-advisory-entitlement.json").write_bytes(b"\xff")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+
+        b.add_issue(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+
+        assert b._calculate_verdict() == "approve"
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param([], id="top-level-not-object"),
+            pytest.param(
+                {"schema": 1, "advisory_entitled": "true"},
+                id="entitlement-not-boolean",
+            ),
+            pytest.param({"schema": 1}, id="entitlement-missing"),
+        ],
+    )
+    def test_wrong_shape_sidecar_fails_open_after_vocabulary_validation(
+        self, tmp_path, monkeypatch, payload
+    ):
+        self._arm_entitlement(tmp_path, monkeypatch, "repo-reuse", payload)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+
+        b.add_issue(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+
+        assert b._calculate_verdict() == "approve"
+
+    def test_explicit_output_dir_revalidates_after_add_time_fail_open(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.add_issue(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+        (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
+            json.dumps({"schema": 1, "advisory_entitled": False})
+        )
+
+        with pytest.raises(ValueError, match="advisory.*not entitled"):
+            b.to_dict(output_dir=str(tmp_path))
+
+    def test_invalid_utf8_sidecar_fails_open_at_explicit_finalization(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.add_issue(
+            severity="critical", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+        (tmp_path / "reconciliator-advisory-entitlement.json").write_bytes(
+            b"\xff"
+        )
+
+        output = b.to_dict(output_dir=str(tmp_path))
+
+        assert output["verdict"] == "approve"
+
+    def test_to_json_supports_explicit_entitled_output_dir(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.add_issue(
+            severity="critical", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+        (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
+            json.dumps({"schema": 1, "advisory_entitled": True})
+        )
+
+        output = json.loads(b.to_json(output_dir=str(tmp_path)))
+
+        assert output["verdict"] == "approve"
+
+    def test_save_revalidates_against_its_output_dir(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.add_issue(
+            severity="high", title="Duplication", file="a.php",
+            description="d", recommendation="r", line=5, channel="advisory",
+        )
+        (tmp_path / "reconciliator-advisory-entitlement.json").write_text(
+            json.dumps({"schema": 1, "advisory_entitled": False})
+        )
+
+        with pytest.raises(ValueError, match="advisory.*not entitled"):
+            b.save(str(tmp_path))
+        assert not (tmp_path / "reconciliator-review.json").exists()
 
     def test_advisory_critical_does_not_gate(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")

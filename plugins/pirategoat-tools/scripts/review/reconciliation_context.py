@@ -390,6 +390,43 @@ def load_agent_findings(
     return findings
 
 
+def persist_reconciler_advisory_entitlement(
+    output_dir: str, agent_findings: Dict[str, Any]
+) -> None:
+    """Persist whether loaded upstream issues entitle advisory reconciliation.
+
+    Only the exact ``channel == "advisory"`` marker on an upstream issue
+    grants entitlement. The sidecar is written even when false and write
+    failures are deliberately fail-open for compatibility with manual and
+    older runs.
+    """
+    advisory_entitled = False
+    for finding in agent_findings.values():
+        issues = finding.get("issues", []) if isinstance(finding, dict) else []
+        if not isinstance(issues, list):
+            continue
+        if any(
+            isinstance(issue, dict) and issue.get("channel") == "advisory"
+            for issue in issues
+        ):
+            advisory_entitled = True
+            break
+
+    sidecar = os.path.join(
+        output_dir, "reconciliator-advisory-entitlement.json"
+    )
+    try:
+        with open(sidecar, "w", encoding="utf-8") as f:
+            json.dump(
+                {"schema": 1, "advisory_entitled": advisory_entitled}, f
+            )
+    except OSError:
+        try:
+            os.unlink(sidecar)
+        except OSError:
+            pass
+
+
 def extract_references(agent_findings: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extract unique file:line references from all agent issues.
 
@@ -1603,6 +1640,7 @@ def main() -> int:
         # Write to output directory
         output_path = os.path.join(output_dir, "reconciliation-context.json")
         os.makedirs(output_dir, exist_ok=True)
+        persist_reconciler_advisory_entitlement(output_dir, agent_findings)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(context, f, indent=2, ensure_ascii=False)
 

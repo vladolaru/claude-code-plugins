@@ -211,6 +211,7 @@ _STALE_ARTIFACTS = [
     "*-review.md",
     "*-scope-summary*.json",
     "*-deferred-files.json",
+    "*-advisory-entitlement.json",
     "*.started",
     "reconciliation-context.json",
     "reconciliation-context.md",

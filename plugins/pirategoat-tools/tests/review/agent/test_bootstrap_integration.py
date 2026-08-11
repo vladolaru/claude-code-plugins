@@ -19,6 +19,8 @@ BOOTSTRAP_SCRIPT = SCRIPTS_DIR / "review" / "agent" / "bootstrap.py"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review.agent.output import ReviewOutputBuilder
+
 # Import AGENT_CONFIG to derive ALL_AGENTS
 _spec = importlib.util.spec_from_file_location("bootstrap_reviewer", str(BOOTSTRAP_SCRIPT))
 _mod = importlib.util.module_from_spec(_spec)
@@ -147,7 +149,7 @@ class TestCategoryRepresentatives:
         assert agent_start["scope"]["paths"] == expected_scope
 
     def test_ref_mode_instance_writes_scope_summaries_and_sidecars(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """Adapter ref-mode instances must leave the same per-agent scope
         evidence as native reviewers — instance-named scope summaries (so
@@ -161,6 +163,7 @@ class TestCategoryRepresentatives:
             "--agent", "repo-reviewer-adapter",
             "--repo-agent-ref", str(ref),
             "--instance-name", "repo-renewals-reviewer",
+            "--channel", "advisory",
             "--scope-domains", "code",
             "--output-dir", str(tmp_path),
         )
@@ -175,6 +178,20 @@ class TestCategoryRepresentatives:
         # from PIRATEGOAT_REVIEWER_NAME.
         assert "PIRATEGOAT_REVIEWER_NAME=repo-renewals" in result.stdout
         assert (tmp_path / "repo-renewals-deferred-files.json").is_file()
+        entitlement = json.loads(
+            (tmp_path / "repo-renewals-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": True}
+
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "repo-renewals")
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="repo-renewals")
+        builder.add_issue(
+            severity="critical", title="Advisory", file="src/app.py",
+            description="d", recommendation="r", line=1,
+            channel="advisory",
+        )
+        assert builder.to_dict()["verdict"] == "approve"
 
     def test_ref_mode_scope_failure_is_an_error_not_a_clean_exit(
         self, tmp_path
@@ -1239,7 +1256,9 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert "DECLARED DOMAIN RULE MARKER" in result.stdout
 
-    def test_advisory_rule_injects_the_channel_contract(self, tmp_path):
+    def test_advisory_rule_injects_the_channel_contract(
+        self, tmp_path, monkeypatch
+    ):
         """The channel exists only as rendered prose unless the reviewer is
         told to propagate it — an untagged advisory-rule finding counts as
         blocking in the verdict, letting an advisory rule gate the review."""
@@ -1252,7 +1271,24 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert 'add_issue(..., channel="advisory")' in result.stdout
 
-    def test_blocking_only_rules_omit_the_channel_contract(self, tmp_path):
+        entitlement = json.loads(
+            (tmp_path / "performance-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": True}
+
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
+        builder.add_issue(
+            severity="high", title="Advisory", file="src/app.py",
+            description="d", recommendation="r", line=1,
+            channel="advisory",
+        )
+        assert builder.to_dict()["verdict"] == "approve"
+
+    def test_blocking_only_rules_omit_the_channel_contract(
+        self, tmp_path, monkeypatch
+    ):
         self._write_review_context(tmp_path, rules=[self._rule(
             tmp_path, "blk-rule", "BLOCKING BODY", channel="blocking",
         )])
@@ -1262,6 +1298,21 @@ class TestRepoRuleAndRefModeSelection:
         assert result.returncode == 0
         assert "BLOCKING BODY" in result.stdout
         assert "CHANNEL CONTRACT" not in result.stdout
+
+        entitlement = json.loads(
+            (tmp_path / "performance-advisory-entitlement.json").read_text()
+        )
+        assert entitlement == {"schema": 1, "advisory_entitled": False}
+
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "performance")
+        builder = ReviewOutputBuilder(pr_id="1", reviewer="performance")
+        with pytest.raises(ValueError, match="advisory.*not entitled"):
+            builder.add_issue(
+                severity="high", title="Advisory", file="src/app.py",
+                description="d", recommendation="r", line=1,
+                channel="advisory",
+            )
 
     def test_isolated_execution_is_refused(self, tmp_path):
         """An explicit isolation request must never silently widen into
