@@ -337,11 +337,18 @@ carries the normalized result into `review-context.json` under `review_config`
   repo ids may carry "reviewer" mid-string, e.g. `api-reviewer-v2`).
 - Ref-mode derives the reviewer name and `.started` marker from `--instance-name`, not the
   shared adapter key, so N adapter instances never clobber one output file.
-- **Advisory channel:** a reviewer/rule with `"channel": "advisory"` produces findings that
-  are listed but NEVER gate the verdict. `add_issue(..., channel="advisory")` is skipped in
-  `_calculate_verdict`. Native agents never set `channel`, so this is backward-compatible;
-  `reconciliation_context.py` surfaces it and the reconciliator preserves it. Bootstrap's
-  rules render instructs native reviewers to tag advisory-rule-derived findings.
+- **Advisory channel:** `add_issue()` accepts only `"blocking"` or `"advisory"`; blocking is
+  the default and is normalized to an absent field. Native agents set advisory only for a
+  finding caused by a selected advisory repo rule—their own-domain findings omit `channel`.
+  Bootstrap writes an entitlement sidecar for every effective reviewer identity: entitlement
+  is true when that reviewer selected any advisory rule OR when ref-mode dispatched it with
+  `--channel advisory`. An explicit false rejects advisory findings at add time and canonical
+  serialization; the reconciliator independently declares entitlement from upstream advisory
+  findings and is checked during final serialization. Missing, malformed, or unwritable
+  sidecars deliberately fail open to vocabulary-only validation for manual builders, older
+  bootstraps, and failed writes. Entitled advisory findings remain listed but never gate the
+  verdict; the summary records how many were suppressed and, only when stricter, the verdict
+  over all findings.
 - **Provenance gate (security boundary):** the adapter EXECUTES repo prompt text with real
   tools, so `load_review_config` excludes any rule/reviewer whose defining file — or
   `.pirategoat/config.json` itself — is added or modified within the reviewed range

@@ -41,7 +41,7 @@ export interface Issue {
     references?: string[]; // Links to docs, patterns, skills
     behavior_evidence?: 'cited' | 'inferred';
     source_cited?: string; // "<file>:<line>" pointer to upstream evidence
-    channel?: 'blocking' | 'advisory'; // Set only by repo-contributed reviewers (native agents omit it). 'blocking' (the default) gates the verdict normally; 'advisory' findings are listed but never gate.
+    channel?: 'blocking' | 'advisory'; // Exact accepted input vocabulary. 'blocking' is the default and is canonicalized to absence; entitled 'advisory' findings remain listed but are excluded from the verdict.
 }
 
 /**
@@ -141,6 +141,8 @@ export interface ReviewOutput {
             low: number;
             info: number;
         };
+        advisory_suppressed: number; // Advisory-tagged findings excluded from the verdict; always present, including 0 (and 0 for not_applicable).
+        verdict_without_advisory?: Verdict; // Present only when advisory_suppressed > 0 and the verdict over all findings would be stricter.
     };
 
     // Issues
