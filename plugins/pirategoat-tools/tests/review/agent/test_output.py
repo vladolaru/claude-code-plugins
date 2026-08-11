@@ -1204,6 +1204,14 @@ class TestNotApplicable:
 class TestAdvisoryChannel:
     """Advisory-channel findings are listed but never gate the verdict."""
 
+    def test_invalid_channel_raises_and_names_value(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
+
+        with pytest.raises(ValueError, match="Advisory"):
+            b.add_issue(severity="high", title="Duplication", file="a.php",
+                        description="d", recommendation="r", line=5,
+                        channel="Advisory")
+
     def test_advisory_high_does_not_gate(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.add_issue(severity="high", title="Duplication", file="a.php",
@@ -1216,10 +1224,11 @@ class TestAdvisoryChannel:
                     description="d", recommendation="r", line=5, channel="advisory")
         assert b._calculate_verdict() == "approve"
 
-    def test_blocking_channel_still_gates(self):
+    def test_blocking_channel_is_implicit_and_still_gates(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-runtime")
         b.add_issue(severity="critical", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="blocking")
+        assert "channel" not in b.issues[0]
         assert b._calculate_verdict() == "block"
 
     def test_no_channel_is_backward_compatible(self):
@@ -1228,7 +1237,7 @@ class TestAdvisoryChannel:
                     description="d", recommendation="r", line=5)
         assert b._calculate_verdict() == "request_changes"
 
-    def test_channel_persisted_in_issue(self):
+    def test_advisory_channel_persisted_in_issue(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="repo-reuse")
         b.add_issue(severity="low", title="x", file="a.php",
                     description="d", recommendation="r", line=5, channel="advisory")

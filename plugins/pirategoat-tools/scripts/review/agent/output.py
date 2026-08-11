@@ -42,6 +42,7 @@ from typing import List, Optional, Dict, Any
 
 
 _VALID_SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')
+_VALID_CHANNELS = ('blocking', 'advisory')
 _SEVERITY_RANK = {
     'info': 0,
     'low': 1,
@@ -241,6 +242,8 @@ class ReviewOutputBuilder:
         behavior_evidence: Optional[str] = None,
         source_cited: Optional[str] = None,
         severity_floor: Optional[str] = None,
+        *,
+        channel: Optional[str] = None,
         **extra_fields
     ) -> Optional[str]:
         """Add an issue. Returns issue ID.
@@ -288,6 +291,13 @@ class ReviewOutputBuilder:
                 raise ValueError(
                     f"Invalid behavior_evidence: {behavior_evidence!r}. "
                     f"Must be one of {valid_evidence}."
+                )
+
+        if channel is not None:
+            if not isinstance(channel, str) or channel not in _VALID_CHANNELS:
+                raise ValueError(
+                    f"Invalid channel: {channel!r}. "
+                    f"Must be one of {_VALID_CHANNELS}."
                 )
 
         # Validate line — None records a first-class file-scoped issue (loud),
@@ -344,6 +354,8 @@ class ReviewOutputBuilder:
             issue['source_cited'] = source_cited
         if floor_value is not None:
             issue['severity_floor'] = floor_value
+        if channel == 'advisory':
+            issue['channel'] = channel
 
         self.issues.append(issue)
         return issue_id
