@@ -569,7 +569,11 @@ function_under_test = _mod.function_name
 
 ### Importing from helpers/
 
-Shared test utilities live in `tests/helpers/`. The `helpers/` package is importable from any test subdirectory via the `conftest.py` sys.path setup:
+Shared test utilities live in `tests/helpers/`. Unlike `scripts/` (added to
+`sys.path` once, in `conftest.py`), `conftest.py` does NOT add `tests/`
+itself — every caller inserts `TESTS_DIR` (the `tests/` directory) onto
+`sys.path` before importing from `helpers/`, the same way `grading/test_graders.py`
+does here:
 
 ```python
 from helpers.graders import grade_review_json, grade_output_pair
