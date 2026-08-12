@@ -1245,7 +1245,7 @@ class TestRunManifest:
         ],
     )
     def test_coverage_is_explicitly_unavailable_for_incomplete_inputs(
-        self, mod, tmp_path, context_payload, plan_payload
+        self, mod, tmp_path, context_payload, plan_payload, capsys
     ):
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -1270,6 +1270,79 @@ class TestRunManifest:
         manifest = _read_manifest(telemetry)
         assert manifest["availability"]["coverage"] is False
         assert manifest["coverage"] is None
+        # Legitimate absence (malformed/partial/missing inputs) is normal
+        # operation and must stay silent — only an unexpected builder bug
+        # is diagnostic-worthy. See
+        # test_unexpected_coverage_builder_exception_is_diagnosed_on_stderr.
+        assert capsys.readouterr().err == ""
+
+    def test_unexpected_coverage_builder_exception_is_diagnosed_on_stderr(
+        self, mod, telemetry, output_dir, capsys, monkeypatch
+    ):
+        """A bug inside the coverage builder must be distinguishable from
+        the legitimate ``return None`` absence paths above: it still
+        yields ``coverage: None`` (fail-open — the run is unaffected) but
+        it must be diagnosed on stderr, unlike every silent absence path.
+        """
+        _write_coverage_inputs(
+            output_dir,
+            changed=["src/a.py"],
+            reviewable=["src/a.py"],
+            agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
+        )
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated coverage builder bug")
+
+        # normalize_paths is the sole collaborator build_coverage_manifest
+        # takes as an injected dependency; breaking it simulates a real
+        # defect in the builder without touching its explicit absence
+        # branches (those `return None` directly, never raising).
+        monkeypatch.setattr(mod.ReviewTelemetry, "_normalize_repo_paths", _boom)
+
+        # Must not raise: a builder bug must never fail the review run.
+        telemetry.start(run_id="run-1")
+
+        manifest = _read_manifest(telemetry)
+        assert manifest["availability"]["coverage"] is False
+        assert manifest["coverage"] is None
+        err = capsys.readouterr().err
+        assert "coverage manifest build failed" in err
+        assert str(output_dir) in err
+        assert "simulated coverage builder bug" in err
+
+    def test_build_coverage_manifest_diagnoses_unexpected_exception_directly(
+        self, mod, capsys
+    ):
+        """Direct-call pin on build_coverage_manifest's own contract.
+
+        normalize_paths is an injected parameter of the function itself, so
+        this exercises the except-Exception path with zero telemetry
+        coupling — a stronger seam than going through ReviewTelemetry.
+        """
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated coverage builder bug")
+
+        final_info = {
+            "available": True,
+            "duplicates": [],
+            "plan": {"changed_files": ["src/a.py"]},
+            "index": {},
+        }
+
+        result = mod.manifest_sections.build_coverage_manifest(
+            "/output/dir",
+            [],
+            {"git": {"changed_files": ["src/a.py"]}},
+            "/repo",
+            final_info,
+            normalize_paths=_boom,
+        )
+
+        assert result is None
+        err = capsys.readouterr().err
+        assert "coverage manifest build failed for /output/dir" in err
+        assert "simulated coverage builder bug" in err
 
     def test_valid_empty_path_sets_are_available_zero_coverage(
         self, telemetry, output_dir

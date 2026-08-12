@@ -400,7 +400,17 @@ def build_coverage_manifest(
             "uncovered": sorted(reviewable_set - assigned_set),
             "semantics": "generated_scope_not_proof_of_model_read",
         }
-    except Exception:
+    except Exception as err:  # noqa: BLE001 — best-effort by design
+        # The explicit `return None` paths above are legitimate absence
+        # (context/plan shape, subset, agent-status invariants) and stay
+        # silent — that is normal operation, not a defect. Only a genuine
+        # builder bug reaches here, and it must not be indistinguishable
+        # from those legitimate paths, so it is surfaced on stderr before
+        # falling back to the same fail-open `None`.
+        print(
+            f"coverage manifest build failed for {output_dir}: {err}",
+            file=sys.stderr,
+        )
         return None
 
 
