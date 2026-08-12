@@ -28,7 +28,7 @@ from review.agent.output import ReviewOutputBuilder
 # `helpers` package resolves, then import graders directly from their real
 # source rather than through the eval module's re-export.
 sys.path.insert(0, str(TESTS_DIR))
-from helpers.graders import grade_review_markdown
+from helpers.graders import GradeResult, grade_review_markdown
 
 # The runner is mostly exercised as a subprocess (see _run_eval), but
 # run_grade_only is also called directly to inspect its GradeResults.
@@ -165,7 +165,7 @@ class TestCliModes:
 
         def fake_dispatch(*args):
             calls.append(args)
-            return _eval_mod.GradeResult(
+            return GradeResult(
                 passed=True, score=1.0, detail={"status": "graded"},
             )
 
@@ -200,13 +200,13 @@ class TestDispatchReportMetadata:
             "expected": {agent: {"verdict_in": ["approve"]}},
         }
         trial_grades = iter([
-            _eval_mod.GradeResult(
+            GradeResult(
                 passed=False, score=0.0, detail={"status": "graded"},
             ),
-            _eval_mod.GradeResult(
+            GradeResult(
                 passed=False, score=0.0, detail={"status": "timed_out"},
             ),
-            _eval_mod.GradeResult(passed=False, score=0.0),
+            GradeResult(passed=False, score=0.0),
         ])
         report_path = tmp_path / "report.json"
 
@@ -247,7 +247,7 @@ class TestDispatchReportMetadata:
         monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
         monkeypatch.setattr(
             _eval_mod, "run_dispatch_scenario",
-            lambda *args: _eval_mod.GradeResult(
+            lambda *args: GradeResult(
                 passed=True, score=1.0, checks_run=1, checks_passed=1,
                 detail={"status": "graded"},
             ),
@@ -279,7 +279,7 @@ class TestDispatchReportMetadata:
         monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
         monkeypatch.setattr(
             _eval_mod, "run_dispatch_scenario",
-            lambda *args: _eval_mod.GradeResult(
+            lambda *args: GradeResult(
                 passed=True, score=1.0, checks_run=1, checks_passed=1,
                 detail={"status": "bootstrap_only"},
             ),
@@ -319,7 +319,7 @@ class TestDispatchReportMetadata:
         monkeypatch.setattr(_eval_mod, "SCENARIOS", {"sample": scenario})
         monkeypatch.setattr(
             _eval_mod, "run_dispatch_scenario",
-            lambda *args: _eval_mod.GradeResult(
+            lambda *args: GradeResult(
                 passed=True, score=1.0, checks_run=1, checks_passed=1,
                 detail={"status": "graded"},
             ),
@@ -353,11 +353,11 @@ class TestDispatchReportMetadata:
         # ENTRY_STATUSES is load-bearing: a typo'd stamp or a leaked internal
         # sentinel ("completed") must not flow into status-filtered pass
         # rates as a novel value.
-        result = _eval_mod.GradeResult(
+        result = GradeResult(
             passed=True, score=1.0, detail={"status": "completed"},
         )
         assert _eval_mod.entry_status(result) == "harness_error"
-        graded = _eval_mod.GradeResult(
+        graded = GradeResult(
             passed=True, score=1.0, detail={"status": "graded"},
         )
         assert _eval_mod.entry_status(graded) == "graded"
