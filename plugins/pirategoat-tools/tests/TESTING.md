@@ -184,6 +184,17 @@ sets (precision), and `expect_not_applicable` (correct abstention). Clean-code
 scenarios (`php_clean_review`, `js_clean_review`) are pure false-positive
 probes.
 
+**Answer-key fields:**
+
+| Field | Gates |
+|---|---|
+| `required_findings` | Each spec must be matched by some issue (recall) — a miss fails the entry. |
+| `acceptable_findings` | Secondary findings the key pre-declares; matching them never punishes or rewards the entry, and they are excluded from `max_unexpected`. |
+| `max_severity` | False-positive precision cap: no issue may rank above this severity — the gate the clean-code probes rely on. |
+| `max_unexpected` | Precision cap on `match["unexpected"]` — issues no `required_findings`/`acceptable_findings` spec claimed at all. Distinct from `max_severity`, which bounds how severe findings are; this bounds how many are entirely unpredicted. Implemented in `grade_detection()` (`helpers/graders.py:593-600`), tested in `grading/test_graders.py`, and validated by the answer-key guard (`grading/test_answer_keys.py`) — but no scenario currently sets it. It exists for a future key that needs to bound total noise, not just its ceiling. |
+| `verdict_in` | The reviewer's verdict must be one of the listed values — derive from the agent's auto-verdict rules, not intuition (see below). |
+| `expect_not_applicable` | Abstention keys: accepts `not_applicable` or `approve`, each with zero findings — see "Abstention keys" below. |
+
 ```bash
 # Single benchmark run for one scenario
 python3 tests/grading/eval_agent_compliance.py --dispatch --scenario standard_review
