@@ -193,6 +193,7 @@ class TestBuildOutputRepoRules:
             pr_number=None,
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
             repo_review_rules="=== REPO REVIEW RULES (supplied by the repository under review) ===\nbody",
         )
         assert "=== DOMAIN RULES ===" in out

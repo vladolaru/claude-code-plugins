@@ -90,7 +90,7 @@ Integration tests that run `review/agent/bootstrap.py` via subprocess against a 
 | `TestErrorCases` | 2 | Unknown agent exits 1 with structured error output |
 | `TestReviewOutputBuilderAPIExample` | 6 | Section 3 includes complete builder API usage example (direct `build_output()` call) |
 | `TestBootstrapOutputSizeCap` | 4 | Large scope truncated with file reference; small scope inline (direct `build_output()` call) |
-| `TestDynamicDispatchRisk` | 4 | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK; PHP → high, no PHP → low (direct `build_output()` call) |
+| `TestDynamicDispatchRisk` | 9 | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK from the caller's `has_php` fact (PHP → high, no PHP → low); rendered scope text can't drive the decision in either direction (direct `build_output()` call); 3 end-to-end subprocess tests cover `main()`'s own `has_php` derivation, which the direct calls can't reach — including that a domain-excluded PHP test file (under `=== SKIPPED ===`) must not force `high` |
 | `TestOutputFilenameConsistency` | 2 | Output filenames from `save()` match bootstrap expectations (direct `build_output()` call) |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)

@@ -246,6 +246,8 @@ Skip-list (sections bootstrap replaces with concrete values):
 
 The skip-list is for *mechanics bootstrap performs* (running scope.py, resolving paths). Policy about what the agent must do with the result belongs in `build_output()`, which also knows the concrete budget and file paths. `TestNotDiffedContractIsDelivered` in `tests/review/agent/test_bootstrap_integration.py` guards this for the NOT DIFFED contract — extend it when you add a comparable contract.
 
+**RULE: `build_output()` never re-derives a fact from the `scope_output` text it just rendered.** Every fact it needs (deferred-file count, PHP-in-scope, and whatever comes next) must arrive as a required parameter the caller computed from a structured source — `main()`'s scope-facts/telemetry-path machinery, not a regex or string split over rendered output. A rename or reformat of scope.py's rendered text should never be able to silently flip a decision a reviewer's briefing depends on; see `not_diffed_count` and `has_php` for the pattern, and `TestNotDiffedContractIsDelivered`/`TestDynamicDispatchRisk` for the executable contracts.
+
 **tests-reviewer-protocol.md** is appended for agents with `"tests-reviewer"` in their `protocols` list. It adds test quality principles (RULE 0: tests verify behavior, not implementation) and common anti-patterns.
 
 ### Bootstrap Output Positioning

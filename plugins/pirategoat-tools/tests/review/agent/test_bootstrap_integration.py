@@ -482,6 +482,7 @@ class TestArchitecturalInvariants:
             pr_number=None,
             reviewer_name="code",
             not_diffed_count=0,
+            has_php=False,
         )
 
         assert section in prompt
@@ -532,6 +533,7 @@ class TestCanonicalExecutableBuilderSource:
             pr_number="42",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
 
         assert "python3 <<'PY'" not in protocol
@@ -582,6 +584,7 @@ class TestNotApplicableCompletionContract:
             pr_number=None,
             reviewer_name="woo-regression",
             not_diffed_count=0,
+            has_php=False,
         )
 
         assert "builder.mark_not_applicable(" in prompt
@@ -602,6 +605,7 @@ class TestNotApplicableCompletionContract:
             pr_number=None,
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
 
         heredoc_body = prompt.split("python3 <<'PY'\n", 1)[1].split("\nPY", 1)[0]
@@ -630,6 +634,7 @@ class TestNotApplicableCompletionContract:
             pr_number=None,
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
 
         assert "RECORDED COUNTS" in prompt
@@ -661,6 +666,7 @@ class TestNotApplicableCompletionContract:
                 pr_number="42",
                 reviewer_name=reviewer_name,
                 not_diffed_count=0,
+                has_php=False,
             )
             start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
             end = prompt.index("\nPY", start) + len("\nPY")
@@ -716,6 +722,7 @@ class TestNotApplicableCompletionContract:
             pr_number="42",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
         start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
         end = prompt.index("\nPY", start) + len("\nPY")
@@ -902,6 +909,7 @@ class TestVerificationMethodContract:
             pr_number=None,
             reviewer_name="code",
             not_diffed_count=0,
+            has_php=False,
         )
         assert "## Absence Claims" in prompt
         assert "searched pattern is absent" in prompt
@@ -954,6 +962,7 @@ class TestReviewOutputBuilderAPIExample:
             pr_number="42",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
 
     def test_output_contains_add_issue_example(self, tmp_path):
@@ -1021,6 +1030,7 @@ class TestBootstrapOutputSizeCap:
             pr_number="42",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
 
     def test_small_scope_included_inline(self, tmp_path):
@@ -1038,6 +1048,7 @@ class TestBootstrapOutputSizeCap:
             pr_number="42",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
         assert small_scope in output
 
@@ -1076,6 +1087,7 @@ class TestBootstrapOutputSizeCap:
                 pr_number="42",
                 reviewer_name=reviewer_name,
                 not_diffed_count=0,
+                has_php=False,
             )
 
         security_output = build("security-reviewer", "security", "security")
@@ -1094,82 +1106,176 @@ class TestBootstrapOutputSizeCap:
 
 
 class TestDynamicDispatchRisk:
-    """Bootstrap injects DYNAMIC_DISPATCH_RISK for dead-code-reviewer."""
+    """Bootstrap injects DYNAMIC_DISPATCH_RISK for dead-code-reviewer.
+
+    has_php is a REQUIRED fact the caller supplies (main() derives it from
+    telemetry_scope_paths — the same fact-based, sidecar-preferring path
+    union used for scope telemetry and the NOT DIFFED contract).
+    build_output() never parses scope_output for PHP filenames — see the
+    regression tests at the bottom of this class for the failure mode that
+    replaced.
+    """
+
+    def _build(self, tmp_path, has_php, scope_output="=== FILES ===\n=== DIFFS ===",
+               agent_name="dead-code-reviewer"):
+        return build_output(
+            agent_name=agent_name,
+            plugin_root="/fake/root",
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output=scope_output,
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="dead-code",
+            not_diffed_count=0,
+            has_php=has_php,
+        )
 
     def test_dead_code_reviewer_gets_dispatch_risk(self, tmp_path):
         """dead-code-reviewer output includes DYNAMIC_DISPATCH_RISK."""
-        scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
-        output = build_output(
-            agent_name="dead-code-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output=scope_with_php,
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="dead-code",
-            not_diffed_count=0,
-        )
+        output = self._build(tmp_path, has_php=True)
         assert "DYNAMIC_DISPATCH_RISK:" in output
 
     def test_dispatch_risk_high_with_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'high' when PHP files are in scope."""
-        scope_with_php = "=== FILES ===\nsrc/payment.php  (+10 -5)\nsrc/utils.ts  (+3 -1)\n=== DIFFS ==="
-        output = build_output(
-            agent_name="dead-code-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output=scope_with_php,
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="dead-code",
-            not_diffed_count=0,
-        )
+        """DYNAMIC_DISPATCH_RISK is 'high' when the caller's fact says PHP files are in scope."""
+        output = self._build(tmp_path, has_php=True)
         risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
         assert "high" in risk_line[0].lower()
 
     def test_dispatch_risk_low_without_php_files(self, tmp_path):
-        """DYNAMIC_DISPATCH_RISK is 'low' when no PHP files are in scope."""
-        scope_no_php = "=== FILES ===\nsrc/utils.ts  (+3 -1)\nsrc/component.tsx  (+20 -5)\n=== DIFFS ==="
-        output = build_output(
-            agent_name="dead-code-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output=scope_no_php,
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="dead-code",
-            not_diffed_count=0,
-        )
+        """DYNAMIC_DISPATCH_RISK is 'low' when the caller's fact says no PHP files are in scope."""
+        output = self._build(tmp_path, has_php=False)
         risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
         assert "low" in risk_line[0].lower()
 
     def test_other_agents_no_dispatch_risk(self, tmp_path):
-        """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK."""
-        output = build_output(
-            agent_name="security-reviewer",
-            plugin_root="/fake/root",
-            status="OK",
-            review_rules="rules",
-            domain_rules=None,
-            scope_output="scope",
-            exploration_scope=None,
-            output_dir=str(tmp_path),
-            pr_number="42",
-            reviewer_name="security",
-            not_diffed_count=0,
-        )
+        """Non-dead-code agents do NOT get DYNAMIC_DISPATCH_RISK, regardless of has_php."""
+        output = self._build(tmp_path, has_php=True, agent_name="security-reviewer")
         assert "DYNAMIC_DISPATCH_RISK:" not in output
+
+    def test_php_looking_text_cannot_force_high_when_fact_says_low(self, tmp_path):
+        """A scope_output full of .php filenames must not flip the decision
+        when the caller's fact (has_php=False) says otherwise.
+
+        This is the exact failure shape being fixed: the old implementation
+        derived has_php by splitting rendered scope_output text on a double
+        space and checking for a '.php' suffix — a second, independent
+        derivation of the same fact build_output() now receives explicitly.
+        """
+        php_looking_text = (
+            "=== FILES ===\n"
+            "src/handler.php  (+10 -5)\n"
+            "src/other.php  (+3 -1)\n"
+            "=== DIFFS ==="
+        )
+        output = self._build(tmp_path, has_php=False, scope_output=php_looking_text)
+        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
+        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert "low" in risk_line[0].lower()
+
+    def test_garbled_text_cannot_suppress_high_when_fact_says_php(self, tmp_path):
+        """A scope_output with no recognizable '.php' text must not suppress
+        the high-risk contract when the caller's fact says PHP files are
+        genuinely in scope.
+
+        This mirrors the NOT DIFFED fix's renamed-header test: a future
+        scope.py refactor that reformats or renames the FILES/DIFFS section
+        (spacing, column order, a new section name) must not silently flip
+        has_php just because the old '.php'-suffix text scan no longer
+        matches — the caller's fact is authoritative regardless of how
+        scope.py renders.
+        """
+        garbled_scope = (
+            "=== SCOPE TRUNCATED ===\n"
+            "Full scope written to external file; see it for details.\n"
+        )
+        assert ".php" not in garbled_scope  # the old text-scan's anchor is gone
+        output = self._build(tmp_path, has_php=True, scope_output=garbled_scope)
+        risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
+        assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
+        assert "high" in risk_line[0].lower()
+
+    def test_real_php_scope_yields_high_end_to_end(self, tmp_path):
+        """End-to-end (subprocess, real scope.py + main()) proof that a
+        real PHP file in scope drives has_php through main()'s derivation.
+
+        The class above covers build_output() in isolation, which cannot
+        catch a mutation to main()'s has_php derivation itself (e.g.
+        `has_php = False`) — that computation lives outside build_output(),
+        so a unit test that only calls build_output() directly is blind to
+        it. This runs the full subprocess chain against a fixture with a
+        genuinely in-scope PHP file (src/ProductManager.php; the domain
+        also excludes tests/ProductManagerTest.php, which must not count).
+        """
+        r = run_bootstrap(
+            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
+            fixture="multi-file-realistic.diff",
+        )
+        assert r.returncode == 0, r.stderr
+        assert "DYNAMIC_DISPATCH_RISK: high" in r.stdout
+
+    def test_real_php_free_scope_yields_low_end_to_end(self, tmp_path):
+        """End-to-end companion to the test above: a fixture with zero PHP
+        files (only .ts/.tsx) must drive has_php to False through the same
+        real main() derivation.
+        """
+        r = run_bootstrap(
+            "--agent", "dead-code-reviewer", "--output-dir", str(tmp_path),
+            fixture="js-ts-source.diff",
+        )
+        assert r.returncode == 0, r.stderr
+        assert "DYNAMIC_DISPATCH_RISK: low" in r.stdout
+
+    def test_domain_excluded_php_test_file_does_not_force_high_end_to_end(self, tmp_path):
+        """A PHP file present only under '=== SKIPPED === Outside domain'
+        (e.g. a test file the dead-code domain deliberately excludes) must
+        not count as PHP-in-scope.
+
+        This is the reachable divergence between the old and new
+        derivations on real scope text: the old text scan read every
+        non-'===' line, including the SKIPPED summary line
+        "Outside domain (N): tests/ProductManagerTest.php" — which has no
+        double space, so the whole line survived as one token and its
+        '.php' suffix set has_php=True even though no PHP file was
+        genuinely in scope. telemetry_scope_paths only contains files that
+        are actually in scope (inline, NOT DIFFED, or list-only), so it
+        excludes SKIPPED files correctly.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        (repo / "README.md").write_text("# init\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+        (repo / "src").mkdir()
+        (repo / "tests").mkdir()
+        (repo / "src" / "app.ts").write_text("export const x = 1;\n")
+        (repo / "tests" / "ProductManagerTest.php").write_text(
+            "<?php\nclass ProductManagerTest extends TestCase {\n"
+            "    public function test_get_product() {\n"
+            "        $this->assertTrue( true );\n    }\n}\n"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "add ts app + php test"], cwd=repo, check=True)
+
+        out_dir = tmp_path / "out"
+        result = subprocess.run(
+            [sys.executable, str(BOOTSTRAP_SCRIPT), "--agent", "dead-code-reviewer",
+             "--output-dir", str(out_dir), "--range", "HEAD~1..HEAD"],
+            capture_output=True, text=True, timeout=60, cwd=repo,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Outside domain" in result.stdout and "ProductManagerTest.php" in result.stdout, (
+            "fixture setup didn't produce the expected SKIPPED line — test doesn't pin what it claims"
+        )
+        assert "DYNAMIC_DISPATCH_RISK: low" in result.stdout
 
 
 class TestRepoRuleAndRefModeSelection:
@@ -1450,6 +1556,7 @@ class TestOutputFilenameConsistency:
             pr_number="42",
             reviewer_name="dead-code",
             not_diffed_count=0,
+            has_php=False,
         )
         assert f"{tmp_path}/dead-code-review.json" in output
         assert f"{tmp_path}/dead-code-review.md" not in output
@@ -1508,6 +1615,7 @@ class TestNotDiffedContractIsDelivered:
     )
 
     def _build(self, tmp_path, scope_output, not_diffed_count, **kwargs):
+        kwargs.setdefault("has_php", False)
         return build_output(
             agent_name="security-reviewer",
             plugin_root="/fake/root",

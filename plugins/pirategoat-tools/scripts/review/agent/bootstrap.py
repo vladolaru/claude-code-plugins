@@ -915,6 +915,7 @@ def build_output(
     pr_number: Optional[str],
     reviewer_name: str,
     not_diffed_count: int,
+    has_php: bool,
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
     change_purpose: Optional[str] = None,
@@ -928,16 +929,29 @@ def build_output(
 ) -> str:
     """Build the structured bootstrap output block.
 
-    not_diffed_count is a REQUIRED fact this function never derives on its
-    own: it must be the caller's already-computed deferred-file count
-    (main() passes len(scope_facts["not_diffed"])). This function does not
-    parse scope_output for it — the sole place that fact is ever text-
-    derived is load_scope_facts()'s documented fallback in main(). No
-    default, so an omitted caller fails loudly (TypeError) instead of
-    silently dropping the NOT DIFFED honesty contract it gates. See
-    TestNotDiffedContractIsDelivered in
+    not_diffed_count and has_php are REQUIRED facts this function never
+    derives on its own:
+
+    - not_diffed_count must be the caller's already-computed deferred-file
+      count (main() passes len(scope_facts["not_diffed"])).
+    - has_php must be the caller's already-computed PHP-in-scope fact
+      (main() passes any(p.endswith(".php") for p in
+      telemetry_scope_paths) — the same deduped fact-based path union used
+      for scope telemetry, itself preferring scope.py's machine-readable
+      summary sidecars over text parsing).
+
+    This function does not parse scope_output for either fact — the sole
+    place either is ever text-derived is main()'s extract_scope_files() /
+    extract_not_diffed_files() / extract_list_only_files() fallback, used
+    only when load_scope_facts()'s machine-readable sidecars are
+    unavailable (load_scope_facts() itself returns None in that case, not
+    a text-derived value). Neither parameter has a default, so an omitted
+    caller fails loudly (TypeError) instead of silently dropping the NOT
+    DIFFED honesty contract or handing dead-code-reviewer a wrong
+    DYNAMIC_DISPATCH_RISK.
+    See TestNotDiffedContractIsDelivered and TestDynamicDispatchRisk in
     tests/review/agent/test_bootstrap_integration.py for the executable
-    contract and its regression history.
+    contracts and their regression history.
     """
     lines = []
 
@@ -1123,14 +1137,9 @@ def build_output(
         lines.append(file_history)
         lines.append("")
 
-    # Inject DYNAMIC_DISPATCH_RISK for dead-code-reviewer
+    # Inject DYNAMIC_DISPATCH_RISK for dead-code-reviewer. has_php is the
+    # caller's fact (see docstring) — never re-derived from scope_output text.
     if agent_name == "dead-code-reviewer":
-        # Check if any PHP files are in the scope
-        has_php = any(
-            line.strip().split("  ")[0].strip().endswith(".php")
-            for line in scope_output.splitlines()
-            if line.strip() and not line.startswith("===")
-        )
         risk = "high (PHP files in scope — check for hooks, filters, callbacks)" if has_php else "low (0 PHP files in scope — skip Step 0)"
         lines.append(f"DYNAMIC_DISPATCH_RISK: {risk}")
         lines.append("")
@@ -1686,6 +1695,10 @@ def main():
     telemetry_scope_paths = list(
         dict.fromkeys([*scope_files_for_budget, *not_diffed_paths, *list_only_paths])
     )
+    # DYNAMIC_DISPATCH_RISK (dead-code-reviewer's Step 0 gate) is derived from
+    # this same fact-based path set, not from re-parsing scope_output text —
+    # see has_php's docstring note in build_output().
+    has_php = any(p.endswith(".php") for p in telemetry_scope_paths)
 
     persist_deferred_sidecar(
         output_dir,
@@ -1836,6 +1849,7 @@ def main():
         pr_number=pr_number,
         reviewer_name=reviewer_name,
         not_diffed_count=len(not_diffed_paths),
+        has_php=has_php,
         file_history=file_history_output,
         pr_intent=pr_intent,
         change_purpose=change_purpose,

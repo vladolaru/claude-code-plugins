@@ -355,6 +355,7 @@ class TestChangePurposeInjection:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
             change_purpose="Adds retry logic to the payment gateway.",
         )
         assert "=== REVIEW FOCUS (pipeline synthesis) ===" in output
@@ -411,6 +412,7 @@ class TestCoverageNoteInjection:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
             coverage_note=note,
         )
         assert "=== COVERAGE NOTE ===" in output
@@ -430,6 +432,7 @@ class TestCoverageNoteInjection:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
         assert "=== COVERAGE NOTE ===" not in output
 
@@ -553,6 +556,7 @@ class TestBudgetBriefingText:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=not_diffed_count,
+            has_php=False,
             review_budget=budget,
             budget_capped=capped,
         )
@@ -878,6 +882,7 @@ class TestAdditionalInstructionsInjection:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
             additional_instructions="Focus on error handling in the retry logic.",
         )
         assert "=== REVIEWER-REQUESTED FOCUS ===" in output
@@ -897,6 +902,7 @@ class TestAdditionalInstructionsInjection:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
             additional_instructions=None,
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
@@ -915,6 +921,7 @@ class TestAdditionalInstructionsInjection:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
 
@@ -932,6 +939,7 @@ class TestAdditionalInstructionsInjection:
             pr_number="1",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
             change_purpose="Adds retry logic.",
             additional_instructions="Focus on error handling.",
             review_budget=30,

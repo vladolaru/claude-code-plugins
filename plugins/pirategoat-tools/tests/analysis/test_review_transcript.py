@@ -963,6 +963,7 @@ class TestAnalyzeSubagent:
             pr_number="42",
             reviewer_name="security",
             not_diffed_count=0,
+            has_php=False,
         )
         command_start = bootstrap_output.index("PIRATEGOAT_PLUGIN_ROOT=")
         command_end = bootstrap_output.index("\nPY", command_start) + len("\nPY")

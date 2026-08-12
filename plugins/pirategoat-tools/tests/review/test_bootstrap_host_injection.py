@@ -201,6 +201,7 @@ def test_build_output_includes_host_section_when_provided():
         exploration_scope=None, output_dir="/tmp",
         pr_number=None, reviewer_name="test",
         not_diffed_count=0,
+        has_php=False,
         host_context=manifest,
     )
     assert "## Host Context" in output
@@ -216,6 +217,7 @@ def test_build_output_omits_host_section_when_none():
         exploration_scope=None, output_dir="/tmp",
         pr_number=None, reviewer_name="test",
         not_diffed_count=0,
+        has_php=False,
         host_context=None,
     )
     assert "## Host Context" not in output
