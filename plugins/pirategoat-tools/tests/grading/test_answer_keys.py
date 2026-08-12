@@ -45,6 +45,9 @@ _NA_INCOMPATIBLE = (
     "required_findings", "acceptable_findings", "max_severity", "max_unexpected",
     "verdict_in",
 )
+_ANSWER_KEY_FIELDS = _NA_INCOMPATIBLE + ("expect_not_applicable",)
+
+_TESTING_MD = TESTS_DIR / "TESTING.md"
 
 
 def _has_gate(key: dict) -> bool:
@@ -156,6 +159,35 @@ def test_answer_key_is_well_formed(name, agent, key):
             assert key.get(field) is None, (
                 f"{name}/{agent}: expect_not_applicable silently disables {field}"
             )
+
+
+def test_every_answer_key_field_is_documented():
+    """TESTING.md's answer-key field table is a key author's only discovery
+    path for this vocabulary — a field the guard enforces but the doc omits
+    is undiscoverable, the exact failure mode max_unexpected had before its
+    documentation was added."""
+    text = _TESTING_MD.read_text()
+    missing = [f for f in _ANSWER_KEY_FIELDS if f"`{f}`" not in text]
+    assert not missing, f"TESTING.md answer-key field table omits: {missing}"
+
+
+def test_max_unexpected_unused_claim_matches_reality():
+    """TESTING.md states no scenario currently sets max_unexpected. Pin that
+    claim so it can't silently drift: if a future key sets it while the doc
+    still says otherwise, this fails instead of leaving the doc stale. If
+    the doc's claim is deliberately updated or removed, this guard steps
+    aside rather than dictating new wording."""
+    text = _TESTING_MD.read_text()
+    if "no scenario currently sets it" not in text:
+        pytest.skip("TESTING.md no longer claims max_unexpected is unused")
+    used = [
+        f"{name}/{agent}" for name, agent, key in KEYED_ENTRIES
+        if key.get("max_unexpected") is not None
+    ]
+    assert not used, (
+        f"TESTING.md claims no scenario sets max_unexpected, but: {used} do "
+        "— update the doc to match."
+    )
 
 
 @pytest.mark.parametrize(
