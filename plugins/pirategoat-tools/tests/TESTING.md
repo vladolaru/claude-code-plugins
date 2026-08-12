@@ -191,9 +191,15 @@ probes.
 | `required_findings` | Each spec must be matched by some issue (recall) — a miss fails the entry. |
 | `acceptable_findings` | Secondary findings the key pre-declares; matching them never punishes or rewards the entry, and they are excluded from `max_unexpected`. |
 | `max_severity` | False-positive precision cap: no issue may rank above this severity — the gate the clean-code probes rely on. |
-| `max_unexpected` | Precision cap on `match["unexpected"]` — issues no `required_findings`/`acceptable_findings` spec claimed at all. Distinct from `max_severity`, which bounds how severe findings are; this bounds how many are entirely unpredicted. Implemented in `grade_detection()` (`helpers/graders.py:593-600`), tested in `grading/test_graders.py`, and validated by the answer-key guard (`grading/test_answer_keys.py`) — but no scenario currently sets it. It exists for a future key that needs to bound total noise, not just its ceiling. |
+| `max_unexpected` | Precision cap on how many findings are entirely unpredicted (`match["unexpected"]`) — contrast `max_severity`'s cap on how severe findings are. |
 | `verdict_in` | The reviewer's verdict must be one of the listed values — derive from the agent's auto-verdict rules, not intuition (see below). |
-| `expect_not_applicable` | Abstention keys: accepts `not_applicable` or `approve`, each with zero findings — see "Abstention keys" below. |
+| `expect_not_applicable` | Abstention keys: accepts `not_applicable` or `approve`, each with zero findings — see "Abstention keys" below. Mutually exclusive with every other field in this table: `grade_detection` short-circuits on it before `match_findings` runs, so the other fields would be silently inert beside it, and the answer-key guard (`grading/test_answer_keys.py`) rejects a key that combines it with any of them. |
+
+**`max_unexpected` is implemented but unused.** `grade_detection()` in
+`helpers/graders.py` gates on it when present, `grading/test_graders.py`
+tests it, and the answer-key guard (`grading/test_answer_keys.py`) validates
+it — but no scenario currently sets it. It exists for a future key that
+needs to bound total noise, not just its ceiling.
 
 ```bash
 # Single benchmark run for one scenario
