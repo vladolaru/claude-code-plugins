@@ -296,6 +296,13 @@ class TestCategoryRepresentatives:
         assert sorted(data["deferred_files"]) == sorted(
             extract_not_diffed_files(result.stdout)
         )
+        # Closes the main()->build_output() seam: not_diffed_count must be
+        # derived from this exact deferred set, not a neighboring fact
+        # (e.g. total scope files) that also happens to be non-empty here.
+        # A mis-wired count would pass every other assertion in this suite.
+        assert ("Not reviewed (budget):" in result.stdout) == bool(
+            data["deferred_files"]
+        )
 
     def test_test_agent(self, tmp_path):
         """Test-reviewer agent gets DOMAIN RULES (php-tests-reviewer)."""
@@ -1500,7 +1507,7 @@ class TestNotDiffedContractIsDelivered:
         "  src/big.py  (+900 -10)\n"
     )
 
-    def _build(self, tmp_path, scope_output, not_diffed_count=0, **kwargs):
+    def _build(self, tmp_path, scope_output, not_diffed_count, **kwargs):
         return build_output(
             agent_name="security-reviewer",
             plugin_root="/fake/root",

@@ -903,6 +903,7 @@ def build_coverage_note(primary_domain: str, secondary_domains: List[str]) -> st
 
 
 def build_output(
+    *,
     agent_name: str,
     plugin_root: str,
     status: str,
@@ -927,18 +928,16 @@ def build_output(
 ) -> str:
     """Build the structured bootstrap output block.
 
-    not_diffed_count is a REQUIRED fact, not derived here: it gates the NOT
-    DIFFED honesty contract in the REVIEW BUDGET section (see below). It must
-    be the caller's already-computed deferred-file count (main() passes
-    len(scope_facts["not_diffed"]) — see load_scope_facts()), never
-    re-parsed from scope_output text. A prior version of this function
-    regexed its own rendered scope_output for the
-    '=== NOT DIFFED (budget exceeded, N files) ===' header; any rename or
-    reformat of that header in scope.py silently zeroed the count and
-    dropped the whole contract with no error. Keeping this parameter
-    required (no default) means every caller must state the fact explicitly
-    — a caller that forgets fails loudly (TypeError) instead of silently
-    losing the contract.
+    not_diffed_count is a REQUIRED fact this function never derives on its
+    own: it must be the caller's already-computed deferred-file count
+    (main() passes len(scope_facts["not_diffed"])). This function does not
+    parse scope_output for it — the sole place that fact is ever text-
+    derived is load_scope_facts()'s documented fallback in main(). No
+    default, so an omitted caller fails loudly (TypeError) instead of
+    silently dropping the NOT DIFFED honesty contract it gates. See
+    TestNotDiffedContractIsDelivered in
+    tests/review/agent/test_bootstrap_integration.py for the executable
+    contract and its regression history.
     """
     lines = []
 
