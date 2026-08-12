@@ -45,9 +45,27 @@ _NA_INCOMPATIBLE = (
     "required_findings", "acceptable_findings", "max_severity", "max_unexpected",
     "verdict_in",
 )
+# _NA_INCOMPATIBLE means "fields expect_not_applicable disables," not "every
+# answer-key field" — they coincide today only because every field this file
+# knows about happens to be NA-incompatible. A future field compatible with
+# abstention would need adding here explicitly; it would land in neither set
+# and stay undocumented with the completeness guard below still green.
 _ANSWER_KEY_FIELDS = _NA_INCOMPATIBLE + ("expect_not_applicable",)
 
 _TESTING_MD = TESTS_DIR / "TESTING.md"
+_ANSWER_KEY_TABLE_HEADING = "**Answer-key fields:**"
+
+
+def _answer_key_table_block(text: str) -> str:
+    """Extract the answer-key field table's row block from TESTING.md: the
+    text between the '**Answer-key fields:**' marker and the table's
+    terminating blank line. Scoping to just the table (not the whole
+    document) is required for row-presence checks to mean anything — a
+    field can still appear in explanatory prose elsewhere while its table
+    row is deleted."""
+    marker = text.index(_ANSWER_KEY_TABLE_HEADING) + len(_ANSWER_KEY_TABLE_HEADING)
+    rest = text[marker:].lstrip("\n")
+    return rest[:rest.index("\n\n")]
 
 
 def _has_gate(key: dict) -> bool:
@@ -162,31 +180,38 @@ def test_answer_key_is_well_formed(name, agent, key):
 
 
 def test_every_answer_key_field_is_documented():
-    """TESTING.md's answer-key field table is a key author's only discovery
+    r"""TESTING.md's answer-key field table is a key author's only discovery
     path for this vocabulary — a field the guard enforces but the doc omits
     is undiscoverable, the exact failure mode max_unexpected had before its
-    documentation was added."""
-    text = _TESTING_MD.read_text()
-    missing = [f for f in _ANSWER_KEY_FIELDS if f"`{f}`" not in text]
-    assert not missing, f"TESTING.md answer-key field table omits: {missing}"
+    documentation was added. Checked as an actual table row (`| \`field\` |`
+    inside the answer-key table block, not a bare substring match anywhere
+    in the document — prose elsewhere that happens to name a field must not
+    satisfy this once its table row is deleted."""
+    table = _answer_key_table_block(_TESTING_MD.read_text())
+    missing = [
+        f for f in _ANSWER_KEY_FIELDS
+        if not re.search(rf"^\| `{re.escape(f)}` \|", table, re.MULTILINE)
+    ]
+    assert not missing, f"TESTING.md answer-key field table omits a row for: {missing}"
 
 
-def test_max_unexpected_unused_claim_matches_reality():
-    """TESTING.md states no scenario currently sets max_unexpected. Pin that
-    claim so it can't silently drift: if a future key sets it while the doc
-    still says otherwise, this fails instead of leaving the doc stale. If
-    the doc's claim is deliberately updated or removed, this guard steps
-    aside rather than dictating new wording."""
-    text = _TESTING_MD.read_text()
-    if "no scenario currently sets it" not in text:
-        pytest.skip("TESTING.md no longer claims max_unexpected is unused")
+def test_max_unexpected_is_currently_unused():
+    """TESTING.md's answer-key field table states no scenario currently sets
+    max_unexpected. That is a fact about SCENARIOS, not about the doc's
+    prose, so it is pinned unconditionally: the moment a key sets it, this
+    fails with a message pointing at both files that need updating. (A
+    conditional skip keyed on doc wording would let any unrelated rewrite of
+    that sentence silently disarm the guard — verified: rewording the
+    sentence while also setting max_unexpected on a scenario made a
+    conditional version of this test skip instead of fail.)"""
     used = [
         f"{name}/{agent}" for name, agent, key in KEYED_ENTRIES
         if key.get("max_unexpected") is not None
     ]
     assert not used, (
-        f"TESTING.md claims no scenario sets max_unexpected, but: {used} do "
-        "— update the doc to match."
+        f"max_unexpected is now set by: {used}. TESTING.md's answer-key "
+        "field table claims no scenario sets it — update the doc, then "
+        "update (or remove) this test to match the new reality."
     )
 
 
