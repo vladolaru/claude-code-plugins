@@ -82,16 +82,25 @@ Deterministic pytest suite. Tests `review/agent/bootstrap.py` pure functions by 
 
 Integration tests that run `review/agent/bootstrap.py` via subprocess against a temp git repo (created from `multi-file-realistic.diff`, isolated from real repo state). Uses category representatives (principle §6) and right-layer testing (principle §7):
 
+Counts below are **collected** tests, not test methods — parameterized classes expand (`TestSmokeAllAgents` is one method run over every registered agent). `TestTestingDocCounts` in this same file pins every row against real collection, so a stale number fails the suite instead of quietly misleading a cold reader.
+
 | Class | Tests | What it verifies |
 |---|---|---|
-| `TestCategoryRepresentatives` | 5 | One comprehensive test per agent category: standard, test-agent, exploration, null-domain, history+override. Each verifies section structure, conditional sections, personalization, and budget in one shot. |
-| `TestArchitecturalInvariants` | 2 | REVIEW RULES identical across 3 representative agents; DOMAIN RULES identical across 2 test agents |
-| `TestSmokeAllAgents` | 21 | Every registered agent exits 0 — the ONE legitimate ALL_AGENTS parameterization (validates registry correctness) |
+| `TestCategoryRepresentatives` | 13 | One comprehensive test per agent category: standard, test-agent, exploration, null-domain, history+override. Each verifies section structure, conditional sections, personalization, and budget in one shot. |
+| `TestArchitecturalInvariants` | 3 | REVIEW RULES identical across 3 representative agents; DOMAIN RULES identical across 2 test agents |
+| `TestSmokeAllAgents` | 30 | Every registered agent exits 0 — the ONE legitimate ALL_AGENTS parameterization (validates registry correctness) |
 | `TestErrorCases` | 2 | Unknown agent exits 1 with structured error output |
 | `TestReviewOutputBuilderAPIExample` | 6 | Section 3 includes complete builder API usage example (direct `build_output()` call) |
-| `TestBootstrapOutputSizeCap` | 4 | Large scope truncated with file reference; small scope inline (direct `build_output()` call) |
+| `TestBootstrapOutputSizeCap` | 5 | Large scope truncated with file reference; small scope inline (direct `build_output()` call) |
 | `TestDynamicDispatchRisk` | 9 | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK from the caller's `has_php` fact (PHP → high, no PHP → low); rendered scope text can't drive the decision in either direction (direct `build_output()` call); 3 end-to-end subprocess tests cover `main()`'s own `has_php` derivation, which the direct calls can't reach — including that a domain-excluded PHP test file (under `=== SKIPPED ===`) must not force `high` |
 | `TestOutputFilenameConsistency` | 2 | Output filenames from `save()` match bootstrap expectations (direct `build_output()` call) |
+| `TestNotDiffedContractIsDelivered` | 9 | The NOT DIFFED handling contract survives protocol stripping — it must be delivered by `build_output()`, never by a section the skip-list removes. Guards the 1.108.0 failure where a mandatory contract reached zero agents. |
+| `TestNotApplicableCompletionContract` | 11 | The shared protocol is the sole executable abstention recipe — a reviewer that finds nothing must abstain the one prescribed way. |
+| `TestRepoRuleAndRefModeSelection` | 7 | Repo rules reach the reviewers they target (effective identity, complete scope); adapter instances receive their declared path scope; an explicit isolation request never runs inline. |
+| `TestVerificationMethodContract` | 6 | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
+| `TestDismissalDisciplineContract` | 3 | Dismissal/mitigation verification applies to ALL findings, not a subset. |
+| `TestCanonicalExecutableBuilderSource` | 1 | Bootstrap is the sole executable `ReviewOutputBuilder` command source. |
+| `TestTestingDocCounts` | 2 | This table itself: every documented count matches real collection, and every class in the file has a row. |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
