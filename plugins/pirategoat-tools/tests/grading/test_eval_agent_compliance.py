@@ -24,6 +24,12 @@ EVAL_SCRIPT = TESTS_DIR / "grading" / "eval_agent_compliance.py"
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts"))
 from review.agent.output import ReviewOutputBuilder
 
+# Same precedent as grading/test_graders.py: add tests/ to sys.path so the
+# `helpers` package resolves, then import graders directly from their real
+# source rather than through the eval module's re-export.
+sys.path.insert(0, str(TESTS_DIR))
+from helpers.graders import grade_review_markdown
+
 # The runner is mostly exercised as a subprocess (see _run_eval), but
 # run_grade_only is also called directly to inspect its GradeResults.
 # Load it the same way the runner itself loads bootstrap: by exact path.
@@ -108,7 +114,7 @@ class TestGradeOnlyMode:
         result = results["security"]
         assert result.passed, result.failures
         assert not any("security-review.md" in failure for failure in result.failures)
-        md_grade = _eval_mod.grade_review_markdown(str(tmp_path / "security-review.md"))
+        md_grade = grade_review_markdown(str(tmp_path / "security-review.md"))
         assert md_grade.passed, md_grade.failures
         assert (tmp_path / "security-review.md").is_file()
 
