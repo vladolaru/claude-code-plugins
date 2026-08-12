@@ -193,7 +193,7 @@ probes.
 | `max_severity` | False-positive precision cap: no issue may rank above this severity — the gate the clean-code probes rely on. |
 | `max_unexpected` | Precision cap on how many findings are entirely unpredicted (`match["unexpected"]`) — contrast `max_severity`'s cap on how severe findings are. |
 | `verdict_in` | The reviewer's verdict must be one of the listed values — derive from the agent's auto-verdict rules, not intuition (see below). |
-| `expect_not_applicable` | Abstention keys: accepts `not_applicable` or `approve`, each with zero findings — see "Abstention keys" below. Mutually exclusive with every other field in this table: `grade_detection` short-circuits on it before `match_findings` runs, so the other fields would be silently inert beside it, and the answer-key guard (`grading/test_answer_keys.py`) rejects a key that combines it with any of them. |
+| `expect_not_applicable` | Abstention keys: accepts `not_applicable` or `approve`, each with zero findings. Mutually exclusive with every other field in this table — see "Abstention keys" below. |
 
 **`max_unexpected` is implemented but unused.** `grade_detection()` in
 `helpers/graders.py` gates on it when present, `grading/test_graders.py`
@@ -315,7 +315,12 @@ protocol mandates `mark_not_applicable` on `NO_DOMAIN_FILES` while the
 tests-reviewer agent definitions instruct APPROVE on the same status — a
 live doctrine conflict in the plugin's own definitions. Until that is
 reconciled, punishing either compliant reading would grade a documentation
-inconsistency, not reviewer quality.
+inconsistency, not reviewer quality. `expect_not_applicable` is also
+mutually exclusive with every other answer-key field: `grade_detection`
+short-circuits on it before `match_findings` runs, so the other fields
+would be silently inert beside it, and the answer-key guard
+(`grading/test_answer_keys.py`) rejects a key that combines it with any of
+them.
 
 **Report schema** (`--report-out`, dispatch mode only): top-level `mode`,
 `trials` (the requested count), and `results[]` with `scenario`, `agent`,
@@ -571,9 +576,15 @@ function_under_test = _mod.function_name
 
 Shared test utilities live in `tests/helpers/`. Unlike `scripts/` (added to
 `sys.path` once, in `conftest.py`), `conftest.py` does NOT add `tests/`
-itself — every caller inserts `TESTS_DIR` (the `tests/` directory) onto
-`sys.path` before importing from `helpers/`, the same way `grading/test_graders.py`
-does here:
+itself — every caller inserts `TESTS_DIR` onto `sys.path` before importing
+from `helpers/`. `grading/test_graders.py` does this:
+
+```python
+TESTS_DIR = Path(__file__).resolve().parent.parent  # grading/ -> tests/
+sys.path.insert(0, str(TESTS_DIR))
+```
+
+Then import as normal:
 
 ```python
 from helpers.graders import grade_review_json, grade_output_pair
