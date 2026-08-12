@@ -416,7 +416,9 @@ If a function is importable and deterministic, test it as a unit test — don't 
 
 **Right layer:** Running a subprocess to verify that `returncode == 0` for every registered agent — this exercises the full `main()` orchestration path, which unit tests can't cover.
 
-The `build_output()`-based test classes (`TestReviewOutputBuilderAPIExample`, `TestBootstrapOutputSizeCap`, `TestDynamicDispatchRisk`, `TestOutputFilenameConsistency`) demonstrate the right pattern: import the function, call it directly, assert on the result. Fast and focused.
+The `build_output()`-based test classes (`TestReviewOutputBuilderAPIExample`, `TestBootstrapOutputSizeCap`, `TestOutputFilenameConsistency`) demonstrate the right pattern: import the function, call it directly, assert on the result. Fast and focused.
+
+`TestDynamicDispatchRisk` deliberately mixes both layers: its direct `build_output()` tests pin the rendering contract, and its three trailing subprocess tests pin `main()`'s own `has_php` derivation — a fact the direct tests structurally cannot reach, since they supply it as a parameter.
 
 **When to keep subprocess tests:**
 - Testing `sys.exit()` paths (CLI argument validation)

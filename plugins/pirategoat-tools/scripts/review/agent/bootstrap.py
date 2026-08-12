@@ -933,7 +933,8 @@ def build_output(
     derives on its own:
 
     - not_diffed_count must be the caller's already-computed deferred-file
-      count (main() passes len(scope_facts["not_diffed"])).
+      count (main() passes len(not_diffed_paths), its alias for
+      scope_facts["not_diffed"]).
     - has_php must be the caller's already-computed PHP-in-scope fact
       (main() passes any(p.endswith(".php") for p in
       telemetry_scope_paths) — the same deduped fact-based path union used
