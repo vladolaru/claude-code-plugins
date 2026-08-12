@@ -36,8 +36,6 @@ from helpers.graders import (
     grade_detection,
     grade_output_pair,
     grade_review_json,
-    grade_review_markdown,
-    grade_no_domain_files,
     grade_error_exit,
     grade_signal_format,
     merge_grades,
@@ -854,8 +852,8 @@ def run_dispatch_scenario(scenario_name: str, scenario: dict, agent_name: str) -
 
         if scenario["grader"] == "no_domain_files":
             # Bootstrap short-circuit: NO_DOMAIN_FILES means no agent runs, so
-            # there is no agent output to grade. grade_no_domain_files targets
-            # agent return signals — running it against the full bootstrap
+            # there is no agent output to grade. helpers.graders.grade_no_domain_files
+            # targets agent return signals — running it against the full bootstrap
             # prompt false-positives on protocol prose that teaches severity
             # vocabulary. The short-circuit itself is the pass condition —
             # and the ONLY pass condition: an unconditional pass on the
