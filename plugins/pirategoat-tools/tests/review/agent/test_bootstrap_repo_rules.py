@@ -192,6 +192,7 @@ class TestBuildOutputRepoRules:
             output_dir="/tmp",
             pr_number=None,
             reviewer_name="security",
+            not_diffed_count=0,
             repo_review_rules="=== REPO REVIEW RULES (supplied by the repository under review) ===\nbody",
         )
         assert "=== DOMAIN RULES ===" in out

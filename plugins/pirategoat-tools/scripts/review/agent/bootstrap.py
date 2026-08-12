@@ -913,6 +913,7 @@ def build_output(
     output_dir: str,
     pr_number: Optional[str],
     reviewer_name: str,
+    not_diffed_count: int,
     file_history: Optional[str] = None,
     pr_intent: Optional[str] = None,
     change_purpose: Optional[str] = None,
@@ -924,7 +925,21 @@ def build_output(
     repo_review_rules: Optional[str] = None,
     repo_reviewer_prompt: Optional[str] = None,
 ) -> str:
-    """Build the structured bootstrap output block."""
+    """Build the structured bootstrap output block.
+
+    not_diffed_count is a REQUIRED fact, not derived here: it gates the NOT
+    DIFFED honesty contract in the REVIEW BUDGET section (see below). It must
+    be the caller's already-computed deferred-file count (main() passes
+    len(scope_facts["not_diffed"]) — see load_scope_facts()), never
+    re-parsed from scope_output text. A prior version of this function
+    regexed its own rendered scope_output for the
+    '=== NOT DIFFED (budget exceeded, N files) ===' header; any rename or
+    reformat of that header in scope.py silently zeroed the count and
+    dropped the whole contract with no error. Keeping this parameter
+    required (no default) means every caller must state the fact explicitly
+    — a caller that forgets fails loudly (TypeError) instead of silently
+    losing the contract.
+    """
     lines = []
 
     # Header
@@ -995,12 +1010,6 @@ def build_output(
     # Review Budget — scope-proportionate tool call calibration
     if review_budget is not None:
         ceiling = int(review_budget * 1.5)
-        not_diffed_count = sum(
-            int(n) for n in re.findall(
-                r'=== NOT DIFFED \(budget exceeded, (\d+) files\) ===',
-                scope_output or "",
-            )
-        )
         lines.append("=== REVIEW BUDGET ===")
         lines.append(f"Target: ~{review_budget} tool calls. Hard ceiling: {ceiling}.")
         if budget_capped:
@@ -1827,6 +1836,7 @@ def main():
         output_dir=output_dir,
         pr_number=pr_number,
         reviewer_name=reviewer_name,
+        not_diffed_count=len(not_diffed_paths),
         file_history=file_history_output,
         pr_intent=pr_intent,
         change_purpose=change_purpose,

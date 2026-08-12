@@ -354,6 +354,7 @@ class TestChangePurposeInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
             change_purpose="Adds retry logic to the payment gateway.",
         )
         assert "=== REVIEW FOCUS (pipeline synthesis) ===" in output
@@ -409,6 +410,7 @@ class TestCoverageNoteInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
             coverage_note=note,
         )
         assert "=== COVERAGE NOTE ===" in output
@@ -427,6 +429,7 @@ class TestCoverageNoteInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
         )
         assert "=== COVERAGE NOTE ===" not in output
 
@@ -536,7 +539,8 @@ class TestBudgetWasCapped:
 class TestBudgetBriefingText:
     """The budget section must be honest about capping and push spend-down."""
 
-    def _output(self, tmp_path, scope_output="scope", budget=80, capped=False):
+    def _output(self, tmp_path, scope_output="scope", budget=80, capped=False,
+                not_diffed_count=0):
         return build_output(
             agent_name="security-reviewer",
             plugin_root="/fake",
@@ -548,6 +552,7 @@ class TestBudgetBriefingText:
             output_dir=str(tmp_path),
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=not_diffed_count,
             review_budget=budget,
             budget_capped=capped,
         )
@@ -562,6 +567,11 @@ class TestBudgetBriefingText:
         assert "effort floor" in output
 
     def test_not_diffed_scope_gets_spend_down_instruction(self, tmp_path):
+        # The header text ("258 files") is deliberately NOT what the count is
+        # sourced from anymore — not_diffed_count is a fact passed by the
+        # caller (main() derives it from scope_facts), independent of how
+        # scope.py renders its section header. This scope text is present
+        # only to prove the header is inert for this decision.
         scope = (
             "=== FILES ===\n"
             "src/a.ts  (+10 -2)\n"
@@ -569,7 +579,8 @@ class TestBudgetBriefingText:
             "=== NOT DIFFED (budget exceeded, 258 files) ===\n"
             "  src/big.ts  (+862 -0)\n"
         )
-        output = self._output(tmp_path, scope_output=scope, budget=80, capped=True)
+        output = self._output(tmp_path, scope_output=scope, budget=80, capped=True,
+                               not_diffed_count=258)
         assert "258 in-scope files" in output
         assert "coverage gap, not efficiency" in output
 
@@ -866,6 +877,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
             additional_instructions="Focus on error handling in the retry logic.",
         )
         assert "=== REVIEWER-REQUESTED FOCUS ===" in output
@@ -884,6 +896,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
             additional_instructions=None,
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
@@ -901,6 +914,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
         )
         assert "REVIEWER-REQUESTED FOCUS" not in output
 
@@ -917,6 +931,7 @@ class TestAdditionalInstructionsInjection:
             output_dir="/tmp/test",
             pr_number="1",
             reviewer_name="security",
+            not_diffed_count=0,
             change_purpose="Adds retry logic.",
             additional_instructions="Focus on error handling.",
             review_budget=30,

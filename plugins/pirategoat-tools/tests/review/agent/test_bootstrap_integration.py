@@ -474,6 +474,7 @@ class TestArchitecturalInvariants:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="code",
+            not_diffed_count=0,
         )
 
         assert section in prompt
@@ -523,6 +524,7 @@ class TestCanonicalExecutableBuilderSource:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
         )
 
         assert "python3 <<'PY'" not in protocol
@@ -572,6 +574,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="woo-regression",
+            not_diffed_count=0,
         )
 
         assert "builder.mark_not_applicable(" in prompt
@@ -591,6 +594,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="security",
+            not_diffed_count=0,
         )
 
         heredoc_body = prompt.split("python3 <<'PY'\n", 1)[1].split("\nPY", 1)[0]
@@ -618,6 +622,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="security",
+            not_diffed_count=0,
         )
 
         assert "RECORDED COUNTS" in prompt
@@ -648,6 +653,7 @@ class TestNotApplicableCompletionContract:
                 output_dir=str(output_dir),
                 pr_number="42",
                 reviewer_name=reviewer_name,
+                not_diffed_count=0,
             )
             start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
             end = prompt.index("\nPY", start) + len("\nPY")
@@ -702,6 +708,7 @@ class TestNotApplicableCompletionContract:
             output_dir=str(output_dir),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
         )
         start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
         end = prompt.index("\nPY", start) + len("\nPY")
@@ -887,6 +894,7 @@ class TestVerificationMethodContract:
             output_dir=str(tmp_path),
             pr_number=None,
             reviewer_name="code",
+            not_diffed_count=0,
         )
         assert "## Absence Claims" in prompt
         assert "searched pattern is absent" in prompt
@@ -938,6 +946,7 @@ class TestReviewOutputBuilderAPIExample:
             output_dir=str(output_dir),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
         )
 
     def test_output_contains_add_issue_example(self, tmp_path):
@@ -1004,6 +1013,7 @@ class TestBootstrapOutputSizeCap:
             output_dir=output_dir,
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
         )
 
     def test_small_scope_included_inline(self, tmp_path):
@@ -1020,6 +1030,7 @@ class TestBootstrapOutputSizeCap:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
         )
         assert small_scope in output
 
@@ -1057,6 +1068,7 @@ class TestBootstrapOutputSizeCap:
                 output_dir=str(tmp_path),
                 pr_number="42",
                 reviewer_name=reviewer_name,
+                not_diffed_count=0,
             )
 
         security_output = build("security-reviewer", "security", "security")
@@ -1091,6 +1103,7 @@ class TestDynamicDispatchRisk:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
+            not_diffed_count=0,
         )
         assert "DYNAMIC_DISPATCH_RISK:" in output
 
@@ -1108,6 +1121,7 @@ class TestDynamicDispatchRisk:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
+            not_diffed_count=0,
         )
         risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
@@ -1127,6 +1141,7 @@ class TestDynamicDispatchRisk:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
+            not_diffed_count=0,
         )
         risk_line = [l for l in output.splitlines() if "DYNAMIC_DISPATCH_RISK:" in l]
         assert risk_line, "DYNAMIC_DISPATCH_RISK line not found in output"
@@ -1145,6 +1160,7 @@ class TestDynamicDispatchRisk:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=0,
         )
         assert "DYNAMIC_DISPATCH_RISK:" not in output
 
@@ -1426,6 +1442,7 @@ class TestOutputFilenameConsistency:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="dead-code",
+            not_diffed_count=0,
         )
         assert f"{tmp_path}/dead-code-review.json" in output
         assert f"{tmp_path}/dead-code-review.md" not in output
@@ -1463,6 +1480,16 @@ class TestNotDiffedContractIsDelivered:
     Regression guard for 1.109.0: the contract originally lived in
     reviewer-protocol.md's '## Scope Discovery' section, which bootstrap strips,
     so it never reached a single reviewer. Policy belongs in build_output.
+
+    Regression guard for the 1.114.0 fix: build_output() used to re-derive the
+    deferred-file count by regexing its OWN rendered scope text for
+    '=== NOT DIFFED (budget exceeded, N files) ===' — a second, independent
+    text-parsing path duplicating the one load_scope_facts()/main() already
+    used. Any rename or reformat of that header in scope.py silently zeroed
+    the count and dropped the entire honesty contract, with no error and
+    (because these tests hardcoded the same header text the regex expected)
+    no test failure either. build_output() now receives not_diffed_count as
+    an explicit fact from the caller and never inspects scope_output for it.
     """
 
     NOT_DIFFED_SCOPE = (
@@ -1473,7 +1500,7 @@ class TestNotDiffedContractIsDelivered:
         "  src/big.py  (+900 -10)\n"
     )
 
-    def _build(self, tmp_path, scope_output, **kwargs):
+    def _build(self, tmp_path, scope_output, not_diffed_count=0, **kwargs):
         return build_output(
             agent_name="security-reviewer",
             plugin_root="/fake/root",
@@ -1485,6 +1512,7 @@ class TestNotDiffedContractIsDelivered:
             output_dir=str(tmp_path),
             pr_number="42",
             reviewer_name="security",
+            not_diffed_count=not_diffed_count,
             review_budget=80,
             **kwargs,
         )
@@ -1501,13 +1529,13 @@ class TestNotDiffedContractIsDelivered:
     )
     def test_contract_reaches_reviewer(self, tmp_path, phrase):
         """Each clause of the contract appears in the delivered briefing."""
-        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE)
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
         assert phrase in output
 
     def test_contract_absent_without_not_diffed_files(self, tmp_path):
         """No NOT DIFFED files means no declaration contract to deliver."""
         clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
-        output = self._build(tmp_path, clean_scope)
+        output = self._build(tmp_path, clean_scope, not_diffed_count=0)
         assert "Not reviewed (budget):" not in output
 
     def test_contract_is_not_sourced_from_stripped_protocol(self):
@@ -1524,3 +1552,36 @@ class TestNotDiffedContractIsDelivered:
             "Contract text placed in a stripped protocol section never reaches "
             "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
         )
+
+    def test_renamed_scope_header_cannot_suppress_a_real_count(self, tmp_path):
+        """A scope.py header rename/reformat must not silently drop the contract.
+
+        This is the exact failure shape being fixed: the old regex expected
+        the literal string '=== NOT DIFFED (budget exceeded, N files) ===' in
+        scope_output. Here that header is renamed to something a future
+        scope.py refactor might plausibly emit, and NO section matches the
+        old pattern at all — yet because the caller still supplies the real
+        fact via not_diffed_count, the contract must still be delivered.
+        """
+        renamed_header_scope = (
+            "=== REVIEW SCOPE ===\n"
+            "=== FILES ===\n"
+            "src/big.py  (+900 -10)\n"
+            "=== DEFERRED (too large to inline, 3 files) ===\n"
+            "  src/big.py  (+900 -10)\n"
+        )
+        assert "NOT DIFFED" not in renamed_header_scope  # the old regex's anchor is gone
+        output = self._build(tmp_path, renamed_header_scope, not_diffed_count=1)
+        assert "Not reviewed (budget):" in output
+        assert "protocol violation" in output
+
+    def test_original_header_text_alone_no_longer_drives_the_contract(self, tmp_path):
+        """The rendered header text must never re-enable the contract by itself.
+
+        NOT_DIFFED_SCOPE carries the exact header the old regex parsed, but
+        not_diffed_count is explicitly 0 (the caller's fact says nothing was
+        deferred). If build_output() still read scope_output text for this
+        decision, the contract would incorrectly appear. It must not.
+        """
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=0)
+        assert "Not reviewed (budget):" not in output
