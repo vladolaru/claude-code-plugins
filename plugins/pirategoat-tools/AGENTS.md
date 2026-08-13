@@ -591,6 +591,8 @@ claude --plugin-dir <worktree>/plugins/pirategoat-tools \
 python3 scripts/analysis/review_run_metrics.py --last 1 --format json | grep plugin_version
 ```
 
+**Permission prompts are skipped.** The wrapper passes `--dangerously-skip-permissions`, because these sessions exist to exercise the review pipeline end to end and prompting on every tool call defeats that. It is scoped to the wrapper rather than aliased onto `claude`, so ordinary sessions keep their prompts. Once prompts are gone the remaining backstop is the `yoloing-safe` PreToolUse hook on `Bash|Write|Edit|Read` — if that plugin is disabled, these sessions have neither. Check with `claude plugin list | grep -A3 yoloing-safe`.
+
 **Caveats.**
 
 - The mount is the live working tree, uncommitted edits included. A half-finished edit is what reviews your PR. Check `git status` before starting a session you intend to trust.

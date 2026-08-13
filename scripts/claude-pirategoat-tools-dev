@@ -14,6 +14,13 @@
 # Nothing is installed, cached, or written to disk. `claude plugin list`
 # reports these as "loaded" with no installed record, so a plain `claude`
 # is always the released version. Dev is opt-in, never sticky.
+#
+# --dangerously-skip-permissions is deliberate: these sessions exist to
+# exercise the review pipeline end to end, and prompting on every tool call
+# defeats that. It is scoped to this wrapper rather than aliased onto
+# `claude` itself, so ordinary sessions keep their prompts. Note that the
+# yoloing-safe PreToolUse hook is the remaining backstop once prompts are
+# gone — if that plugin is disabled, these sessions have neither.
 
 set -euo pipefail
 
@@ -62,8 +69,10 @@ EOF
 
 echo "claude-pirategoat-tools-dev → $PLUGIN_DIR" >&2
 echo "  session only; $RELEASE_ID disabled for this process" >&2
+echo "  permission prompts SKIPPED (--dangerously-skip-permissions)" >&2
 
 exec claude \
   --plugin-dir "$PLUGIN_DIR" \
   --settings "$SETTINGS_JSON" \
+  --dangerously-skip-permissions \
   "$@"
