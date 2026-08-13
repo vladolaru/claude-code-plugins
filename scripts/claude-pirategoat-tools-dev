@@ -3,8 +3,8 @@
 # Launch Claude Code with the WORKTREE pirategoat-tools instead of the
 # released one, for this session only.
 #
-#   claude-dev                 # interactive
-#   claude-dev -p "..."        # headless; all arguments pass through
+#   claude-pirategoat-tools-dev            # interactive
+#   claude-pirategoat-tools-dev -p "..."   # headless; args pass through
 #
 # Why a wrapper rather than two flags typed by hand: the flags must always
 # travel together. --plugin-dir alone loads the worktree copy ALONGSIDE the
@@ -36,12 +36,12 @@ MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
 # Fail loudly rather than silently launching the released plugin: a wrapper
 # that quietly does nothing is worse than one that refuses.
 if [ ! -f "$PLUGIN_DIR/scripts/review/pipeline.py" ]; then
-  echo "claude-dev: not a pirategoat-tools worktree" >&2
+  echo "claude-pirategoat-tools-dev: not a pirategoat-tools worktree" >&2
   echo "  expected: $PLUGIN_DIR/scripts/review/pipeline.py" >&2
   exit 1
 fi
 if [ ! -f "$MARKETPLACE_JSON" ]; then
-  echo "claude-dev: missing $MARKETPLACE_JSON" >&2
+  echo "claude-pirategoat-tools-dev: missing $MARKETPLACE_JSON" >&2
   exit 1
 fi
 
@@ -60,8 +60,8 @@ PY
 )
 EOF
 
-echo "claude-dev: pirategoat-tools ← $PLUGIN_DIR" >&2
-echo "            session only; $RELEASE_ID disabled for this process" >&2
+echo "claude-pirategoat-tools-dev → $PLUGIN_DIR" >&2
+echo "  session only; $RELEASE_ID disabled for this process" >&2
 
 exec claude \
   --plugin-dir "$PLUGIN_DIR" \

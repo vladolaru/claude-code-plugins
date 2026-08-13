@@ -563,13 +563,13 @@ Each subagent JSONL file contains one JSON object per line, with the first line 
 
 ## Development Workflows
 
-### Running the Dev Version (`scripts/claude-dev`)
+### Running the Dev Version (`scripts/claude-pirategoat-tools-dev`)
 
 To exercise unreleased plugin changes against a real repository before release, start Claude Code through the wrapper at the repo root:
 
 ```bash
-scripts/claude-dev                          # interactive
-scripts/claude-dev -p "review this branch"  # headless; all arguments pass through
+scripts/claude-pirategoat-tools-dev                          # interactive
+scripts/claude-pirategoat-tools-dev -p "review this branch"  # headless; args pass through
 ```
 
 Symlink it onto your `PATH` if you want it available everywhere — it resolves the worktree from its own location, following symlinks, so it works from any directory.
