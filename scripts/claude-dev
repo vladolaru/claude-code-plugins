@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# Launch Claude Code with the WORKTREE pirategoat-tools instead of the
+# released one, for this session only.
+#
+#   claude-dev                 # interactive
+#   claude-dev -p "..."        # headless; all arguments pass through
+#
+# Why a wrapper rather than two flags typed by hand: the flags must always
+# travel together. --plugin-dir alone loads the worktree copy ALONGSIDE the
+# installed release, and both then register the same commands and agents.
+# The --settings override disables the release for this process only.
+#
+# Nothing is installed, cached, or written to disk. `claude plugin list`
+# reports these as "loaded" with no installed record, so a plain `claude`
+# is always the released version. Dev is opt-in, never sticky.
+
+set -euo pipefail
+
+# Resolve this script's real directory, following symlinks, so the wrapper
+# still finds the worktree when linked onto PATH from somewhere else.
+source_path="${BASH_SOURCE[0]}"
+while [ -L "$source_path" ]; do
+  link_dir="$(cd -P "$(dirname "$source_path")" && pwd)"
+  source_path="$(readlink "$source_path")"
+  case "$source_path" in
+    /*) ;;
+    *) source_path="$link_dir/$source_path" ;;
+  esac
+done
+REPO_ROOT="$(cd -P "$(dirname "$source_path")/.." && pwd)"
+
+PLUGIN_DIR="$REPO_ROOT/plugins/pirategoat-tools"
+MARKETPLACE_JSON="$REPO_ROOT/.claude-plugin/marketplace.json"
+
+# Fail loudly rather than silently launching the released plugin: a wrapper
+# that quietly does nothing is worse than one that refuses.
+if [ ! -f "$PLUGIN_DIR/scripts/review/pipeline.py" ]; then
+  echo "claude-dev: not a pirategoat-tools worktree" >&2
+  echo "  expected: $PLUGIN_DIR/scripts/review/pipeline.py" >&2
+  exit 1
+fi
+if [ ! -f "$MARKETPLACE_JSON" ]; then
+  echo "claude-dev: missing $MARKETPLACE_JSON" >&2
+  exit 1
+fi
+
+# The release's plugin id is derived, not hardcoded, so renaming the
+# marketplace cannot leave this wrapper disabling a plugin that no longer
+# exists — which would silently load both copies again.
+read -r RELEASE_ID SETTINGS_JSON <<EOF
+$(python3 - "$MARKETPLACE_JSON" <<'PY'
+import json
+import sys
+
+name = json.load(open(sys.argv[1], encoding="utf-8"))["name"]
+release_id = f"pirategoat-tools@{name}"
+print(release_id, json.dumps({"enabledPlugins": {release_id: False}}))
+PY
+)
+EOF
+
+echo "claude-dev: pirategoat-tools ← $PLUGIN_DIR" >&2
+echo "            session only; $RELEASE_ID disabled for this process" >&2
+
+exec claude \
+  --plugin-dir "$PLUGIN_DIR" \
+  --settings "$SETTINGS_JSON" \
+  "$@"

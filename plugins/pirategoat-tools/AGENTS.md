@@ -563,6 +563,40 @@ Each subagent JSONL file contains one JSON object per line, with the first line 
 
 ## Development Workflows
 
+### Running the Dev Version (`scripts/claude-dev`)
+
+To exercise unreleased plugin changes against a real repository before release, start Claude Code through the wrapper at the repo root:
+
+```bash
+scripts/claude-dev                          # interactive
+scripts/claude-dev -p "review this branch"  # headless; all arguments pass through
+```
+
+Symlink it onto your `PATH` if you want it available everywhere — it resolves the worktree from its own location, following symlinks, so it works from any directory.
+
+**What it does.** Two flags that must always travel together:
+
+```bash
+claude --plugin-dir <worktree>/plugins/pirategoat-tools \
+       --settings '{"enabledPlugins":{"pirategoat-tools@<marketplace>":false}}'
+```
+
+`--plugin-dir` loads the worktree **in place** — the plugin is not copied into `~/.claude/plugins/cache/`, so edits apply to the next session with no sync step. The `--settings` override is not optional: `--plugin-dir` alone loads the worktree *alongside* the installed release, and both then register the same commands and agents. The release's plugin id is derived from `.claude-plugin/marketplace.json` rather than hardcoded, so renaming the marketplace cannot leave the wrapper disabling a plugin that no longer exists.
+
+**Nothing is installed, cached, or written to disk.** `claude plugin list` reports the worktree copy as `pirategoat-tools@inline` with `Status: loaded` and no installed record; the release keeps its own entry, disabled only inside that process. A plain `claude` is always the released version — dev is opt-in and never sticky. This is the opposite failure direction from a global switch: forgetting the wrapper means you are on the safe version.
+
+**Which version actually ran** is recorded durably. `_detect_plugin_version()` falls back to the CHANGELOG's top version when the plugin root's directory name is not a semver, so a run under the wrapper records the worktree version (e.g. `1.114.0`) in `plugin_version` in the run manifest, even though `claude plugin list` shows `Version: unknown` for an inline load. Check it with:
+
+```bash
+python3 scripts/analysis/review_run_metrics.py --last 1 --format json | grep plugin_version
+```
+
+**Caveats.**
+
+- The mount is the live working tree, uncommitted edits included. A half-finished edit is what reviews your PR. Check `git status` before starting a session you intend to trust.
+- Edits made *during* a session do not affect the already-loaded plugin; restart the wrapper to pick them up.
+- `/tmp/.pirategoat-tools-root` is repopulated from `$CLAUDE_PLUGIN_ROOT` by the PreToolUse hook, which under the wrapper is the worktree, so the fallback cache self-corrects. Its `find`-based fallback sorts on the full path and would otherwise favor the released install.
+
 ### Adding a Reviewer Agent
 
 1. Read existing agent `.md` files in `agents/` to understand the format and conventions
