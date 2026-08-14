@@ -483,7 +483,7 @@ class ReviewOutputBuilder:
         try:
             with open(sidecar, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return None
         files = data.get("deferred_files") if isinstance(data, dict) else None
         if not isinstance(files, list):
@@ -506,6 +506,30 @@ class ReviewOutputBuilder:
         )
         return self._deferred_files
 
+    def _reject_unknown_deferred(
+        self, paths: List[str], known: frozenset, api_name: str
+    ) -> None:
+        """Raise the one canonical rejection for out-of-set declarations.
+
+        Both enforcement points share this phrasing. Add-time passes the
+        single path just offered so feedback stays immediate; save-time
+        passes every offender at once, so a review carrying 23 bad
+        declarations costs one round trip instead of 23. ``api_name`` names
+        the calling declaration API, keeping rejections from sibling
+        declaration APIs distinguishable to agent and test alike.
+        """
+        valid = (
+            "Valid paths: " + ", ".join(sorted(known))
+            if known
+            else "This review has no deferred files, so nothing may be "
+                 "declared."
+        )
+        offenders = ", ".join(repr(p) for p in paths)
+        raise ValueError(
+            f"{api_name} received {len(paths)} declaration(s) matching no "
+            f"NOT DIFFED file of this review: {offenders}. {valid}"
+        )
+
     def _validate_deferred_serialization(
         self, output_dir: str
     ) -> Optional[frozenset]:
@@ -515,22 +539,18 @@ class ReviewOutputBuilder:
         save() already knows the output directory and reviewer, so the
         check cannot be bypassed by skipping the env envelope. Returns the
         known set (None preserves fail-open for genuinely sidecar-less use).
+
+        The seam differs from its advisory sibling on purpose: advisory
+        entitlement revalidates at to_dict(output_dir=...) (serialization),
+        this at save() (publication), so a caller serializing manually via
+        to_dict/to_json knowingly opts out of deferred validation.
         """
         known = self._load_deferred_files(output_dir, self.reviewer)
         if known is None:
             return None
-        for path in self.unreviewed:
-            if path not in known:
-                valid = (
-                    "Valid paths: " + ", ".join(sorted(known))
-                    if known
-                    else "This review has no deferred files, so nothing may "
-                         "be declared."
-                )
-                raise ValueError(
-                    f"add_unreviewed({path!r}) matches no NOT DIFFED file of "
-                    f"this review. {valid}"
-                )
+        unknown = [path for path in self.unreviewed if path not in known]
+        if unknown:
+            self._reject_unknown_deferred(unknown, known, "add_unreviewed")
         return known
 
     @staticmethod
@@ -627,16 +647,7 @@ class ReviewOutputBuilder:
         # count as a reviewed claim for every genuinely deferred file.
         known = self._known_deferred_files()
         if known is not None and path not in known:
-            valid = (
-                "Valid paths: " + ", ".join(sorted(known))
-                if known
-                else "This review has no deferred files, so nothing may be "
-                     "declared."
-            )
-            raise ValueError(
-                f"add_unreviewed({file!r}) matches no NOT DIFFED file of "
-                f"this review. {valid}"
-            )
+            self._reject_unknown_deferred([path], known, "add_unreviewed")
         if path not in self.unreviewed:
             self.unreviewed.append(path)
 
@@ -777,7 +788,7 @@ class ReviewOutputBuilder:
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        known_deferred = self._validate_deferred_serialization(output_dir)
+        self._validate_deferred_serialization(output_dir)
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         serialized = self.to_json(output_dir=output_dir)

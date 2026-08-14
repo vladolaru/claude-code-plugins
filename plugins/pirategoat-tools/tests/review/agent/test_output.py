@@ -1025,7 +1025,10 @@ class TestAddObservation:
 
 
 class TestAddUnreviewed:
-    """add_unreviewed declares NOT DIFFED coverage gaps through the builder."""
+    """add_unreviewed declares NOT DIFFED coverage gaps through the builder.
+
+    Add-time enforcement only — the authoritative save-time check that does
+    not need the env envelope lives in TestSaveTimeDeferredValidation."""
 
     def test_stores_and_dedupes_paths(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
@@ -1535,7 +1538,9 @@ class TestAdvisoryChannel:
 class TestSaveTimeDeferredValidation:
     """save() validates declarations against the on-disk sidecar even when
     the PIRATEGOAT_* env envelope is absent (the bypass path 3/19 agents
-    took in the 2026-08-14 live-fire run)."""
+    took in the 2026-08-14 live-fire run).
+
+    The env-envelope add-time path this backstops is TestAddUnreviewed."""
 
     def _write_sidecar(self, output_dir, reviewer, files):
         sidecar = Path(output_dir) / f"{reviewer}-deferred-files.json"
@@ -1550,9 +1555,81 @@ class TestSaveTimeDeferredValidation:
         builder = ReviewOutputBuilder("123", "go-tests")
         # Form-valid but out-of-set — the exact garbage shape that shipped:
         builder.add_unreviewed("pkg/real_test.go (450 lines not diffed)")
-        with pytest.raises(ValueError, match="matches no NOT DIFFED file"):
+        with pytest.raises(ValueError, match="NOT DIFFED file"):
             builder.save(str(tmp_path))
         assert not (tmp_path / "go-tests-review.json").exists()
+        # Validation must precede staging, not just the final replace.
+        assert not list(Path(tmp_path).glob("*.tmp"))
+
+    def test_save_reports_every_offender_in_one_raise(
+        self, tmp_path, monkeypatch
+    ):
+        """The motivating run shipped 23 bad declarations; reporting them
+        one per save would cost 23 round trips to clean up."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
+        builder = ReviewOutputBuilder("123", "go-tests")
+        builder.add_unreviewed("pkg/real_test.go")  # the one legitimate entry
+        builder.add_unreviewed("pkg/bogus_one.go")
+        builder.add_unreviewed("pkg/bogus_two.go")
+        builder.add_unreviewed("pkg/bogus_three.go")
+        with pytest.raises(ValueError) as excinfo:
+            builder.save(str(tmp_path))
+        message = str(excinfo.value)
+        assert "add_unreviewed received 3 declaration" in message
+        for offender in ("bogus_one", "bogus_two", "bogus_three"):
+            assert offender in message
+        assert "pkg/real_test.go" in message  # as a valid path, not an offender
+
+    def test_save_rejects_declaration_when_deferred_set_is_empty(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "go-tests", [])
+        builder = ReviewOutputBuilder("123", "go-tests")
+        builder.add_unreviewed("pkg/anything.go")
+        with pytest.raises(ValueError, match="no deferred files"):
+            builder.save(str(tmp_path))
+        assert not (tmp_path / "go-tests-review.json").exists()
+
+    def test_save_rejects_paths_appended_around_add_unreviewed(
+        self, tmp_path, monkeypatch
+    ):
+        """Defense in depth is deliberate: the check reads the published
+        list, so bypassing the add-time API does not buy a free pass."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
+        builder = ReviewOutputBuilder("123", "go-tests")
+        builder.unreviewed.append("bogus.go")
+        with pytest.raises(ValueError, match="NOT DIFFED file"):
+            builder.save(str(tmp_path))
+
+    def test_save_stays_fail_open_when_sidecar_is_malformed(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        (tmp_path / "go-tests-deferred-files.json").write_text("{not json")
+        builder = ReviewOutputBuilder("123", "go-tests")
+        builder.add_unreviewed("anything/form-valid.go")
+        builder.save(str(tmp_path))
+        assert (tmp_path / "go-tests-review.json").exists()
+
+    def test_save_stays_fail_open_when_sidecar_is_invalid_utf8(
+        self, tmp_path, monkeypatch
+    ):
+        """Undecodable bytes are a corrupt sidecar, not a declaration
+        offense — the catch must match the advisory loader's."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        (tmp_path / "go-tests-deferred-files.json").write_bytes(b"\xff\xfe\x00")
+        builder = ReviewOutputBuilder("123", "go-tests")
+        builder.add_unreviewed("anything/form-valid.go")
+        builder.save(str(tmp_path))
+        assert (tmp_path / "go-tests-review.json").exists()
 
     def test_save_accepts_in_set_declaration_without_env(
         self, tmp_path, monkeypatch
