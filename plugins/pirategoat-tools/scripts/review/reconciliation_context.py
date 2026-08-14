@@ -170,13 +170,14 @@ def _review_stem(agent: str) -> str:
     return agent
 
 
-def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
-    """Read one agent's declared-unreviewed paths from its review JSON.
+def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]]:
+    """Read one agent's review JSON, or None when it is unreadable.
 
-    Returns None when the agent produced no parseable output OR its
-    unreviewed field is malformed (non-null, non-list) — either way it can
-    claim nothing. Returns the list of declared paths (possibly empty)
-    otherwise; canonical null and an absent key mean "declared nothing".
+    The single canonical read behind every deferred-coverage field this
+    module consumes. Each caller keeps its own failure policy on top,
+    because "no readable output" means different things for a declaration
+    (the agent can claim nothing), a claim (no explicit claims exist), and
+    the auto-fill marker (nothing to re-attribute).
     """
     path = os.path.join(output_dir, f"{_review_stem(agent)}.json")
     try:
@@ -184,33 +185,131 @@ def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(data, dict):
+    return data if isinstance(data, dict) else None
+
+
+def _normalize_deferred_paths(raw: Any) -> Optional[List[str]]:
+    """Normalize a coverage-bearing path list, or None when malformed.
+
+    Declarations and claims address the same namespace — the canonical
+    repo-relative paths the scope sidecars emit — so they must accept
+    exactly the same spellings: "./src/x.php" and "src\\x.php" have to
+    match "src/x.php", or a coverage statement silently addresses a file
+    that does not exist in this review.
+
+    A malformed entry fails the WHOLE list rather than being dropped:
+    silently dropping entries changes what the list says (in the limit, to
+    []), and both callers read an empty list as a strong statement. Each
+    caller maps None onto its own fail-closed value.
+    """
+    if not isinstance(raw, list):
         return None
-    unreviewed = data.get("unreviewed")
-    if unreviewed is None:
-        # Canonical "no declarations": the builder serializes null when
-        # nothing was declared (absent predates the field). Output without
-        # declarations claims full review per the budget contract.
-        return []
-    if not isinstance(unreviewed, list):
-        # Malformed field: what the agent meant to declare is unknowable,
-        # so it can claim nothing — same as unparseable output. Coercing
-        # to [] would invert genuine gaps into deferred-but-reviewed
-        # claims and erase them from files_never_inline.
-        return None
-    # Normalize declarations to the canonical repo-relative form the scope
-    # sidecars use — "./src/x.php" and "src\\x.php" must match "src/x.php",
-    # or an explicit declaration silently inverts into a
-    # deferred-but-reviewed claim. A malformed entry fails the whole list
-    # closed for the same reason the malformed field does: silently
-    # dropping it could leave [] — a claim that every deferred file was
-    # reviewed — where the agent tried to declare a gap.
     cleaned = []
-    for item in unreviewed:
+    for item in raw:
         if not isinstance(item, str) or not item.strip():
             return None
         cleaned.append(posixpath.normpath(item.strip().replace("\\", "/")))
     return cleaned
+
+
+def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
+    """Read one agent's declared-unreviewed paths from its review JSON.
+
+    Returns None when the agent produced no parseable output OR its
+    unreviewed field is malformed (non-null, non-list, or carrying a
+    malformed entry) — either way it can claim nothing. Returns the list of
+    declared paths (possibly empty) otherwise; canonical null and an absent
+    key mean "declared nothing".
+
+    Coercing a malformed field to [] would invert genuine gaps into
+    deferred-but-reviewed claims under the legacy complement and erase them
+    from files_never_inline, so this fails to None, never to [].
+    """
+    data = _load_review_payload(output_dir, agent)
+    if data is None:
+        return None
+    unreviewed = data.get("unreviewed")
+    if unreviewed is None:
+        # Canonical "no declarations": the builder serializes null when
+        # nothing was declared (absent predates the field). Under the
+        # legacy complement, output without declarations claims full review
+        # per the budget contract.
+        return []
+    return _normalize_deferred_paths(unreviewed)
+
+
+def _load_agent_deferred_claims(
+    output_dir: str, agent: str
+) -> Optional[List[str]]:
+    """Read one agent's explicit deferred-review claims from its review JSON.
+
+    Three states, and the difference between them decides how much the
+    agent gets credited for:
+
+    * **None** — no ``deferred_reviewed`` key, or no readable output. This
+      is a legacy producer, from before claims were stated at all, so the
+      caller falls back to the old complement semantics (anything the agent
+      did not declare, it reviewed). Reading silence as a claim is wrong
+      for new producers but right for old ones: they had no way to say it.
+    * **A present list, INCLUDING []** — the builder always emits this key
+      now, so its presence proves the producer states its claims. Silence
+      about a deferred file is then a gap, not a claim, and [] means
+      "claimed nothing" rather than "old output".
+    * **A malformed list, or one carrying a malformed entry — []** — still
+      explicit mode. What the agent meant to claim is unknowable, so it
+      claims nothing. This deliberately does NOT fall back to None: the
+      complement would claim MORE than the agent ever stated, inverting the
+      fail direction of a validation failure into extra credit.
+    """
+    data = _load_review_payload(output_dir, agent)
+    if data is None or "deferred_reviewed" not in data:
+        return None
+    claims = _normalize_deferred_paths(data.get("deferred_reviewed"))
+    return [] if claims is None else claims
+
+
+def _load_agent_autofilled(output_dir: str, agent: str) -> List[str]:
+    """Read the paths ``save()`` auto-declared unreviewed for this agent.
+
+    Unlike the two lists above, this marker carries no coverage: every path
+    in it is already declared unreviewed and already counted as a gap. It
+    only decides which LABEL that gap renders under — the reviewer's budget
+    judgment or the system's save-time backfill. That is why malformed
+    entries are dropped instead of failing the list: the cost is an
+    auto-filled path rendering as agent-declared, exactly as it did before
+    the marker existed, and no gap is erased or claim invented either way.
+    """
+    data = _load_review_payload(output_dir, agent)
+    if data is None:
+        return []
+    meta = data.get("meta")
+    marker = meta.get("unreviewed_autofilled") if isinstance(meta, dict) else None
+    if not isinstance(marker, list):
+        return []
+    return [
+        posixpath.normpath(item.strip().replace("\\", "/"))
+        for item in marker
+        if isinstance(item, str) and item.strip()
+    ]
+
+
+def _attribute_gap(
+    f_path: str,
+    agent: str,
+    agent_autofilled: set,
+    declared: Dict[str, set],
+    autofilled: Dict[str, set],
+) -> None:
+    """File one agent's unreviewed path under WHO decided it stayed unread.
+
+    Both populations live in the same ``unreviewed`` array and are equally
+    real gaps, but they answer different questions: the reviewer ran out of
+    budget and said so, or ``save()`` found a deferred file the reviewer
+    accounted for neither way and backfilled it. Merging them credits the
+    system's honesty to the reviewer's judgment.
+    """
+    target = autofilled if f_path in agent_autofilled else declared
+    target.setdefault(f_path, set()).add(agent)
 
 
 def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
@@ -219,15 +318,29 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
     Reads ``*-scope-summary*.json`` sidecars written by bootstrap/scope.py,
     then reconciles them with each agent's review output. Budget-skipped
     (NOT DIFFED) files are the agent's deferred work queue: the budget
-    contract requires each one to be reviewed or declared via
-    ``builder.add_unreviewed()``, so an agent that produced output and did
-    NOT declare a deferred file claims to have reviewed it.
+    contract requires each one to be claimed reviewed, declared unreviewed,
+    or auto-declared at save.
+
+    How an agent's output answers for a deferred file depends on the
+    producer (see ``_load_agent_deferred_claims``):
+
+    * **Explicit mode** — output carrying ``deferred_reviewed`` states its
+      claims, so a deferred file is claimed only when the agent named it.
+      Silence is a gap, not a claim.
+    * **Legacy mode** — output predating that key had no way to state
+      claims, so the old complement still applies: anything the agent
+      produced output for and did not declare, it claims to have reviewed.
 
     A file is a coverage gap (``files_never_inline``) only when NO agent
     received its diff inline AND no deferring agent claims to have reviewed
     it. Claimed files surface separately in ``files_deferred_reviewed``
-    (an agent claim, not proof of read), and explicit declarations in
-    ``files_declared_unreviewed`` so warnings can name genuine omissions.
+    (an agent claim, not proof of read), and gaps carry their attribution
+    so warnings can name genuine omissions:
+    ``files_declared_unreviewed`` holds only what the AGENT declared, while
+    ``files_autofilled_unreviewed`` (added alongside it, never replacing
+    it) holds what ``save()`` auto-declared because the agent accounted for
+    it neither way. Attributing that backfill to the reviewer's budget
+    judgment is the exact confusion the builder's Markdown split prevents.
 
     Returns None when no summaries exist (pre-sidecar runs) so callers can
     distinguish "no data" from "no gaps".
@@ -271,8 +384,11 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
 
     never_inline = {f: a for f, a in skipped.items() if f not in inline}
     unreviewed_by_agent: Dict[str, Optional[List[str]]] = {}
+    claims_by_agent: Dict[str, Optional[List[str]]] = {}
+    autofilled_by_agent: Dict[str, set] = {}
     claimed: Dict[str, set] = {}
     declared: Dict[str, set] = {}
+    autofilled: Dict[str, set] = {}
     for f_path, agents in never_inline.items():
         for agent in agents:
             if agent not in unreviewed_by_agent:
@@ -290,11 +406,46 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
                 ) <= deferred_by_agent.get(agent, set()):
                     declared_list = None
                 unreviewed_by_agent[agent] = declared_list
+                claims_list = _load_agent_deferred_claims(output_dir, agent)
+                # The same consumer-side membership check, with the OPPOSITE
+                # fail value. Declarations fail to None because their
+                # unreliability must not be read as "reviewed everything";
+                # claims fail to [] because theirs must not be read as
+                # "legacy producer" — that would hand the agent the
+                # complement, i.e. a claim over every deferred file it never
+                # mentioned. Both directions land on "credits nothing".
+                if claims_list is not None and not set(
+                    claims_list
+                ) <= deferred_by_agent.get(agent, set()):
+                    claims_list = []
+                claims_by_agent[agent] = claims_list
+                autofilled_by_agent[agent] = set(
+                    _load_agent_autofilled(output_dir, agent)
+                )
             agent_unreviewed = unreviewed_by_agent[agent]
+            agent_claims = claims_by_agent[agent]
+            if agent_claims is not None:
+                # Explicit mode: the agent states what it reviewed, so only
+                # a named file is claimed. Unreliable declarations degrade
+                # to "declared nothing" here rather than voiding the whole
+                # output — the two lists fail independently — and a file in
+                # neither list falls through to files_never_inline as an
+                # unattributed gap, which is what silence actually means.
+                if f_path in agent_claims:
+                    claimed.setdefault(f_path, set()).add(agent)
+                elif f_path in (agent_unreviewed or []):
+                    _attribute_gap(
+                        f_path, agent, autofilled_by_agent[agent],
+                        declared, autofilled,
+                    )
+                continue
             if agent_unreviewed is None:
                 continue  # no output — the agent can neither claim nor declare
             if f_path in agent_unreviewed:
-                declared.setdefault(f_path, set()).add(agent)
+                _attribute_gap(
+                    f_path, agent, autofilled_by_agent[agent],
+                    declared, autofilled,
+                )
             else:
                 claimed.setdefault(f_path, set()).add(agent)
 
@@ -313,6 +464,13 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
         },
         "files_declared_unreviewed": {
             f: sorted(a) for f, a in sorted(declared.items())
+        },
+        # Additive sibling of the key above, and disjoint from it per
+        # (file, agent): the same path can be an agent's own declaration
+        # for one reviewer and a save-time backfill for another, but never
+        # both for the same reviewer.
+        "files_autofilled_unreviewed": {
+            f: sorted(a) for f, a in sorted(autofilled.items())
         },
     }
 
@@ -1084,6 +1242,7 @@ def to_markdown(context: Dict[str, Any]) -> str:
     if isinstance(inline_coverage, dict) and inline_coverage.get("files_never_inline"):
         gaps = inline_coverage["files_never_inline"]
         declared = inline_coverage.get("files_declared_unreviewed") or {}
+        autofilled = inline_coverage.get("files_autofilled_unreviewed") or {}
         parts.append("## Inline Diff Coverage Gaps\n")
         parts.append(
             f"**⚠ {len(gaps)} changed file(s) matched reviewer domains but "
@@ -1094,12 +1253,25 @@ def to_markdown(context: Dict[str, Any]) -> str:
             "`review-findings.md` as a coverage warning.\n"
         )
         for f_path, agents in gaps.items():
+            # Two annotations, never merged: a reviewer that declared the
+            # gap at budget exhaustion made a judgment call, while a
+            # save-time auto-fill means the reviewer accounted for the file
+            # neither way and the system said so on its behalf. Labeling
+            # the latter "(budget)" would credit the reviewer with a
+            # decision it never made.
+            notes = []
             declaring = declared.get(f_path) if isinstance(declared, dict) else None
-            note = (
-                f"; declared unreviewed (budget) by: {', '.join(declaring)}"
-                if declaring
-                else ""
-            )
+            if declaring:
+                notes.append(
+                    f"declared unreviewed (budget) by: {', '.join(declaring)}"
+                )
+            auto = autofilled.get(f_path) if isinstance(autofilled, dict) else None
+            if auto:
+                notes.append(
+                    "auto-declared unreviewed at save (unaccounted) by: "
+                    f"{', '.join(auto)}"
+                )
+            note = "".join(f"; {n}" for n in notes)
             parts.append(f"- `{f_path}` (skipped by: {', '.join(agents)}{note})")
         parts.append("")
     if isinstance(inline_coverage, dict) and inline_coverage.get(
