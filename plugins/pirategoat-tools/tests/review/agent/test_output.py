@@ -1182,7 +1182,7 @@ class TestAddDeferredReviewed:
             json.dumps({"schema": 1, "deferred_files": deferred})
         )
 
-    @pytest.mark.parametrize("bad", ["", "   ", None, 42])
+    @pytest.mark.parametrize("bad", ["", "   ", None, 42, ["src/a.py"]])
     def test_rejects_non_path_values(self, bad):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         with pytest.raises(ValueError):
@@ -1241,8 +1241,9 @@ class TestAddDeferredReviewed:
         told "nothing may be declared" is being handed the wrong API."""
         self._arm_deferred_sidecar(tmp_path, monkeypatch, [])
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
-        with pytest.raises(ValueError, match="no claim may be made"):
+        with pytest.raises(ValueError, match=r"1 claim\(s\)") as excinfo:
             b.add_deferred_reviewed("src/a.py")
+        assert "no claim may be made" in str(excinfo.value)
 
 
 # =============================================================================
@@ -1800,5 +1801,89 @@ class TestSaveTimeDeferredValidation:
         message = str(excinfo.value)
         assert "add_deferred_reviewed" in message
         assert "bogus-claim.go" in message
+        # The noun, not just the API name, carries the attribution: an
+        # offense reported as a "declaration" under the claims API name
+        # sends the reader to the wrong fix.
+        assert "claim(s)" in message
         assert "add_unreviewed" not in message
         assert not (tmp_path / "code-review.json").exists()
+
+    def test_unaccounted_deferred_files_autofill_as_unreviewed(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "docs-drift", ["a.md", "b.md", "c.md"])
+        builder = ReviewOutputBuilder("123", "docs-drift")
+        builder.add_deferred_reviewed("a.md")
+        builder.add_unreviewed("b.md")
+        builder.save(str(tmp_path))
+        data = json.loads((tmp_path / "docs-drift-review.json").read_text())
+        assert sorted(data["unreviewed"]) == ["b.md", "c.md"]
+        assert data["meta"]["unreviewed_autofilled"] == ["c.md"]
+        out = capsys.readouterr().out
+        assert "UNREVIEWED: 1 declared (+1 auto-filled) / 3 deferred" in out
+        assert "CLAIMED REVIEWED: 1" in out
+        assert "WARNING" in out
+
+    def test_fully_accounted_save_has_no_autofill(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go")
+        builder.save(str(tmp_path))
+        data = json.loads((tmp_path / "code-review.json").read_text())
+        assert data["unreviewed"] is None
+        assert data["meta"]["unreviewed_autofilled"] is None
+        assert "WARNING" not in capsys.readouterr().out
+
+    def test_double_save_autofill_is_idempotent(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go")
+        builder.save(str(tmp_path))
+        builder.save(str(tmp_path))  # the sanctioned re-save path
+        data = json.loads((tmp_path / "code-review.json").read_text())
+        assert data["unreviewed"] == ["b.go"]
+        assert data["meta"]["unreviewed_autofilled"] == ["b.go"]
+
+    def test_missing_sidecar_autofills_nothing_and_omits_deferred_tail(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Fail-open means no authoritative set, so there is nothing to
+        auto-fill against and no deferred total to echo — the accounting
+        line must degrade to what is actually known, not to a fabricated
+        zero-deferred claim."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_unreviewed("some/file.go")
+        builder.save(str(tmp_path))  # no sidecar
+        data = json.loads((tmp_path / "code-review.json").read_text())
+        assert data["unreviewed"] == ["some/file.go"]
+        assert data["meta"]["unreviewed_autofilled"] is None
+        out = capsys.readouterr().out
+        assert "UNREVIEWED: 1 declared\n" in out
+        assert "deferred" not in out
+        assert "WARNING" not in out
+
+    def test_sidecar_with_no_deferred_files_echoes_zeros(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A review that deferred nothing still reports its accounting —
+        the line is the agent's receipt, not an exception path."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", [])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+        assert (
+            "UNREVIEWED: 0 declared / 0 deferred | CLAIMED REVIEWED: 0" in out
+        )
+        assert "WARNING" not in out

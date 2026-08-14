@@ -265,6 +265,7 @@ class ReviewOutputBuilder:
         self.clearances = []
         self.unreviewed = []
         self.deferred_reviewed = []
+        self.unreviewed_autofilled = []
         self.files_reviewed = 0
         self.review_start = datetime.now()
         self.tool_results_used = []
@@ -677,6 +678,12 @@ class ReviewOutputBuilder:
         '**Not reviewed (budget):**' line in the Markdown summary and appear
         as 'unreviewed' in the JSON output, so downstream coverage accounting
         sees the gap. They never count toward the verdict.
+
+        Explicit declaration is not the only way into that list: save()
+        auto-declares any deferred file left neither declared here nor
+        claimed via add_deferred_reviewed(), marking it in
+        meta.unreviewed_autofilled. Declaring deliberately is still what
+        distinguishes a known gap from an unnoticed one.
         """
         # Shared grammar: an unmatchable declaration would invert into a
         # deferred-but-reviewed claim downstream, so malformed forms fail here.
@@ -701,9 +708,10 @@ class ReviewOutputBuilder:
         accounting labels it as such. Call as you finish each deferred file
         (or once with several paths). Claiming is what makes a deferred
         file the reviewer read distinguishable from one it never opened:
-        a file neither claimed here nor declared via add_unreviewed() is
-        recorded as neither, because the builder states only what the
-        reviewer states.
+        a deferred file neither claimed here nor declared via
+        add_unreviewed() is auto-declared unreviewed at save() and listed
+        in meta.unreviewed_autofilled. Silence records a gap; it never
+        counts as review.
 
         Claims share add_unreviewed()'s path grammar and are validated
         against the authoritative deferred set with the same membership
@@ -835,6 +843,10 @@ class ReviewOutputBuilder:
             'clearances': self.clearances if self.clearances else None,
             'meta': {
                 'files_reviewed': self.files_reviewed,
+                'unreviewed_autofilled': (
+                    self.unreviewed_autofilled
+                    if self.unreviewed_autofilled else None
+                ),
                 'review_duration_ms': review_duration,
                 'confidence_score': self.overall_confidence,
                 'tool_results_used': self.tool_results_used if self.tool_results_used else None
@@ -869,7 +881,19 @@ class ReviewOutputBuilder:
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        self._validate_deferred_serialization(output_dir)
+        known_deferred = self._validate_deferred_serialization(output_dir)
+        # Close the silent third state: every deferred file must end up
+        # claimed, declared, or auto-declared. Auto-fill is marked so
+        # metrics can separate agent honesty from system honesty.
+        if known_deferred is not None:
+            unaccounted = sorted(
+                known_deferred
+                - set(self.deferred_reviewed)
+                - set(self.unreviewed)
+            )
+            if unaccounted:
+                self.unreviewed.extend(unaccounted)
+                self.unreviewed_autofilled = unaccounted
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         serialized = self.to_json(output_dir=output_dir)
@@ -902,6 +926,33 @@ class ReviewOutputBuilder:
                 f"OBSERVATIONS: {len(self.observations)} | "
                 f"VERDICT: {output['verdict']}"
             )
+            # Deferred-coverage accounting, echoed for the same reason as
+            # the counts above: the agent still has a turn left to correct
+            # it. Auto-fill happened silently in the file; here it is
+            # visible, so an agent that DID read the file can claim it and
+            # save again rather than shipping a gap it never intended.
+            declared = [
+                p for p in self.unreviewed
+                if p not in self.unreviewed_autofilled
+            ]
+            unreviewed_line = f"UNREVIEWED: {len(declared)} declared"
+            if self.unreviewed_autofilled:
+                unreviewed_line += (
+                    f" (+{len(self.unreviewed_autofilled)} auto-filled)"
+                )
+            if known_deferred is not None:
+                unreviewed_line += (
+                    f" / {len(known_deferred)} deferred | "
+                    f"CLAIMED REVIEWED: {len(self.deferred_reviewed)}"
+                )
+            print(unreviewed_line)
+            if self.unreviewed_autofilled:
+                print(
+                    "WARNING: deferred files neither claimed nor declared "
+                    "were auto-declared unreviewed. If you actually read "
+                    "them, claim them with add_deferred_reviewed(...) and "
+                    "save again."
+                )
             # Completion telemetry and publication run under one exclusive
             # lock so {log, publish} is a single atomic unit per execution:
             # the manifest's latest agent_complete always describes the

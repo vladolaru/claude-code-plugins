@@ -178,6 +178,11 @@ export interface ReviewOutput {
     // Metadata
     meta: {
         files_reviewed: number;
+        // Subset of `unreviewed` the builder auto-declared at save time
+        // because the reviewer neither claimed nor declared those deferred
+        // files (null when nothing was auto-filled). Marked so metrics can
+        // separate agent honesty from system honesty.
+        unreviewed_autofilled: string[] | null;
         review_duration_ms?: number;
         confidence_score: ConfidenceScore; // Overall confidence
         tool_results_used?: string[]; // e.g., ['test-results', 'semgrep']
