@@ -79,6 +79,48 @@ def _make_issue(
     return issue
 
 
+def _write_summary(
+    output_dir, agent, files_with_diffs, budget_exceeded, *, domain=None
+):
+    """Write one agent's scope-summary sidecar under its real filename.
+
+    Keyed on the AGENT name rather than a hand-spelled filename so every
+    coverage test addresses the sidecar the way the aggregator does;
+    `domain` appends the secondary-summary suffix that adapter and
+    multi-domain agents emit.
+    """
+    suffix = f"-{domain}" if domain else ""
+    path = os.path.join(output_dir, f"{agent}-scope-summary{suffix}.json")
+    with open(path, "w") as f:
+        json.dump({
+            "schema": 1,
+            "domain": "x",
+            "status": "OK",
+            "files_with_diffs": files_with_diffs,
+            "budget_exceeded_files": budget_exceeded,
+            "list_only_files": [],
+        }, f)
+
+
+def _write_review(output_dir, stem, unreviewed=None, claims=_ABSENT):
+    """Write <stem>.json — the real filename an agent's review carries.
+
+    Takes the review STEM, not the agent name: several tests exist to pin
+    the stem-derivation rule itself, so deriving it here would hide the
+    thing under test.
+
+    `claims` defaults to a sentinel so a test can distinguish a key-less
+    legacy output from an explicit `deferred_reviewed: []`.
+    """
+    payload = {"reviewer": stem.replace("-review", ""), "issues": []}
+    if unreviewed is not None:
+        payload["unreviewed"] = unreviewed
+    if claims is not _ABSENT:
+        payload["deferred_reviewed"] = claims
+    with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
+        json.dump(payload, f)
+
+
 def _make_context_with_findings(agent_findings):
     """Create a minimal reconciliation context dict with given agent findings."""
     return {
@@ -2860,18 +2902,6 @@ class TestNonStringFieldCoercion:
 class TestAggregateInlineCoverage:
     """aggregate_inline_coverage() reads *-scope-summary*.json sidecars."""
 
-    def _write_summary(self, output_dir, name, files_with_diffs, budget_exceeded):
-        path = os.path.join(output_dir, name)
-        with open(path, "w") as f:
-            json.dump({
-                "schema": 1,
-                "domain": "x",
-                "status": "OK",
-                "files_with_diffs": files_with_diffs,
-                "budget_exceeded_files": budget_exceeded,
-                "list_only_files": [],
-            }, f)
-
     def test_returns_none_without_summaries(self, mod, tmp_path):
         assert mod.aggregate_inline_coverage(str(tmp_path)) is None
 
@@ -2879,12 +2909,12 @@ class TestAggregateInlineCoverage:
         assert mod.aggregate_inline_coverage(str(tmp_path / "nope")) is None
 
     def test_files_never_inline(self, mod, tmp_path):
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             ["src/a.php"], ["src/starved.php", "src/b.php"],
         )
-        self._write_summary(
-            str(tmp_path), "code-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "code-reviewer",
             ["src/b.php"], ["src/starved.php"],
         )
         cov = mod.aggregate_inline_coverage(str(tmp_path))
@@ -2898,38 +2928,31 @@ class TestAggregateInlineCoverage:
 
     def test_malformed_summary_skipped(self, mod, tmp_path):
         (tmp_path / "broken-scope-summary.json").write_text("{not json")
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             ["src/a.php"], [],
         )
         cov = mod.aggregate_inline_coverage(str(tmp_path))
         assert cov["agents_reporting"] == 1
 
     def test_secondary_summaries_attribute_to_agent(self, mod, tmp_path):
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary-config-ops.json",
-            [], ["ci.yml"],
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["ci.yml"],
+            domain="config-ops",
         )
         cov = mod.aggregate_inline_coverage(str(tmp_path))
         assert cov["files_never_inline"]["ci.yml"] == ["security-reviewer"]
-
-    def _write_review(self, output_dir, stem, unreviewed=None):
-        payload = {"reviewer": stem.replace("-review", ""), "issues": []}
-        if unreviewed is not None:
-            payload["unreviewed"] = unreviewed
-        with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
-            json.dump(payload, f)
 
     def test_undeclared_deferred_file_counts_as_claimed_reviewed(
         self, mod, tmp_path
     ):
         """An agent with output that did NOT declare a deferred file claims
         to have reviewed it per the budget contract — not a coverage gap."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             ["src/a.php"], ["src/deferred.php"],
         )
-        self._write_review(str(tmp_path), "security-review")
+        _write_review(str(tmp_path), "security-review")
 
         cov = mod.aggregate_inline_coverage(str(tmp_path))
 
@@ -2942,11 +2965,11 @@ class TestAggregateInlineCoverage:
     def test_declared_unreviewed_file_stays_a_gap_with_declaration(
         self, mod, tmp_path
     ):
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             ["src/a.php"], ["src/omitted.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review", unreviewed=["src/omitted.php"]
         )
 
@@ -2965,16 +2988,16 @@ class TestAggregateInlineCoverage:
     ):
         """A file is covered when ANY deferring agent reviewed it, even if a
         different agent declared it unreviewed."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/shared.php"],
         )
-        self._write_summary(
-            str(tmp_path), "code-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "code-reviewer",
             [], ["src/shared.php"],
         )
-        self._write_review(str(tmp_path), "security-review")
-        self._write_review(
+        _write_review(str(tmp_path), "security-review")
+        _write_review(
             str(tmp_path), "code-review", unreviewed=["src/shared.php"]
         )
 
@@ -2994,11 +3017,11 @@ class TestAggregateInlineCoverage:
         """A declaration of "./src/omitted.php" must match the sidecar's
         "src/omitted.php" — otherwise an explicit coverage gap inverts into
         a deferred-but-reviewed claim."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/omitted.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review", unreviewed=["./src/omitted.php"]
         )
 
@@ -3018,11 +3041,11 @@ class TestAggregateInlineCoverage:
         """A non-null, non-list unreviewed field is unknowable intent — the
         agent can claim nothing, so its deferred files stay genuine gaps
         instead of silently flipping to deferred-but-reviewed."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/deferred.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review", unreviewed="src/deferred.php"
         )
 
@@ -3045,11 +3068,11 @@ class TestAggregateInlineCoverage:
         """One malformed entry poisons the list — silently dropping it
         could leave [] (a full-review claim) where the agent tried to
         declare a gap. The agent can claim nothing; files stay gaps."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/deferred.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review", unreviewed=bad_list
         )
 
@@ -3067,8 +3090,8 @@ class TestAggregateInlineCoverage:
         """The builder serializes unreviewed as null when nothing was
         declared — that is the canonical no-declarations case, and per the
         budget contract the agent claims its deferred files were reviewed."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/deferred.php"],
         )
         with open(os.path.join(str(tmp_path), "security-review.json"), "w") as f:
@@ -3100,11 +3123,11 @@ class TestAggregateInlineCoverage:
         An entry outside the agent's own deferred set matches nothing, so
         the whole list is unreliable — the agent can claim nothing and its
         deferred files stay genuine gaps."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/deferred.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review", unreviewed=declared
         )
 
@@ -3122,15 +3145,15 @@ class TestAggregateInlineCoverage:
         """A declaration of an own-deferred file that another agent covered
         inline is in the agent's deferred set and must not poison the list
         — its other declarations still count."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/shared.php", "src/omitted.php"],
         )
-        self._write_summary(
-            str(tmp_path), "code-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "code-reviewer",
             ["src/shared.php"], [],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review",
             unreviewed=["src/shared.php", "src/omitted.php"],
         )
@@ -3167,12 +3190,11 @@ class TestAggregateInlineCoverage:
         """Adapter instances write instance-named scope summaries and
         <instance-stem>-review.json output; their declarations must
         reconcile exactly like a native reviewer's."""
-        self._write_summary(
-            str(tmp_path), f"{instance}-scope-summary-code.json",
-            [], ["src/deferred.php"],
+        _write_summary(
+            str(tmp_path), instance, [], ["src/deferred.php"], domain="code",
         )
         stem = instance[: -len("-reviewer")]
-        self._write_review(
+        _write_review(
             str(tmp_path), f"{stem}-review",
             unreviewed=["src/deferred.php"],
         )
@@ -3189,8 +3211,8 @@ class TestAggregateInlineCoverage:
     ):
         """No review JSON means the agent can neither claim nor declare —
         its deferred files stay genuine gaps (pre-1.109.0 behavior)."""
-        self._write_summary(
-            str(tmp_path), "security-reviewer-scope-summary.json",
+        _write_summary(
+            str(tmp_path), "security-reviewer",
             [], ["src/deferred.php"],
         )
 
@@ -3208,40 +3230,14 @@ class TestExplicitClaimsCoverage:
     instead of an inferred review claim. Key-less outputs keep the legacy
     complement semantics."""
 
-    def _write_summary(self, output_dir, agent, files_with_diffs, budget_exceeded):
-        path = os.path.join(output_dir, f"{agent}-scope-summary.json")
-        with open(path, "w") as f:
-            json.dump({
-                "schema": 1,
-                "domain": "x",
-                "status": "OK",
-                "files_with_diffs": files_with_diffs,
-                "budget_exceeded_files": budget_exceeded,
-                "list_only_files": [],
-            }, f)
-
-    def _write_review(self, output_dir, stem, unreviewed=None, claims=_ABSENT):
-        """Write <stem>.json — the real filename an agent's review carries.
-
-        `claims` defaults to a sentinel so a test can distinguish a
-        key-less legacy output from an explicit `deferred_reviewed: []`.
-        """
-        payload = {"reviewer": stem.replace("-review", ""), "issues": []}
-        if unreviewed is not None:
-            payload["unreviewed"] = unreviewed
-        if claims is not _ABSENT:
-            payload["deferred_reviewed"] = claims
-        with open(os.path.join(output_dir, f"{stem}.json"), "w") as f:
-            json.dump(payload, f)
-
     def test_explicit_claims_partition_deferred_files(self, mod, tmp_path):
         """Claimed, declared, and unaccounted deferred files land in three
         distinct places — the unaccounted one is a GAP, never a claim."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer",
             [], ["src/claimed.php", "src/declared.php", "src/silent.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review",
             unreviewed=["src/declared.php"],
             claims=["src/claimed.php"],
@@ -3269,10 +3265,10 @@ class TestExplicitClaimsCoverage:
     def test_empty_claims_list_claims_nothing(self, mod, tmp_path):
         """`deferred_reviewed: []` is the explicit "claimed nothing" signal
         the builder always emits — it must not read as a legacy output."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
         )
-        self._write_review(str(tmp_path), "security-review", claims=[])
+        _write_review(str(tmp_path), "security-review", claims=[])
 
         cov = mod.aggregate_inline_coverage(str(tmp_path))
 
@@ -3286,11 +3282,11 @@ class TestExplicitClaimsCoverage:
         "src/deferred.php" — the same grammar declarations speak. The
         unclaimed sibling proves the match came from the claim rather than
         from a fallback to the legacy complement."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer",
             [], ["src/deferred.php", "src/silent.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review", claims=["./src/deferred.php"],
         )
 
@@ -3310,10 +3306,10 @@ class TestExplicitClaimsCoverage:
         """Outputs predating the claims field carry no `deferred_reviewed`
         key; for them silence still means "reviewed" — changing that would
         retroactively invent gaps in already-published runs."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
         )
-        self._write_review(str(tmp_path), "security-review")
+        _write_review(str(tmp_path), "security-review")
 
         cov = mod.aggregate_inline_coverage(str(tmp_path))
 
@@ -3338,10 +3334,10 @@ class TestExplicitClaimsCoverage:
         """A claim outside the agent's own deferred set proves the list
         unreliable. It fails closed to claiming NOTHING — never back to the
         legacy complement, which would claim MORE than the agent stated."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
         )
-        self._write_review(str(tmp_path), "security-review", claims=claims)
+        _write_review(str(tmp_path), "security-review", claims=claims)
 
         cov = mod.aggregate_inline_coverage(str(tmp_path))
 
@@ -3375,10 +3371,10 @@ class TestExplicitClaimsCoverage:
         present — so the output is explicit-mode and the agent claims
         nothing. Falling back to the complement would turn garbage into a
         review claim for every deferred file."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer", [], ["src/deferred.php"],
         )
-        self._write_review(str(tmp_path), "security-review", claims=claims)
+        _write_review(str(tmp_path), "security-review", claims=claims)
 
         cov = mod.aggregate_inline_coverage(str(tmp_path))
 
@@ -3393,11 +3389,11 @@ class TestExplicitClaimsCoverage:
         """Declarations and claims fail independently: a malformed
         `unreviewed` (fail-to-None) must not void a well-formed claim, and
         the files the claim does not cover stay gaps."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer",
             [], ["src/claimed.php", "src/gap.php"],
         )
-        self._write_review(
+        _write_review(
             str(tmp_path), "security-review",
             unreviewed="src/gap.php",           # malformed: not a list
             claims=["src/claimed.php"],
@@ -3414,14 +3410,14 @@ class TestExplicitClaimsCoverage:
     def test_explicit_and_legacy_agents_coexist_per_file(self, mod, tmp_path):
         """Mode is per-output, not per-run: one agent's legacy complement
         can still cover a file its explicit-mode peer left unaccounted."""
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer", [], ["src/shared.php"],
         )
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "code-reviewer", [], ["src/shared.php"],
         )
-        self._write_review(str(tmp_path), "security-review", claims=[])
-        self._write_review(str(tmp_path), "code-review")  # legacy, no key
+        _write_review(str(tmp_path), "security-review", claims=[])
+        _write_review(str(tmp_path), "code-review")  # legacy, no key
 
         cov = mod.aggregate_inline_coverage(str(tmp_path))
 
@@ -3436,18 +3432,6 @@ class TestAutofilledUnreviewedAttribution:
     reviewer's budget judgment — the reconciliation context must not
     attribute them to the agent."""
 
-    def _write_summary(self, output_dir, agent, files_with_diffs, budget_exceeded):
-        path = os.path.join(output_dir, f"{agent}-scope-summary.json")
-        with open(path, "w") as f:
-            json.dump({
-                "schema": 1,
-                "domain": "x",
-                "status": "OK",
-                "files_with_diffs": files_with_diffs,
-                "budget_exceeded_files": budget_exceeded,
-                "list_only_files": [],
-            }, f)
-
     def test_autofilled_paths_split_from_agent_declarations(
         self, mod, tmp_path
     ):
@@ -3458,7 +3442,7 @@ class TestAutofilledUnreviewedAttribution:
             "deferred_reviewed": [],
             "meta": {"unreviewed_autofilled": ["src/auto.php"]},
         }))
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer",
             [], ["src/declared.php", "src/auto.php"],
         )
@@ -3484,7 +3468,7 @@ class TestAutofilledUnreviewedAttribution:
             "issues": [],
             "unreviewed": ["src/declared.php"],
         }))
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "security-reviewer", [], ["src/declared.php"],
         )
 
@@ -3494,6 +3478,56 @@ class TestAutofilledUnreviewedAttribution:
             "security-reviewer",
         ]
         assert cov["files_autofilled_unreviewed"] == {}
+
+    def test_malformed_marker_entry_degrades_only_that_entry(
+        self, mod, tmp_path
+    ):
+        """The marker labels gaps, it does not carry coverage: one bad
+        entry must cost only its own attribution, not the whole marker.
+        Failing the list would silently relabel every real auto-fill as the
+        reviewer's own budget judgment — the attribution this key exists to
+        prevent."""
+        (tmp_path / "security-review.json").write_text(json.dumps({
+            "reviewer": "security",
+            "issues": [],
+            "unreviewed": ["src/declared.php", "src/auto.php"],
+            "deferred_reviewed": [],
+            "meta": {"unreviewed_autofilled": ["src/auto.php", 42]},
+        }))
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            [], ["src/declared.php", "src/auto.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_autofilled_unreviewed"] == {
+            "src/auto.php": ["security-reviewer"],
+        }
+        assert cov["files_declared_unreviewed"] == {
+            "src/declared.php": ["security-reviewer"],
+        }
+
+    def test_non_list_marker_leaves_every_path_agent_declared(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "security-review.json").write_text(json.dumps({
+            "reviewer": "security",
+            "issues": [],
+            "unreviewed": ["src/auto.php"],
+            "deferred_reviewed": [],
+            "meta": {"unreviewed_autofilled": "src/auto.php"},
+        }))
+        _write_summary(
+            str(tmp_path), "security-reviewer", [], ["src/auto.php"],
+        )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert cov["files_autofilled_unreviewed"] == {}
+        assert cov["files_declared_unreviewed"]["src/auto.php"] == [
+            "security-reviewer",
+        ]
 
     def test_render_distinguishes_the_two_populations(self, mod):
         ctx = _make_context_with_findings({})
@@ -3535,7 +3569,7 @@ class TestAutofilledUnreviewedAttribution:
             "schema": 1,
             "deferred_files": ["src/declared.php", "src/auto.php"],
         }))
-        self._write_summary(
+        _write_summary(
             str(tmp_path), "code-reviewer",
             [], ["src/declared.php", "src/auto.php"],
         )

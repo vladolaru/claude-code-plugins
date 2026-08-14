@@ -173,11 +173,14 @@ def _review_stem(agent: str) -> str:
 def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]]:
     """Read one agent's review JSON, or None when it is unreadable.
 
-    The single canonical read behind every deferred-coverage field this
-    module consumes. Each caller keeps its own failure policy on top,
-    because "no readable output" means different things for a declaration
-    (the agent can claim nothing), a claim (no explicit claims exist), and
-    the auto-fill marker (nothing to re-attribute).
+    The single read behind the three deferred-coverage loaders below; each
+    keeps its own failure policy on top, because "no readable output" means
+    different things for a declaration (the agent can claim nothing), a
+    claim (no explicit claims exist), and the auto-fill marker (nothing to
+    re-attribute). ``load_agent_findings`` reads the same files for the
+    findings payload through its own path and failure policy — it reports
+    malformed output on stderr and skips it, which is not what silent
+    coverage accounting wants.
     """
     path = os.path.join(output_dir, f"{_review_stem(agent)}.json")
     try:
@@ -188,26 +191,46 @@ def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]
     return data if isinstance(data, dict) else None
 
 
-def _normalize_deferred_paths(raw: Any) -> Optional[List[str]]:
-    """Normalize a coverage-bearing path list, or None when malformed.
+def _normalize_deferred_paths(
+    raw: Any, *, on_bad_entry: str
+) -> Optional[List[str]]:
+    """Normalize a deferred-path list, or None when the value is not a list.
 
-    Declarations and claims address the same namespace — the canonical
-    repo-relative paths the scope sidecars emit — so they must accept
-    exactly the same spellings: "./src/x.php" and "src\\x.php" have to
-    match "src/x.php", or a coverage statement silently addresses a file
-    that does not exist in this review.
+    The one place this module spells the path grammar. Every deferred-path
+    field addresses the same namespace — the canonical repo-relative paths
+    the scope sidecars emit — so they must accept exactly the same
+    spellings: "./src/x.php" and "src\\x.php" have to match "src/x.php", or
+    a statement silently addresses a file that does not exist in this
+    review.
 
-    A malformed entry fails the WHOLE list rather than being dropped:
-    silently dropping entries changes what the list says (in the limit, to
-    []), and both callers read an empty list as a strong statement. Each
-    caller maps None onto its own fail-closed value.
+    ``on_bad_entry`` is required, with no default, because the right policy
+    depends on what the list carries and a default is how the wrong one
+    spreads to the next field:
+
+    * ``"fail"`` — return None for the WHOLE list. For declarations and
+      claims, which carry COVERAGE: dropping an entry changes what the list
+      says (in the limit, to []), and both callers read an empty list as a
+      strong statement about every deferred file.
+    * ``"drop"`` — skip the bad entry, keep the rest. For the auto-fill
+      marker, which carries only LABELING: its paths are already counted as
+      gaps either way, so a dropped entry costs one honest attribution and
+      degrades to the pre-marker rendering, while failing the list would
+      relabel every genuine auto-fill as the reviewer's own judgment.
+
+    Callers map None onto their own fail-closed value.
     """
+    if on_bad_entry not in ("fail", "drop"):
+        raise ValueError(
+            f"on_bad_entry must be 'fail' or 'drop', got {on_bad_entry!r}."
+        )
     if not isinstance(raw, list):
         return None
     cleaned = []
     for item in raw:
         if not isinstance(item, str) or not item.strip():
-            return None
+            if on_bad_entry == "fail":
+                return None
+            continue
         cleaned.append(posixpath.normpath(item.strip().replace("\\", "/")))
     return cleaned
 
@@ -235,7 +258,7 @@ def _load_agent_unreviewed(output_dir: str, agent: str) -> Optional[List[str]]:
         # legacy complement, output without declarations claims full review
         # per the budget contract.
         return []
-    return _normalize_deferred_paths(unreviewed)
+    return _normalize_deferred_paths(unreviewed, on_bad_entry="fail")
 
 
 def _load_agent_deferred_claims(
@@ -264,7 +287,9 @@ def _load_agent_deferred_claims(
     data = _load_review_payload(output_dir, agent)
     if data is None or "deferred_reviewed" not in data:
         return None
-    claims = _normalize_deferred_paths(data.get("deferred_reviewed"))
+    claims = _normalize_deferred_paths(
+        data.get("deferred_reviewed"), on_bad_entry="fail"
+    )
     return [] if claims is None else claims
 
 
@@ -274,23 +299,17 @@ def _load_agent_autofilled(output_dir: str, agent: str) -> List[str]:
     Unlike the two lists above, this marker carries no coverage: every path
     in it is already declared unreviewed and already counted as a gap. It
     only decides which LABEL that gap renders under — the reviewer's budget
-    judgment or the system's save-time backfill. That is why malformed
-    entries are dropped instead of failing the list: the cost is an
-    auto-filled path rendering as agent-declared, exactly as it did before
-    the marker existed, and no gap is erased or claim invented either way.
+    judgment or the system's save-time backfill. Hence the ``"drop"``
+    entry policy and the empty list for a non-list marker: an unusable
+    entry costs its own attribution and nothing more, exactly as it read
+    before the marker existed.
     """
     data = _load_review_payload(output_dir, agent)
     if data is None:
         return []
     meta = data.get("meta")
     marker = meta.get("unreviewed_autofilled") if isinstance(meta, dict) else None
-    if not isinstance(marker, list):
-        return []
-    return [
-        posixpath.normpath(item.strip().replace("\\", "/"))
-        for item in marker
-        if isinstance(item, str) and item.strip()
-    ]
+    return _normalize_deferred_paths(marker, on_bad_entry="drop") or []
 
 
 def _attribute_gap(
