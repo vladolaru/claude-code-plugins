@@ -479,6 +479,13 @@ class TestToDict:
         assert summary["advisory_suppressed"] == 0
         assert "verdict_without_advisory" not in summary
 
+    def test_pr_id_coerced_to_string(self):
+        """Ad-hoc builder scripts hand-roll the value bootstrap would have
+        injected as a string; an int serializes as a JSON number and breaks
+        the artifact's shape uniformity for every downstream consumer."""
+        builder = ReviewOutputBuilder(123, "code")
+        assert builder.to_dict()["pr_id"] == "123"
+
 
 # =============================================================================
 # TestToMarkdown
@@ -1972,6 +1979,55 @@ class TestSaveTimeDeferredValidation:
         assert "b.go" in message
         assert not (tmp_path / "code-review.json").exists()
         assert not list(Path(tmp_path).glob("*.tmp"))
+
+    def test_declared_and_claimed_path_rejected_without_a_sidecar(
+        self, tmp_path, monkeypatch
+    ):
+        """Fail-open is about MEMBERSHIP, not self-consistency.
+
+        Without a sidecar nobody can say whether a path is a deferred file
+        of this review — so declarations and claims go unchecked. But
+        "declared unreviewed" and "claimed reviewed" contradict each other
+        no matter what the deferred set is, and the builder holds both
+        lists. Letting the contradiction publish here also hides itself:
+        the accounting echo omits the claimed count when no sidecar is
+        readable, so the doubled path is visible in neither the receipt nor
+        any warning.
+        """
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        builder = ReviewOutputBuilder("123", "code")  # no sidecar written
+        builder.add_unreviewed("b.go")
+        builder.add_deferred_reviewed("b.go")
+        with pytest.raises(ValueError) as excinfo:
+            builder.save(str(tmp_path))
+        assert "1 path(s) are both declared unreviewed" in str(excinfo.value)
+        assert not (tmp_path / "code-review.json").exists()
+        assert not list(Path(tmp_path).glob("*.tmp"))
+
+    def test_sidecar_replacement_between_saves_rederives_cleanly(
+        self, tmp_path, monkeypatch
+    ):
+        """A replaced sidecar must not make the system blame the agent.
+
+        The previous save's auto-fill is derived from the old deferred set.
+        If the new derivation ran before that stale fill was stripped, the
+        agent would be told its own add_unreviewed() call "matches no NOT
+        DIFFED file" for a path it never declared — an error about the
+        system's bookkeeping, addressed to the wrong party and unfixable by
+        the party receiving it.
+        """
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go")
+        builder.save(str(tmp_path))          # b.go auto-filled
+        self._write_sidecar(tmp_path, "code", ["a.go", "c.go"])
+        builder.save(str(tmp_path))          # must NOT blame the agent for b.go
+        data = json.loads((tmp_path / "code-review.json").read_text())
+        assert data["unreviewed"] == ["c.go"]
+        assert data["meta"]["unreviewed_autofilled"] == ["c.go"]
 
     def test_missing_sidecar_autofills_nothing_and_omits_deferred_tail(
         self, tmp_path, monkeypatch, capsys

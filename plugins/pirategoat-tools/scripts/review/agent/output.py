@@ -275,7 +275,11 @@ class ReviewOutputBuilder:
     """Simple builder for structured review outputs."""
 
     def __init__(self, pr_id: str, reviewer: str):
-        self.pr_id = pr_id
+        # Agents that hand-roll a builder script pass whatever the bootstrap
+        # wrapper would have injected as a string — a real run shipped an int
+        # that serialized as a JSON number, so the artifact's shape stopped
+        # being uniform across reviewers. Coerce once, at construction.
+        self.pr_id = pr_id if isinstance(pr_id, str) else str(pr_id)
         self.reviewer = reviewer
         self.timestamp = datetime.now().isoformat()
         self.issues = []
@@ -605,12 +609,43 @@ class ReviewOutputBuilder:
         save() already knows the output directory and reviewer, so the
         check cannot be bypassed by skipping the env envelope. Returns the
         known set (None preserves fail-open for genuinely sidecar-less use).
+        Fail-open is membership-only: the contradiction guard below runs
+        before it, because it needs no sidecar to be right.
 
         The seam differs from its advisory sibling on purpose: advisory
         entitlement revalidates at to_dict(output_dir=...) (serialization),
         this at save() (publication), so a caller serializing manually via
         to_dict/to_json knowingly opts out of deferred validation.
         """
+        # Both agent-authored lists may be individually valid — or
+        # unvalidatable — and still contradict each other. Serializing a path
+        # into both arrays publishes two opposite statements about one file
+        # and inflates the accounting (three statements about two files),
+        # leaving every consumer to guess — conservatively "declared",
+        # overriding the explicit claim. The reviewer is the only one who
+        # knows which it meant.
+        #
+        # This runs ABOVE the fail-open return below because it compares the
+        # reviewer's two lists against each other, not against the sidecar:
+        # self-consistency needs no authority. Fail-open covers MEMBERSHIP
+        # ("is this path a deferred file of this review?") — the one question
+        # only the sidecar can answer — so a missing sidecar must not turn a
+        # contradiction into a published artifact.
+        #
+        # Only the reviewer's own statements reach here: save() strips the
+        # previous auto-fill before calling this, so the sanctioned
+        # claim-after-warning re-save is not a contradiction.
+        contradicted = sorted(
+            set(self.unreviewed) & set(self.deferred_reviewed)
+        )
+        if contradicted:
+            raise ValueError(
+                f"{len(contradicted)} path(s) are both declared unreviewed "
+                f"and claimed reviewed: "
+                f"{', '.join(repr(p) for p in contradicted)}. "
+                "A file is one or the other — make only one of the two calls "
+                "for this path in your builder script and run it again."
+            )
         known = self._load_deferred_files(output_dir, self.reviewer)
         if known is None:
             return None
@@ -633,27 +668,6 @@ class ReviewOutputBuilder:
         if unknown_claims:
             self._reject_unknown_deferred(
                 unknown_claims, known, "add_deferred_reviewed", "claim"
-            )
-        # Both lists are individually valid but may still contradict each
-        # other. Serializing a path into both arrays publishes two opposite
-        # statements about one file and inflates the accounting (three
-        # statements about two files), leaving every consumer to guess —
-        # conservatively "declared", overriding the explicit claim. The
-        # reviewer is the only one who knows which it meant.
-        #
-        # Only the reviewer's own statements reach here: save() strips the
-        # previous auto-fill before calling this, so the sanctioned
-        # claim-after-warning re-save is not a contradiction.
-        contradicted = sorted(
-            set(self.unreviewed) & set(self.deferred_reviewed)
-        )
-        if contradicted:
-            raise ValueError(
-                f"{len(contradicted)} path(s) are both declared unreviewed "
-                f"and claimed reviewed: "
-                f"{', '.join(repr(p) for p in contradicted)}. "
-                "A file is one or the other — drop it from one list and "
-                "save again."
             )
         return known
 
@@ -960,7 +974,10 @@ class ReviewOutputBuilder:
         # contradiction between two agent statements is still rejected.
         # Only paths this builder auto-filled are dropped, so agent-authored
         # declarations survive (add_unreviewed() promotes a path out of the
-        # marker precisely so it survives here).
+        # marker precisely so it survives here). The strip is unconditional
+        # while the re-derivation below is not, so a save whose sidecar has
+        # become unreadable publishes no derived gaps at all — derived state
+        # states nothing once the authority that justified it is gone.
         if self.unreviewed_autofilled:
             previous_autofill = set(self.unreviewed_autofilled)
             self.unreviewed = [
