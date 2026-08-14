@@ -1050,12 +1050,17 @@ def build_output(
             # a reviewer. See REVIEWER_PROTOCOL_SKIP_SECTIONS.
             lines.append(
                 "Before writing output, every NOT DIFFED file must be either "
-                "reviewed or declared — an APPROVE that silently ignores them is "
-                "a protocol violation. Declare each file you could not reach "
+                "claimed or declared — an APPROVE that silently ignores them is "
+                "a protocol violation. Claim each deferred file you actually "
+                'read with builder.add_deferred_reviewed("<path>") — one call '
+                "takes several paths. Declare each file you could not reach "
                 'with builder.add_unreviewed("<path>") — it records the gap '
                 "in the JSON output (the pipeline-derived Markdown renders it "
                 "as the `**Not reviewed (budget):**` line) — and never count a "
                 "declared-unreviewed file toward your verdict. "
+                "Anything you leave in neither list is auto-declared unreviewed "
+                "at save time and marked auto-filled: silence records a "
+                "coverage gap, it never counts as review. "
                 "Declaring is for genuine budget exhaustion only: a declaration "
                 "written with most of your budget unspent is a protocol "
                 "violation, and citing your budget or ceiling as the reason for "
@@ -1179,6 +1184,7 @@ def build_output(
     lines.append(f'    method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
     lines.append(f'    evidence="hit counts, file:line list")     # optional')
     lines.append(f'builder.add_unreviewed("path/unreached.py")  # ONLY at budget exhaustion — declares a NOT DIFFED coverage gap')
+    lines.append(f'builder.add_deferred_reviewed("path/read1.py", "path/read2.py")  # claim each NOT DIFFED file you actually read')
     lines.append(
         'builder.set_files_reviewed(N)  # REQUIRED: replace N with the actual number of files you reviewed'
     )

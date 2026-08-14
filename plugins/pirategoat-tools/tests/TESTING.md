@@ -148,6 +148,17 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestToJson` | json.loads(to_json()) roundtrips to match to_dict() |
 | `TestToMarkdown` | Header format, issues grouped by severity, positive observations |
 | `TestSave` | Creates both files, JSON matches to_dict(), return paths correct |
+| `TestAddDeferredReviewed` | Explicit claims of NOT DIFFED files actually read: the path grammar shared with `add_unreviewed()`, add-time membership validation against the deferred sidecar, and that a claim never moves the verdict |
+| `TestSaveTimeDeferredValidation` | `save()` as the coverage authority: batch-rejected declarations and claims, declare+claim contradictions rejected even without a sidecar, per-save recomputed `meta.unreviewed_autofilled` backfill, and the `UNREVIEWED … / CLAIMED REVIEWED` echo |
+
+###Reconciliation Context Tests (`review/test_reconciliation_context.py`)
+
+Direct unit tests on `scripts/review/reconciliation_context.py` — agent-finding loading, scope and hunk checking, source-snippet extraction, severity normalization, and the `to_markdown()` rendering the reconciliator reads (238 collected tests across 22 classes). The deferred-coverage accounting classes are listed here because they carry the NOT DIFFED honesty contract from reviewer output into the reconciliation view; the remaining classes follow the same direct-unit-test pattern.
+
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestExplicitClaimsCoverage` | 18 | `aggregate_inline_coverage()` reads a reviewer's explicit `deferred_reviewed` claims instead of inferring review from silence; unreliable claims fail closed to claiming nothing, while key-less legacy output keeps complement semantics |
+| `TestAutofilledUnreviewedAttribution` | 6 | `meta.unreviewed_autofilled` paths surface as `files_autofilled_unreviewed`, separate from the reviewer's own `files_declared_unreviewed` — the system's backfill is never published as the reviewer's judgment |
 
 ### Shared Graders (`helpers/graders.py`)
 
