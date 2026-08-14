@@ -467,19 +467,16 @@ class ReviewOutputBuilder:
             "evidence": evidence.strip() if evidence and evidence.strip() else None,
         })
 
-    def _known_deferred_files(self) -> Optional[frozenset]:
-        """The bootstrap-written deferred set for this reviewer, or None.
+    @staticmethod
+    def _load_deferred_files(
+        output_dir: Optional[str], reviewer: Optional[str]
+    ) -> Optional[frozenset]:
+        """Load the bootstrap-written deferred set, or None when unavailable.
 
-        Located through the canonical builder envelope's env vars. Absent
-        env vars or sidecar (manual builder use, older bootstrap, failed
-        fail-open write) means no authoritative set exists and
-        add_unreviewed() validation stays form-only.
+        None is deliberate fail-open: no sidecar means no authoritative set
+        exists (manual builder use, older bootstrap, failed fail-open write)
+        and validation stays form-only.
         """
-        if self._deferred_files_loaded:
-            return self._deferred_files
-        self._deferred_files_loaded = True
-        output_dir = os.environ.get("PIRATEGOAT_OUTPUT_DIR")
-        reviewer = os.environ.get("PIRATEGOAT_REVIEWER_NAME")
         if not output_dir or not reviewer:
             return None
         sidecar = os.path.join(output_dir, f"{reviewer}-deferred-files.json")
@@ -491,10 +488,50 @@ class ReviewOutputBuilder:
         files = data.get("deferred_files") if isinstance(data, dict) else None
         if not isinstance(files, list):
             return None
-        self._deferred_files = frozenset(
-            p for p in files if isinstance(p, str)
+        return frozenset(p for p in files if isinstance(p, str))
+
+    def _known_deferred_files(self) -> Optional[frozenset]:
+        """The deferred set via the env envelope — add-time fast feedback.
+
+        Authoritative enforcement happens at save() with the explicit
+        output directory; this lookup only makes add_unreviewed() fail
+        earlier on the recommended path.
+        """
+        if self._deferred_files_loaded:
+            return self._deferred_files
+        self._deferred_files_loaded = True
+        self._deferred_files = self._load_deferred_files(
+            os.environ.get("PIRATEGOAT_OUTPUT_DIR"),
+            os.environ.get("PIRATEGOAT_REVIEWER_NAME"),
         )
         return self._deferred_files
+
+    def _validate_deferred_serialization(
+        self, output_dir: str
+    ) -> Optional[frozenset]:
+        """Authoritative deferred-set validation at publication time.
+
+        Runs on EVERY save regardless of how the builder was invoked —
+        save() already knows the output directory and reviewer, so the
+        check cannot be bypassed by skipping the env envelope. Returns the
+        known set (None preserves fail-open for genuinely sidecar-less use).
+        """
+        known = self._load_deferred_files(output_dir, self.reviewer)
+        if known is None:
+            return None
+        for path in self.unreviewed:
+            if path not in known:
+                valid = (
+                    "Valid paths: " + ", ".join(sorted(known))
+                    if known
+                    else "This review has no deferred files, so nothing may "
+                         "be declared."
+                )
+                raise ValueError(
+                    f"add_unreviewed({path!r}) matches no NOT DIFFED file of "
+                    f"this review. {valid}"
+                )
+        return known
 
     @staticmethod
     def _load_advisory_entitlement(
@@ -739,6 +776,8 @@ class ReviewOutputBuilder:
         visible, the normal semantics of an atomic single-file write.
         """
         os.makedirs(output_dir, exist_ok=True)
+
+        known_deferred = self._validate_deferred_serialization(output_dir)
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         serialized = self.to_json(output_dir=output_dir)

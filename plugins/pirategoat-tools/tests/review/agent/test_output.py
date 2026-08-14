@@ -1525,3 +1525,51 @@ class TestAdvisoryChannel:
                     description="d", recommendation="r", line=6, channel="blocking")
         # Only the blocking medium counts → comment (not block from the advisory critical).
         assert b._calculate_verdict() == "comment"
+
+
+# =============================================================================
+# TestSaveTimeDeferredValidation
+# =============================================================================
+
+
+class TestSaveTimeDeferredValidation:
+    """save() validates declarations against the on-disk sidecar even when
+    the PIRATEGOAT_* env envelope is absent (the bypass path 3/19 agents
+    took in the 2026-08-14 live-fire run)."""
+
+    def _write_sidecar(self, output_dir, reviewer, files):
+        sidecar = Path(output_dir) / f"{reviewer}-deferred-files.json"
+        sidecar.write_text(json.dumps({"schema": 1, "deferred_files": files}))
+
+    def test_save_rejects_out_of_set_declaration_without_env(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
+        builder = ReviewOutputBuilder("123", "go-tests")
+        # Form-valid but out-of-set — the exact garbage shape that shipped:
+        builder.add_unreviewed("pkg/real_test.go (450 lines not diffed)")
+        with pytest.raises(ValueError, match="matches no NOT DIFFED file"):
+            builder.save(str(tmp_path))
+        assert not (tmp_path / "go-tests-review.json").exists()
+
+    def test_save_accepts_in_set_declaration_without_env(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "go-tests", ["pkg/real_test.go"])
+        builder = ReviewOutputBuilder("123", "go-tests")
+        builder.add_unreviewed("pkg/real_test.go")
+        builder.save(str(tmp_path))
+        data = json.loads((tmp_path / "go-tests-review.json").read_text())
+        assert data["unreviewed"] == ["pkg/real_test.go"]
+
+    def test_save_stays_fail_open_when_sidecar_missing(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        builder = ReviewOutputBuilder("123", "go-tests")
+        builder.add_unreviewed("anything/form-valid.go")
+        builder.save(str(tmp_path))  # no sidecar -> legacy fail-open, no raise
+        assert (tmp_path / "go-tests-review.json").exists()
