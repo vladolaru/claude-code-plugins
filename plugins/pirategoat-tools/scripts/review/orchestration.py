@@ -29,6 +29,7 @@ try:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
+    from . import critic_adjustments
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -52,6 +53,7 @@ except ImportError:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
+    from review import critic_adjustments
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +705,21 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     report_path = os.path.join(output_dir, "review-report.md")
     findings_path = os.path.join(output_dir, "review-findings.json")
     degradation_notes = []
+
+    # Carry any pending critic adjustments into the findings ledger before
+    # the verdict sync. The step-10 briefing already has the orchestrator
+    # run this; idempotence makes the defensive re-run free, and bot mode
+    # (which follows no briefing) converges through this call alone.
+    # Ordering note: nothing re-runs the reconciliator after this point —
+    # compute_next_step only routes forward (candidates are `s >
+    # current_step`), so a completed step 8 is never re-entered — and the
+    # applied_critic_adjustments record in the findings file survives to
+    # the final artifact.
+    if os.path.isfile(findings_path):
+        try:
+            critic_adjustments.apply_adjustments(output_dir)
+        except (ValueError, OSError, json.JSONDecodeError) as err:
+            degradation_notes.append(f"critic adjustments not applied: {err}")
 
     if not verdict_data:
         degradation_notes.append("review-verdict.json not found")

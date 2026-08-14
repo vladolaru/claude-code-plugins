@@ -15,6 +15,7 @@ SCRIPT_PATH = SCRIPTS_DIR / "review" / "critic_adjustments.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review.critic_adjustments import apply_adjustments
+from review.orchestration import _orchestrate_step_11
 
 
 def _write_findings(output_dir, issues):
@@ -421,13 +422,19 @@ class TestScopeLinePairing:
         assert issue["scope"] == "file"
         assert issue["line"] is None
 
-    def test_a_non_integer_line_is_rejected(self, tmp_path):
+    @pytest.mark.parametrize("bad_line", ["88", True, 0, -5])
+    def test_a_line_outside_the_1_indexed_contract_is_rejected(
+        self, tmp_path, bad_line
+    ):
+        """output.py accepts only positive ints for `line`; a patch that
+        smuggled 0 or a negative past this guard would publish a finding
+        the builder itself would have refused."""
         _write_findings(tmp_path, [_issue("aaaa1111")])
         _write_adjustments(tmp_path, [{
             "action": "rescope", "id": "aaaa1111",
-            "fields": {"line": "88"}, "rationale": "r",
+            "fields": {"line": bad_line}, "rationale": "r",
         }])
-        with pytest.raises(ValueError, match="line must be an integer"):
+        with pytest.raises(ValueError, match="line must be a positive"):
             apply_adjustments(str(tmp_path))
 
 
@@ -485,3 +492,47 @@ class TestCLI:
         assert "obliterate" in proc.stderr
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"
+
+
+class TestStepElevenAppliesAdjustments:
+    """Step 11 defensively re-runs the idempotent apply so bot mode (which
+    follows no briefing) and a non-compliant orchestrator still converge."""
+
+    def _step_11(self, output_dir):
+        """Call the finalize step the way the pipeline facade routes it."""
+        return _orchestrate_step_11("pr", {}, {}, {}, str(output_dir))
+
+    def test_pending_adjustments_applied_before_verdict_sync(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "medium"}, "rationale": "r",
+        }])
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "REQUEST_CHANGES"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        self._step_11(tmp_path)
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "medium"
+        assert data["verdict"] == "REQUEST_CHANGES"  # Rule 23 ran AFTER apply
+
+    def test_invalid_adjustments_degrade_instead_of_crashing(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "obliterate", "id": "aaaa1111",
+            "fields": {}, "rationale": "r",
+        }])
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "REQUEST_CHANGES"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        self._step_11(tmp_path)
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert any("critic adjustments not applied" in n
+                   for n in result["degradation_notes"])
+        # The note must reach `status` too — appended after the status is
+        # computed, it would publish a "success" run carrying a degradation.
+        assert result["status"] == "degraded"
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low"  # nothing half-applied

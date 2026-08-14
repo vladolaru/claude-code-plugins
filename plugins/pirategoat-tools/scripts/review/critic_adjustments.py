@@ -93,10 +93,11 @@ def _validate_fields(fields, entry_label):
             )
         if key == "line" and value is not None and (
             isinstance(value, bool) or not isinstance(value, int)
+            or value <= 0
         ):
             raise ValueError(
-                f"{entry_label}: line must be an integer or null, "
-                f"got {value!r}"
+                f"{entry_label}: line must be a positive (1-indexed) "
+                f"integer or null, got {value!r}"
             )
 
 
