@@ -1029,7 +1029,8 @@ class TestAddUnreviewed:
     """add_unreviewed declares NOT DIFFED coverage gaps through the builder.
 
     Add-time enforcement only — the authoritative save-time check that does
-    not need the env envelope lives in TestSaveTimeDeferredValidation."""
+    not need the env envelope lives in TestSaveTimeDeferredValidation, and
+    the sibling claims API is covered by TestAddDeferredReviewed."""
 
     def test_stores_and_dedupes_paths(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
@@ -1135,6 +1136,12 @@ class TestAddUnreviewed:
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         assert b.to_dict()["unreviewed"] is None
 
+    def test_deferred_reviewed_key_always_present(self):
+        """The sibling key deliberately does NOT null out when empty: its
+        presence is what tells a consumer this output states its claims."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        assert b.to_dict()["deferred_reviewed"] == []
+
     def test_unreviewed_does_not_affect_verdict(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         b.add_unreviewed("src/a.py")
@@ -1152,6 +1159,90 @@ class TestAddUnreviewed:
     def test_markdown_omits_line_when_nothing_declared(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         assert "Not reviewed (budget)" not in b.to_markdown()
+
+
+# =============================================================================
+# TestAddDeferredReviewed
+# =============================================================================
+
+
+class TestAddDeferredReviewed:
+    """add_deferred_reviewed claims NOT DIFFED files as actually reviewed.
+
+    Add-time enforcement only, mirroring TestAddUnreviewed (its declaring
+    sibling — both APIs share one path grammar, so the form cases here and
+    there must stay in lockstep). The authoritative save-time check lives
+    in TestSaveTimeDeferredValidation."""
+
+    def _arm_deferred_sidecar(self, tmp_path, monkeypatch, deferred):
+        """Simulate the bootstrap-written authoritative deferred set."""
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
+        (tmp_path / "sec-deferred-files.json").write_text(
+            json.dumps({"schema": 1, "deferred_files": deferred})
+        )
+
+    @pytest.mark.parametrize("bad", ["", "   ", None, 42])
+    def test_rejects_non_path_values(self, bad):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError):
+            b.add_deferred_reviewed(bad)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "/abs/a.py", "../outside.py", "..", "C:/win.py", "c:win.py",
+            # These normalize to "." — a form no scope summary can contain.
+            ".", "./", "foo/..",
+        ],
+    )
+    def test_rejects_non_repo_relative_forms(self, bad):
+        """A claim addresses the same namespace as a declaration, so it
+        must reject the same unmatchable forms — claiming '/etc/passwd' as
+        reviewed is not a near miss, it is a statement about a file this
+        review does not contain."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError):
+            b.add_deferred_reviewed(bad)
+
+    def test_stores_and_dedupes_claims(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_deferred_reviewed("src/a.py", "./src/a.py", "src/b.py")
+        assert b.deferred_reviewed == ["src/a.py", "src/b.py"]
+
+    def test_zero_arguments_raises(self):
+        """A claim of nothing is a silent no-op, not a claim."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="at least one file path"):
+            b.add_deferred_reviewed()
+
+    def test_claim_in_deferred_set_accepted(self, tmp_path, monkeypatch):
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/deferred.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_deferred_reviewed("./src/deferred.py")  # normalized first
+        assert b.deferred_reviewed == ["src/deferred.py"]
+
+    def test_claim_outside_deferred_set_rejected_at_add(
+        self, tmp_path, monkeypatch
+    ):
+        """A claim on a file this review never deferred is as wrong as a
+        declaration on one, and the rejection must say 'claim'."""
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/email.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="src/email.py"):
+            b.add_deferred_reviewed("src/emails.py")
+        with pytest.raises(ValueError, match="claim"):
+            b.add_deferred_reviewed("src/emails.py")
+
+    def test_empty_deferred_set_rejects_every_claim(
+        self, tmp_path, monkeypatch
+    ):
+        """The empty-set branch must speak the caller's noun — a claimant
+        told "nothing may be declared" is being handed the wrong API."""
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, [])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="no claim may be made"):
+            b.add_deferred_reviewed("src/a.py")
 
 
 # =============================================================================
@@ -1677,10 +1768,6 @@ class TestSaveTimeDeferredValidation:
         assert not (tmp_path / "code-review.json").exists()
         assert not list(Path(tmp_path).glob("*.tmp"))
 
-    def test_deferred_reviewed_key_always_present(self, tmp_path):
-        builder = ReviewOutputBuilder("123", "code")
-        assert builder.to_dict()["deferred_reviewed"] == []
-
     def test_bad_declarations_and_bad_claims_stay_attributable(
         self, tmp_path, monkeypatch
     ):
@@ -1711,6 +1798,7 @@ class TestSaveTimeDeferredValidation:
         with pytest.raises(ValueError) as excinfo:
             builder.save(str(tmp_path))
         message = str(excinfo.value)
-        assert "add_deferred_reviewed received 1 declaration" in message
+        assert "add_deferred_reviewed" in message
         assert "bogus-claim.go" in message
+        assert "add_unreviewed" not in message
         assert not (tmp_path / "code-review.json").exists()

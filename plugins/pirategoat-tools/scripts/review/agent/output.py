@@ -508,8 +508,40 @@ class ReviewOutputBuilder:
         return self._deferred_files
 
     @staticmethod
+    def _normalize_deferred_path(file: str, api_name: str) -> str:
+        """The one path grammar both deferred-set APIs speak.
+
+        Declarations and claims address the same namespace — the canonical
+        repo-relative paths scope.py emits — so they must accept and reject
+        exactly the same spellings. Keeping the grammar here rather than in
+        each API is what stops the two from drifting: when they lived apart,
+        claims accepted '/etc/passwd' and '../x' that declarations rejected.
+
+        Normalizes "./src/x.php", "src\\x.php", and "src//x.php" to one
+        form, and rejects forms no scope path can ever take (absolute,
+        traversal, drive-prefixed, dot-only) — an unmatched path is not a
+        near miss, it is a coverage statement about a file that does not
+        exist in this review.
+        """
+        if not isinstance(file, str) or not file.strip():
+            raise ValueError(f"{api_name} requires a non-empty file path.")
+        path = posixpath.normpath(file.strip().replace("\\", "/"))
+        if (
+            path.startswith("/")
+            or path == "."
+            or path == ".."
+            or path.startswith("../")
+            or (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
+        ):
+            raise ValueError(
+                f"{api_name} requires a repository-relative path exactly "
+                f"as shown in the NOT DIFFED listing, got {file!r}."
+            )
+        return path
+
+    @staticmethod
     def _reject_unknown_deferred(
-        paths: List[str], known: frozenset, api_name: str
+        paths: List[str], known: frozenset, api_name: str, noun: str
     ) -> None:
         """Raise the one canonical rejection for out-of-set deferred paths.
 
@@ -518,17 +550,23 @@ class ReviewOutputBuilder:
         passes every offender at once, so a review carrying 23 bad
         declarations costs one round trip instead of 23. ``api_name`` names
         the calling API, keeping rejections from the sibling deferred-set
-        APIs distinguishable to agent and test alike.
+        APIs distinguishable to agent and test alike, and ``noun`` says what
+        the offending paths were offered as ("declaration", "claim").
+
+        ``noun`` is deliberately required rather than defaulted: a default
+        is how the empty-set branch came to tell a claimant that "nothing
+        may be declared", and the next sibling API would inherit the same
+        wrong word silently.
         """
         valid = (
             "Valid paths: " + ", ".join(sorted(known))
             if known
-            else "This review has no deferred files, so nothing may be "
-                 "declared."
+            else f"This review has no deferred files, so no {noun} may be "
+                 "made."
         )
         offenders = ", ".join(repr(p) for p in paths)
         raise ValueError(
-            f"{api_name} received {len(paths)} declaration(s) matching no "
+            f"{api_name} received {len(paths)} {noun}(s) matching no "
             f"NOT DIFFED file of this review: {offenders}. {valid}"
         )
 
@@ -552,17 +590,23 @@ class ReviewOutputBuilder:
             return None
         unknown = [path for path in self.unreviewed if path not in known]
         if unknown:
-            self._reject_unknown_deferred(unknown, known, "add_unreviewed")
+            self._reject_unknown_deferred(
+                unknown, known, "add_unreviewed", "declaration"
+            )
         # Claims are checked separately from declarations, under their own
         # api_name: both offenses mean "not a deferred file of this review",
         # but a wrongly declared gap and a wrongly claimed read need
-        # different fixes, so the raises must stay attributable.
+        # different fixes, so the raises must stay attributable. The price
+        # is that a review carrying both kinds of offense costs two round
+        # trips instead of one — accepted deliberately, because a merged
+        # message would have to drop the attribution that makes each
+        # offender actionable.
         unknown_claims = [
             path for path in self.deferred_reviewed if path not in known
         ]
         if unknown_claims:
             self._reject_unknown_deferred(
-                unknown_claims, known, "add_deferred_reviewed"
+                unknown_claims, known, "add_deferred_reviewed", "claim"
             )
         return known
 
@@ -634,25 +678,9 @@ class ReviewOutputBuilder:
         as 'unreviewed' in the JSON output, so downstream coverage accounting
         sees the gap. They never count toward the verdict.
         """
-        if not isinstance(file, str) or not file.strip():
-            raise ValueError("add_unreviewed requires a non-empty file path.")
-        # Normalize to the canonical repo-relative form scope.py emits, so
-        # "./src/x.php", "src\\x.php", and "src/x.php" declare the same
-        # coverage gap. Forms that can never match a scope path are rejected
-        # loudly — an unmatched declaration would invert into a
-        # deferred-but-reviewed claim downstream.
-        path = posixpath.normpath(file.strip().replace("\\", "/"))
-        if (
-            path.startswith("/")
-            or path == "."
-            or path == ".."
-            or path.startswith("../")
-            or (len(path) >= 2 and path[1] == ":" and path[0].isalpha())
-        ):
-            raise ValueError(
-                "add_unreviewed requires a repository-relative path exactly "
-                f"as shown in the NOT DIFFED listing, got {file!r}."
-            )
+        # Shared grammar: an unmatchable declaration would invert into a
+        # deferred-but-reviewed claim downstream, so malformed forms fail here.
+        path = self._normalize_deferred_path(file, "add_unreviewed")
         # When bootstrap persisted the authoritative deferred set, a
         # declaration outside it (typo, wrong repo root) is rejected at
         # write time — form checks alone cannot catch a path that is merely
@@ -660,7 +688,9 @@ class ReviewOutputBuilder:
         # count as a reviewed claim for every genuinely deferred file.
         known = self._known_deferred_files()
         if known is not None and path not in known:
-            self._reject_unknown_deferred([path], known, "add_unreviewed")
+            self._reject_unknown_deferred(
+                [path], known, "add_unreviewed", "declaration"
+            )
         if path not in self.unreviewed:
             self.unreviewed.append(path)
 
@@ -675,20 +705,24 @@ class ReviewOutputBuilder:
         recorded as neither, because the builder states only what the
         reviewer states.
 
-        Claims are validated against the authoritative deferred set with
-        the same membership rule as declarations — at add time when the
-        env envelope is present, and always at save().
+        Claims share add_unreviewed()'s path grammar and are validated
+        against the authoritative deferred set with the same membership
+        rule — at add time when the env envelope is present, and always at
+        save().
         """
+        if not files:
+            raise ValueError(
+                "add_deferred_reviewed requires at least one file path — a "
+                "call claiming nothing is a no-op, not a claim."
+            )
         known = self._known_deferred_files()
         for file in files:
-            if not isinstance(file, str) or not file.strip():
-                raise ValueError(
-                    "add_deferred_reviewed requires non-empty file paths."
-                )
-            path = posixpath.normpath(file.strip().replace("\\", "/"))
+            path = self._normalize_deferred_path(
+                file, "add_deferred_reviewed"
+            )
             if known is not None and path not in known:
                 self._reject_unknown_deferred(
-                    [path], known, "add_deferred_reviewed"
+                    [path], known, "add_deferred_reviewed", "claim"
                 )
             if path not in self.deferred_reviewed:
                 self.deferred_reviewed.append(path)

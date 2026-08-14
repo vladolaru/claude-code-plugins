@@ -153,6 +153,12 @@ export interface ReviewOutput {
     // not reach at budget exhaustion. Never counts toward the verdict.
     unreviewed: string[] | null;
 
+    // Explicit deferred-review claims — ALWAYS present (never null; [] means
+    // "claimed nothing"). Key presence distinguishes explicit-claims output
+    // from legacy output where silence was read as a claim. A claim is a
+    // statement, not proof of read, and never counts toward the verdict.
+    deferred_reviewed: string[];
+
     // Recommendations (optional)
     recommendations?: {
         immediate: string[]; // Must fix before merge
