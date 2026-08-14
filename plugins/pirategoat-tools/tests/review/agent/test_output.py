@@ -1160,6 +1160,45 @@ class TestAddUnreviewed:
         b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
         assert "Not reviewed (budget)" not in b.to_markdown()
 
+    def test_markdown_separates_declared_from_autofilled(self, tmp_path):
+        """Budget exhaustion is not why an auto-declared file went
+        unreviewed, so the human artifact must not file it under that
+        label — the JSON can tell agent honesty from system backfill and
+        the Markdown has to as well."""
+        (tmp_path / "sec-deferred-files.json").write_text(
+            json.dumps(
+                {"schema": 1, "deferred_files": ["src/a.py", "src/auto.py"]}
+            )
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        b.save(str(tmp_path))  # src/auto.py gets auto-declared
+        md = render_markdown(
+            json.loads((tmp_path / "sec-review.json").read_text())
+        )
+        assert "**Not reviewed (budget):** `src/a.py`\n" in md
+        assert (
+            "**Not reviewed (auto-declared at save — neither claimed nor "
+            "declared by the reviewer):** `src/auto.py`\n"
+        ) in md
+        # Membership must not leak across the two lines.
+        budget_line = next(
+            line for line in md.splitlines()
+            if line.startswith("**Not reviewed (budget):**")
+        )
+        assert "src/auto.py" not in budget_line
+
+    def test_markdown_renders_old_shape_without_autofill_key(self):
+        """Outputs produced before save-time auto-fill carry no meta key;
+        they must keep rendering exactly as they did."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        data = b.to_dict()
+        del data["meta"]["unreviewed_autofilled"]
+        md = render_markdown(data)
+        assert "**Not reviewed (budget):** `src/a.py`" in md
+        assert "auto-declared" not in md
+
 
 # =============================================================================
 # TestAddDeferredReviewed
@@ -1851,6 +1890,24 @@ class TestSaveTimeDeferredValidation:
         data = json.loads((tmp_path / "code-review.json").read_text())
         assert data["unreviewed"] == ["b.go"]
         assert data["meta"]["unreviewed_autofilled"] == ["b.go"]
+
+    def test_claim_after_warning_clears_autofill_on_resave(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go")
+        builder.save(str(tmp_path))          # b.go auto-filled, WARNING
+        builder.add_deferred_reviewed("b.go")
+        builder.save(str(tmp_path))          # the WARNING's own remediation
+        data = json.loads((tmp_path / "code-review.json").read_text())
+        assert data["unreviewed"] is None
+        assert data["meta"]["unreviewed_autofilled"] is None
+        assert sorted(data["deferred_reviewed"]) == ["a.go", "b.go"]
+        out = capsys.readouterr().out
+        assert out.count("WARNING") == 1  # first save only
 
     def test_missing_sidecar_autofills_nothing_and_omits_deferred_tail(
         self, tmp_path, monkeypatch, capsys

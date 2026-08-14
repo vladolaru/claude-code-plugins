@@ -171,10 +171,29 @@ def render_markdown(data: Dict) -> str:
         md.append(f"- High: {counts['high']}\n")
         md.append(f"- Medium: {counts['medium']}\n\n")
 
-    # Declared coverage gap — in-scope files unreached at budget exhaustion
+    # Coverage gap — two populations share the 'unreviewed' array but not a
+    # reason, so they never share a label: what the reviewer declared at
+    # budget exhaustion, and what save() auto-declared because it was
+    # neither claimed nor declared. Filing the latter under "budget" would
+    # attribute the system's backfill to the reviewer's judgment. Older
+    # outputs carry no marker and render exactly as they used to.
     if data.get('unreviewed'):
-        files = ", ".join(f"`{f}`" for f in data['unreviewed'])
-        md.append(f"**Not reviewed (budget):** {files}\n\n")
+        meta = data.get('meta')
+        autofilled = set(
+            (meta.get('unreviewed_autofilled') or [])
+            if isinstance(meta, dict) else []
+        )
+        declared = [f for f in data['unreviewed'] if f not in autofilled]
+        auto_declared = [f for f in data['unreviewed'] if f in autofilled]
+        if declared:
+            files = ", ".join(f"`{f}`" for f in declared)
+            md.append(f"**Not reviewed (budget):** {files}\n\n")
+        if auto_declared:
+            files = ", ".join(f"`{f}`" for f in auto_declared)
+            md.append(
+                "**Not reviewed (auto-declared at save — neither claimed "
+                f"nor declared by the reviewer):** {files}\n\n"
+            )
 
     # Issues — every severity that counts toward total_issues must render,
     # or the Markdown claims findings it doesn't show.
@@ -682,8 +701,9 @@ class ReviewOutputBuilder:
         Explicit declaration is not the only way into that list: save()
         auto-declares any deferred file left neither declared here nor
         claimed via add_deferred_reviewed(), marking it in
-        meta.unreviewed_autofilled. Declaring deliberately is still what
-        distinguishes a known gap from an unnoticed one.
+        meta.unreviewed_autofilled and re-deriving both on every save.
+        Declaring deliberately is still what distinguishes a known gap
+        from an unnoticed one.
         """
         # Shared grammar: an unmatchable declaration would invert into a
         # deferred-but-reviewed claim downstream, so malformed forms fail here.
@@ -711,7 +731,9 @@ class ReviewOutputBuilder:
         a deferred file neither claimed here nor declared via
         add_unreviewed() is auto-declared unreviewed at save() and listed
         in meta.unreviewed_autofilled. Silence records a gap; it never
-        counts as review.
+        counts as review. Auto-fill is recomputed on every save, so
+        claiming a file you did read and saving again clears both the
+        auto-declaration and its warning.
 
         Claims share add_unreviewed()'s path grammar and are validated
         against the authoritative deferred set with the same membership
@@ -885,15 +907,29 @@ class ReviewOutputBuilder:
         # Close the silent third state: every deferred file must end up
         # claimed, declared, or auto-declared. Auto-fill is marked so
         # metrics can separate agent honesty from system honesty.
+        #
+        # It is DERIVED state, recomputed from scratch on every save: the
+        # previous fill is stripped before the new one is computed, and the
+        # marker is reset unconditionally. That is what makes the warning's
+        # own instruction ("claim them and save again") actually work — a
+        # sticky fill would leave the claimed path in both lists forever,
+        # warning on every save about a gap the agent had already closed.
+        # Only paths this builder auto-filled are stripped, so an agent's
+        # own declarations are never silently dropped.
         if known_deferred is not None:
+            if self.unreviewed_autofilled:
+                self.unreviewed = [
+                    p for p in self.unreviewed
+                    if p not in self.unreviewed_autofilled
+                ]
             unaccounted = sorted(
                 known_deferred
                 - set(self.deferred_reviewed)
                 - set(self.unreviewed)
             )
+            self.unreviewed_autofilled = unaccounted
             if unaccounted:
                 self.unreviewed.extend(unaccounted)
-                self.unreviewed_autofilled = unaccounted
 
         json_path = os.path.join(output_dir, f"{self.reviewer}-review.json")
         serialized = self.to_json(output_dir=output_dir)
