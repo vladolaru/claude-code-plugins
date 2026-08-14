@@ -181,7 +181,9 @@ export interface ReviewOutput {
         // Subset of `unreviewed` the builder auto-declared at save time
         // because the reviewer neither claimed nor declared those deferred
         // files (null when nothing was auto-filled). Marked so metrics can
-        // separate agent honesty from system honesty.
+        // separate agent honesty from system honesty. Required going
+        // forward; artifacts produced before save-time auto-fill carry no
+        // such key, so consumers must tolerate its absence.
         unreviewed_autofilled: string[] | null;
         review_duration_ms?: number;
         confidence_score: ConfidenceScore; // Overall confidence

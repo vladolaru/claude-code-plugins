@@ -179,10 +179,11 @@ def render_markdown(data: Dict) -> str:
     # outputs carry no marker and render exactly as they used to.
     if data.get('unreviewed'):
         meta = data.get('meta')
-        autofilled = set(
-            (meta.get('unreviewed_autofilled') or [])
-            if isinstance(meta, dict) else []
-        )
+        marker = meta.get('unreviewed_autofilled') if isinstance(meta, dict) else None
+        # A non-list marker says nothing usable about membership (a string
+        # would split into a set of characters), so it is ignored and every
+        # path keeps the declared label.
+        autofilled = set(marker) if isinstance(marker, list) else set()
         declared = [f for f in data['unreviewed'] if f not in autofilled]
         auto_declared = [f for f in data['unreviewed'] if f in autofilled]
         if declared:
@@ -191,8 +192,8 @@ def render_markdown(data: Dict) -> str:
         if auto_declared:
             files = ", ".join(f"`{f}`" for f in auto_declared)
             md.append(
-                "**Not reviewed (auto-declared at save — neither claimed "
-                f"nor declared by the reviewer):** {files}\n\n"
+                "**Not reviewed (unaccounted — auto-declared at save):** "
+                f"{files}\n\n"
             )
 
     # Issues — every severity that counts toward total_issues must render,
@@ -282,8 +283,13 @@ class ReviewOutputBuilder:
         self.recommendations = {'immediate': [], 'important': [], 'suggestions': []}
         self.positive_observations = []
         self.clearances = []
+        # Agent-authored: gaps the reviewer declared (plus, after save(),
+        # the derived fill below merged in).
         self.unreviewed = []
+        # Agent-authored: deferred files the reviewer claims it read.
         self.deferred_reviewed = []
+        # Derived at save(): the subset of self.unreviewed the builder
+        # auto-declared because the reviewer stated nothing about it.
         self.unreviewed_autofilled = []
         self.files_reviewed = 0
         self.review_start = datetime.now()
@@ -628,6 +634,27 @@ class ReviewOutputBuilder:
             self._reject_unknown_deferred(
                 unknown_claims, known, "add_deferred_reviewed", "claim"
             )
+        # Both lists are individually valid but may still contradict each
+        # other. Serializing a path into both arrays publishes two opposite
+        # statements about one file and inflates the accounting (three
+        # statements about two files), leaving every consumer to guess —
+        # conservatively "declared", overriding the explicit claim. The
+        # reviewer is the only one who knows which it meant.
+        #
+        # Only the reviewer's own statements reach here: save() strips the
+        # previous auto-fill before calling this, so the sanctioned
+        # claim-after-warning re-save is not a contradiction.
+        contradicted = sorted(
+            set(self.unreviewed) & set(self.deferred_reviewed)
+        )
+        if contradicted:
+            raise ValueError(
+                f"{len(contradicted)} path(s) are both declared unreviewed "
+                f"and claimed reviewed: "
+                f"{', '.join(repr(p) for p in contradicted)}. "
+                "A file is one or the other — drop it from one list and "
+                "save again."
+            )
         return known
 
     @staticmethod
@@ -703,7 +730,13 @@ class ReviewOutputBuilder:
         claimed via add_deferred_reviewed(), marking it in
         meta.unreviewed_autofilled and re-deriving both on every save.
         Declaring deliberately is still what distinguishes a known gap
-        from an unnoticed one.
+        from an unnoticed one — and declaring a path the previous save
+        auto-declared promotes it out of that marker, recording the gap as
+        the reviewer's own statement.
+
+        A path declared here must not also be claimed via
+        add_deferred_reviewed(): save() rejects the contradiction rather
+        than publishing both statements about one file.
         """
         # Shared grammar: an unmatchable declaration would invert into a
         # deferred-but-reviewed claim downstream, so malformed forms fail here.
@@ -718,6 +751,14 @@ class ReviewOutputBuilder:
             self._reject_unknown_deferred(
                 [path], known, "add_unreviewed", "declaration"
             )
+        if path in self.unreviewed_autofilled:
+            # An explicit declaration outranks system backfill: promote the
+            # path out of derived state so the next save records it as the
+            # reviewer's own statement. Without this the call is a silent
+            # no-op — the path is already in self.unreviewed — and the
+            # marker would keep attributing to the system a gap the agent
+            # has just taken ownership of.
+            self.unreviewed_autofilled.remove(path)
         if path not in self.unreviewed:
             self.unreviewed.append(path)
 
@@ -829,6 +870,11 @@ class ReviewOutputBuilder:
 
         Without an explicit directory, manual and legacy callers retain the
         deliberate fail-open, vocabulary-only advisory behavior.
+
+        Deferred-coverage fields reflect the LAST save()'s derivation:
+        unreviewed carries any auto-declared paths and
+        meta.unreviewed_autofilled names them. Called before any save, both
+        contain only what the reviewer itself stated.
         """
         if output_dir is not None:
             self._validate_advisory_serialization(output_dir)
@@ -903,25 +949,30 @@ class ReviewOutputBuilder:
         """
         os.makedirs(output_dir, exist_ok=True)
 
+        # Auto-fill is DERIVED state, recomputed from scratch on every save,
+        # and the strip runs FIRST — before validation, before the
+        # contradiction check, before the new derivation. That ordering is
+        # load-bearing: the reviewer's answer to the warning is to claim a
+        # file it did read, and the previous fill still lists that file as
+        # unreviewed. Stripping first means validation only ever sees what
+        # the reviewer itself stated, so the sanctioned remediation is not
+        # mistaken for a declare-plus-claim contradiction, while a genuine
+        # contradiction between two agent statements is still rejected.
+        # Only paths this builder auto-filled are dropped, so agent-authored
+        # declarations survive (add_unreviewed() promotes a path out of the
+        # marker precisely so it survives here).
+        if self.unreviewed_autofilled:
+            previous_autofill = set(self.unreviewed_autofilled)
+            self.unreviewed = [
+                p for p in self.unreviewed if p not in previous_autofill
+            ]
+            self.unreviewed_autofilled = []
+
         known_deferred = self._validate_deferred_serialization(output_dir)
         # Close the silent third state: every deferred file must end up
         # claimed, declared, or auto-declared. Auto-fill is marked so
         # metrics can separate agent honesty from system honesty.
-        #
-        # It is DERIVED state, recomputed from scratch on every save: the
-        # previous fill is stripped before the new one is computed, and the
-        # marker is reset unconditionally. That is what makes the warning's
-        # own instruction ("claim them and save again") actually work — a
-        # sticky fill would leave the claimed path in both lists forever,
-        # warning on every save about a gap the agent had already closed.
-        # Only paths this builder auto-filled are stripped, so an agent's
-        # own declarations are never silently dropped.
         if known_deferred is not None:
-            if self.unreviewed_autofilled:
-                self.unreviewed = [
-                    p for p in self.unreviewed
-                    if p not in self.unreviewed_autofilled
-                ]
             unaccounted = sorted(
                 known_deferred
                 - set(self.deferred_reviewed)

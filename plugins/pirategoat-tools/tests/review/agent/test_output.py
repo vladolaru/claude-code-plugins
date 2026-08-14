@@ -1178,8 +1178,8 @@ class TestAddUnreviewed:
         )
         assert "**Not reviewed (budget):** `src/a.py`\n" in md
         assert (
-            "**Not reviewed (auto-declared at save — neither claimed nor "
-            "declared by the reviewer):** `src/auto.py`\n"
+            "**Not reviewed (unaccounted — auto-declared at save):** "
+            "`src/auto.py`\n"
         ) in md
         # Membership must not leak across the two lines.
         budget_line = next(
@@ -1195,6 +1195,18 @@ class TestAddUnreviewed:
         b.add_unreviewed("src/a.py")
         data = b.to_dict()
         del data["meta"]["unreviewed_autofilled"]
+        md = render_markdown(data)
+        assert "**Not reviewed (budget):** `src/a.py`" in md
+        assert "auto-declared" not in md
+
+    def test_markdown_ignores_malformed_autofill_marker(self):
+        """A non-list marker says nothing usable about membership; the
+        paths keep their existing label rather than being split by a
+        set of characters."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        data = b.to_dict()
+        data["meta"]["unreviewed_autofilled"] = "src/a.py"
         md = render_markdown(data)
         assert "**Not reviewed (budget):** `src/a.py`" in md
         assert "auto-declared" not in md
@@ -1880,13 +1892,19 @@ class TestSaveTimeDeferredValidation:
         assert "WARNING" not in capsys.readouterr().out
 
     def test_double_save_autofill_is_idempotent(self, tmp_path, monkeypatch):
+        """An unchanged re-save must not duplicate the fill or the marker.
+
+        This holds under both sticky and derived semantics, so it is a
+        no-duplication guard only — the redesign to derived state is pinned
+        by test_claim_after_warning_clears_autofill_on_resave.
+        """
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
         builder = ReviewOutputBuilder("123", "code")
         builder.add_deferred_reviewed("a.go")
         builder.save(str(tmp_path))
-        builder.save(str(tmp_path))  # the sanctioned re-save path
+        builder.save(str(tmp_path))
         data = json.loads((tmp_path / "code-review.json").read_text())
         assert data["unreviewed"] == ["b.go"]
         assert data["meta"]["unreviewed_autofilled"] == ["b.go"]
@@ -1894,6 +1912,9 @@ class TestSaveTimeDeferredValidation:
     def test_claim_after_warning_clears_autofill_on_resave(
         self, tmp_path, monkeypatch, capsys
     ):
+        """The remediation the WARNING teaches must actually work — and
+        must not trip the declare-plus-claim contradiction guard, which is
+        why the previous fill is stripped BEFORE validation runs."""
         monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
         monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
         self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
@@ -1908,6 +1929,49 @@ class TestSaveTimeDeferredValidation:
         assert sorted(data["deferred_reviewed"]) == ["a.go", "b.go"]
         out = capsys.readouterr().out
         assert out.count("WARNING") == 1  # first save only
+
+    def test_explicit_declaration_promotes_out_of_autofill(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Declaring a path the system had auto-filled is the agent taking
+        ownership of the gap — the second legal answer to the WARNING. It
+        must stop counting as backfill, or the marker lies about who
+        accounted for the file in exactly the case it exists to measure."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go")
+        builder.save(str(tmp_path))          # b.go auto-filled, WARNING
+        builder.add_unreviewed("b.go")       # the agent owns the gap
+        builder.save(str(tmp_path))
+        data = json.loads((tmp_path / "code-review.json").read_text())
+        assert data["unreviewed"] == ["b.go"]
+        assert data["meta"]["unreviewed_autofilled"] is None
+        out = capsys.readouterr().out
+        assert out.count("WARNING") == 1  # first save only
+        assert "UNREVIEWED: 1 declared / 2 deferred" in out
+
+    def test_declared_and_claimed_path_rejected_at_save(
+        self, tmp_path, monkeypatch
+    ):
+        """Declaring a file unreviewed and claiming it reviewed are
+        contradictory statements about the same file. Serializing both
+        would put the path in two arrays and inflate the accounting to
+        three statements about two files."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_unreviewed("b.go")
+        builder.add_deferred_reviewed("b.go")
+        with pytest.raises(ValueError) as excinfo:
+            builder.save(str(tmp_path))
+        message = str(excinfo.value)
+        assert "1 path(s) are both declared unreviewed" in message
+        assert "b.go" in message
+        assert not (tmp_path / "code-review.json").exists()
+        assert not list(Path(tmp_path).glob("*.tmp"))
 
     def test_missing_sidecar_autofills_nothing_and_omits_deferred_tail(
         self, tmp_path, monkeypatch, capsys
@@ -1925,8 +1989,12 @@ class TestSaveTimeDeferredValidation:
         assert data["unreviewed"] == ["some/file.go"]
         assert data["meta"]["unreviewed_autofilled"] is None
         out = capsys.readouterr().out
-        assert "UNREVIEWED: 1 declared\n" in out
-        assert "deferred" not in out
+        unreviewed_line = next(
+            line for line in out.splitlines()
+            if line.startswith("UNREVIEWED:")
+        )
+        assert unreviewed_line == "UNREVIEWED: 1 declared"
+        assert "deferred" not in unreviewed_line
         assert "WARNING" not in out
 
     def test_sidecar_with_no_deferred_files_echoes_zeros(
