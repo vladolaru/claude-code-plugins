@@ -264,6 +264,7 @@ class ReviewOutputBuilder:
         self.positive_observations = []
         self.clearances = []
         self.unreviewed = []
+        self.deferred_reviewed = []
         self.files_reviewed = 0
         self.review_start = datetime.now()
         self.tool_results_used = []
@@ -506,17 +507,18 @@ class ReviewOutputBuilder:
         )
         return self._deferred_files
 
+    @staticmethod
     def _reject_unknown_deferred(
-        self, paths: List[str], known: frozenset, api_name: str
+        paths: List[str], known: frozenset, api_name: str
     ) -> None:
-        """Raise the one canonical rejection for out-of-set declarations.
+        """Raise the one canonical rejection for out-of-set deferred paths.
 
-        Both enforcement points share this phrasing. Add-time passes the
+        Every enforcement point shares this phrasing. Add-time passes the
         single path just offered so feedback stays immediate; save-time
         passes every offender at once, so a review carrying 23 bad
         declarations costs one round trip instead of 23. ``api_name`` names
-        the calling declaration API, keeping rejections from sibling
-        declaration APIs distinguishable to agent and test alike.
+        the calling API, keeping rejections from the sibling deferred-set
+        APIs distinguishable to agent and test alike.
         """
         valid = (
             "Valid paths: " + ", ".join(sorted(known))
@@ -551,6 +553,17 @@ class ReviewOutputBuilder:
         unknown = [path for path in self.unreviewed if path not in known]
         if unknown:
             self._reject_unknown_deferred(unknown, known, "add_unreviewed")
+        # Claims are checked separately from declarations, under their own
+        # api_name: both offenses mean "not a deferred file of this review",
+        # but a wrongly declared gap and a wrongly claimed read need
+        # different fixes, so the raises must stay attributable.
+        unknown_claims = [
+            path for path in self.deferred_reviewed if path not in known
+        ]
+        if unknown_claims:
+            self._reject_unknown_deferred(
+                unknown_claims, known, "add_deferred_reviewed"
+            )
         return known
 
     @staticmethod
@@ -651,6 +664,35 @@ class ReviewOutputBuilder:
         if path not in self.unreviewed:
             self.unreviewed.append(path)
 
+    def add_deferred_reviewed(self, *files: str):
+        """Claim NOT DIFFED (deferred) files as actually reviewed.
+
+        A claim is a statement, not proof of read — downstream coverage
+        accounting labels it as such. Call as you finish each deferred file
+        (or once with several paths). Claiming is what makes a deferred
+        file the reviewer read distinguishable from one it never opened:
+        a file neither claimed here nor declared via add_unreviewed() is
+        recorded as neither, because the builder states only what the
+        reviewer states.
+
+        Claims are validated against the authoritative deferred set with
+        the same membership rule as declarations — at add time when the
+        env envelope is present, and always at save().
+        """
+        known = self._known_deferred_files()
+        for file in files:
+            if not isinstance(file, str) or not file.strip():
+                raise ValueError(
+                    "add_deferred_reviewed requires non-empty file paths."
+                )
+            path = posixpath.normpath(file.strip().replace("\\", "/"))
+            if known is not None and path not in known:
+                self._reject_unknown_deferred(
+                    [path], known, "add_deferred_reviewed"
+                )
+            if path not in self.deferred_reviewed:
+                self.deferred_reviewed.append(path)
+
     def set_files_reviewed(self, count: int):
         """Set number of files reviewed."""
         self.files_reviewed = count
@@ -748,6 +790,11 @@ class ReviewOutputBuilder:
             'summary': summary,
             'issues': self.issues,
             'unreviewed': self.unreviewed if self.unreviewed else None,
+            # Never nulled when empty, unlike its siblings above: key
+            # presence is the downstream consumer's signal that this output
+            # carries explicit deferred-review claims, so an empty list must
+            # stay readable as "claimed nothing" rather than "old producer".
+            'deferred_reviewed': self.deferred_reviewed,
             'observations': self.observations if self.observations else None,
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,

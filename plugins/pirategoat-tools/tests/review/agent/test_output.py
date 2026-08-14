@@ -438,8 +438,9 @@ class TestToDict:
         d = b.to_dict()
         expected_keys = {
             "pr_id", "reviewer", "timestamp", "version", "verdict",
-            "summary", "issues", "unreviewed", "observations",
-            "recommendations", "positive_observations", "clearances", "meta",
+            "summary", "issues", "unreviewed", "deferred_reviewed",
+            "observations", "recommendations", "positive_observations",
+            "clearances", "meta",
         }
         assert expected_keys == set(d.keys())
 
@@ -1580,7 +1581,11 @@ class TestSaveTimeDeferredValidation:
         assert "add_unreviewed received 3 declaration" in message
         for offender in ("bogus_one", "bogus_two", "bogus_three"):
             assert offender in message
-        assert "pkg/real_test.go" in message  # as a valid path, not an offender
+        # The legitimate entry appears only in the valid-paths tail, never
+        # among the offenders the message opens with.
+        offenders, _, valid_paths = message.partition("Valid paths:")
+        assert "pkg/real_test.go" in valid_paths
+        assert "pkg/real_test.go" not in offenders
 
     def test_save_rejects_declaration_when_deferred_set_is_empty(
         self, tmp_path, monkeypatch
@@ -1650,3 +1655,62 @@ class TestSaveTimeDeferredValidation:
         builder.add_unreviewed("anything/form-valid.go")
         builder.save(str(tmp_path))  # no sidecar -> legacy fail-open, no raise
         assert (tmp_path / "go-tests-review.json").exists()
+
+    def test_claims_serialize_and_validate_membership(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go", "b.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go", "./b.go")  # normalizes ./b.go
+        builder.save(str(tmp_path))
+        data = json.loads((tmp_path / "code-review.json").read_text())
+        assert data["deferred_reviewed"] == ["a.go", "b.go"]
+
+    def test_out_of_set_claim_rejected_at_save(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("not-deferred.go")
+        with pytest.raises(ValueError, match="add_deferred_reviewed"):
+            builder.save(str(tmp_path))
+        assert not (tmp_path / "code-review.json").exists()
+        assert not list(Path(tmp_path).glob("*.tmp"))
+
+    def test_deferred_reviewed_key_always_present(self, tmp_path):
+        builder = ReviewOutputBuilder("123", "code")
+        assert builder.to_dict()["deferred_reviewed"] == []
+
+    def test_bad_declarations_and_bad_claims_stay_attributable(
+        self, tmp_path, monkeypatch
+    ):
+        """A declaration offense and a claim offense are different errors.
+
+        Both mean "this path is not in the deferred set", but the fix
+        differs — one is a wrongly declared gap, the other a wrongly
+        claimed read — so each raise names the API that produced it and
+        never blames its sibling.
+        """
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        self._write_sidecar(tmp_path, "code", ["a.go"])
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_unreviewed("bogus-declaration.go")
+        builder.add_deferred_reviewed("bogus-claim.go")
+
+        # Declarations are checked first and own the raise alone.
+        with pytest.raises(ValueError) as excinfo:
+            builder.save(str(tmp_path))
+        message = str(excinfo.value)
+        assert "add_unreviewed received 1 declaration" in message
+        assert "bogus-declaration.go" in message
+        assert "add_deferred_reviewed" not in message
+
+        # With the declaration fixed, the claim raises under its own name.
+        builder.unreviewed.clear()
+        with pytest.raises(ValueError) as excinfo:
+            builder.save(str(tmp_path))
+        message = str(excinfo.value)
+        assert "add_deferred_reviewed received 1 declaration" in message
+        assert "bogus-claim.go" in message
+        assert not (tmp_path / "code-review.json").exists()
