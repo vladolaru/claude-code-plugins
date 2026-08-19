@@ -939,9 +939,17 @@ def main():
     # a step the router passes over must say so in durable state with its
     # gating condition, not only in orchestrator-facing prose. Trailing
     # skips (steps after the last active one) are recorded when next_info
-    # is None, right before finalize. A second write_state is the honest
-    # cost: routing is only knowable after get_active_steps, which runs
-    # after the completed_steps write.
+    # is None, right before finalize.
+    #
+    # This is a second write_state, and that is a choice rather than a
+    # constraint: nothing between the two writes touches disk or can
+    # raise (get_active_steps and compute_next_step are pure functions of
+    # their in-memory arguments, and _eval_condition is total), so the
+    # earlier write could equally be moved down here. Two are kept because
+    # the extra cost is negligible — a small file, written only when
+    # something new was recorded — and because a crash between them fails
+    # in the safe direction: the ledger is then absent or short, which
+    # reads as unmeasured or partial, never as a wrong measurement.
     if not blocks_progress:
         upper = next_info["step"] if next_info else max(_STEP_MAP) + 1
         already = {
@@ -951,13 +959,20 @@ def main():
         }
         newly_skipped = []
         for skipped_step in range(step + 1, upper):
-            if skipped_step not in active and skipped_step not in already:
-                step_def = _STEP_MAP[skipped_step]
-                newly_skipped.append({
-                    "step": skipped_step,
-                    "title": step_def["title"],
-                    "condition": step_def["condition"],
-                })
+            if skipped_step in active or skipped_step in already:
+                continue
+            # Step numbers are contiguous today, so the gap can only hold
+            # defined steps; resolving through .get() keeps a future
+            # sparse or renumbered STEP_SEQUENCE from turning a routing
+            # gap into a KeyError mid-run.
+            step_def = _STEP_MAP.get(skipped_step)
+            if step_def is None:
+                continue
+            newly_skipped.append({
+                "step": skipped_step,
+                "title": step_def["title"],
+                "condition": step_def["condition"],
+            })
         if newly_skipped:
             state.setdefault("skipped_steps", []).extend(newly_skipped)
             write_state(output_dir, state)

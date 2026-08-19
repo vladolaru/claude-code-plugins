@@ -605,8 +605,22 @@ def build_skipped_steps_manifest(output_dir: str) -> Optional[list]:
     this builder without one has no decision to report, and inventing a
     step for it would put a fabricated skip in the ledger the audit
     reconciles against completions and telemetry.
+
+    The ledger is authoritative only on a manifest whose status is
+    "complete". Manifests materialize at every step, so a running one may
+    carry a partial ledger — an abandoned run publishes whatever it had
+    reached, with availability true — and it also lags one invocation,
+    because the router records its skips after telemetry has already
+    logged that step. Only on a complete manifest do recorded completions
+    plus recorded skips account for every step in the contract.
     """
     state = read_json_file(output_dir, "pipeline-state.json")
+    # The explicit key check is behaviorally redundant with the isinstance
+    # gate below (an absent key reads as None, which is not a list) and is
+    # kept as intent: absence and malformation are different facts that
+    # happen to share one outcome, so pinning them separately keeps a
+    # later "treat garbage as zero" edit from silently promoting a
+    # pre-recording run to a measured zero.
     if state is None or "skipped_steps" not in state:
         return None
     skipped = state.get("skipped_steps")
