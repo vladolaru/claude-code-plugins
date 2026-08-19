@@ -1385,6 +1385,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f"Output directory: {od}")
     actions.append(f"Context: <one-line summary of PR scope, verdict, and finding count>")
     actions.append(f"Return STAND, REVISE, or ESCALATE with findings written to {od}/decision-critic-findings.md.")
+    actions.append(
+        f"On REVISE, also record every finding-level adjustment in "
+        f"{od}/decision-critic-adjustments.json, per your agent instructions — "
+        f"a recommendation that exists only as prose cannot reach the "
+        f"machine-readable ledger."
+    )
     actions.append("```")
     actions.append("")
     actions.append("**Wait for the critic to finish — do not run in background.**")
@@ -1393,9 +1399,32 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("")
     actions.append("**STAND** — No changes needed. Proceed to writing verdict files.")
     actions.append("")
-    actions.append(f"**REVISE** — 1) Read critic's recommendations → 2) Spot-check claims "
-                   f"with `git grep`/`Read` → 3) Edit `{od}/review-report.md` to fix verified "
-                   f"issues → 4) Write verdict files.")
+    actions.append(
+        "**REVISE** — the machine-readable ledger updates first, the prose second:"
+    )
+    actions.append(
+        f"1) Read the critic's recommendations AND "
+        f"`{od}/decision-critic-adjustments.json`."
+    )
+    actions.append(
+        f"2) Spot-check the claims with `git grep`/`Read`. Mark any adjustment "
+        f'the spot-check refutes with `"rejected": true` plus a '
+        f"`rejection_reason` — a refuted decision stays visible as rejected, "
+        f"it is not deleted."
+    )
+    actions.append(
+        f"3) Carry the surviving adjustments into `{od}/review-findings.json`:"
+    )
+    actions.append("```bash")
+    actions.append(
+        f'python3 {SCRIPTS_DIR}/critic_adjustments.py --output-dir "{od}"'
+    )
+    actions.append("```")
+    actions.append(
+        f"4) Edit `{od}/review-report.md` so it matches the updated findings — "
+        f"counts, severity table, and finding list must agree with the JSON."
+    )
+    actions.append("5) Write verdict files.")
     actions.append("")
     actions.append("**ESCALATE** — Override review verdict to **COMMENT** regardless of report, "
                    "then write verdict files.")

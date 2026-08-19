@@ -1512,6 +1512,23 @@ class TestStep9ReviewReport:
 
 
 class TestStep10DecisionCritic:
+    @staticmethod
+    def _revise_section(guidance):
+        """The REVISE block: from the `**REVISE**` line up to `**ESCALATE**`."""
+        lines = "\n".join(guidance["actions"]).split("\n")
+        collected = []
+        in_revise = False
+        for line in lines:
+            if "REVISE" in line and "**" in line:
+                in_revise = True
+                collected.append(line)
+            elif "ESCALATE" in line and "**" in line:
+                in_revise = False
+            elif in_revise:
+                collected.append(line)
+        assert collected, "no REVISE block found in the step-10 briefing"
+        return "\n".join(collected)
+
     def test_dispatches_decision_reviewer(self, mod, tmp_path):
         state = {"completed_steps": []}
         ctx = {}
@@ -1598,6 +1615,62 @@ class TestStep10DecisionCritic:
             "REVISE instructions must use a concrete action verb (edit/update/fix/correct/reframe)"
         )
 
+    def test_revise_routes_through_the_adjustments_ledger(self, mod, tmp_path):
+        """REVISE must apply the critic's adjustments, not only edit prose.
+
+        The load-bearing half of the flow is the `critic_adjustments.py`
+        invocation: without it the critic's finding-level decisions reach
+        the human report and never the machine-readable ledger that bot
+        mode, baselines, and metrics consume.
+        """
+        state = {"completed_steps": []}
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
+        revise_text = self._revise_section(g)
+
+        assert "decision-critic-adjustments.json" in revise_text, (
+            "REVISE must tell the orchestrator to read the adjustments file"
+        )
+        assert "critic_adjustments.py" in revise_text, (
+            "REVISE must invoke the module that carries adjustments into "
+            "review-findings.json"
+        )
+        assert "--output-dir" in revise_text, (
+            "the apply command must be runnable as written"
+        )
+        assert "rejected" in revise_text, (
+            "a refuted adjustment must be marked rejected, not deleted"
+        )
+
+    def test_revise_updates_the_ledger_before_the_report(self, mod, tmp_path):
+        """Ordering is the contract: JSON first, then prose that matches it."""
+        state = {"completed_steps": []}
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
+        revise_text = self._revise_section(g)
+
+        read_adjustments = revise_text.index("decision-critic-adjustments.json")
+        apply_adjustments = revise_text.index("critic_adjustments.py")
+        edit_report = revise_text.index("review-report.md")
+
+        assert read_adjustments < apply_adjustments < edit_report, (
+            "REVISE must read the adjustments, apply them to the findings "
+            "JSON, and only then edit the report to match — a report edited "
+            "first would describe a ledger the critic never reached"
+        )
+
+    def test_critic_dispatch_prompt_requires_the_adjustments_file(
+        self, mod, tmp_path
+    ):
+        """The critic itself must be told to write the machine-readable form."""
+        state = {"completed_steps": []}
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+        prompt = text.split("Use this dispatch prompt:", 1)[1]
+        prompt = prompt.split("Act on the critic's verdict:", 1)[0]
+
+        assert "decision-critic-adjustments.json" in prompt, (
+            "the dispatch prompt must ask the critic for the adjustments file"
+        )
+
     def test_stand_instructs_no_changes(self, mod, tmp_path):
         """STAND verdict instructions must convey that no edits are needed."""
         state = {"completed_steps": []}
@@ -1655,9 +1728,14 @@ class TestStep10DecisionCritic:
         # Dispatch prompt should use critic-context.md
         assert "critic-context.md" in text
         # Should NOT reference review-findings.json in the dispatch prompt
-        # (it's consumed during the build step, not passed to the critic)
+        # (it's consumed during the build step, not passed to the critic).
+        # The slice ends where the prompt ends: the post-dispatch REVISE
+        # actions legitimately name the findings JSON the orchestrator
+        # patches, and that text never reaches the critic.
         dispatch_start = text.index("dispatch prompt")
-        dispatch_section = text[dispatch_start:]
+        dispatch_section = text[dispatch_start:].split(
+            "Act on the critic's verdict:", 1
+        )[0]
         assert "review-findings.json" not in dispatch_section
 
     def test_normal_flow_includes_report_path_in_dispatch(self, mod, tmp_path):

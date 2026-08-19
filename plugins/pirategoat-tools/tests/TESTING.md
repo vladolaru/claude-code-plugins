@@ -160,6 +160,19 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — agent-findin
 | `TestExplicitClaimsCoverage` | 18 | `aggregate_inline_coverage()` reads a reviewer's explicit `deferred_reviewed` claims instead of inferring review from silence; unreliable claims fail closed to claiming nothing, while key-less legacy output keeps complement semantics |
 | `TestAutofilledUnreviewedAttribution` | 6 | `meta.unreviewed_autofilled` paths surface as `files_autofilled_unreviewed`, separate from the reviewer's own `files_declared_unreviewed` — the system's backfill is never published as the reviewer's judgment |
 
+###Critic Adjustments Tests (`review/test_critic_adjustments.py`)
+
+Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json` (36 collected tests across 6 classes). The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
+
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestApplyAdjustments` | 9 | The happy paths and the loud failures: `promote`, `add`, and `remove` land with `critic_adjustment` provenance and a summary recounted from the resulting population; a missing adjustments file is a no-op, `rejected` entries are skipped, and a second run is idempotent; an unknown action, an unknown target id, or a non-adjustable field fails the whole call with nothing written |
+| `TestCrashSafety` | 3 | Application recorded on both sides — `adjustment_id` allocation before the findings write, and the `applied_critic_adjustments` record — so a crash between the two writes converges without double-applying; duplicate `adjustment_id`s are rejected (an id identifies which decisions a ledger already contains), and no temp file survives either a success or a rejection |
+| `TestBatchCoherence` | 9 | All-or-nothing batch validation with nothing written: duplicate targets, an entry targeting a finding an earlier entry removes, an entry with no usable id, an unaddressable finding, an `add` that assigns its own id (both spellings), a pre-existing severity outside the vocabulary, and a findings file that is not a JSON object |
+| `TestScopeLinePairing` | 9 | `scope`/`line` stay the pair `schemas/review-output.ts` declares and `output.py`'s renderer branches on, and patched lines keep the builder's positive 1-indexed invariant |
+| `TestCLI` | 3 | The process contract the step-10 briefing invokes: exit status plus the stdout/stderr channel split |
+| `TestStepElevenAppliesAdjustments` | 3 | Step 11 applies pending adjustments before the verdict sync, and an unapplicable batch degrades the run instead of crashing finalize |
+
 ### Shared Graders (`helpers/graders.py`)
 
 Reusable grading functions for review output files. Used by both `grading/test_graders.py` (validates the graders themselves) and `grading/eval_agent_compliance.py` (grades actual agent output).

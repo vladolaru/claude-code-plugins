@@ -707,11 +707,11 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     degradation_notes = []
 
     # Carry any pending critic adjustments into the findings ledger before
-    # the verdict sync. This is currently the only caller, so it is where
-    # every run converges — nothing yet instructs the orchestrator to
-    # apply them mid-run, and bot mode follows no briefing at all. Once
-    # the step-10 briefing does instruct it, this becomes a defensive
-    # re-run that idempotence makes free.
+    # the verdict sync. The step-10 REVISE briefing instructs the
+    # orchestrator to run the same apply mid-run, so this call is the
+    # defensive re-run: bot mode follows no briefing at all, and an
+    # interactive run can still stop short of step 10's instructions.
+    # Idempotence makes the re-run free for a run that already applied.
     # Ordering note: nothing re-runs the reconciliator after this point —
     # compute_next_step only routes forward (candidates are `s >
     # current_step`), so a completed step 8 is never re-entered — and the
