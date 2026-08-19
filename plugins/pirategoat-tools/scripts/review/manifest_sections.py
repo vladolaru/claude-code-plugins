@@ -45,6 +45,9 @@ _MAX_DEPENDENCY_REFRESH_COMMAND_CHARS = 500
 _REVIEWER_MARKDOWN_STATUSES = frozenset({
     "not_run", "complete", "partial", "failed",
 })
+_WORKTREE_HYGIENE_STATUSES = frozenset({
+    "clean", "changed_during_review", "unknown",
+})
 
 
 def read_json_file(output_dir: str, name: str) -> Optional[dict]:
@@ -548,4 +551,45 @@ def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
         "written": written,
         "expected": expected,
         "status": status,
+    }
+
+
+def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
+    """Project the step-11 worktree-hygiene artifact into the manifest.
+
+    None means the run never measured hygiene — the artifact is absent or
+    unreadable, as on an older run or one whose step 11 never reached the
+    check. That is a different fact from a measured result whose status is
+    itself "unknown" (the check ran but had no verified baseline to compare
+    against), which projects as a section like any other outcome.
+
+    The entry lists are the raw porcelain lines the check collected, so
+    they are filtered to strings and every field falls back to the
+    artifact's own absent-measurement values rather than to a fabricated
+    one: an unrecognizable status reads as "unknown", never as "clean".
+    """
+    data = read_json_file(output_dir, "worktree-hygiene.json")
+    if data is None:
+        return None
+
+    def entries(key: str) -> List[str]:
+        value = data.get(key)
+        if not isinstance(value, list):
+            return []
+        return [entry for entry in value if isinstance(entry, str)]
+
+    status = data.get("status")
+    captured_at = data.get("baseline_captured_at")
+    return {
+        "status": (
+            status
+            if isinstance(status, str) and status in _WORKTREE_HYGIENE_STATUSES
+            else "unknown"
+        ),
+        "new_files": entries("new_files"),
+        "changed_files": entries("changed_files"),
+        "probe_residue_removed": entries("probe_residue_removed"),
+        "baseline_captured_at": (
+            captured_at if isinstance(captured_at, str) else None
+        ),
     }

@@ -841,6 +841,12 @@ class ReviewTelemetry:
         manifest["reviewer_markdown"] = (
             manifest_sections.build_reviewer_markdown_manifest(self.output_dir)
         )
+        manifest["worktree_hygiene"] = (
+            manifest_sections.build_worktree_hygiene_manifest(self.output_dir)
+        )
+        manifest["availability"]["worktree_hygiene"] = (
+            manifest["worktree_hygiene"] is not None
+        )
         if self._event_parse_gaps:
             manifest["event_parse_gaps"] = self._event_parse_gaps
         return manifest

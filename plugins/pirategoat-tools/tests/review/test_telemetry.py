@@ -485,6 +485,7 @@ class TestRunManifest:
             "pipeline": True,
             "transcript": False,
             "coverage": False,
+            "worktree_hygiene": False,
         }
         assert manifest["coverage"] is None
 
@@ -3326,3 +3327,129 @@ class TestDependencyRefreshManifest:
         section = manifest["dependency_refresh"]
         assert section["requested"] is True
         assert section["reported"] is False
+
+
+class TestWorktreeHygieneManifest:
+    """The manifest records the step-11 worktree-hygiene measurement."""
+
+    def _telemetry(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
+        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
+                run_id="run-1")
+        return t, out_dir
+
+    def test_absent_artifact_yields_none(self, mod, tmp_path):
+        build = mod.manifest_sections.build_worktree_hygiene_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_artifact_projected_into_manifest(self, mod, tmp_path):
+        (tmp_path / "worktree-hygiene.json").write_text(json.dumps({
+            "schema": 1,
+            "status": "clean",
+            "new_files": [],
+            "changed_files": [],
+            "probe_residue_removed": ["zz_pirategoat-probe.go"],
+            "baseline_captured_at": "2026-08-19T10:00:00+00:00",
+        }))
+
+        section = mod.manifest_sections.build_worktree_hygiene_manifest(
+            str(tmp_path)
+        )
+
+        assert section["status"] == "clean"
+        assert section["probe_residue_removed"] == ["zz_pirategoat-probe.go"]
+        assert section["baseline_captured_at"] == "2026-08-19T10:00:00+00:00"
+
+    def test_malformed_artifact_yields_none(self, mod, tmp_path):
+        (tmp_path / "worktree-hygiene.json").write_text("[]")
+        build = mod.manifest_sections.build_worktree_hygiene_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_missing_fields_project_safely(self, mod, tmp_path):
+        (tmp_path / "worktree-hygiene.json").write_text(json.dumps(
+            {"schema": 1}
+        ))
+
+        section = mod.manifest_sections.build_worktree_hygiene_manifest(
+            str(tmp_path)
+        )
+
+        assert section["status"] == "unknown"
+        assert section["new_files"] == []
+        assert section["changed_files"] == []
+        assert section["probe_residue_removed"] == []
+        assert section["baseline_captured_at"] is None
+
+    def test_non_string_entries_are_dropped(self, mod, tmp_path):
+        (tmp_path / "worktree-hygiene.json").write_text(json.dumps({
+            "schema": 1,
+            "status": 7,
+            "new_files": ["?? a.txt", 3, None],
+            "changed_files": " M b.txt",
+            "probe_residue_removed": [{"path": "x"}],
+            "baseline_captured_at": 1234,
+        }))
+
+        section = mod.manifest_sections.build_worktree_hygiene_manifest(
+            str(tmp_path)
+        )
+
+        assert section["status"] == "unknown"
+        assert section["new_files"] == ["?? a.txt"]
+        assert section["changed_files"] == []
+        assert section["probe_residue_removed"] == []
+        assert section["baseline_captured_at"] is None
+
+    def test_measured_unknown_is_not_absent(self, mod, tmp_path):
+        """A measured "unknown" is a section; only an absent artifact is None."""
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "worktree-hygiene.json").write_text(json.dumps({
+            "schema": 1,
+            "status": "unknown",
+            "new_files": [],
+            "changed_files": [],
+            "probe_residue_removed": [],
+            "baseline_captured_at": None,
+        }))
+
+        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+        manifest = _read_manifest(t)
+
+        assert manifest["worktree_hygiene"]["status"] == "unknown"
+        assert manifest["availability"]["worktree_hygiene"] is True
+
+    def test_manifest_wires_the_section_and_availability_flag(
+        self, mod, tmp_path
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "worktree-hygiene.json").write_text(json.dumps({
+            "schema": 1,
+            "status": "changed_during_review",
+            "new_files": ["?? notes.md"],
+            "changed_files": [" M src/app.py"],
+            "probe_residue_removed": ["zz_pirategoat-probe.go"],
+            "baseline_captured_at": "2026-08-19T10:00:00+00:00",
+        }))
+
+        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+        manifest = _read_manifest(t)
+
+        assert manifest["worktree_hygiene"] == {
+            "status": "changed_during_review",
+            "new_files": ["?? notes.md"],
+            "changed_files": [" M src/app.py"],
+            "probe_residue_removed": ["zz_pirategoat-probe.go"],
+            "baseline_captured_at": "2026-08-19T10:00:00+00:00",
+        }
+        assert manifest["availability"]["worktree_hygiene"] is True
+
+    def test_absent_artifact_is_recorded_as_unavailable(self, mod, tmp_path):
+        t, _out_dir = self._telemetry(mod, tmp_path)
+
+        manifest = _read_manifest(t)
+
+        assert manifest["worktree_hygiene"] is None
+        assert manifest["availability"]["worktree_hygiene"] is False

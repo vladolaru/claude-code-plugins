@@ -1028,8 +1028,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         )
     # "unknown" is silent by construction now: with no verified baseline
     # nothing was swept and nothing was compared, so there is no outcome to
-    # report — only the absence of one, which `worktree_hygiene: null` and
-    # the hygiene artifact already state.
+    # report — only the absence of one, which `worktree_hygiene: null` here,
+    # the hygiene artifact, and the run manifest's `worktree_hygiene` section
+    # already state.
 
     if not verdict_data:
         degradation_notes.append("review-verdict.json not found")
