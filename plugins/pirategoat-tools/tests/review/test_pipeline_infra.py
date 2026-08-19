@@ -560,6 +560,23 @@ class TestCLIIntegration:
         assert (tmp_path / "run-config.json").is_file()
         assert (tmp_path / ".branch-review-baseline.json").is_file()
 
+    def test_step_1_clears_worktree_hygiene_artifacts(self, tmp_path):
+        """Hygiene artifacts are per-run measurements, not run-dir state.
+
+        A surviving `.worktree-baseline.json` would let a run whose own
+        capture failed compare against a previous run's snapshot and
+        publish it as this run's measurement. It also has to be listed by
+        exact name: glob patterns never match a leading dot.
+        """
+        (tmp_path / ".worktree-baseline.json").write_text(
+            '{"schema": 1, "repo_root": "/stale", "entries": []}'
+        )
+        (tmp_path / "worktree-hygiene.json").write_text('{"status": "clean"}')
+        self._run("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert not (tmp_path / ".worktree-baseline.json").exists()
+        assert not (tmp_path / "worktree-hygiene.json").exists()
+
     def test_step_1_clears_per_agent_and_reconciliation_artifacts(self, tmp_path):
         """Agent sidecars, markers, and reconciliation context are per-run artifacts.
 

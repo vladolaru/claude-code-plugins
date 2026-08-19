@@ -228,6 +228,15 @@ _STALE_ARTIFACTS = [
     "*-scoped-diff.patch",
     "dependency-refresh.json",
     "dependency-refresh-verification.json",
+    # Listed by exact name, not swept by a glob: `glob` never matches a
+    # leading dot, so a `*.json` pattern would silently skip the baseline
+    # (same reason `.telemetry-log-path` is spelled out above). A stale
+    # baseline surviving into the next run is what would let a failed
+    # capture read as a successful one — and, before the repo-identity
+    # gate, could have authorized a sweep in a repo this run never
+    # measured.
+    ".worktree-baseline.json",
+    "worktree-hygiene.json",
 ]
 
 # Files to preserve across runs

@@ -3,7 +3,9 @@
 The reviewed repo is the user's LIVE working tree. The pipeline snapshots
 git status at step 3 and, at step 11, sweeps only its own probe-marker
 residue and reports everything else without blame. A missing baseline
-reads 'unknown', never 'clean'.
+reads 'unknown', never 'clean' — and, since the sweep is gated on a
+baseline that names the repo it measured, an unverified run deletes
+nothing at all.
 """
 
 import json
@@ -30,20 +32,25 @@ from review.orchestration import (
 @pytest.fixture
 def git_repo(tmp_path, monkeypatch):
     """A throwaway git repo as CWD, with a separate output dir."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    (repo / "tracked.txt").write_text("hello")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-qm", "init"],
-        cwd=repo, check=True,
-    )
+    repo = _init_repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     out = tmp_path / "out"
     out.mkdir()
     return repo, out
+
+
+def _init_repo(path):
+    """A git repo with one commit at `path`."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    (path / "tracked.txt").write_text("hello")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        cwd=path, check=True,
+    )
+    return path
 
 
 class TestBaselineCapture:
@@ -60,6 +67,13 @@ class TestBaselineCapture:
         _capture_worktree_baseline(str(out))
         data = json.loads((out / ".worktree-baseline.json").read_text())
         assert data["entries"] == []
+
+    def test_baseline_records_the_repo_it_measured(self, git_repo):
+        """Identity, not just content: the sweep will check this later."""
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        data = json.loads((out / ".worktree-baseline.json").read_text())
+        assert data["repo_root"] == os.path.realpath(str(repo))
 
     def test_capture_failure_writes_nothing(self, git_repo, monkeypatch):
         repo, out = git_repo
@@ -142,6 +156,117 @@ class TestHygieneCheck:
         assert result["probe_residue_removed"] == [f"newpkg/{probe.name}"]
         assert result["status"] == "clean"
 
+    def test_baseline_from_another_repo_never_sweeps(
+        self, git_repo, tmp_path, monkeypatch
+    ):
+        """The delete is bound to the repo the baseline actually measured.
+
+        A run directory reused across clones — or a process whose cwd moved
+        — would otherwise let a baseline taken in one repo authorize
+        deletions in another, and publish the result as `clean`.
+        """
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        foreign = _init_repo(tmp_path / "foreign")
+        victim = foreign / f"notes_{PROBE_MARKER}.md"
+        victim.write_text("a marker-named file in a repo we never measured")
+        monkeypatch.chdir(foreign)
+
+        result = _check_worktree_hygiene(str(out))
+
+        assert victim.exists(), "no delete outside the measured repo"
+        assert result["probe_residue_removed"] == []
+        assert result["status"] == "unknown", "an unverified pair is not clean"
+
+    def test_baseline_without_repo_root_never_sweeps(self, git_repo):
+        """A baseline that cannot prove its origin authorizes nothing."""
+        repo, out = git_repo
+        (out / ".worktree-baseline.json").write_text(
+            json.dumps({"schema": 1, "entries": []})
+        )
+        probe = repo / f"zz_{PROBE_MARKER}_test.go"
+        probe.write_text("package main")
+
+        result = _check_worktree_hygiene(str(out))
+
+        assert probe.exists()
+        assert result["status"] == "unknown"
+
+    def test_sweep_works_from_a_subdirectory_of_the_repo(
+        self, git_repo, monkeypatch
+    ):
+        """Porcelain paths are repo-relative wherever git is invoked.
+
+        Resolved against the cwd instead of the verified root, every path
+        below a subdirectory cwd fails `isfile` and the sweep silently
+        becomes a no-op that still reports `clean`.
+        """
+        repo, out = git_repo
+        sub = repo / "pkg"
+        sub.mkdir()
+        (sub / "keep.txt").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-qm", "sub"],
+            cwd=repo, check=True,
+        )
+        monkeypatch.chdir(sub)
+        _capture_worktree_baseline(str(out))
+        probe = repo / f"zz_{PROBE_MARKER}_test.go"
+        probe.write_text("package main")
+
+        result = _check_worktree_hygiene(str(out))
+
+        assert not probe.exists()
+        assert result["probe_residue_removed"] == [probe.name]
+        assert result["status"] == "clean"
+
+    def test_marker_named_directory_does_not_condemn_its_contents(
+        self, git_repo
+    ):
+        """The guard matches the basename, not the whole path.
+
+        Matching the path would make one marker-named directory turn every
+        ordinary file beneath it into residue.
+        """
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        holder = repo / f"dir_{PROBE_MARKER}"
+        holder.mkdir()
+        bystander = holder / "user-notes.txt"
+        bystander.write_text("the user's notes, inside a marker-named dir")
+        probe = holder / f"zz_{PROBE_MARKER}_test.go"
+        probe.write_text("package main")
+
+        result = _check_worktree_hygiene(str(out))
+
+        assert bystander.exists(), "a non-marker file is never residue"
+        assert not probe.exists(), "the marker file beside it still goes"
+        assert result["probe_residue_removed"] == [f"dir_{PROBE_MARKER}/{probe.name}"]
+        assert any("user-notes.txt" in e for e in result["new_files"])
+        assert result["status"] == "changed_during_review"
+
+    def test_marker_named_symlink_to_directory_is_not_removed(self, git_repo):
+        """`isfile` is what keeps the unlink to regular files.
+
+        git lists a symlink as one entry; without the guard the pipeline
+        would unlink a link the user owns on the strength of its name.
+        """
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        target = repo / "real_dir"
+        target.mkdir()
+        (target / "user-work.txt").write_text("the user's work")
+        link = repo / f"link_{PROBE_MARKER}"
+        link.symlink_to(target, target_is_directory=True)
+
+        result = _check_worktree_hygiene(str(out))
+
+        assert link.is_symlink(), "a link to a directory is not residue"
+        assert (target / "user-work.txt").exists()
+        assert result["probe_residue_removed"] == []
+
     def test_tracked_marker_file_is_never_deleted(self, git_repo):
         """Only untracked marker files can be pipeline residue.
 
@@ -187,7 +312,12 @@ def _seed_step_11(out):
 
 
 class TestStepElevenHygieneNotes:
-    """Finalize is where the run reports what it left behind."""
+    """Finalize is where the run reports what it left behind.
+
+    Two channels, deliberately separate: `worktree_hygiene` on the pipeline
+    result carries the measurement, and `status` degrades only for what the
+    pipeline itself did wrong.
+    """
 
     def _step_11(self, out):
         return _orchestrate_step_11("pr", {}, {}, {}, str(out))
@@ -201,8 +331,18 @@ class TestStepElevenHygieneNotes:
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
+        assert result["worktree_hygiene"] == {
+            "status": "clean", "new_files": 0,
+            "changed_files": 0, "probe_residue_removed": 0,
+        }
 
-    def test_foreign_change_is_reported_without_blame(self, git_repo):
+    def test_foreign_change_is_measured_not_blamed(self, git_repo):
+        """The requester editing their own tree is data, not a defect.
+
+        `status` is a bot contract meaning the review pipeline
+        underperformed; spending it on someone else's keystrokes would
+        teach every consumer to ignore it.
+        """
         repo, out = git_repo
         _seed_step_11(out)
         _capture_worktree_baseline(str(out))
@@ -210,9 +350,12 @@ class TestStepElevenHygieneNotes:
         user_file.write_text("the user's work")
         self._step_11(out)
         result = json.loads((out / "pipeline-result.json").read_text())
-        assert any("worktree changed during review" in n
-                   for n in result["degradation_notes"])
-        assert result["status"] == "degraded"
+        assert result["degradation_notes"] == []
+        assert result["status"] == "success"
+        assert result["worktree_hygiene"] == {
+            "status": "changed_during_review", "new_files": 1,
+            "changed_files": 0, "probe_residue_removed": 0,
+        }
         assert user_file.exists()
 
     def test_probe_residue_alone_degrades_the_run(self, git_repo):
@@ -232,14 +375,18 @@ class TestStepElevenHygieneNotes:
         assert any("probe residue swept" in n
                    for n in result["degradation_notes"])
         assert result["status"] == "degraded"
+        assert result["worktree_hygiene"] == {
+            "status": "clean", "new_files": 0,
+            "changed_files": 0, "probe_residue_removed": 1,
+        }
         assert not probe.exists()
 
     def test_non_git_cwd_adds_no_hygiene_notes(self, git_repo, monkeypatch,
                                                tmp_path):
-        """"unknown" is the normal reading for a non-repo or a pre-C1 run.
+        """"unknown" is inert: nothing swept, nothing compared.
 
-        Noting it would mark every such run degraded for the absence of a
-        measurement that was never taken.
+        The pipeline result carries `null` rather than a zeroed summary, so
+        an unmeasured run can never be read as a measured-clean one.
         """
         repo, out = git_repo
         _seed_step_11(out)
@@ -250,5 +397,6 @@ class TestStepElevenHygieneNotes:
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
+        assert result["worktree_hygiene"] is None
         hygiene = json.loads((out / "worktree-hygiene.json").read_text())
         assert hygiene["status"] == "unknown"

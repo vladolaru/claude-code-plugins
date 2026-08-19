@@ -62,13 +62,15 @@ except ImportError:
 # the reviewed repo is the user's live tree and may hold uncommitted work).
 PROBE_MARKER = "pirategoat-probe"
 
-# One spelling of the status command for both the step-3 snapshot and the
+# One spelling of the status arguments for both the step-3 snapshot and the
 # step-11 comparison, so the two can never drift into reporting a format
 # difference as a worktree change. `--untracked-files=all` is load-bearing:
 # plain porcelain collapses an untracked directory into a single "?? dir/"
 # entry without recursing, which would both coarsen the comparison and hide
-# a probe file created inside a new directory from the sweep.
-_GIT_STATUS_CMD = ["git", "status", "--porcelain", "--untracked-files=all"]
+# a probe file created inside a new directory from the sweep. Porcelain
+# reports every path relative to the repository root regardless of where it
+# is invoked, which is why both halves pin the root explicitly below.
+_GIT_STATUS_ARGS = ["status", "--porcelain", "--untracked-files=all"]
 
 # ---------------------------------------------------------------------------
 # Dispatch Plan Persistence
@@ -208,49 +210,108 @@ def _orchestrate_step_2(mode, config, state, context, output_dir):
 # Worktree Hygiene
 # ---------------------------------------------------------------------------
 
-def _capture_worktree_baseline(output_dir):
-    """Snapshot the reviewed worktree's git status for end-of-run hygiene.
+def _resolve_repo_root():
+    """Absolute, symlink-resolved root of the repo containing CWD, or None.
 
-    Any failure yields no baseline file, which step 11 reports as hygiene
-    "unknown" — never "clean" (zero != unknown).
+    Repo identity is what makes the step-11 sweep safe: a baseline records
+    the repo it measured and the sweep refuses to delete anywhere else.
     """
     try:
         proc = subprocess.run(
-            _GIT_STATUS_CMD,
+            ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=30,
         )
-        if proc.returncode != 0:
-            return
-        payload = {
-            "schema": 1,
-            "captured_at": datetime.now(timezone.utc).isoformat(),
-            "entries": [
-                line for line in proc.stdout.splitlines() if line.strip()
-            ],
-        }
-        with open(
-            os.path.join(output_dir, ".worktree-baseline.json"), "w",
-            encoding="utf-8",
-        ) as f:
-            json.dump(payload, f, indent=2)
     except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    root = proc.stdout.strip()
+    if not root:
+        return None
+    try:
+        return os.path.realpath(root)
+    except OSError:
+        return None
+
+
+def _git_status_lines(repo_root):
+    """Porcelain status of `repo_root`, or None when git could not answer.
+
+    Pinned to an explicit root with `git -C`, the same way
+    dependency_refresh.py's `_tracked_worktree_status()` pins its own probe,
+    so the measurement never silently describes whatever repo the process
+    happened to be standing in.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", repo_root] + _GIT_STATUS_ARGS,
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _capture_worktree_baseline(output_dir):
+    """Snapshot the reviewed worktree's git status for end-of-run hygiene.
+
+    The snapshot records the repo root it measured, because step 11 will not
+    delete anything unless the repo it is standing in then is provably the
+    same one. Any failure yields no baseline file, so the comparison has
+    nothing to read and reports hygiene "unknown" — never "clean" (zero !=
+    unknown) — and, with no verified baseline, sweeps nothing.
+
+    Limitation: `--untracked-files=all` still does not list ignored paths, so
+    a probe written inside a gitignored directory is invisible to both the
+    report and the sweep. Probes belong in non-ignored paths.
+    """
+    repo_root = _resolve_repo_root()
+    if repo_root is None:
+        return
+    entries = _git_status_lines(repo_root)
+    if entries is None:
+        return
+    payload = {
+        "schema": 1,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "repo_root": repo_root,
+        "entries": entries,
+    }
+    try:
+        critic_adjustments.atomic_write_json(
+            os.path.join(output_dir, ".worktree-baseline.json"), payload
+        )
+    except OSError:
         pass
 
 
 def _check_worktree_hygiene(output_dir):
     """Compare current git status to the step-3 baseline; sweep probe residue.
 
-    Writes and returns worktree-hygiene.json. Missing/unreadable baseline
-    or a failed status run -> "unknown", never "clean". Only UNTRACKED files
-    whose basename carries PROBE_MARKER are ever deleted: the reserved name
-    guarantees nothing user-owned can match it, and probes are new files by
-    construction, so a tracked path carrying the marker is somebody's
-    versioned work rather than residue. Everything else is reported
-    untouched because it may be the user's — "changed during review" is
-    informational, not blame. A targeted unlink is the only mutation this
-    function makes; it never resets, cleans, stashes, or unstages, because
-    the reviewed repo is the requester's live tree and may hold uncommitted
-    work. A probe someone staged is therefore reported, not deleted.
+    Writes and returns worktree-hygiene.json.
+
+    The sweep is gated on a verified baseline. The snapshot records the repo
+    root it measured; this function resolves the root it is standing in now
+    and deletes nothing unless both exist and name the same repo. No baseline
+    means no delete, ever — removing files from a repo this run never
+    measured would be acting on a filename alone, and a run directory reused
+    across repos, or a process whose CWD moved, is exactly how that happens.
+    An unverified pair reports "unknown", never "clean".
+
+    Within a verified repo, only UNTRACKED files whose BASENAME carries
+    PROBE_MARKER are deleted: the reserved name guarantees nothing
+    user-owned can match it, matching on the basename keeps a marker-named
+    *directory* from condemning the ordinary files inside it, and probes are
+    new files by construction, so a tracked path carrying the marker is
+    somebody's versioned work rather than residue. Everything else is
+    reported untouched because it may be the user's — "changed during
+    review" is informational, not blame. A targeted unlink is the only
+    mutation this function makes; it never resets, cleans, stashes, or
+    unstages, because the reviewed repo is the requester's live tree and may
+    hold uncommitted work. A probe someone staged is therefore reported, not
+    deleted.
     """
     result = {
         "schema": 1,
@@ -260,73 +321,90 @@ def _check_worktree_hygiene(output_dir):
         "probe_residue_removed": [],
     }
     baseline = None
+    baseline_root = None
     baseline_path = os.path.join(output_dir, ".worktree-baseline.json")
     if os.path.isfile(baseline_path):
         try:
             with open(baseline_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             entries = data.get("entries") if isinstance(data, dict) else None
-            if isinstance(entries, list):
+            root = data.get("repo_root") if isinstance(data, dict) else None
+            if isinstance(entries, list) and isinstance(root, str) and root:
                 baseline = {e for e in entries if isinstance(e, str)}
+                baseline_root = root
         except (OSError, json.JSONDecodeError):
             baseline = None
-    try:
-        proc = subprocess.run(
-            _GIT_STATUS_CMD,
-            capture_output=True, text=True, timeout=30,
-        )
-        current = (
-            [line for line in proc.stdout.splitlines() if line.strip()]
-            if proc.returncode == 0 else None
-        )
-    except (OSError, subprocess.SubprocessError):
-        current = None
+            baseline_root = None
 
-    if current is not None:
-        # Sweep probe residue first — a probe left behind by a dead agent is
-        # pipeline-owned by construction of the reserved name, so removing it
-        # also keeps it out of the comparison below, where it would otherwise
-        # read as a foreign change. Porcelain format: two status chars, a
-        # space, then the path; `--untracked-files=all` lists every untracked
-        # file individually, so a probe inside a directory that did not exist
-        # at baseline is visible here instead of being hidden behind a single
-        # "?? newdir/" entry.
-        remaining = []
-        for line in current:
-            path = line[3:].strip()
-            if (
-                line[:2] == "??"
-                and PROBE_MARKER in os.path.basename(path)
-                and os.path.isfile(path)
-            ):
-                try:
-                    os.remove(path)
-                except OSError:
-                    # Residue we could not remove is still residue: report it
-                    # as an ordinary entry rather than claiming a sweep.
-                    remaining.append(line)
-                else:
-                    result["probe_residue_removed"].append(path)
-                continue
-            remaining.append(line)
-        current = remaining
+    # The identity gate. Everything below — the sweep included — happens
+    # only inside the repo the baseline actually measured.
+    current_root = _resolve_repo_root()
+    verified_root = (
+        current_root
+        if current_root is not None and current_root == baseline_root
+        else None
+    )
 
-    if current is not None and baseline is not None:
-        appeared = sorted(set(current) - baseline)
-        result["new_files"] = [e for e in appeared if e.startswith("??")]
-        result["changed_files"] = [e for e in appeared if not e.startswith("??")]
-        result["status"] = "changed_during_review" if appeared else "clean"
-    # Either half missing leaves the status at its "unknown" default: with
-    # nothing to compare against, reporting "clean" would publish an absent
-    # measurement as a measured zero.
+    if verified_root is not None:
+        current = _git_status_lines(verified_root)
+        if current is not None:
+            # Sweep probe residue first — a probe left behind by a dead agent
+            # is pipeline-owned by construction of the reserved name, so
+            # removing it also keeps it out of the comparison below, where it
+            # would otherwise read as a foreign change. Porcelain format: two
+            # status chars, a space, then the path, reported relative to the
+            # repo root; `--untracked-files=all` lists every untracked file
+            # individually, so a probe inside a directory that did not exist
+            # at baseline is visible here instead of being hidden behind a
+            # single "?? newdir/" entry. The path is used exactly as git
+            # printed it: git quotes any path that could carry leading or
+            # trailing whitespace, so stripping cannot rescue a path but can
+            # remap one — it would resolve "probe.go " to a different file.
+            remaining = []
+            for line in current:
+                path = line[3:]
+                abs_path = os.path.join(verified_root, path)
+                if (
+                    line[:2] == "??"
+                    and PROBE_MARKER in os.path.basename(path)
+                    # Defense in depth, and the one thing that stops a
+                    # marker-named symlink to a directory from being
+                    # unlinked: only regular files (and links to them) are
+                    # residue.
+                    and os.path.isfile(abs_path)
+                ):
+                    try:
+                        os.remove(abs_path)
+                    except OSError:
+                        # Residue we could not remove is still residue:
+                        # report it as an ordinary entry rather than
+                        # claiming a sweep.
+                        remaining.append(line)
+                    else:
+                        result["probe_residue_removed"].append(path)
+                    continue
+                remaining.append(line)
+            current = remaining
+
+            appeared = sorted(set(current) - baseline)
+            result["new_files"] = [e for e in appeared if e.startswith("??")]
+            result["changed_files"] = [
+                e for e in appeared if not e.startswith("??")
+            ]
+            result["status"] = (
+                "changed_during_review" if appeared else "clean"
+            )
+    # An unverified pair, or a status run that failed, leaves the status at
+    # its "unknown" default: with nothing to compare against, reporting
+    # "clean" would publish an absent measurement as a measured zero.
 
     try:
         critic_adjustments.atomic_write_json(
             os.path.join(output_dir, "worktree-hygiene.json"), result
         )
     except OSError:
-        # The in-process result still reaches step 11's degradation notes,
-        # so an unwritable artifact costs the record, not the measurement.
+        # The in-process result still reaches step 11's pipeline result, so
+        # an unwritable artifact costs the record, not the measurement.
         pass
     return result
 
@@ -906,26 +984,36 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # created it is pipeline-owned litter; everything else is reported and
     # left alone, since it may be the requester's own work.
     hygiene = _check_worktree_hygiene(output_dir)
-    if hygiene.get("status") == "changed_during_review":
-        changed = len(hygiene.get("new_files", [])) + len(
-            hygiene.get("changed_files", [])
-        )
-        degradation_notes.append(
-            f"worktree changed during review: {changed} file(s), "
-            "not attributed — see worktree-hygiene.json"
-        )
+    # Measured hygiene rides the pipeline result as data; an unmeasured run
+    # carries null rather than a zeroed summary, so a consumer can never
+    # read "nothing was measured" as "nothing happened".
+    hygiene_summary = None
+    if hygiene.get("status") != "unknown":
+        hygiene_summary = {
+            "status": hygiene.get("status"),
+            "new_files": len(hygiene.get("new_files", [])),
+            "changed_files": len(hygiene.get("changed_files", [])),
+            "probe_residue_removed": len(
+                hygiene.get("probe_residue_removed", [])
+            ),
+        }
+    # Only the sweep degrades the run. A requester editing their own tree
+    # during a review is routine, and `status` is a bot contract that has to
+    # keep meaning "the review pipeline underperformed" — spending it on
+    # someone else's ordinary keystrokes would teach every consumer to
+    # ignore it. Swept residue is different in kind: it is a pipeline
+    # participant breaking the rule that a probe is created, run, and
+    # deleted by the same command.
     if hygiene.get("probe_residue_removed"):
         degradation_notes.append(
             f"probe residue swept at finalize: "
             f"{len(hygiene['probe_residue_removed'])} file(s) — a probe "
             "should be deleted in the same command that created it"
         )
-    # "unknown" deliberately gets no note. A non-git checkout, or a run
-    # directory from before the baseline existed, is a normal reading and
-    # not a degradation of this review; noting it would mark every legacy
-    # run degraded for the absence of a measurement never taken. The
-    # unknown state still reaches the reader through the hygiene artifact
-    # and its manifest section.
+    # "unknown" is silent by construction now: with no verified baseline
+    # nothing was swept and nothing was compared, so there is no outcome to
+    # report — only the absence of one, which `worktree_hygiene: null` and
+    # the hygiene artifact already state.
 
     if not verdict_data:
         degradation_notes.append("review-verdict.json not found")
@@ -978,6 +1066,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "review_baseline_saved": os.path.isfile(
             os.path.join(output_dir, ".branch-review-baseline.json")
         ),
+        "worktree_hygiene": hygiene_summary,
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
     with open(result_path, "w") as f:

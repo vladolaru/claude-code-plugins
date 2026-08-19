@@ -653,6 +653,17 @@ class TestStepElevenAppliesAdjustments:
     still converge on a findings JSON the critic reached — but only under
     REVISE, the verdict whose briefing spot-checked the entries first."""
 
+    @pytest.fixture(autouse=True)
+    def _isolated_cwd(self, tmp_path, monkeypatch):
+        """Keep finalize's worktree hygiene off the developer's own repo.
+
+        Step 11 inspects the repo it is standing in, and pytest stands in
+        the real checkout. Scoped to this class because only these tests
+        call the step directly; the CLI tests elsewhere in this file run
+        in a subprocess with their own cwd.
+        """
+        monkeypatch.chdir(tmp_path)
+
     def _step_11(self, output_dir):
         """Call the finalize step the way the pipeline facade routes it."""
         return _orchestrate_step_11("pr", {}, {}, {}, str(output_dir))
