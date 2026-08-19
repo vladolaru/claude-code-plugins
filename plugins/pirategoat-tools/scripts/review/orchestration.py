@@ -238,7 +238,97 @@ def _capture_worktree_baseline(output_dir):
 
 
 def _check_worktree_hygiene(output_dir):
-    raise NotImplementedError
+    """Compare current git status to the step-3 baseline; sweep probe residue.
+
+    Writes and returns worktree-hygiene.json. Missing/unreadable baseline
+    or a failed status run -> "unknown", never "clean". Only UNTRACKED files
+    whose basename carries PROBE_MARKER are ever deleted: the reserved name
+    guarantees nothing user-owned can match it, and probes are new files by
+    construction, so a tracked path carrying the marker is somebody's
+    versioned work rather than residue. Everything else is reported
+    untouched because it may be the user's — "changed during review" is
+    informational, not blame. A targeted unlink is the only mutation this
+    function makes; it never resets, cleans, stashes, or unstages, because
+    the reviewed repo is the requester's live tree and may hold uncommitted
+    work. A probe someone staged is therefore reported, not deleted.
+    """
+    result = {
+        "schema": 1,
+        "status": "unknown",
+        "new_files": [],
+        "changed_files": [],
+        "probe_residue_removed": [],
+    }
+    baseline = None
+    baseline_path = os.path.join(output_dir, ".worktree-baseline.json")
+    if os.path.isfile(baseline_path):
+        try:
+            with open(baseline_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = data.get("entries") if isinstance(data, dict) else None
+            if isinstance(entries, list):
+                baseline = {e for e in entries if isinstance(e, str)}
+        except (OSError, json.JSONDecodeError):
+            baseline = None
+    try:
+        proc = subprocess.run(
+            _GIT_STATUS_CMD,
+            capture_output=True, text=True, timeout=30,
+        )
+        current = (
+            [line for line in proc.stdout.splitlines() if line.strip()]
+            if proc.returncode == 0 else None
+        )
+    except (OSError, subprocess.SubprocessError):
+        current = None
+
+    if current is not None:
+        # Sweep probe residue first — a probe left behind by a dead agent is
+        # pipeline-owned by construction of the reserved name, so removing it
+        # also keeps it out of the comparison below, where it would otherwise
+        # read as a foreign change. Porcelain format: two status chars, a
+        # space, then the path; `--untracked-files=all` lists every untracked
+        # file individually, so a probe inside a directory that did not exist
+        # at baseline is visible here instead of being hidden behind a single
+        # "?? newdir/" entry.
+        remaining = []
+        for line in current:
+            path = line[3:].strip()
+            if (
+                line[:2] == "??"
+                and PROBE_MARKER in os.path.basename(path)
+                and os.path.isfile(path)
+            ):
+                try:
+                    os.remove(path)
+                except OSError:
+                    # Residue we could not remove is still residue: report it
+                    # as an ordinary entry rather than claiming a sweep.
+                    remaining.append(line)
+                else:
+                    result["probe_residue_removed"].append(path)
+                continue
+            remaining.append(line)
+        current = remaining
+
+    if current is not None and baseline is not None:
+        appeared = sorted(set(current) - baseline)
+        result["new_files"] = [e for e in appeared if e.startswith("??")]
+        result["changed_files"] = [e for e in appeared if not e.startswith("??")]
+        result["status"] = "changed_during_review" if appeared else "clean"
+    # Either half missing leaves the status at its "unknown" default: with
+    # nothing to compare against, reporting "clean" would publish an absent
+    # measurement as a measured zero.
+
+    try:
+        critic_adjustments.atomic_write_json(
+            os.path.join(output_dir, "worktree-hygiene.json"), result
+        )
+    except OSError:
+        # The in-process result still reaches step 11's degradation notes,
+        # so an unwritable artifact costs the record, not the measurement.
+        pass
+    return result
 
 
 def _orchestrate_step_3(mode, config, state, context, output_dir):
@@ -809,6 +899,33 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                         f"{critic_verdict} — not applied (adjustments are a "
                         f"REVISE-only channel)"
                     )
+
+    # Hygiene: the reviewed repo is the requester's live working tree, so
+    # finalize accounts for what the run left in it. The sweep runs here
+    # rather than nowhere because a probe that outlived the command that
+    # created it is pipeline-owned litter; everything else is reported and
+    # left alone, since it may be the requester's own work.
+    hygiene = _check_worktree_hygiene(output_dir)
+    if hygiene.get("status") == "changed_during_review":
+        changed = len(hygiene.get("new_files", [])) + len(
+            hygiene.get("changed_files", [])
+        )
+        degradation_notes.append(
+            f"worktree changed during review: {changed} file(s), "
+            "not attributed — see worktree-hygiene.json"
+        )
+    if hygiene.get("probe_residue_removed"):
+        degradation_notes.append(
+            f"probe residue swept at finalize: "
+            f"{len(hygiene['probe_residue_removed'])} file(s) — a probe "
+            "should be deleted in the same command that created it"
+        )
+    # "unknown" deliberately gets no note. A non-git checkout, or a run
+    # directory from before the baseline existed, is a normal reading and
+    # not a degradation of this review; noting it would mark every legacy
+    # run degraded for the absence of a measurement never taken. The
+    # unknown state still reaches the reader through the hygiene artifact
+    # and its manifest section.
 
     if not verdict_data:
         degradation_notes.append("review-verdict.json not found")
