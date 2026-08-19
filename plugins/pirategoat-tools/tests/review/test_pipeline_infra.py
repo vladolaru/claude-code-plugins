@@ -730,6 +730,59 @@ class TestCLIIntegration:
         assert first_state["run_id"] != second_state["run_id"]
 
 
+class TestSkippedStepRecording:
+    """Steps the router passes over are recorded in durable pipeline state."""
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_skipped_steps_recorded_with_condition(self, tmp_path):
+        """Branch mode passes over step 2 — needs_workspace_setup is PR-only."""
+        r = self._run("--step", "1", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        skipped = {s["step"]: s for s in state["skipped_steps"]}
+        assert 2 in skipped
+        assert skipped[2]["condition"] == "needs_workspace_setup"
+        assert skipped[2]["title"] == "Repo Setup"
+
+    def test_trailing_skip_recorded_at_last_active_step(self, tmp_path):
+        """Step 12 follows the last active step, so step 11 must record it."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        r = self._run("--step", "11", "--mode", "full",
+                       "--output-dir", str(tmp_path))
+        assert r.returncode == 0
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        skipped = {s["step"]: s for s in state["skipped_steps"]}
+        assert 12 in skipped
+        assert skipped[12]["condition"] == "has_workspace_state_interactive"
+        assert skipped[12]["title"] == "Cleanup"
+
+    def test_skip_records_are_not_duplicated(self, tmp_path):
+        """Re-invoking the same step records each passed-over step once."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        self._run("--step", "11", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        self._run("--step", "11", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        recorded = [entry["step"] for entry in state["skipped_steps"]]
+        assert recorded == sorted(set(recorded))
+        assert recorded.count(12) == 1
+
+    def test_active_steps_are_never_recorded_as_skipped(self, tmp_path):
+        """A step the router runs must not appear in the skip ledger."""
+        self._run("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path))
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        recorded = {entry["step"] for entry in state["skipped_steps"]}
+        assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11})
+
+
 class TestQuickModeConfig:
     """--quick CLI flag is stored in run-config.json and persists across steps."""
 

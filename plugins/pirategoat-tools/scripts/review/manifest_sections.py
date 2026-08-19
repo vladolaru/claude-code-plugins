@@ -593,3 +593,35 @@ def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
             captured_at if isinstance(captured_at, str) else None
         ),
     }
+
+
+def build_skipped_steps_manifest(output_dir: str) -> Optional[list]:
+    """Skip decisions recorded by the step router; None when unmeasured.
+
+    None (state absent/unreadable, or a pre-recording run without the
+    key) is distinct from [] — a run whose router measured zero skips.
+
+    Only records carrying a real step number survive; a run that reaches
+    this builder without one has no decision to report, and inventing a
+    step for it would put a fabricated skip in the ledger the audit
+    reconciles against completions and telemetry.
+    """
+    state = read_json_file(output_dir, "pipeline-state.json")
+    if state is None or "skipped_steps" not in state:
+        return None
+    skipped = state.get("skipped_steps")
+    if not isinstance(skipped, list):
+        return None
+    projected = []
+    for item in skipped:
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("step"), int)
+            and not isinstance(item.get("step"), bool)
+        ):
+            projected.append({
+                "step": item["step"],
+                "title": item.get("title") or "",
+                "condition": item.get("condition") or "",
+            })
+    return projected

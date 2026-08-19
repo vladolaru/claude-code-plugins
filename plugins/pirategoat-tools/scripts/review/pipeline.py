@@ -935,6 +935,33 @@ def main():
     else:
         guidance["skip_reason"] = None
 
+    # Record skip decisions where they are made — dispatch-plan symmetry:
+    # a step the router passes over must say so in durable state with its
+    # gating condition, not only in orchestrator-facing prose. Trailing
+    # skips (steps after the last active one) are recorded when next_info
+    # is None, right before finalize. A second write_state is the honest
+    # cost: routing is only knowable after get_active_steps, which runs
+    # after the completed_steps write.
+    if not blocks_progress:
+        upper = next_info["step"] if next_info else max(_STEP_MAP) + 1
+        already = {
+            entry.get("step")
+            for entry in state.get("skipped_steps", [])
+            if isinstance(entry, dict)
+        }
+        newly_skipped = []
+        for skipped_step in range(step + 1, upper):
+            if skipped_step not in active and skipped_step not in already:
+                step_def = _STEP_MAP[skipped_step]
+                newly_skipped.append({
+                    "step": skipped_step,
+                    "title": step_def["title"],
+                    "condition": step_def["condition"],
+                })
+        if newly_skipped:
+            state.setdefault("skipped_steps", []).extend(newly_skipped)
+            write_state(output_dir, state)
+
     # Telemetry: finalize at last active step
     if next_info is None and not blocks_progress and telemetry:
         try:

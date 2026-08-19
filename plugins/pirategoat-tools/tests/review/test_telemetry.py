@@ -535,6 +535,7 @@ class TestRunManifest:
             "transcript": False,
             "coverage": False,
             "worktree_hygiene": False,
+            "skipped_steps": False,
         }
         assert manifest["coverage"] is None
 
@@ -3510,3 +3511,124 @@ class TestWorktreeHygieneManifest:
 
         assert manifest["worktree_hygiene"] is None
         assert manifest["availability"]["worktree_hygiene"] is False
+
+
+class TestSkippedStepsManifest:
+    """The manifest records the step-skip decisions the router made."""
+
+    def _telemetry(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
+        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
+                run_id="run-1")
+        return t, out_dir
+
+    def test_absent_state_yields_none(self, mod, tmp_path):
+        build = mod.manifest_sections.build_skipped_steps_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_recorded_skips_projected(self, mod, tmp_path):
+        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+            "skipped_steps": [
+                {"step": 2, "title": "Repo Setup",
+                 "condition": "needs_workspace_setup"},
+            ],
+        }))
+
+        section = mod.manifest_sections.build_skipped_steps_manifest(
+            str(tmp_path)
+        )
+
+        assert section == [{"step": 2, "title": "Repo Setup",
+                            "condition": "needs_workspace_setup"}]
+
+    def test_state_without_the_key_yields_none(self, mod, tmp_path):
+        (tmp_path / "pipeline-state.json").write_text(json.dumps({}))
+        build = mod.manifest_sections.build_skipped_steps_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_empty_list_is_a_measured_zero(self, mod, tmp_path):
+        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+            "skipped_steps": [],
+        }))
+        build = mod.manifest_sections.build_skipped_steps_manifest
+        assert build(str(tmp_path)) == []
+
+    def test_malformed_state_yields_none(self, mod, tmp_path):
+        (tmp_path / "pipeline-state.json").write_text("[]")
+        build = mod.manifest_sections.build_skipped_steps_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_non_list_value_yields_none(self, mod, tmp_path):
+        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+            "skipped_steps": {"step": 2},
+        }))
+        build = mod.manifest_sections.build_skipped_steps_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_unusable_entries_are_dropped_and_fields_default(
+        self, mod, tmp_path
+    ):
+        """Only step-identified records survive; absent prose reads empty."""
+        (tmp_path / "pipeline-state.json").write_text(json.dumps({
+            "skipped_steps": [
+                {"step": 4},
+                {"step": "12", "title": "Cleanup"},
+                "step 2",
+                {"title": "Repo Setup"},
+                {"step": True, "title": "Bool Is Not A Step"},
+            ],
+        }))
+
+        section = mod.manifest_sections.build_skipped_steps_manifest(
+            str(tmp_path)
+        )
+
+        assert section == [{"step": 4, "title": "", "condition": ""}]
+
+    def test_manifest_wires_the_section_and_availability_flag(
+        self, mod, tmp_path
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "skipped_steps": [
+                {"step": 2, "title": "Repo Setup",
+                 "condition": "needs_workspace_setup"},
+                {"step": 12, "title": "Cleanup",
+                 "condition": "has_workspace_state_interactive"},
+            ],
+        }))
+
+        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+        manifest = _read_manifest(t)
+
+        assert manifest["skipped_steps"] == [
+            {"step": 2, "title": "Repo Setup",
+             "condition": "needs_workspace_setup"},
+            {"step": 12, "title": "Cleanup",
+             "condition": "has_workspace_state_interactive"},
+        ]
+        assert manifest["availability"]["skipped_steps"] is True
+
+    def test_measured_zero_skips_is_available(self, mod, tmp_path):
+        """[] is a measured result, not an absent measurement."""
+        t, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "skipped_steps": [],
+        }))
+
+        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+        manifest = _read_manifest(t)
+
+        assert manifest["skipped_steps"] == []
+        assert manifest["availability"]["skipped_steps"] is True
+
+    def test_absent_state_is_recorded_as_unavailable(self, mod, tmp_path):
+        t, _out_dir = self._telemetry(mod, tmp_path)
+
+        manifest = _read_manifest(t)
+
+        assert manifest["skipped_steps"] is None
+        assert manifest["availability"]["skipped_steps"] is False

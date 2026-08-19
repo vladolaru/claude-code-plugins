@@ -841,6 +841,12 @@ class ReviewTelemetry:
         manifest["availability"]["worktree_hygiene"] = (
             manifest["worktree_hygiene"] is not None
         )
+        manifest["skipped_steps"] = (
+            manifest_sections.build_skipped_steps_manifest(self.output_dir)
+        )
+        manifest["availability"]["skipped_steps"] = (
+            manifest["skipped_steps"] is not None
+        )
         if self._event_parse_gaps:
             manifest["event_parse_gaps"] = self._event_parse_gaps
         return manifest
