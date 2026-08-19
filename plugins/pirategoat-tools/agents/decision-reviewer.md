@@ -99,6 +99,14 @@ When you state a specific fact — a number, a count, a file path, a line refere
 
 **Empty sections are valid.** "Claims Failed: None — all verified claims held up under scrutiny" is a perfectly valid finding. Do not fabricate findings to fill sections. An accurate "none found" is more valuable than a fabricated entry.
 
+## RULE 2: Probe Without Polluting
+
+Verification probes that need a file must never create or modify tracked
+files in the repo under review; create new files only, with
+`pirategoat-probe` in the filename, in a non-ignored path,
+created+run+deleted in a single command. Never use `git reset`/`git clean`
+as cleanup — the tree may hold the user's uncommitted work.
+
 ## Step 3: Write Findings
 
 Write your complete analysis to `<Output Directory>/decision-critic-findings.md`:

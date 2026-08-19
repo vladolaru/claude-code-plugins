@@ -64,7 +64,7 @@ The script outputs structured text. Parse these key fields from the header:
 
 **On `STATUS: OK`:** The `=== DIFFS ===` section contains filtered diffs for matched files within the context budget. Files are sorted by budget priority (production code before tests for mixed domains), largest-first within each tier. One oversized leading file may be admitted in full as a protected exception; the remaining files share the normal budget.
 
-**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. The handling contract — review or declare, and what a declaration costs — is delivered by bootstrap's `=== REVIEW BUDGET ===` section, which knows your actual budget. It is deliberately not repeated here: this section is stripped before you receive the protocol.
+**On `BUDGET_EXCEEDED` / `=== NOT DIFFED ===`:** These files matched your domain but their diffs were NOT given to you. The handling contract — claim or declare, and what a declaration costs — is delivered by bootstrap's `=== REVIEW BUDGET ===` section, which knows your actual budget. It is deliberately not repeated here: this section is stripped before you receive the protocol.
 
 ### When You Need More Context
 
@@ -157,6 +157,32 @@ When uncertain, read the actual source file to confirm.
 **Simplification bias:** When evaluating a change, consider whether the same goal could be achieved by removing or simplifying existing code rather than adding new code. The best fix is sometimes less code, not more. If you spot a simplification opportunity within your domain, include it. This is a lens, not a mandate — don't force it.
 
 **Preexisting-code agents** (patterns-reviewer, history-insights-reviewer): search the **base ref state** (`git grep <pattern> <base_ref>`, `git show <base_ref>:<path>`), not HEAD. HEAD includes the PR's own changes.
+
+## Empirical Probes (Running Code)
+
+Reproducing a finding by running code is encouraged — never at the
+reviewed repo's expense:
+
+- **Never create or modify tracked files** in the repo under review.
+  Mutation belongs exclusively to tests-mutation-reviewer, which runs
+  solo and restores what it touches.
+- **A probe that needs a new file** creates it inside the repo with
+  `pirategoat-probe` in the FILENAME (e.g. `zz_pirategoat-probe_test.go`
+  — the marker is matched literally, hyphen included, and it must be in
+  the file's own name, not just a parent directory's), in a path
+  git does not ignore (ignored paths are invisible to the pipeline's
+  residue sweep). The pipeline treats that marker as its own residue:
+  leftovers are swept and reported at the end of the run.
+- **Create, run, and delete in a single command**, so an interrupted
+  turn cannot orphan the file:
+
+  ```bash
+  cp "$TMPDIR/probe.go" pkg/zz_pirategoat-probe_test.go && go test ./pkg/ ; rm -f pkg/zz_pirategoat-probe_test.go
+  ```
+
+- **Never use `git reset`, `git checkout --`, or `git clean` as cleanup**
+  — the repo is the user's live working tree and may hold uncommitted
+  work.
 
 ## Absence Claims (Clearing Blast Radius)
 

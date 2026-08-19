@@ -1267,6 +1267,17 @@ def _step_9_review_report(mode, state, context, config, output_dir):
             )
         actions.append("")
 
+    actions.append("")
+    actions.append(
+        "**Empirical verification rules:** never create or modify tracked "
+        "files in the reviewed repo. If spot-checking a claim requires a "
+        "new file, put `pirategoat-probe` in its filename (not just a "
+        "directory name), keep it in a non-ignored path, and create+run+"
+        "delete it in a single command. Never use `git reset`/"
+        "`git checkout --`/`git clean` as cleanup — the tree may hold the "
+        "user's uncommitted work."
+    )
+
     handoff = [
         f"Verify `{od}/review-report.md` exists before proceeding.",
     ]
@@ -1515,7 +1526,9 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         actions.append(f"- `{od}/review-report.md`")
         actions.append(f"- `{od}/review-findings.json` + `review-findings.md`")
         actions.append(f"- `{od}/pipeline-result.json` — status, verdict, report_path, "
-                       "findings_path, critic_verdict, degradation_notes")
+                       "findings_path, critic_verdict, degradation_notes, "
+                       "worktree_hygiene (compact hygiene summary; null when "
+                       "the run never measured it)")
 
         if mode == "incremental":
             actions.append("Baseline saved. Next run reviews only new commits.")

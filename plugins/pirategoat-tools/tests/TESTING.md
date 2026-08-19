@@ -95,12 +95,13 @@ Counts below are **collected** tests, not test methods — parameterized classes
 | `TestDynamicDispatchRisk` | 9 | dead-code-reviewer gets DYNAMIC_DISPATCH_RISK from the caller's `has_php` fact (PHP → high, no PHP → low); rendered scope text can't drive the decision in either direction (direct `build_output()` call); 3 end-to-end subprocess tests cover `main()`'s own `has_php` derivation, which the direct calls can't reach — including that a domain-excluded PHP test file (under `=== SKIPPED ===`) must not force `high` |
 | `TestOutputFilenameConsistency` | 2 | Output filenames from `save()` match bootstrap expectations (direct `build_output()` call) |
 | `TestNotDiffedContractIsDelivered` | 9 | The NOT DIFFED handling contract survives protocol stripping — it must be delivered by `build_output()`, never by a section the skip-list removes. Guards the 1.108.0 failure where a mandatory contract reached zero agents. |
+| `TestEmpiricalProbeContract` | 8 | The `pirategoat-probe` naming convention survives protocol stripping into built prompts, and the section is not on the skip-list. The step-11 residue sweep only ever fires on files an agent named this way, so a stripped section makes the enforcement half inert. |
 | `TestNotApplicableCompletionContract` | 11 | The shared protocol is the sole executable abstention recipe — a reviewer that finds nothing must abstain the one prescribed way. |
 | `TestRepoRuleAndRefModeSelection` | 7 | Repo rules reach the reviewers they target (effective identity, complete scope); adapter instances receive their declared path scope; an explicit isolation request never runs inline. |
 | `TestVerificationMethodContract` | 6 | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
 | `TestDismissalDisciplineContract` | 3 | Dismissal/mitigation verification applies to ALL findings, not a subset. |
 | `TestCanonicalExecutableBuilderSource` | 1 | Bootstrap is the sole executable `ReviewOutputBuilder` command source. |
-| `TestTestingDocCounts` | 5 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context) are checked in the documented direction only. |
+| `TestTestingDocCounts` | 7 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context) are checked in the documented direction only. |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
@@ -174,6 +175,16 @@ Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer 
 | `TestStepElevenAppliesAdjustments` | 9 | Step 11 applies pending adjustments before the verdict sync under REVISE, and an unapplicable batch degrades the run instead of crashing finalize; the verdict gate keeps that defensive re-run from becoming a bypass — a pending file under STAND, ESCALATE, a skipped critic, or a missing verdict is reported and never applied, while entries already applied, rejected, or recorded in the findings file stay silent |
 | `TestCriticContextRoundTrip` | 2 | The seam none of the three modules' own tests span: an id taken out of a real `build_critic_context()` render — the critic's only view — must resolve in the ledger when step 11 applies it. Guards the gap where the context showed F-labels alone and every REVISE run shipped degraded |
 | `TestVerdictSyncHardening` | 2 | Rule 23's verdict sync is the ledger's other writer: it replaces the file atomically (no temp residue) and degrades on a non-object ledger instead of raising `TypeError` past its except tuple |
+
+###Orchestration Hygiene Tests (`review/test_orchestration_hygiene.py`)
+
+Direct unit tests on the worktree-hygiene half of `scripts/review/orchestration.py` — the step-3 baseline snapshot, the step-11 compare-and-sweep, and the degradation notes step 11 derives from the result (23 collected tests across 3 classes). Each test runs against a throwaway git repo as CWD, because the code under test resolves and mutates the repository it is standing in.
+
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestBaselineCapture` | 4 | `_capture_worktree_baseline()` records the porcelain entries AND the repo root it measured; a clean tree writes an empty entry list (a measured zero), and a failed capture writes nothing at all rather than a baseline that would license a sweep |
+| `TestHygieneCheck` | 15 | `_check_worktree_hygiene()` sweeps ONLY untracked files whose basename carries the probe marker, inside a baseline whose recorded repo root is provably the one it is standing in. Foreign new files, preexisting dirt, a marker-named directory's ordinary contents, a marker-named symlink to a directory, and tracked marker files are reported, never deleted; a missing, foreign, or repo-root-less baseline reports `unknown` and deletes nothing |
+| `TestStepElevenHygieneNotes` | 4 | Only swept probe residue degrades the run — a requester editing their own tree during a review is measured, not blamed, because `status` is a bot contract meaning "the review underperformed". A non-git CWD adds no notes |
 
 ### Shared Graders (`helpers/graders.py`)
 

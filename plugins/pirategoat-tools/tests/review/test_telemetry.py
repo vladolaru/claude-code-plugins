@@ -3403,6 +3403,18 @@ class TestWorktreeHygieneManifest:
         assert section["probe_residue_removed"] == []
         assert section["baseline_captured_at"] is None
 
+    def test_unrecognized_status_degrades_to_unknown(self, mod, tmp_path):
+        """A well-typed status outside the allowlist reads "unknown"."""
+        (tmp_path / "worktree-hygiene.json").write_text(json.dumps(
+            {"schema": 1, "status": "corrupted"}
+        ))
+
+        section = mod.manifest_sections.build_worktree_hygiene_manifest(
+            str(tmp_path)
+        )
+
+        assert section["status"] == "unknown"
+
     def test_measured_unknown_is_not_absent(self, mod, tmp_path):
         """A measured "unknown" is a section; only an absent artifact is None."""
         t, out_dir = self._telemetry(mod, tmp_path)

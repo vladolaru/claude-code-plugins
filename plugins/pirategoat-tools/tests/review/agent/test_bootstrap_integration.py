@@ -916,6 +916,73 @@ class TestVerificationMethodContract:
         assert "searched pattern is absent" in prompt
 
 
+class TestEmpiricalProbeContract:
+    """The probe-naming convention must reach the reviewers that run code.
+
+    The sweep in orchestration deletes only untracked files whose BASENAME
+    carries `pirategoat-probe`. That enforcement half is inert unless the
+    producer half — this protocol section — actually reaches an agent, and
+    a section placed in a stripped part of the protocol reaches nobody
+    (the 1.108.0 failure `TestNotDiffedContractIsDelivered` guards for the
+    NOT DIFFED contract). This class is the same guard for the convention.
+    """
+
+    CLAUSES = (
+        "## Empirical Probes",
+        "Never create or modify tracked files",
+        "pirategoat-probe",
+        "FILENAME",
+        "git does not ignore",
+        "Create, run, and delete in a single command",
+        "git reset",
+    )
+
+    def _delivered_prompt(self, tmp_path):
+        protocol = (
+            PLUGIN_ROOT / "agents/shared/reviewer-protocol.md"
+        ).read_text()
+        review_rules = _mod.extract_protocol_sections(
+            protocol,
+            _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS,
+        )
+        return build_output(
+            agent_name="code-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules=review_rules,
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number=None,
+            reviewer_name="code",
+            not_diffed_count=0,
+            has_php=False,
+        )
+
+    @pytest.mark.parametrize("clause", CLAUSES)
+    def test_clause_reaches_agent_prompts(self, clause, tmp_path):
+        """Each clause survives skip-list extraction into the built prompt.
+
+        Compared with whitespace collapsed: the protocol is hard-wrapped
+        prose, so a clause spanning a line break is still delivered. Only
+        deleting or rewording it should fail this guard.
+        """
+        delivered = " ".join(self._delivered_prompt(tmp_path).split())
+        assert " ".join(clause.split()) in delivered
+
+    def test_section_is_not_in_the_skip_list(self):
+        """A future skip-list entry must not silently strip the convention."""
+        assert not any(
+            skipped.startswith("## Empirical Probes")
+            for skipped in _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
+        ), (
+            "The probe convention is policy, not mechanics bootstrap "
+            "performs — stripping it makes the residue sweep's producer "
+            "half reach zero agents."
+        )
+
+
 class TestSmokeAllAgents:
     """Every registered agent must run bootstrap without crashing.
 
@@ -1735,6 +1802,8 @@ class TestTestingDocCounts:
          "review/test_critic_adjustments.py", "full"),
         ("###Reconciliation Context Tests",
          "review/test_reconciliation_context.py", "partial"),
+        ("###Orchestration Hygiene Tests",
+         "review/test_orchestration_hygiene.py", "full"),
     )
     FULL_TABLES = tuple(row for row in TABLES if row[2] == "full")
 
