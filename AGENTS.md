@@ -254,6 +254,7 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/containment.py` | `pytest plugins/pirategoat-tools/tests/test_containment_contract.py plugins/pirategoat-tools/tests/hosts/ plugins/pirategoat-tools/tests/review/test_review_config.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` |
 | `scripts/review/plan_dispatch.py` | `pytest plugins/pirategoat-tools/tests/review/test_plan_dispatch.py plugins/pirategoat-tools/tests/review/test_criteria_coverage.py -v` |
 | `scripts/review/agent_registry.json` (triage criteria/keywords/checks) | `pytest plugins/pirategoat-tools/tests/review/test_criteria_coverage.py plugins/pirategoat-tools/tests/review/test_plan_dispatch.py -v` (every criterion bullet needs a dispatching probe) |
+| `plugins/pirategoat-tools/AGENTS.md` agent-registry reference (`model_tier` row) or `scripts/review/agent_registry.json` `model_tier` values | `pytest plugins/pirategoat-tools/tests/review/test_registry_docs.py -v` |
 | `scripts/review/context.py` | `pytest plugins/pirategoat-tools/tests/review/test_context.py -v` |
 | `scripts/review/dependency_refresh.py` | `pytest plugins/pirategoat-tools/tests/review/test_dependency_refresh.py -v` |
 | `scripts/review/user_settings.py` | `pytest plugins/pirategoat-tools/tests/review/test_user_settings.py plugins/pirategoat-tools/tests/review/test_pipeline_infra.py -v` |

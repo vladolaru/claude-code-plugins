@@ -1790,11 +1790,12 @@ class TestTestingDocCounts:
     # "full"    — the table claims to describe the whole file, so both
     #             directions hold: documented counts are real, and no class
     #             is missing a row.
-    # "partial" — the table documents a deliberate subset (the
-    #             reconciliation-context table calls out the 2 classes
-    #             carrying the NOT DIFFED contract out of 22). Its rows must
-    #             still be true; requiring the other 20 would be demanding
-    #             prose the section never promised.
+    # "partial" — the table documents a deliberate subset of a large file
+    #             (e.g. the reconciliation-context table calls out the 2
+    #             classes carrying the NOT DIFFED contract out of 22). Its
+    #             rows must still be true; requiring the undocumented
+    #             classes would be demanding prose the section never
+    #             promised.
     TABLES = (
         ("###Bootstrap Integration Tests",
          "review/agent/test_bootstrap_integration.py", "full"),
@@ -1804,6 +1805,10 @@ class TestTestingDocCounts:
          "review/test_reconciliation_context.py", "partial"),
         ("###Orchestration Hygiene Tests",
          "review/test_orchestration_hygiene.py", "full"),
+        ("###Pipeline Infrastructure Tests",
+         "review/test_pipeline_infra.py", "partial"),
+        ("###Telemetry Tests",
+         "review/test_telemetry.py", "partial"),
     )
     FULL_TABLES = tuple(row for row in TABLES if row[2] == "full")
 

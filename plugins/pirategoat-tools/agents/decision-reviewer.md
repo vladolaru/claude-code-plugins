@@ -104,8 +104,9 @@ When you state a specific fact — a number, a count, a file path, a line refere
 Verification probes that need a file must never create or modify tracked
 files in the repo under review; create new files only, with
 `pirategoat-probe` in the filename, in a non-ignored path,
-created+run+deleted in a single command. Never use `git reset`/`git clean`
-as cleanup — the tree may hold the user's uncommitted work.
+created+run+deleted in a single command. Never use `git reset`/
+`git checkout --`/`git clean` as cleanup — the tree may hold the user's
+uncommitted work.
 
 ## Step 3: Write Findings
 

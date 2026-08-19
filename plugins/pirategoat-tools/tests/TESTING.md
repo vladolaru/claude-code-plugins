@@ -20,6 +20,7 @@ tests/
 │   ├── test_critic.py                # Decision critic tests
 │   ├── test_telemetry.py             # Telemetry logging tests
 │   ├── test_agent_registry.py        # Agent registry validation tests
+│   ├── test_registry_docs.py         # AGENTS.md registry reference pinned to the registry
 │   └── agent/                        # Tests for scripts/review/agent/
 │       ├── test_bootstrap.py         # Bootstrap unit tests (direct imports)
 │       ├── test_bootstrap_integration.py  # Bootstrap integration (smoke + category reps + build_output)
@@ -71,6 +72,7 @@ The review pipeline tests load `scripts/review/pipeline.py` as the stable compat
 | `scripts/review/pipeline_contract.py` | Shared host, step-sequence, timeout, path, and Git vocabulary | All three pipeline test files |
 | `scripts/review/briefings.py` | Pure guidance and briefing formatting | `review/test_pipeline.py` |
 | `scripts/review/orchestration.py` | Side-effecting per-step subprocess and artifact work | `review/test_pipeline_integration.py` |
+| `scripts/review/manifest_sections.py` | Run-manifest section projections (reached through `telemetry.py`, not the facade) | `review/test_telemetry.py` |
 
 `pipeline_mod` preserves the facade's re-export contract for existing callers. Tests that patch a name resolved by orchestration use `orchestration_mod`, so the patch targets the caller's module globals.
 
@@ -101,7 +103,7 @@ Counts below are **collected** tests, not test methods — parameterized classes
 | `TestVerificationMethodContract` | 6 | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
 | `TestDismissalDisciplineContract` | 3 | Dismissal/mitigation verification applies to ALL findings, not a subset. |
 | `TestCanonicalExecutableBuilderSource` | 1 | Bootstrap is the sole executable `ReviewOutputBuilder` command source. |
-| `TestTestingDocCounts` | 7 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context) are checked in the documented direction only. |
+| `TestTestingDocCounts` | 9 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context, pipeline infrastructure, telemetry) are checked in the documented direction only. |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
@@ -185,6 +187,26 @@ Direct unit tests on the worktree-hygiene half of `scripts/review/orchestration.
 | `TestBaselineCapture` | 4 | `_capture_worktree_baseline()` records the porcelain entries AND the repo root it measured; a clean tree writes an empty entry list (a measured zero), and a failed capture writes nothing at all rather than a baseline that would license a sweep |
 | `TestHygieneCheck` | 15 | `_check_worktree_hygiene()` sweeps ONLY untracked files whose basename carries the probe marker, inside a baseline whose recorded repo root is provably the one it is standing in. Foreign new files, preexisting dirt, a marker-named directory's ordinary contents, a marker-named symlink to a directory, and tracked marker files are reported, never deleted; a missing, foreign, or repo-root-less baseline reports `unknown` and deletes nothing |
 | `TestStepElevenHygieneNotes` | 4 | Only swept probe residue degrades the run — a requester editing their own tree during a review is measured, not blamed, because `status` is a bot contract meaning "the review underperformed". A non-git CWD adds no notes |
+
+###Pipeline Infrastructure Tests (`review/test_pipeline_infra.py`)
+
+Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequence, routing, state I/O, output formatting, telemetry/Git identity, and the CLI (92 collected tests across 12 classes). The step-skip class is documented here because its records are what make a run auditable at all — reconciling 12 contract steps against 9 completions otherwise takes source archaeology; the remaining classes follow the routing/state/CLI split the module table above describes.
+
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestSkippedStepRecording` | 4 | The router records each step it passes over — number, title, and the gating condition — into `pipeline-state.json` at the moment it decides: a PR-only step passed over in branch mode, a trailing skip recorded by the last active step, one record per step across re-invocations, and never a step the router actually ran |
+
+###Telemetry Tests (`review/test_telemetry.py`)
+
+Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag (220 collected tests across 18 classes). The skip-ledger projection is documented here because it carries the step-skip audit contract from pipeline state into the manifest; the remaining classes follow the same direct-unit-test pattern.
+
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestSkippedStepsManifest` | 10 | `build_skipped_steps_manifest()` keeps three outcomes apart: `None` when the run never recorded skips (state absent, key-less, malformed, or a non-list value), `[]` as a measured zero, and the projected records otherwise — entries without a usable integer step are dropped and absent prose defaults to empty, and the manifest carries the section beside `availability.skipped_steps` |
+
+###Registry Documentation Tests (`review/test_registry_docs.py`)
+
+Two module-level guards pinning the plugin `AGENTS.md` agent-registry reference to `scripts/review/agent_registry.json` in both directions: every `model_tier` the registry actually uses must appear in the documented vocabulary, and the vocabulary must not teach a tier no agent uses. `"inherit"` is excepted as a routing keyword — legitimate to document with zero users. The row had drifted to `inherit`/`sonnet`/`haiku` while five agents ran at `opus`, so a cold agent reading the canonical reference learned a vocabulary the machine does not use. No count table: the file has no test classes, so there is nothing for `TestTestingDocCounts` to pin.
 
 ### Shared Graders (`helpers/graders.py`)
 
