@@ -18,6 +18,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
     apply_adjustments,
+    atomic_write_json,
     pending_count,
 )
 from review.orchestration import _orchestrate_step_11
@@ -267,6 +268,24 @@ class TestCrashSafety:
         ])
         with pytest.raises(ValueError, match="duplicate adjustment_id"):
             apply_adjustments(str(tmp_path))
+
+
+class TestArtifactEncoding:
+    """The shared writer must not re-encode an artifact it did not author."""
+
+    def test_non_ascii_prose_survives_as_utf8_not_escapes(self, tmp_path):
+        path = tmp_path / "review-findings.json"
+        atomic_write_json(str(path), {"description": "a bug \u2014 and a fix"})
+
+        raw = path.read_bytes()
+        # The reconciliator writes this artifact with ensure_ascii=False, so
+        # every verdict sync through this writer would otherwise rewrite all
+        # of its em-dashed prose into \uXXXX escapes and read as corruption.
+        assert "a bug \u2014 and a fix".encode("utf-8") in raw
+        assert b"\\u2014" not in raw
+        assert json.loads(path.read_text(encoding="utf-8"))["description"] == (
+            "a bug \u2014 and a fix"
+        )
 
 
 class TestBatchCoherence:

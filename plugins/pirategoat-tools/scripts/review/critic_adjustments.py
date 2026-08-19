@@ -58,6 +58,13 @@ def atomic_write_json(path, payload):
     review-findings.json: step 11's Rule 23 verdict sync writes the same
     artifact and shares this primitive, so the crash-safety of the ledger
     does not depend on which writer touched it last.
+
+    Encoding matches the artifact's author for the same reason: the
+    reconciliator writes review-findings.json with ``ensure_ascii=False``,
+    so escaping here would make every verdict sync rewrite the whole
+    ledger's prose (finding text is full of em dashes) into ``\\uXXXX``
+    escapes — lossless, but indistinguishable from corruption to whoever
+    reads the run's artifacts.
     """
     directory = os.path.dirname(path) or "."
     temp_path = None
@@ -69,7 +76,7 @@ def atomic_write_json(path, payload):
             encoding="utf-8",
         ) as temp_file:
             temp_path = temp_file.name
-            json.dump(payload, temp_file, indent=2)
+            json.dump(payload, temp_file, indent=2, ensure_ascii=False)
             temp_file.flush()
         os.replace(temp_path, path)
         temp_path = None

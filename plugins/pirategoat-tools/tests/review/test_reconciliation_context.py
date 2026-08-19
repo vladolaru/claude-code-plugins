@@ -3665,7 +3665,12 @@ class TestInlineCoverageMarkdown:
         assert "Inline Diff Coverage Gaps" not in md
         assert "## Deferred Files Reviewed From The NOT DIFFED Queue" in md
         assert "`src/deferred.php` (claimed by: security-reviewer)" in md
-        assert "not proof of read" in md
+        # The note must teach the CURRENT contract: claims are the agent's
+        # own explicit statements, and silence-derivation survives only for
+        # legacy output predating the `deferred_reviewed` key.
+        assert "the agent's own claim, not proof of read" in md
+        assert "stated explicitly under `deferred_reviewed`" in md
+        assert "legacy output predating that key" in md
 
 
 class TestReviewStem:

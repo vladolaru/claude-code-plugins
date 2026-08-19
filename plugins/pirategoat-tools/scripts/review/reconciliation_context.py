@@ -1300,9 +1300,10 @@ def to_markdown(context: Dict[str, Any]) -> str:
         parts.append("## Deferred Files Reviewed From The NOT DIFFED Queue\n")
         parts.append(
             f"**{len(deferred)} file(s) never received their diff inline but "
-            "were reviewed from the deferred queue** per the budget contract "
-            "(reviewer output without an unreviewed declaration — an agent "
-            "claim, not proof of read).\n"
+            "were reviewed from the deferred queue** per the budget contract. "
+            "Each is the agent's own claim, not proof of read — stated "
+            "explicitly under `deferred_reviewed`, or, for legacy output "
+            "predating that key, derived from the agent's silence.\n"
         )
         for f_path, agents in deferred.items():
             parts.append(f"- `{f_path}` (claimed by: {', '.join(agents)})")

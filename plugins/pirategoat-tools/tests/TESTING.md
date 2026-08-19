@@ -165,12 +165,13 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — agent-findin
 
 ###Critic Adjustments Tests (`review/test_critic_adjustments.py`)
 
-Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json` (46 collected tests across 8 classes). The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
+Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json` (47 collected tests across 9 classes). The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
 
 | Class | Tests | What it verifies |
 |---|---|---|
 | `TestApplyAdjustments` | 9 | The happy paths and the loud failures: `promote`, `add`, and `remove` land with `critic_adjustment` provenance and a summary recounted from the resulting population; a missing adjustments file is a no-op, `rejected` entries are skipped, and a second run is idempotent; an unknown action, an unknown target id, or a non-adjustable field fails the whole call with nothing written |
 | `TestCrashSafety` | 3 | Application recorded on both sides — `adjustment_id` allocation before the findings write, and the `applied_critic_adjustments` record — so a crash between the two writes converges without double-applying; duplicate `adjustment_id`s are rejected (an id identifies which decisions a ledger already contains), and no temp file survives either a success or a rejection |
+| `TestArtifactEncoding` | 1 | The shared `atomic_write_json` primitive writes UTF-8 rather than ASCII escapes, matching the reconciliator that authors `review-findings.json` — otherwise every verdict sync rewrites the whole ledger's em-dashed prose into `\uXXXX` and reads as corruption in the run's artifacts |
 | `TestBatchCoherence` | 9 | All-or-nothing batch validation with nothing written: duplicate targets, an entry targeting a finding an earlier entry removes, an entry with no usable id, an unaddressable finding, an `add` that assigns its own id (both spellings), a pre-existing severity outside the vocabulary, and a findings file that is not a JSON object |
 | `TestScopeLinePairing` | 9 | `scope`/`line` stay the pair `schemas/review-output.ts` declares and `output.py`'s renderer branches on, and patched lines keep the builder's positive 1-indexed invariant |
 | `TestCLI` | 3 | The process contract the step-10 briefing invokes: exit status plus the stdout/stderr channel split |
