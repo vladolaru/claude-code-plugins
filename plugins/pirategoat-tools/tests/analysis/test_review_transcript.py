@@ -28,6 +28,7 @@ enrich_run_transcript = _mod.enrich_run_transcript
 manifest_step_timeline = _mod._manifest_step_timeline
 result_state = _mod._result_state
 is_bootstrap_builder_heredoc = _mod._is_bootstrap_builder_heredoc
+safe_model = _mod._safe_model
 
 _bootstrap_spec = importlib.util.spec_from_file_location(
     "review_bootstrap_for_transcript_test", BOOTSTRAP_PATH
@@ -303,6 +304,54 @@ class TestFindSessionFile:
         _write_jsonl(tmp_path / "-two" / "same.jsonl", [])
 
         assert find_session_file(tmp_path, "same") is None
+
+
+class TestSafeModel:
+    """The model sanitizer admits real Claude model ids and nothing else.
+
+    It rejects rather than normalizes: a safe value is returned verbatim, so
+    the bracketed context-window variant tag is preserved rather than stripped.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "claude-sonnet-5",
+            "claude-opus-5",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-5[1m]",
+            "claude-opus-4-8[1m]",
+            "claude-" + "a" * 119,
+            "claude-" + "a" * 119 + "[1m]",
+        ],
+    )
+    def test_accepts_and_preserves_real_model_ids(self, value):
+        assert safe_model(value) == value
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "claude-x[<b>]",
+            "claude-x[a][b]",
+            "claude-x[]",
+            "claude-x[",
+            "claude-x]",
+            "claude-x[1m]extra",
+            "claude-x[1m] ; rm -rf /",
+            "claude-x[" + "a" * 17 + "]",
+            "claude x",
+            "claude-x\n",
+            "evil-model",
+            "PRIVATE_SECRET_SENTINEL",
+            "Claude-opus-5",
+            "claude-" + "a" * 200,
+            "",
+            None,
+            42,
+        ],
+    )
+    def test_rejects_unsafe_values(self, value):
+        assert safe_model(value) is None
 
 
 class TestCorrelateRunAgents:
@@ -603,6 +652,32 @@ class TestCorrelateRunAgents:
         result = correlate_run_agents(session, output_dir, {"security-reviewer"})
         assert result[0]["model"] is None
 
+    def test_preserves_bracketed_model_variant_tag(self, tmp_path):
+        """Claude Code reports context-window variants as ``claude-opus-5[1m]``.
+
+        The bracketed tag is part of what the API resolved, so it must survive
+        sanitization: dropping it silently nulled the model for every Opus-tier
+        dispatch while Sonnet dispatches resolved normally.
+        """
+        session = tmp_path / "variant-model.jsonl"
+        output_dir = tmp_path / "pr-review-variant"
+        _write_jsonl(
+            session,
+            [
+                _assistant(_call("v1", "Agent", prompt=_agent_prompt(output_dir))),
+                _result(
+                    "v1",
+                    structured={
+                        "agentId": "variant-agent-id",
+                        "resolvedModel": "claude-opus-5[1m]",
+                    },
+                ),
+            ],
+        )
+
+        result = correlate_run_agents(session, output_dir, {"security-reviewer"})
+        assert result[0]["model"] == "claude-opus-5[1m]"
+
     def test_special_agent_uses_recognized_subagent_type(self, tmp_path):
         session = tmp_path / "special.jsonl"
         output_dir = tmp_path / "pr-review-3"
@@ -822,6 +897,23 @@ class TestAnalyzeSubagent:
             "output_tokens": 16,
         }
         assert result["usage_by_model"]["claude-opus-4-1"]["output_tokens"] == 13
+
+    def test_attributes_usage_under_the_bracketed_variant_key(self, tmp_path):
+        """A variant tag keys usage attribution instead of being discarded."""
+        transcript = _write_jsonl(
+            tmp_path / "agent.jsonl",
+            [
+                _assistant(
+                    usage=_usage(11, 13, create=17, read=19),
+                    model="claude-opus-5[1m]",
+                    entry_usage=True,
+                    message_id="variant-tagged-message",
+                ),
+            ],
+        )
+
+        result = analyze_subagent(transcript, tmp_path, [])
+        assert result["usage_by_model"]["claude-opus-5[1m]"]["output_tokens"] == 13
 
     def test_repeated_message_id_counts_final_cumulative_usage(self, tmp_path):
         """A response split across records shares message.id; later records

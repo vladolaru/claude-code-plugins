@@ -21,7 +21,12 @@ _USAGE_FIELDS = (
     "output_tokens",
 )
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
-_SAFE_MODEL = re.compile(r"^claude-[a-z0-9][a-z0-9._-]{0,119}$")
+# Claude Code reports context-window variants with a bracketed suffix
+# (e.g. "claude-opus-5[1m]"), verified against real transcripts. Admit ONE
+# optional tag of safe characters and keep it: the tag names a distinct
+# variant the API actually resolved, so stripping it would misreport
+# attribution. Rejecting it nulled the model for every Opus-tier dispatch.
+_SAFE_MODEL = re.compile(r"^claude-[a-z0-9][a-z0-9._-]{0,119}(\[[a-z0-9._-]{1,16}\])?$")
 # The harness appends its trailer as a LINE-ANCHORED
 # "agentId: <id> (use SendMessage ...)" near the end of the result text
 # (verified against real transcripts). Anchor to line starts and take the
