@@ -344,6 +344,28 @@ class TestBatchCoherence:
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"  # nothing written
 
+    @pytest.mark.parametrize("shape", [[{"id": "aaaa1111"}], "findings", 7])
+    def test_findings_that_is_not_an_object_fails_as_a_value_error(
+        self, tmp_path, shape
+    ):
+        """The adjustments file is shape-guarded; the findings file was
+        not, so a non-object ledger died on an AttributeError outside this
+        module's ValueError contract — the one step 11 catches."""
+        (tmp_path / "review-findings.json").write_text(json.dumps(shape))
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "medium"}, "rationale": "r",
+        }])
+        with pytest.raises(ValueError, match="must be a JSON object"):
+            apply_adjustments(str(tmp_path))
+        assert json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        ) == shape
+        doc = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        assert "adjustment_id" not in doc["adjustments"][0]  # nothing written
+
 
 class TestScopeLinePairing:
     """schemas/review-output.ts:36-37 and output.py's renderer treat
@@ -495,8 +517,9 @@ class TestCLI:
 
 
 class TestStepElevenAppliesAdjustments:
-    """Step 11 defensively re-runs the idempotent apply so bot mode (which
-    follows no briefing) and a non-compliant orchestrator still converge."""
+    """Step 11 is where pending critic adjustments land, so bot mode (which
+    follows no briefing) and any run whose orchestrator did not apply them
+    still converge on a findings JSON the critic reached."""
 
     def _step_11(self, output_dir):
         """Call the finalize step the way the pipeline facade routes it."""
@@ -515,7 +538,11 @@ class TestStepElevenAppliesAdjustments:
         self._step_11(tmp_path)
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "medium"
-        assert data["verdict"] == "REQUEST_CHANGES"  # Rule 23 ran AFTER apply
+        # Both effects landed — the patch and the Rule 23 verdict sync.
+        # The pair is order-invariant (each write preserves the other's
+        # field); what pins the placement is the sibling test's
+        # `status == "degraded"` assertion.
+        assert data["verdict"] == "REQUEST_CHANGES"
 
     def test_invalid_adjustments_degrade_instead_of_crashing(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
@@ -536,3 +563,24 @@ class TestStepElevenAppliesAdjustments:
         assert result["status"] == "degraded"
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"  # nothing half-applied
+
+    def test_malformed_findings_file_degrades_instead_of_crashing(
+        self, tmp_path
+    ):
+        """The measured regression: a list-shaped findings file with no
+        review-verdict.json used to survive step 11 — Rule 23's write is
+        gated on verdict_data — so the apply call must not become the
+        thing that crashes finalize."""
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps([_issue("aaaa1111", "low")])
+        )
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "medium"}, "rationale": "r",
+        }])
+        (tmp_path / "review-report.md").write_text("# report")
+        self._step_11(tmp_path)
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert any("critic adjustments not applied" in n
+                   for n in result["degradation_notes"])
+        assert result["status"] == "degraded"

@@ -211,6 +211,13 @@ def apply_adjustments(output_dir):
         )
     with open(findings_path, "r", encoding="utf-8") as f:
         findings = json.load(f)
+    # Same shape guard the adjustments file gets above: a findings file
+    # that is not an object would otherwise die on an AttributeError
+    # instead of this module's ValueError contract, and the step-11
+    # caller catches only the latter — a malformed ledger would crash
+    # finalize inside the guard meant to keep it running.
+    if not isinstance(findings, dict):
+        raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
     issues = findings.get("issues")
     if not isinstance(issues, list):
         raise ValueError(f"{FINDINGS_FILENAME} has no issues list")
