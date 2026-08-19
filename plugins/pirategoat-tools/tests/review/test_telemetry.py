@@ -462,9 +462,15 @@ class TestNoFabricatedMeasurements:
     ``thoughts_length`` used to default to 0 on both writers while no
     caller ever passed it, so every step and pipeline_end event of every
     run reported a measured zero for a measurement that never happened.
-    These guards pin its absence — in the raw events and in the manifest
-    projection — so it cannot come back as a default. Old logs that still
-    carry the key stay readable; consumers simply ignore it.
+    The field was removed at three sites, and each needs its own guard,
+    because a guard that only reads freshly written events is satisfied
+    by the writer's silence alone: with nothing emitting the key, the
+    projection allowlists can be reverted and such a test still passes.
+    So the writer guards use fresh events, and the allowlist guard feeds
+    a pre-change event shape through the projection — which is the live
+    mechanism for old logs, since a manifest is rebuilt from the whole
+    JSONL on every refresh. Old logs stay readable either way; the key
+    they carry is dropped in projection rather than honored.
     """
 
     def test_step_and_pipeline_end_events_omit_thoughts_length(
@@ -483,13 +489,41 @@ class TestNoFabricatedMeasurements:
             assert event["args"] == {"bot_mode": True}
             assert "thoughts_length" not in json.dumps(event)
 
-    def test_manifest_step_projection_omits_thoughts_length(self, telemetry):
-        telemetry.start(run_id="run-1")
-        telemetry.log_step(step=1, phase="SETUP", title="Repo Setup",
-                           bot_mode=False)
+    def test_manifest_projection_drops_thoughts_length_from_old_events(
+        self, mod, telemetry
+    ):
+        """The allowlist drops the key, not the writer's silence.
 
-        step = _read_manifest(telemetry)["steps"][-1]
-        assert step["args"] == {"bot_mode": False}
+        Written as a pre-change producer would have: the event goes
+        straight into the JSONL, so restoring the allowlist entry fails
+        this test. A same-run log_step() call could not, since the
+        current writer emits no key for the allowlist to select.
+        """
+        telemetry.start(run_id="run-1")
+        old_event = {
+            "schema_version": mod.EVENT_SCHEMA_VERSION,
+            "run_id": "run-1",
+            "event": "step",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "step": 10,
+            "phase": "VALIDATION",
+            "title": "Decision Critic",
+            "duration_since_prev_ms": 12,
+            "args": {"bot_mode": True, "thoughts_length": 321},
+            "decisions": {"critic_skipped": True},
+        }
+        with open(telemetry.log_path, "a") as f:
+            f.write(json.dumps(old_event) + "\n")
+
+        # Any refresh reprojects every step event in the log, old included.
+        telemetry.finalize(step=15, phase="OUTPUT", title="Present Results")
+
+        steps = _read_manifest(telemetry)["steps"]
+        assert [step["step"] for step in steps] == [10]
+        assert steps[0]["args"] == {"bot_mode": True}
+        # Neighbours in the same allowlist must survive the drop.
+        assert steps[0]["decisions"] == {"critic_skipped": True}
+        assert "thoughts_length" not in json.dumps(steps[0])
 
     def test_log_step_and_finalize_reject_thoughts_length(self, telemetry):
         """The parameter is gone from the signatures, not merely unused."""

@@ -144,6 +144,41 @@ def test_safe_string_retains_multiline_prose_whitespace():
     assert sanitize._safe_string(value) == value
 
 
+def test_sanitize_steps_drops_thoughts_length_from_old_logs():
+    """Old logs carry a field the writers no longer emit; it stays dropped.
+
+    ``thoughts_length`` defaulted to 0 on every step event while no caller
+    ever passed it, so it was a measurement that never happened published
+    as a measured zero. It is gone from the producers, but runs already on
+    disk still carry it, and this projection is where those logs are read.
+    Feeding a pre-change event shape is what makes this a guard rather
+    than a restatement of the writers' silence: restoring the copy block
+    fails this test, while a test built from a freshly written event could
+    not, since nothing emits the key for the projection to copy.
+    """
+    old_step = {
+        "run_id": "run-1",
+        "event": "step",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "phase": "VALIDATION",
+        "title": "Decision Critic",
+        "schema_version": 1,
+        "step": 10,
+        "duration_since_prev_ms": 12,
+        "args": {"bot_mode": True, "thoughts_length": 321},
+        "decisions": {"critic_skipped": True},
+    }
+
+    [projected] = sanitize._sanitize_steps([old_step])
+
+    assert projected["args"] == {"bot_mode": True}
+    # An old log stays readable: everything but the dropped key survives.
+    assert projected["decisions"] == {"critic_skipped": True}
+    assert projected["step"] == 10
+    assert projected["title"] == "Decision Critic"
+    assert "thoughts_length" not in json.dumps(projected)
+
+
 def _manifest(
     run_id: str = "run-1",
     *,
