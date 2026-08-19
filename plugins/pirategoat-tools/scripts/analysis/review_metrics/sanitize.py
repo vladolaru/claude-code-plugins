@@ -206,9 +206,6 @@ def _sanitize_steps(value: object) -> list[dict[str, Any]]:
         if isinstance(raw_args, dict):
             if isinstance(raw_args.get("bot_mode"), bool):
                 args["bot_mode"] = raw_args["bot_mode"]
-            thoughts_length = _nonnegative_int(raw_args.get("thoughts_length"))
-            if thoughts_length is not None:
-                args["thoughts_length"] = thoughts_length
         raw_decisions = item.get("decisions") if isinstance(item, dict) else None
         decisions: dict[str, bool] = {}
         # Decisions change what a run reports (a critic skip turns a real

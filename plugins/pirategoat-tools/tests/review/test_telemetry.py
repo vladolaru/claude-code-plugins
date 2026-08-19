@@ -453,6 +453,55 @@ class TestFinalize:
         assert summary.get("commit_count") == 3
 
 
+# ── Unmeasured fields ────────────────────────────────────────
+
+
+class TestNoFabricatedMeasurements:
+    """Zero ≠ unknown: an event may not carry a value nobody measured.
+
+    ``thoughts_length`` used to default to 0 on both writers while no
+    caller ever passed it, so every step and pipeline_end event of every
+    run reported a measured zero for a measurement that never happened.
+    These guards pin its absence — in the raw events and in the manifest
+    projection — so it cannot come back as a default. Old logs that still
+    carry the key stay readable; consumers simply ignore it.
+    """
+
+    def test_step_and_pipeline_end_events_omit_thoughts_length(
+        self, telemetry
+    ):
+        telemetry.start(pr_number="42")
+        telemetry.log_step(step=1, phase="SETUP", title="Repo Setup",
+                           bot_mode=True)
+        telemetry.finalize(step=15, phase="OUTPUT", title="Present Results",
+                           bot_mode=True)
+
+        events = _read_events(telemetry.log_path)
+        written = [e for e in events if e["event"] in ("step", "pipeline_end")]
+        assert [e["event"] for e in written] == ["step", "pipeline_end"]
+        for event in written:
+            assert event["args"] == {"bot_mode": True}
+            assert "thoughts_length" not in json.dumps(event)
+
+    def test_manifest_step_projection_omits_thoughts_length(self, telemetry):
+        telemetry.start(run_id="run-1")
+        telemetry.log_step(step=1, phase="SETUP", title="Repo Setup",
+                           bot_mode=False)
+
+        step = _read_manifest(telemetry)["steps"][-1]
+        assert step["args"] == {"bot_mode": False}
+
+    def test_log_step_and_finalize_reject_thoughts_length(self, telemetry):
+        """The parameter is gone from the signatures, not merely unused."""
+        telemetry.start(pr_number="42")
+        with pytest.raises(TypeError):
+            telemetry.log_step(step=1, phase="SETUP", title="Repo Setup",
+                               thoughts_length=321)
+        with pytest.raises(TypeError):
+            telemetry.finalize(step=15, phase="OUTPUT", title="Present",
+                               thoughts_length=321)
+
+
 # ── Run manifest ───────────────────────────────────────────────
 
 
@@ -507,7 +556,6 @@ class TestRunManifest:
             phase="VALIDATION",
             title="Decision Critic",
             bot_mode=True,
-            thoughts_length=321,
             decisions={
                 "critic_skipped": True,
                 "reason": "SENSITIVE_DECISION_PROSE",
@@ -521,10 +569,7 @@ class TestRunManifest:
         assert step["step"] == 10
         assert step["phase"] == "VALIDATION"
         assert step["title"] == "Decision Critic"
-        assert step["args"] == {
-            "bot_mode": True,
-            "thoughts_length": 321,
-        }
+        assert step["args"] == {"bot_mode": True}
         assert step["decisions"] == {"critic_skipped": True}
         serialized = json.dumps(step)
         assert "SENSITIVE_DECISION_PROSE" not in serialized

@@ -269,7 +269,6 @@ class ReviewTelemetry:
 
     def log_step(self, step: int, phase: str, title: str,
                  bot_mode: bool = False,
-                 thoughts_length: int = 0,
                  decisions: Optional[dict] = None) -> None:
         """Append step timing event (no snapshot). No-op if not started."""
         if self.log_path is None:
@@ -287,7 +286,6 @@ class ReviewTelemetry:
             "duration_since_prev_ms": duration_ms,
             "args": {
                 "bot_mode": bot_mode,
-                "thoughts_length": thoughts_length,
             },
         }
         if decisions:
@@ -359,8 +357,7 @@ class ReviewTelemetry:
             return None
 
     def finalize(self, step: int, phase: str, title: str,
-                 bot_mode: bool = False,
-                 thoughts_length: int = 0) -> None:
+                 bot_mode: bool = False) -> None:
         """Append pipeline_end with snapshot + summary. No-op if not started."""
         if self.log_path is None:
             return
@@ -383,7 +380,6 @@ class ReviewTelemetry:
             "duration_since_prev_ms": duration_ms,
             "args": {
                 "bot_mode": bot_mode,
-                "thoughts_length": thoughts_length,
             },
             "snapshot": self._snapshot(extracts),
             "summary": self._build_summary(total_ms, extracts),
@@ -656,9 +652,7 @@ class ReviewTelemetry:
 
         args = event.get("args", {})
         if isinstance(args, dict):
-            safe_args = self._select_scalar_fields(
-                args, ("bot_mode", "thoughts_length")
-            )
+            safe_args = self._select_scalar_fields(args, ("bot_mode",))
             if safe_args:
                 result["args"] = safe_args
 
