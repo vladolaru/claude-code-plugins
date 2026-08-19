@@ -56,6 +56,20 @@ except ImportError:
     from review import critic_adjustments
 
 
+# Reserved marker for pipeline-created probe files. Nothing user-owned
+# may carry it, which is what makes the step-11 residue sweep a safe,
+# targeted delete instead of a tree-wide git reset/clean (forbidden:
+# the reviewed repo is the user's live tree and may hold uncommitted work).
+PROBE_MARKER = "pirategoat-probe"
+
+# One spelling of the status command for both the step-3 snapshot and the
+# step-11 comparison, so the two can never drift into reporting a format
+# difference as a worktree change. `--untracked-files=all` is load-bearing:
+# plain porcelain collapses an untracked directory into a single "?? dir/"
+# entry without recursing, which would both coarsen the comparison and hide
+# a probe file created inside a new directory from the sweep.
+_GIT_STATUS_CMD = ["git", "status", "--porcelain", "--untracked-files=all"]
+
 # ---------------------------------------------------------------------------
 # Dispatch Plan Persistence
 # ---------------------------------------------------------------------------
@@ -190,6 +204,43 @@ def _orchestrate_step_2(mode, config, state, context, output_dir):
     return context
 
 
+# ---------------------------------------------------------------------------
+# Worktree Hygiene
+# ---------------------------------------------------------------------------
+
+def _capture_worktree_baseline(output_dir):
+    """Snapshot the reviewed worktree's git status for end-of-run hygiene.
+
+    Any failure yields no baseline file, which step 11 reports as hygiene
+    "unknown" — never "clean" (zero != unknown).
+    """
+    try:
+        proc = subprocess.run(
+            _GIT_STATUS_CMD,
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode != 0:
+            return
+        payload = {
+            "schema": 1,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "entries": [
+                line for line in proc.stdout.splitlines() if line.strip()
+            ],
+        }
+        with open(
+            os.path.join(output_dir, ".worktree-baseline.json"), "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(payload, f, indent=2)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _check_worktree_hygiene(output_dir):
+    raise NotImplementedError
+
+
 def _orchestrate_step_3(mode, config, state, context, output_dir):
     context_path = os.path.join(output_dir, "review-context.json")
 
@@ -230,6 +281,14 @@ def _orchestrate_step_3(mode, config, state, context, output_dir):
     # script never installs anything.
     if config.get("refresh_dependencies"):
         state["dependency_refresh"] = _detect_dependency_refresh_state(context)
+
+    # Baseline for the step-11 hygiene comparison. Taken at the end of
+    # context gathering — the earliest point the run has a settled view of
+    # the tree — so everything already there is recorded as the user's
+    # pre-existing state, and everything that appears afterwards (the
+    # orchestrator's own step-3 dependency refresh included) is measured
+    # as having changed during the review rather than blamed on anyone.
+    _capture_worktree_baseline(output_dir)
 
     return context
 
