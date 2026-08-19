@@ -162,7 +162,7 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — agent-findin
 
 ###Critic Adjustments Tests (`review/test_critic_adjustments.py`)
 
-Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json` (36 collected tests across 6 classes). The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
+Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json` (42 collected tests across 6 classes). The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
 
 | Class | Tests | What it verifies |
 |---|---|---|
@@ -171,7 +171,7 @@ Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer 
 | `TestBatchCoherence` | 9 | All-or-nothing batch validation with nothing written: duplicate targets, an entry targeting a finding an earlier entry removes, an entry with no usable id, an unaddressable finding, an `add` that assigns its own id (both spellings), a pre-existing severity outside the vocabulary, and a findings file that is not a JSON object |
 | `TestScopeLinePairing` | 9 | `scope`/`line` stay the pair `schemas/review-output.ts` declares and `output.py`'s renderer branches on, and patched lines keep the builder's positive 1-indexed invariant |
 | `TestCLI` | 3 | The process contract the step-10 briefing invokes: exit status plus the stdout/stderr channel split |
-| `TestStepElevenAppliesAdjustments` | 3 | Step 11 applies pending adjustments before the verdict sync, and an unapplicable batch degrades the run instead of crashing finalize |
+| `TestStepElevenAppliesAdjustments` | 9 | Step 11 applies pending adjustments before the verdict sync under REVISE, and an unapplicable batch degrades the run instead of crashing finalize; the verdict gate keeps that defensive re-run from becoming a bypass — a pending file under STAND, ESCALATE, a skipped critic, or a missing verdict is reported and never applied, while entries already applied, rejected, or recorded in the findings file stay silent |
 
 ### Shared Graders (`helpers/graders.py`)
 

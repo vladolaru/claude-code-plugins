@@ -707,21 +707,49 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     degradation_notes = []
 
     # Carry any pending critic adjustments into the findings ledger before
-    # the verdict sync. The step-10 REVISE briefing instructs the
-    # orchestrator to run the same apply mid-run, so this call is the
-    # defensive re-run: bot mode follows no briefing at all, and an
-    # interactive run can still stop short of step 10's instructions.
-    # Idempotence makes the re-run free for a run that already applied.
+    # the verdict sync — but only under REVISE, the one verdict that
+    # sanctions them. The step-10 REVISE briefing has the orchestrator
+    # spot-check each entry and mark the refuted ones `rejected` before
+    # running this same apply, so here it is the defensive re-run: bot
+    # mode follows no briefing at all, and an interactive run can still
+    # stop short of step 10's instructions. Idempotence makes the re-run
+    # free for a run that already applied.
+    # The verdict gate is what keeps that re-run from becoming a bypass:
+    # adjustments are a REVISE-only channel, so a critic that writes them
+    # alongside STAND, ESCALATE, or a skipped verdict would otherwise get
+    # them applied with no orchestrator spot-check at all. Under any other
+    # verdict a still-pending file is surfaced as a degradation and never
+    # applied. Pending is counted, not assumed: a file whose entries have
+    # all landed is the ordinary post-apply state of a REVISE run whose
+    # step 11 is re-entered, and says nothing.
     # Ordering note: nothing re-runs the reconciliator after this point —
     # compute_next_step only routes forward (candidates are `s >
     # current_step`), so a completed step 8 is never re-entered — and the
     # applied_critic_adjustments record in the findings file survives to
     # the final artifact.
     if os.path.isfile(findings_path):
-        try:
-            critic_adjustments.apply_adjustments(output_dir)
-        except (ValueError, OSError, json.JSONDecodeError) as err:
-            degradation_notes.append(f"critic adjustments not applied: {err}")
+        critic_verdict = state.get("critic_verdict", "unavailable")
+        if critic_verdict == "REVISE":
+            try:
+                critic_adjustments.apply_adjustments(output_dir)
+            except (ValueError, OSError, json.JSONDecodeError) as err:
+                degradation_notes.append(
+                    f"critic adjustments not applied: {err}"
+                )
+        else:
+            try:
+                pending = critic_adjustments.pending_count(output_dir)
+            except (ValueError, OSError, json.JSONDecodeError) as err:
+                degradation_notes.append(
+                    f"critic adjustments not readable: {err}"
+                )
+            else:
+                if pending:
+                    degradation_notes.append(
+                        f"critic adjustments present but critic verdict is "
+                        f"{critic_verdict} — not applied (adjustments are a "
+                        f"REVISE-only channel)"
+                    )
 
     if not verdict_data:
         degradation_notes.append("review-verdict.json not found")

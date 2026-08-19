@@ -14,7 +14,11 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "review" / "critic_adjustments.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from review.critic_adjustments import apply_adjustments
+from review.critic_adjustments import (
+    APPLIED_IDS_KEY,
+    apply_adjustments,
+    pending_count,
+)
 from review.orchestration import _orchestrate_step_11
 
 
@@ -33,6 +37,12 @@ def _write_findings(output_dir, issues):
 def _write_adjustments(output_dir, adjustments):
     (Path(output_dir) / "decision-critic-adjustments.json").write_text(
         json.dumps({"schema": 1, "adjustments": adjustments})
+    )
+
+
+def _write_critic_verdict(output_dir, verdict):
+    (Path(output_dir) / "decision-critic-verdict.json").write_text(
+        json.dumps({"verdict": verdict})
     )
 
 
@@ -519,7 +529,8 @@ class TestCLI:
 class TestStepElevenAppliesAdjustments:
     """Step 11 is where pending critic adjustments land, so bot mode (which
     follows no briefing) and any run whose orchestrator did not apply them
-    still converge on a findings JSON the critic reached."""
+    still converge on a findings JSON the critic reached — but only under
+    REVISE, the verdict whose briefing spot-checked the entries first."""
 
     def _step_11(self, output_dir):
         """Call the finalize step the way the pipeline facade routes it."""
@@ -531,6 +542,7 @@ class TestStepElevenAppliesAdjustments:
             "action": "promote", "id": "aaaa1111",
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
+        _write_critic_verdict(tmp_path, "REVISE")
         (tmp_path / "review-verdict.json").write_text(
             json.dumps({"verdict": "REQUEST_CHANGES"})
         )
@@ -550,6 +562,7 @@ class TestStepElevenAppliesAdjustments:
             "action": "obliterate", "id": "aaaa1111",
             "fields": {}, "rationale": "r",
         }])
+        _write_critic_verdict(tmp_path, "REVISE")
         (tmp_path / "review-verdict.json").write_text(
             json.dumps({"verdict": "REQUEST_CHANGES"})
         )
@@ -563,6 +576,119 @@ class TestStepElevenAppliesAdjustments:
         assert result["status"] == "degraded"
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"  # nothing half-applied
+
+    @pytest.mark.parametrize("critic_verdict", ["STAND", "ESCALATE", "SKIPPED"])
+    def test_non_revise_verdict_never_applies_pending_adjustments(
+        self, tmp_path, critic_verdict
+    ):
+        """Adjustments are a REVISE-only channel.
+
+        Only the REVISE briefing has the orchestrator spot-check each
+        entry and mark the refuted ones rejected. A critic that writes
+        adjustments alongside any other verdict would otherwise get them
+        applied here with no review at all — the apply would stop being a
+        defensive re-run and become the sole, unreviewed application.
+        """
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        _write_critic_verdict(tmp_path, critic_verdict)
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        self._step_11(tmp_path)
+
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low", "nothing may be applied"
+        assert "critic_adjustment" not in data["issues"][0]
+        assert APPLIED_IDS_KEY not in data
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert any("REVISE-only channel" in n
+                   for n in result["degradation_notes"]), (
+            "a pending file under a non-REVISE verdict must be surfaced, "
+            "not silently dropped"
+        )
+        assert result["status"] == "degraded"
+
+    def test_missing_critic_verdict_never_applies_pending_adjustments(
+        self, tmp_path
+    ):
+        """No verdict file is not an implicit REVISE."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        self._step_11(tmp_path)
+
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low"
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert any("critic verdict is unavailable" in n
+                   for n in result["degradation_notes"])
+
+    def test_settled_adjustments_are_not_suspicious_under_stand(
+        self, tmp_path
+    ):
+        """The gate reports pending entries, not the presence of a file.
+
+        Entries the orchestrator already applied or rejected want nothing
+        more from the ledger, so a run carrying only those is the ordinary
+        settled state — noting it would make every re-entered step 11 look
+        degraded.
+        """
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [
+            {"action": "promote", "id": "aaaa1111",
+             "fields": {"severity": "medium"}, "rationale": "r",
+             "applied": True},
+            {"action": "remove", "id": "aaaa1111", "rationale": "r",
+             "rejected": True, "rejection_reason": "spot-check refuted it"},
+        ])
+        _write_critic_verdict(tmp_path, "STAND")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        self._step_11(tmp_path)
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["degradation_notes"] == []
+        assert result["status"] == "success"
+
+    def test_ids_recorded_in_findings_also_count_as_settled(self, tmp_path):
+        """The other half of the shared predicate: a crash between the two
+        writes leaves an unflagged entry whose id the findings file already
+        records. It is not pending, so it must not be reported either."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "medium")])
+        findings_path = tmp_path / "review-findings.json"
+        data = json.loads(findings_path.read_text())
+        data[APPLIED_IDS_KEY] = ["deadbeef"]
+        findings_path.write_text(json.dumps(data))
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+            "adjustment_id": "deadbeef",
+        }])
+        _write_critic_verdict(tmp_path, "STAND")
+
+        assert pending_count(str(tmp_path)) == 0
+
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        self._step_11(tmp_path)
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["degradation_notes"] == []
 
     def test_malformed_findings_file_degrades_instead_of_crashing(
         self, tmp_path
@@ -578,6 +704,7 @@ class TestStepElevenAppliesAdjustments:
             "action": "promote", "id": "aaaa1111",
             "fields": {"severity": "medium"}, "rationale": "r",
         }])
+        _write_critic_verdict(tmp_path, "REVISE")
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
         result = json.loads((tmp_path / "pipeline-result.json").read_text())

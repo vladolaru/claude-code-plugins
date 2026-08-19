@@ -185,6 +185,79 @@ def _index_adjustment_ids(adjustments):
         seen[adjustment_id] = idx
 
 
+# Entry states, shared by the writer and the read-only counter so the two
+# can never disagree about what "pending" means.
+_SETTLED = "settled"      # flagged applied, or rejected by the orchestrator
+_CATCH_UP = "catch_up"    # findings write landed, flag write did not
+_PENDING = "pending"      # not yet applied anywhere
+
+
+def _entry_state(entry, already_recorded):
+    """Classify one adjustment against the record kept on both sides."""
+    if entry.get("applied") is True or entry.get("rejected") is True:
+        return _SETTLED
+    if entry.get("adjustment_id") in already_recorded:
+        return _CATCH_UP
+    return _PENDING
+
+
+def _recorded_ids_best_effort(output_dir):
+    """Read the already-applied ids without insisting they are well-formed.
+
+    apply_adjustments raises on a malformed record because it is about to
+    write against it. This read-only path instead falls back to "nothing
+    recorded", which can only over-count pending entries — the direction
+    that surfaces a suspicious file rather than hiding one.
+    """
+    findings_path = os.path.join(output_dir, FINDINGS_FILENAME)
+    if not os.path.isfile(findings_path):
+        return set()
+    try:
+        with open(findings_path, "r", encoding="utf-8") as f:
+            findings = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return set()
+    if not isinstance(findings, dict):
+        return set()
+    recorded = findings.get(APPLIED_IDS_KEY)
+    if not isinstance(recorded, list):
+        return set()
+    return {value for value in recorded if isinstance(value, str)}
+
+
+def pending_count(output_dir):
+    """Count adjustments that have not landed yet, without applying any.
+
+    The step-11 gate needs to tell a file that still wants to change the
+    ledger from one whose entries have all already landed: only the
+    former is suspicious under a non-REVISE verdict, since re-entering
+    step 11 after a legitimate apply leaves a fully-flagged file behind.
+    Answering that by calling apply_adjustments would be the bypass the
+    gate exists to close, so this shares the predicate instead of the
+    write path.
+    """
+    adj_path = os.path.join(output_dir, ADJUSTMENTS_FILENAME)
+    if not os.path.isfile(adj_path):
+        return 0
+    with open(adj_path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    adjustments = doc.get("adjustments") if isinstance(doc, dict) else None
+    if not isinstance(adjustments, list):
+        raise ValueError(
+            f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"
+        )
+    already_recorded = _recorded_ids_best_effort(output_dir)
+    count = 0
+    for entry in adjustments:
+        # apply_adjustments rejects a non-object entry loudly; for the
+        # read-only question "is anything here unlanded?" it certainly is.
+        if not isinstance(entry, dict):
+            count += 1
+        elif _entry_state(entry, already_recorded) == _PENDING:
+            count += 1
+    return count
+
+
 def apply_adjustments(output_dir):
     """Apply pending critic adjustments once; return a result dict.
 
@@ -243,10 +316,10 @@ def apply_adjustments(output_dir):
     seen_targets = {}
     removed_in_batch = {}
     for idx, entry in enumerate(adjustments):
-        if entry.get("applied") is True or entry.get("rejected") is True:
+        entry_state = _entry_state(entry, already_recorded)
+        if entry_state == _SETTLED:
             continue
-        adjustment_id = entry.get("adjustment_id")
-        if adjustment_id in already_recorded:
+        if entry_state == _CATCH_UP:
             # The findings write landed; only the flag write was lost.
             catch_up.append(entry)
             continue
