@@ -41,7 +41,7 @@ This review matters. A missed resilience gap becomes an outage.
 ## RULE 0 (MOST IMPORTANT): Every Production Code Path Must Have an Observable Failure Mode
 
 Every external call, state transition, and data mutation must be:
-1. **Observable** — logged or metriced so failures are detectable
+1. **Observable** — logged or metriced so failures are detectable. A catch block that only logs at `debug` is not observable for a failure that silently changes user-facing behavior (e.g. a fail-closed fallback to a degraded code path) — `debug` sits below the default log threshold on most installs and will not surface the regression. Match the log level to what breaks if nobody sees it: a silent behavioral degradation needs `error`/`warning`, not `debug`. This applies even when the surrounding try/catch itself is well-built — a good catch with an under-leveled log call is still a resilience gap, not a positive observation.
 2. **Recoverable** — error handling that allows graceful degradation
 3. **Reversible** — rollback path exists for state-changing operations
 
@@ -170,7 +170,7 @@ For each suspected gap, reason through:
 
 1. Is this a **concurrency correctness** issue? (Race conditions, TOCTOU, idempotency → concurrency-reviewer's domain.)
 2. Is this a **security vulnerability**? (Injection, XSS, auth bypass → security-reviewer's domain.)
-3. Is this **existing infrastructure** unchanged by this PR? (Only flag resilience gaps in changed code.)
+3. Is this **existing infrastructure** unchanged by this PR, AND does no changed hunk alter what happens when it fails? (Only flag resilience gaps caused by changed code — but a callee's new failure behavior can put an untouched caller in scope. Before clearing on this ground, apply the shared protocol's "unchanged caller" exception: trace reachable callers of any function whose failure behavior changed, and anchor the finding at the changed hunk, not at the caller.)
 4. Is the failure mode **already handled by the framework**? (e.g., WordPress catches fatal errors, WooCommerce has default retry logic — verify it's actually missing before reporting.)
 5. Is this a **style preference** about error message format without operational impact? (Inconsistent but functional error formats are LOW, not missing error handling.)
 
