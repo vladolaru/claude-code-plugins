@@ -1704,63 +1704,96 @@ class TestNotDiffedContractIsDelivered:
 
 
 class TestTestingDocCounts:
-    """TESTING.md's per-class counts for this file must match real collection.
+    """TESTING.md's per-class count tables must match real collection.
 
-    Four of the eight documented counts had silently drifted (5 vs 13, 2 vs 3,
-    21 vs 30, 4 vs 5) and six classes were undocumented entirely, so the table
-    read as authoritative while being wrong — the failure mode the table exists
-    to prevent. Counts are COLLECTED tests, not test methods: parameterized
-    classes expand, and for TestSmokeAllAgents (one method over every registered
-    agent) the method count would be useless.
+    Four of the eight documented counts had silently drifted (5 vs 13, 2 vs
+    3, 21 vs 30, 4 vs 5) and six classes were undocumented entirely, so the
+    table read as authoritative while being wrong — the failure mode the
+    table exists to prevent. Counts are COLLECTED tests, not test methods:
+    parameterized classes expand, and for TestSmokeAllAgents (one method
+    over every registered agent) the method count would be useless.
+
+    The guard lives here, next to the first table it covered, and covers
+    every count table in TESTING.md — a table added without a guard is a
+    table that drifts. It checks itself: its own row is in the first table.
     """
 
-    TABLE_HEADING = "###Bootstrap Integration Tests"
+    # (TESTING.md heading, test file under tests/, coverage mode)
+    #
+    # "full"    — the table claims to describe the whole file, so both
+    #             directions hold: documented counts are real, and no class
+    #             is missing a row.
+    # "partial" — the table documents a deliberate subset (the
+    #             reconciliation-context table calls out the 2 classes
+    #             carrying the NOT DIFFED contract out of 22). Its rows must
+    #             still be true; requiring the other 20 would be demanding
+    #             prose the section never promised.
+    TABLES = (
+        ("###Bootstrap Integration Tests",
+         "review/agent/test_bootstrap_integration.py", "full"),
+        ("###Critic Adjustments Tests",
+         "review/test_critic_adjustments.py", "full"),
+        ("###Reconciliation Context Tests",
+         "review/test_reconciliation_context.py", "partial"),
+    )
+    FULL_TABLES = tuple(row for row in TABLES if row[2] == "full")
 
-    def _documented(self):
-        """Parse {class: count} from this file's table in TESTING.md."""
+    def _documented(self, heading):
+        """Parse {class: count} from one table in TESTING.md."""
         text = (TESTS_DIR / "TESTING.md").read_text(encoding="utf-8")
-        start = text.index(self.TABLE_HEADING)
-        block = text[start:].split("\n###", 1)[0]
+        assert text.count(heading) == 1, (
+            f"heading {heading!r} is not unique in TESTING.md — the guard "
+            f"would parse an ambiguous block"
+        )
+        block = text[text.index(heading):].split("\n###", 1)[0]
         documented = {}
         for line in block.splitlines():
             match = re.match(r"\|\s*`(Test\w+)`\s*\|\s*(\d+)\s*\|", line)
             if match:
                 documented[match.group(1)] = int(match.group(2))
-        assert documented, "no rows parsed — did the table format change?"
+        assert documented, (
+            f"no rows parsed under {heading!r} — did the table format change?"
+        )
         return documented
 
-    def _collected(self):
+    def _collected(self, rel_path):
         """Real per-class collected counts, via pytest's own collector."""
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(Path(__file__)),
+            [sys.executable, "-m", "pytest", str(TESTS_DIR / rel_path),
              "--collect-only", "-q", "-p", "no:cacheprovider"],
             capture_output=True, text=True, cwd=str(PLUGIN_ROOT.parent.parent),
         )
-        assert result.returncode == 0, f"collection failed:\n{result.stdout}\n{result.stderr}"
+        assert result.returncode == 0, (
+            f"collection failed for {rel_path}:\n{result.stdout}\n{result.stderr}"
+        )
         counts = {}
         for line in result.stdout.splitlines():
             match = re.search(r"::(Test\w+)::", line)
             if match:
                 counts[match.group(1)] = counts.get(match.group(1), 0) + 1
-        assert counts, "collected nothing — collector output format changed?"
+        assert counts, f"collected nothing from {rel_path} — format changed?"
         return counts
 
-    def test_documented_counts_match_collection(self):
-        documented, collected = self._documented(), self._collected()
+    @pytest.mark.parametrize("heading,rel_path,mode", TABLES)
+    def test_documented_counts_match_collection(self, heading, rel_path, mode):
+        documented = self._documented(heading)
+        collected = self._collected(rel_path)
         wrong = {
             name: (count, collected.get(name))
             for name, count in documented.items()
             if collected.get(name) != count
         }
         assert not wrong, (
-            "TESTING.md counts are stale (class: documented -> actual): "
-            f"{wrong}. Update the Bootstrap Integration Tests table."
+            f"{heading} counts are stale (class: documented -> actual): "
+            f"{wrong}. Update the table."
         )
 
-    def test_every_class_is_documented(self):
-        documented, collected = self._documented(), self._collected()
+    @pytest.mark.parametrize("heading,rel_path,mode", FULL_TABLES)
+    def test_every_class_is_documented(self, heading, rel_path, mode):
+        documented = self._documented(heading)
+        collected = self._collected(rel_path)
         missing = sorted(set(collected) - set(documented))
         assert not missing, (
-            f"classes absent from TESTING.md's table: {missing}. Add a row each, "
+            f"classes absent from {heading}: {missing}. Add a row each, "
             "or the table implies coverage that isn't described."
         )

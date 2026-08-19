@@ -2,6 +2,7 @@
 finding-level decisions into review-findings.json."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ from review.critic_adjustments import (
     pending_count,
 )
 from review.orchestration import _orchestrate_step_11
+from review.reconciliation_context import build_critic_context
 
 
 def _write_findings(output_dir, issues):
@@ -524,6 +526,125 @@ class TestCLI:
         assert "obliterate" in proc.stderr
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"
+
+
+class TestVerdictSyncHardening:
+    """Step 11's Rule 23 sync is the other writer of review-findings.json.
+
+    Crash-safety is a property of the artifact, not of one module: the
+    adjustments apply replaces the ledger atomically, but the verdict sync
+    ran last and wrote it with a truncating open, so a crash there left a
+    truncated ledger regardless. It also assumed the file was an object.
+    """
+
+    def test_verdict_sync_leaves_no_temp_residue(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "COMMENT"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict"] == "COMMENT"
+        leftovers = [
+            path.name for path in tmp_path.iterdir()
+            if path.name.startswith("tmp") or path.suffix == ".tmp"
+        ]
+        assert leftovers == [], f"temp files survived the sync: {leftovers}"
+
+    def test_list_shaped_ledger_degrades_instead_of_crashing(self, tmp_path):
+        """The subscript assignment used to raise TypeError past the except
+        tuple, taking finalize down with a review that had already run."""
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps([_issue("aaaa1111", "low")])
+        )
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "COMMENT"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert any("verdict sync skipped" in note
+                   for note in result["degradation_notes"])
+        assert result["status"] == "degraded", (
+            "a degradation found during the sync must reach the status "
+            "published beside it"
+        )
+        # The unusable ledger is left exactly as found, not half-rewritten.
+        assert json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        ) == [_issue("aaaa1111", "low")]
+
+
+class TestCriticContextRoundTrip:
+    """The full REVISE loop across the two artifacts that must agree.
+
+    Three modules meet here and none of their own tests span the seam:
+    reconciliation_context.py renders the critic's ONLY view of the
+    findings, the critic keys its adjustments off that view, and
+    critic_adjustments.py resolves those keys against review-findings.json.
+    While the context rendered F-labels alone, each module passed its own
+    tests and the loop was still broken end to end — every REVISE run
+    shipped degraded with "no issue with id 'F1'". This test crosses the
+    seam by taking its id the way the critic must: out of the rendered
+    context, never out of the findings file.
+    """
+
+    # Deliberately regex over the RENDERED context: reading the id from
+    # the findings dict would test the applier against itself and skip
+    # the one hop — render to critic — where the contract broke.
+    ID_IN_HEADING = re.compile(r"^### F\d+ \[id: ([^\]]+)\]:", re.MULTILINE)
+
+    def test_an_id_read_from_the_critic_context_applies(self, tmp_path):
+        _write_findings(tmp_path, [_issue("9f3a1c7d", "low")])
+        findings = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        context = build_critic_context("# review report", findings)
+        (tmp_path / "critic-context.md").write_text(context)
+
+        # The critic's view is the context document, so the key it can use
+        # is whatever that document shows it.
+        visible_ids = self.ID_IN_HEADING.findall(context)
+        assert visible_ids, (
+            "the critic context shows no ledger id — a critic reading it "
+            "has no key it can put in an adjustment"
+        )
+
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": visible_ids[0],
+            "fields": {"severity": "high"},
+            "rationale": "the exploit path is reachable from the REST route",
+        }])
+        _write_critic_verdict(tmp_path, "REVISE")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "REQUEST_CHANGES"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        issue = data["issues"][0]
+        assert issue["severity"] == "high", (
+            "the id the critic could see did not resolve in the ledger"
+        )
+        assert issue["critic_adjustment"]["action"] == "promote"
+        assert data["summary"]["by_severity"]["high"] == 1
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["degradation_notes"] == []
+        assert result["status"] == "success"
+
+    def test_the_visible_id_is_the_ledger_id(self, tmp_path):
+        """Not just parseable — the same string the findings file stores."""
+        _write_findings(tmp_path, [_issue("9f3a1c7d"), _issue("0badf00d")])
+        findings = json.loads((tmp_path / "review-findings.json").read_text())
+        context = build_critic_context("# review report", findings)
+        assert self.ID_IN_HEADING.findall(context) == [
+            issue["id"] for issue in findings["issues"]
+        ]
 
 
 class TestStepElevenAppliesAdjustments:

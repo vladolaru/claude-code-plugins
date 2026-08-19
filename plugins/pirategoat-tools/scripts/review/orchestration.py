@@ -761,18 +761,36 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         degradation_notes.append("review-findings.json not found")
 
     verdict = verdict_data.get("verdict", "COMMENT") if verdict_data else "COMMENT"
-    status = "success" if not degradation_notes else "degraded"
 
-    # Rule 23: update review-findings.json verdict to match
+    # Rule 23: update review-findings.json verdict to match. This is the
+    # other writer of the ledger critic_adjustments.py keeps crash-safe, so
+    # it shares that module's atomic write: a truncating open here would
+    # leave the artifact destroyable by a crash mid-write no matter how
+    # carefully the adjustments path replaces it, and this write is the
+    # last one the run performs.
     if verdict_data and os.path.isfile(findings_path):
         try:
             with open(findings_path) as f:
                 findings = json.load(f)
-            findings["verdict"] = verdict
-            with open(findings_path, "w") as f:
-                json.dump(findings, f, indent=2)
+            # A non-object ledger has nowhere to carry a verdict. The
+            # subscript assignment would raise TypeError past this except
+            # tuple and crash finalize outright — the same shape hole the
+            # adjustments apply closed on its own side.
+            if not isinstance(findings, dict):
+                degradation_notes.append(
+                    "verdict sync skipped: review-findings.json is not an "
+                    "object"
+                )
+            else:
+                findings["verdict"] = verdict
+                critic_adjustments.atomic_write_json(findings_path, findings)
         except (json.JSONDecodeError, OSError):
             pass
+
+    # Computed after the verdict sync: a degradation the sync discovers has
+    # to reach the status it is reported beside, or the run publishes
+    # "success" while carrying a note that says otherwise.
+    status = "success" if not degradation_notes else "degraded"
 
     pipeline_result = {
         "status": status,

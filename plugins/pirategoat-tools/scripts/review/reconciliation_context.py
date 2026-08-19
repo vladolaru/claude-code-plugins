@@ -1627,8 +1627,22 @@ def build_critic_context(report_text: str, findings: Dict[str, Any]) -> str:
 
         conf_str = f", confidence: {confidence}" if confidence else ""
         title = _strip_critic_severity_floor_markers(title)
+        # The ledger id, beside the F-label the critic uses in prose. The
+        # critic keys decision-critic-adjustments.json by this id, and
+        # critic_adjustments.py resolves it against review-findings.json —
+        # without it here the critic's only visible handle is the F-label,
+        # which is a rendering artifact no ledger contains, so every
+        # adjustment it wrote failed as "no issue with id 'F1'". Rendered
+        # BEFORE the title so no title can forge an id group after it, and
+        # only for issues the applier can actually address: its `by_id` map
+        # admits exactly the non-empty string ids, so "an id is shown" and
+        # "this finding is targetable" stay the same statement.
+        issue_id = issue.get("id")
+        id_str = ""
+        if isinstance(issue_id, str) and issue_id:
+            id_str = f" [id: {_escape_inline(issue_id)}]"
         parts.append(
-            f"### F{idx}: {_escape_inline(title)} [{severity}{conf_str}]"
+            f"### F{idx}{id_str}: {_escape_inline(title)} [{severity}{conf_str}]"
         )
 
         if file_path:

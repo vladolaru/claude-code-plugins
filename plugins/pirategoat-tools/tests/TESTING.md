@@ -100,7 +100,7 @@ Counts below are **collected** tests, not test methods — parameterized classes
 | `TestVerificationMethodContract` | 6 | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
 | `TestDismissalDisciplineContract` | 3 | Dismissal/mitigation verification applies to ALL findings, not a subset. |
 | `TestCanonicalExecutableBuilderSource` | 1 | Bootstrap is the sole executable `ReviewOutputBuilder` command source. |
-| `TestTestingDocCounts` | 2 | This table itself: every documented count matches real collection, and every class in the file has a row. |
+| `TestTestingDocCounts` | 5 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context) are checked in the documented direction only. |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
@@ -162,7 +162,7 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — agent-findin
 
 ###Critic Adjustments Tests (`review/test_critic_adjustments.py`)
 
-Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json` (42 collected tests across 6 classes). The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
+Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer that carries `decision-critic-adjustments.json` into `review-findings.json` (46 collected tests across 8 classes). The module is the seam where a critic decision either reaches the machine-readable ledger or silently vanishes, so the classes are split by failure mode rather than by function.
 
 | Class | Tests | What it verifies |
 |---|---|---|
@@ -172,6 +172,8 @@ Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer 
 | `TestScopeLinePairing` | 9 | `scope`/`line` stay the pair `schemas/review-output.ts` declares and `output.py`'s renderer branches on, and patched lines keep the builder's positive 1-indexed invariant |
 | `TestCLI` | 3 | The process contract the step-10 briefing invokes: exit status plus the stdout/stderr channel split |
 | `TestStepElevenAppliesAdjustments` | 9 | Step 11 applies pending adjustments before the verdict sync under REVISE, and an unapplicable batch degrades the run instead of crashing finalize; the verdict gate keeps that defensive re-run from becoming a bypass — a pending file under STAND, ESCALATE, a skipped critic, or a missing verdict is reported and never applied, while entries already applied, rejected, or recorded in the findings file stay silent |
+| `TestCriticContextRoundTrip` | 2 | The seam none of the three modules' own tests span: an id taken out of a real `build_critic_context()` render — the critic's only view — must resolve in the ledger when step 11 applies it. Guards the gap where the context showed F-labels alone and every REVISE run shipped degraded |
+| `TestVerdictSyncHardening` | 2 | Rule 23's verdict sync is the ledger's other writer: it replaces the file atomically (no temp residue) and degrades on a non-object ledger instead of raising `TypeError` past its except tuple |
 
 ### Shared Graders (`helpers/graders.py`)
 

@@ -47,12 +47,17 @@ FINDINGS_FILENAME = "review-findings.json"
 APPLIED_IDS_KEY = "applied_critic_adjustments"
 
 
-def _atomic_write_json(path, payload):
+def atomic_write_json(path, payload):
     """Replace a JSON artifact in one step, or leave the old one intact.
 
     Same temp-file-then-os.replace convention as telemetry.py's manifest
     and orchestration.py's dispatch plan. Failures propagate here — a
     ledger this module could not write must not read as a success.
+
+    Public because this module is not the only writer of
+    review-findings.json: step 11's Rule 23 verdict sync writes the same
+    artifact and shares this primitive, so the crash-safety of the ledger
+    does not depend on which writer touched it last.
     """
     directory = os.path.dirname(path) or "."
     temp_path = None
@@ -416,14 +421,14 @@ def apply_adjustments(output_dir):
         findings[APPLIED_IDS_KEY] = recorded_ids
         if newly_allocated:
             # Ids only — the applied flags belong after the findings write.
-            _atomic_write_json(adj_path, doc)
-        _atomic_write_json(findings_path, findings)
+            atomic_write_json(adj_path, doc)
+        atomic_write_json(findings_path, findings)
     if applied or catch_up:
         for entry, _action, _fields in pending:
             entry["applied"] = True
         for entry in catch_up:
             entry["applied"] = True
-        _atomic_write_json(adj_path, doc)
+        atomic_write_json(adj_path, doc)
     return {"status": "applied" if applied else "nothing_pending",
             "applied": applied}
 
