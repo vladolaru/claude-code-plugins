@@ -361,6 +361,12 @@ def _usage_summary(output_dir):
         # evidence at finalize while the orchestrator's is partial by
         # construction, and a single flag could not say that.
         "availability": section["availability"],
+        # The warrant behind "partial": False means the capture substituted
+        # its own window bound because the run was still open, which is the
+        # normal finalize case. A closed window whose orchestrator half is
+        # still partial is the other story — damaged transcript evidence —
+        # and a consumer cannot tell them apart without this.
+        "window_closed": section["window"]["closed"],
     }
 
 

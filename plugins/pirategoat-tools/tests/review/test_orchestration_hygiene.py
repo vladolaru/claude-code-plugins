@@ -511,9 +511,27 @@ class TestStepElevenUsageSnapshot:
             "availability": {
                 "subagents": "complete", "orchestrator": "partial",
             },
+            "window_closed": False,
         }
         assert result["status"] == "success"
         assert result["degradation_notes"] == []
+
+    def test_compact_block_carries_the_windows_own_state(self, git_repo,
+                                                         monkeypatch):
+        """"partial" has two stories and the bot has to tell them apart:
+        a substituted bound (the run was still open at capture) versus
+        damaged transcript evidence inside a window that really closed."""
+        repo, out = git_repo
+        _seed_step_11(out)
+        payload = self._usage_snapshot()
+        payload["window"]["closed"] = True
+        self._fake_capture(monkeypatch, json.dumps(payload))
+
+        self._step_11(out)
+        result = json.loads((out / "pipeline-result.json").read_text())
+
+        assert result["usage"]["window_closed"] is True
+        assert result["usage"]["availability"]["orchestrator"] == "partial"
 
     def test_failed_capture_reads_unmeasured_and_degrades_nothing(
         self, git_repo, monkeypatch

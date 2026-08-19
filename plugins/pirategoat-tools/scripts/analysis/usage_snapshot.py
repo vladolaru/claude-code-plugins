@@ -233,6 +233,16 @@ def _build_snapshot(
     # transcript: the dispatch records `claude-opus-5[1m]` where the messages
     # record plain `claude-opus-5`, and the bracketed variant is a separately
     # priced model. Bucketing on the transcript's spelling would merge them.
+    #
+    # The cost of that choice: a subagent that fell back mid-run would have
+    # its whole total booked to the dispatched model, because the dispatch
+    # result envelope carries ONE `resolvedModel` and cannot express a
+    # switch. The transcript's own `usage_by_model` can — it observed
+    # exactly one model per transcript across all 14 agents of the
+    # 2026-08-19 field run — but it drops the priced variant tag, so it
+    # cannot be the bucket key either. Pricing correctness wins: the
+    # per-agent rows below keep the dispatched model beside each total, so
+    # a reader who suspects a fallback can still cross-check one agent.
     by_model: dict[str, dict[str, int]] = {}
     for row in usable:
         model = row.get("model")

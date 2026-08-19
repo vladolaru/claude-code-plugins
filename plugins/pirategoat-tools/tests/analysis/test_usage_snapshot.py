@@ -242,6 +242,26 @@ class TestAvailabilityLabels:
         assert run.snapshot()["availability"]["orchestrator"] == "partial"
         assert run.snapshot()["window"]["closed"] is False
 
+    def test_substituted_window_cannot_warrant_complete(self, tmp_path):
+        """A settled status is not the same fact as a recorded end.
+
+        Here the manifest calls itself complete but recorded no
+        `ended_at`, so the capture still SUBSTITUTES its own instant as
+        the window bound. Every other case masks this: while the status
+        is "running" the enrichment's own `run_settled` gate already
+        forces `orchestrator_data` false, so dropping the `window_closed`
+        conjunct changes nothing there. This is the one shape where the
+        guard is the only thing standing between a substituted bound and
+        a completeness claim.
+        """
+        run = _seed_two_agent_run(tmp_path, status="complete")
+
+        _run_cli(run)
+        snapshot = run.snapshot()
+
+        assert snapshot["window"]["closed"] is False
+        assert snapshot["availability"]["orchestrator"] == "partial"
+
     def test_settled_run_can_upgrade_the_orchestrator_half(self, tmp_path):
         """A post-close re-run measures a window that is actually closed."""
         run = _seed_two_agent_run(

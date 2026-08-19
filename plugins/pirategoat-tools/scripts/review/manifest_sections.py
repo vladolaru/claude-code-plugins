@@ -49,6 +49,13 @@ _WORKTREE_HYGIENE_STATUSES = frozenset({
     "clean", "changed_during_review", "unknown",
 })
 _USAGE_AVAILABILITY_STATES = frozenset({"complete", "partial", "missing"})
+# The one snapshot schema this projection understands. An artifact
+# announcing a different one was written by a producer whose field
+# meanings this builder cannot vouch for, so it reads as unmeasured
+# rather than being projected on the assumption that the names still
+# mean what they mean here — the same rule the metrics consumer
+# applies to run manifests via _SUPPORTED_MANIFEST_SCHEMA_VERSION.
+_SUPPORTED_USAGE_SNAPSHOT_SCHEMA = 1
 # Mirrors the token-usage vocabulary the analysis package accumulates. The
 # two halves of a snapshot are summed over the same field set, so a map
 # missing any of them is not a usable measurement.
@@ -647,9 +654,20 @@ def build_usage_manifest(output_dir: str) -> Optional[dict]:
     is taken, while the orchestrator is measuring its own still-open
     session. Flattening them would let a structurally partial number be
     read as a complete one.
+
+    `window.closed` rides along because "partial" alone is ambiguous on a
+    durable surface: an orchestrator half can be partial because the
+    capture substituted its own window bound (the run was still open) or
+    because the transcript evidence itself was damaged. The 2026-08-19
+    field run is that ambiguity made concrete — a CLOSED window whose
+    orchestrator half is still partial, from an unresolved tool call.
+    Without the flag a reader cannot tell those two runs apart.
     """
     data = read_json_file(output_dir, "usage-snapshot.json")
     if data is None:
+        return None
+    schema = data.get("schema")
+    if isinstance(schema, bool) or schema != _SUPPORTED_USAGE_SNAPSHOT_SCHEMA:
         return None
 
     availability = data.get("availability")
@@ -664,9 +682,11 @@ def build_usage_manifest(output_dir: str) -> Optional[dict]:
     by_model_raw = data.get("usage_by_model")
     by_model: Dict[str, Dict[str, int]] = {}
     if isinstance(by_model_raw, dict):
+        # Keys need no type guard: this dict came out of a JSON object, and
+        # JSON object keys are always strings.
         for model, usage in by_model_raw.items():
             safe = _safe_usage_map(usage)
-            if isinstance(model, str) and safe is not None:
+            if safe is not None:
                 by_model[model] = safe
 
     rows_raw = data.get("subagent_usage")
@@ -687,8 +707,24 @@ def build_usage_manifest(output_dir: str) -> Optional[dict]:
     counts = data.get("agents_measured")
     counts = counts if isinstance(counts, dict) else {}
     captured_at = data.get("captured_at")
+    window = data.get("window")
+    window = window if isinstance(window, dict) else {}
+
+    def bound(name: str) -> Optional[str]:
+        value = window.get(name)
+        return value if isinstance(value, str) else None
+
     return {
         "captured_at": captured_at if isinstance(captured_at, str) else None,
+        "window": {
+            "started_at": bound("started_at"),
+            "ended_at": bound("ended_at"),
+            # Anything but an explicit True reads as a substituted bound.
+            # "closed" is the stronger claim — it says the run's own
+            # manifest recorded an end — so an unreadable flag must fall to
+            # the weaker one, never license the stronger.
+            "closed": window.get("closed") is True,
+        },
         "availability": {
             "subagents": state("subagents"),
             "orchestrator": state("orchestrator"),

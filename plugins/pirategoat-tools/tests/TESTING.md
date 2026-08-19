@@ -182,14 +182,14 @@ Direct unit tests on `scripts/review/critic_adjustments.py` — the sole writer 
 
 ###Orchestration Hygiene Tests (`review/test_orchestration_hygiene.py`)
 
-Direct unit tests on the finalize-side accounting in `scripts/review/orchestration.py` — the step-3 hygiene baseline snapshot, the step-11 compare-and-sweep, the degradation notes step 11 derives from the result, and the step-11 token-usage capture (28 collected tests across 4 classes). Each test runs against a throwaway git repo as CWD, because the hygiene code under test resolves and mutates the repository it is standing in.
+Direct unit tests on the finalize-side accounting in `scripts/review/orchestration.py` — the step-3 hygiene baseline snapshot, the step-11 compare-and-sweep, the degradation notes step 11 derives from the result, and the step-11 token-usage capture (29 collected tests across 4 classes). Each test runs against a throwaway git repo as CWD, because the hygiene code under test resolves and mutates the repository it is standing in.
 
 | Class | Tests | What it verifies |
 |---|---|---|
 | `TestBaselineCapture` | 4 | `_capture_worktree_baseline()` records the porcelain entries AND the repo root it measured; a clean tree writes an empty entry list (a measured zero), and a failed capture writes nothing at all rather than a baseline that would license a sweep |
 | `TestHygieneCheck` | 15 | `_check_worktree_hygiene()` sweeps ONLY untracked files whose basename carries the probe marker, inside a baseline whose recorded repo root is provably the one it is standing in. Foreign new files, preexisting dirt, a marker-named directory's ordinary contents, a marker-named symlink to a directory, and tracked marker files are reported, never deleted; a missing, foreign, or repo-root-less baseline reports `unknown` and deletes nothing |
 | `TestStepElevenHygieneNotes` | 4 | Only swept probe residue degrades the run — a requester editing their own tree during a review is measured, not blamed, because `status` is a bot contract meaning "the review underperformed". A non-git CWD adds no notes |
-| `TestStepElevenUsageSnapshot` | 5 | The capture is a subprocess seam (so `scripts/review/` never imports `scripts/analysis/`) whose failure is deliberately quiet: an absent or unreadable snapshot reads as unmeasured — `usage: null`, status untouched, no note — because a Codex host and every pre-feature run legitimately have no Claude-format transcripts. A measured snapshot projects into the compact `usage` block with both availability halves intact, and a measured-missing half publishes nulls rather than zeros |
+| `TestStepElevenUsageSnapshot` | 6 | The capture is a subprocess seam (so `scripts/review/` never imports `scripts/analysis/`) whose failure is deliberately quiet: an absent or unreadable snapshot reads as unmeasured — `usage: null`, status untouched, no note — because a Codex host and every pre-feature run legitimately have no Claude-format transcripts. A measured snapshot projects into the compact `usage` block with both availability halves intact plus `window_closed`, and a measured-missing half publishes nulls rather than zeros |
 
 ###Pipeline Infrastructure Tests (`review/test_pipeline_infra.py`)
 
@@ -201,12 +201,12 @@ Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequen
 
 ###Telemetry Tests (`review/test_telemetry.py`)
 
-Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag (229 collected tests across 19 classes). The skip-ledger and token-usage projections are documented here because each carries an audit contract from a run artifact into the manifest; the remaining classes follow the same direct-unit-test pattern.
+Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag (237 collected tests across 19 classes). The skip-ledger and token-usage projections are documented here because each carries an audit contract from a run artifact into the manifest; the remaining classes follow the same direct-unit-test pattern.
 
 | Class | Tests | What it verifies |
 |---|---|---|
 | `TestSkippedStepsManifest` | 10 | `build_skipped_steps_manifest()` keeps three outcomes apart: `None` when the run never recorded skips (state absent, key-less, malformed, or a non-list value), `[]` as a measured zero, and the projected records otherwise — entries without a usable integer step are dropped and absent prose defaults to empty, and the manifest carries the section beside `availability.skipped_steps` |
-| `TestUsageManifest` | 9 | `build_usage_manifest()` keeps the same three outcomes apart for the step-11 token-usage snapshot: `None` when the run never measured usage (artifact absent or malformed), a section carrying its own `missing` availability when the capture ran and found no transcripts, and the projection otherwise. The two availability halves stay separate (subagents complete at finalize, orchestrator partial by construction), an unrecognized label reads `missing`, and a damaged usage map is dropped rather than zeroed |
+| `TestUsageManifest` | 17 | `build_usage_manifest()` keeps the same three outcomes apart for the step-11 token-usage snapshot: `None` when the run never measured usage (artifact absent or malformed), a section carrying its own `missing` availability when the capture ran and found no transcripts, and the projection otherwise. The two availability halves stay separate (subagents complete at finalize, orchestrator partial by construction) beside `window.closed`, which is what tells a reader whether "partial" means a substituted bound or damaged evidence — an unreadable flag falls to the weaker claim. An unrecognized label reads `missing`, a damaged usage map is dropped rather than zeroed, and an unknown snapshot schema reads as unmeasured |
 
 ###Registry Documentation Tests (`review/test_registry_docs.py`)
 

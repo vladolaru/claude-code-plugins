@@ -3621,6 +3621,11 @@ class TestUsageManifest:
         section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
 
         assert section["captured_at"] == "2026-08-19T10:43:00+00:00"
+        assert section["window"] == {
+            "started_at": "2026-08-19T10:00:00+00:00",
+            "ended_at": "2026-08-19T10:43:00+00:00",
+            "closed": False,
+        }
         assert section["availability"] == {
             "subagents": "complete", "orchestrator": "partial",
         }
@@ -3635,6 +3640,52 @@ class TestUsageManifest:
             {"agent": "security-reviewer", "model": "claude-sonnet-5",
              "usage": self._usage(output=2)},
         ]
+
+    def test_unknown_schema_yields_none(self, mod, tmp_path):
+        """A snapshot announcing a schema this builder does not know was
+        written by a producer whose field meanings it cannot vouch for."""
+        self._write(tmp_path, self._snapshot(schema=2))
+
+        build = mod.manifest_sections.build_usage_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_missing_schema_yields_none(self, mod, tmp_path):
+        snapshot = self._snapshot()
+        del snapshot["schema"]
+        self._write(tmp_path, snapshot)
+
+        build = mod.manifest_sections.build_usage_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_a_closed_window_is_projected_as_closed(self, mod, tmp_path):
+        """The flag is what separates "partial because the run was still
+        open" from "partial because the evidence was damaged"."""
+        self._write(tmp_path, self._snapshot(
+            window={"started_at": "2026-08-19T10:00:00+00:00",
+                    "ended_at": "2026-08-19T10:43:05+00:00",
+                    "closed": True},
+        ))
+
+        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
+
+        assert section["window"]["closed"] is True
+
+    @pytest.mark.parametrize(
+        "window",
+        [{}, {"closed": "yes"}, {"closed": 1}, "not-an-object", None],
+        ids=["absent", "string", "int", "scalar", "null"],
+    )
+    def test_unreadable_window_falls_to_substituted(self, mod, tmp_path,
+                                                    window):
+        """"closed" is the stronger claim, so an unreadable flag must fall
+        to the weaker one rather than license the stronger."""
+        self._write(tmp_path, self._snapshot(window=window))
+
+        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
+
+        assert section["window"] == {
+            "started_at": None, "ended_at": None, "closed": False,
+        }
 
     def test_measured_missing_is_not_absent(self, mod, tmp_path):
         """A run that tried and found no transcripts is a section, not None.
