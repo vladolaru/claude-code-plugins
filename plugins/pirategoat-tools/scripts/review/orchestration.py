@@ -210,11 +210,15 @@ def _orchestrate_step_2(mode, config, state, context, output_dir):
 # Worktree Hygiene
 # ---------------------------------------------------------------------------
 
-def _resolve_repo_root():
+def _resolve_current_repo_root():
     """Absolute, symlink-resolved root of the repo containing CWD, or None.
 
     Repo identity is what makes the step-11 sweep safe: a baseline records
     the repo it measured and the sweep refuses to delete anywhere else.
+
+    Named for the cwd it resolves, to stay distinct from
+    ``context._resolve_repo_root(path)`` in this same package, which
+    answers the same question for a path it is handed.
     """
     try:
         proc = subprocess.run(
@@ -267,7 +271,7 @@ def _capture_worktree_baseline(output_dir):
     a probe written inside a gitignored directory is invisible to both the
     report and the sweep. Probes belong in non-ignored paths.
     """
-    repo_root = _resolve_repo_root()
+    repo_root = _resolve_current_repo_root()
     if repo_root is None:
         return
     entries = _git_status_lines(repo_root)
@@ -316,12 +320,14 @@ def _check_worktree_hygiene(output_dir):
     result = {
         "schema": 1,
         "status": "unknown",
+        "baseline_captured_at": None,
         "new_files": [],
         "changed_files": [],
         "probe_residue_removed": [],
     }
     baseline = None
     baseline_root = None
+    baseline_captured_at = None
     baseline_path = os.path.join(output_dir, ".worktree-baseline.json")
     if os.path.isfile(baseline_path):
         try:
@@ -332,13 +338,18 @@ def _check_worktree_hygiene(output_dir):
             if isinstance(entries, list) and isinstance(root, str) and root:
                 baseline = {e for e in entries if isinstance(e, str)}
                 baseline_root = root
+                captured = data.get("captured_at")
+                baseline_captured_at = (
+                    captured if isinstance(captured, str) else None
+                )
         except (OSError, json.JSONDecodeError):
             baseline = None
             baseline_root = None
+            baseline_captured_at = None
 
     # The identity gate. Everything below — the sweep included — happens
     # only inside the repo the baseline actually measured.
-    current_root = _resolve_repo_root()
+    current_root = _resolve_current_repo_root()
     verified_root = (
         current_root
         if current_root is not None and current_root == baseline_root
@@ -394,6 +405,10 @@ def _check_worktree_hygiene(output_dir):
             result["status"] = (
                 "changed_during_review" if appeared else "clean"
             )
+            # Only meaningful once the comparison actually happened: it dates
+            # the snapshot the counts are relative to, so a reader looking at
+            # an odd number can see how much review the window covers.
+            result["baseline_captured_at"] = baseline_captured_at
     # An unverified pair, or a status run that failed, leaves the status at
     # its "unknown" default: with nothing to compare against, reporting
     # "clean" would publish an absent measurement as a measured zero.
@@ -996,6 +1011,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             "probe_residue_removed": len(
                 hygiene.get("probe_residue_removed", [])
             ),
+            "baseline_captured_at": hygiene.get("baseline_captured_at"),
         }
     # Only the sweep degrades the run. A requester editing their own tree
     # during a review is routine, and `status` is a bot contract that has to

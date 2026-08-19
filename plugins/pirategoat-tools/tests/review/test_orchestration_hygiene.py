@@ -92,6 +92,20 @@ class TestHygieneCheck:
         data = json.loads((out / "worktree-hygiene.json").read_text())
         assert data["status"] == "clean"
 
+    def test_clean_run_dates_its_baseline(self, git_repo):
+        """The counts mean nothing without the window they cover."""
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        baseline = json.loads((out / ".worktree-baseline.json").read_text())
+        result = _check_worktree_hygiene(str(out))
+        assert result["baseline_captured_at"] == baseline["captured_at"]
+
+    def test_unknown_run_dates_nothing(self, git_repo):
+        repo, out = git_repo
+        result = _check_worktree_hygiene(str(out))
+        assert result["status"] == "unknown"
+        assert result["baseline_captured_at"] is None
+
     def test_probe_residue_swept_and_recorded(self, git_repo):
         repo, out = git_repo
         _capture_worktree_baseline(str(out))
@@ -331,9 +345,11 @@ class TestStepElevenHygieneNotes:
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
+        baseline = json.loads((out / ".worktree-baseline.json").read_text())
         assert result["worktree_hygiene"] == {
             "status": "clean", "new_files": 0,
             "changed_files": 0, "probe_residue_removed": 0,
+            "baseline_captured_at": baseline["captured_at"],
         }
 
     def test_foreign_change_is_measured_not_blamed(self, git_repo):
@@ -352,9 +368,11 @@ class TestStepElevenHygieneNotes:
         result = json.loads((out / "pipeline-result.json").read_text())
         assert result["degradation_notes"] == []
         assert result["status"] == "success"
+        baseline = json.loads((out / ".worktree-baseline.json").read_text())
         assert result["worktree_hygiene"] == {
             "status": "changed_during_review", "new_files": 1,
             "changed_files": 0, "probe_residue_removed": 0,
+            "baseline_captured_at": baseline["captured_at"],
         }
         assert user_file.exists()
 
@@ -375,9 +393,11 @@ class TestStepElevenHygieneNotes:
         assert any("probe residue swept" in n
                    for n in result["degradation_notes"])
         assert result["status"] == "degraded"
+        baseline = json.loads((out / ".worktree-baseline.json").read_text())
         assert result["worktree_hygiene"] == {
             "status": "clean", "new_files": 0,
             "changed_files": 0, "probe_residue_removed": 1,
+            "baseline_captured_at": baseline["captured_at"],
         }
         assert not probe.exists()
 

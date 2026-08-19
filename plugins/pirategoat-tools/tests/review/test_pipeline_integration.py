@@ -1820,15 +1820,36 @@ class TestStep10AgentPrompt:
 class TestFullSequenceIntegration:
     """Full multi-step sequence produces pipeline-result.json."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture
+    def repo(self, tmp_path):
+        """A throwaway repository for the sequence to stand in.
 
-    def test_full_sequence_produces_pipeline_result(self, tmp_path):
+        The pipeline measures the repo it is running in — step 3 snapshots
+        its git status and step 11 compares, and sweeps probe residue,
+        against that snapshot — so a sequence spawned without a cwd runs
+        that machinery over whoever's checkout pytest happened to start in.
+        The sequence is repo-coupled in its own right too: step 1 resolves
+        git identity and step 7 writes a review baseline. The output
+        directory stays outside this repo so the run's own artifacts never
+        register as worktree changes.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        _add_commit(repo)
+        return repo
+
+    def _run(self, cwd, *args):
+        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              cwd=str(cwd))
+
+    def test_full_sequence_produces_pipeline_result(self, tmp_path, repo):
         """Run steps 1,3,5,6,7,8,11 in order — pipeline-result.json should exist."""
-        od = str(tmp_path)
+        od = str(tmp_path / "out")
+        os.makedirs(od, exist_ok=True)
         # Step 1: seed
-        r = self._run("--step", "1", "--mode", "full", "--output-dir", od)
+        r = self._run(repo, "--step", "1", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
 
         # Pre-write context as if review/context.py succeeded
@@ -1838,43 +1859,43 @@ class TestFullSequenceIntegration:
                     "commit_count": 1, "base_ref": "main"},
             "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
         }
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        (Path(od) / "review-context.json").write_text(json.dumps(ctx))
 
         # Step 3: gather context (reads the pre-written file)
-        r = self._run("--step", "3", "--mode", "full", "--output-dir", od)
+        r = self._run(repo, "--step", "3", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
 
         # Step 5: dispatch plan (may fail without git, but should not crash)
-        r = self._run("--step", "5", "--mode", "full", "--output-dir", od)
+        r = self._run(repo, "--step", "5", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
 
         # Pre-write dispatch plan as if planner succeeded
         plan = {"agents": [{"name": "code-reviewer", "domain": "code", "status": "DISPATCH", "reason": "always"}], "git_range": "abc..HEAD"}
-        (tmp_path / "dispatch-plan.json").write_text(json.dumps(plan))
+        (Path(od) / "dispatch-plan.json").write_text(json.dumps(plan))
 
         # Step 6: dispatch agents
-        r = self._run("--step", "6", "--mode", "full", "--output-dir", od)
+        r = self._run(repo, "--step", "6", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
 
         # Step 7: save baseline
-        r = self._run("--step", "7", "--mode", "full", "--output-dir", od)
+        r = self._run(repo, "--step", "7", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
-        assert (tmp_path / ".branch-review-baseline.json").is_file()
+        assert (Path(od) / ".branch-review-baseline.json").is_file()
 
         # Step 8: reconcile (no review files exist — that's OK)
-        r = self._run("--step", "8", "--mode", "full", "--output-dir", od)
+        r = self._run(repo, "--step", "8", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
 
         # Pre-write verdict, report, and findings as if steps 8-10 ran
-        (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
-        (tmp_path / "review-report.md").write_text("# Review\nAll clear.")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+        (Path(od) / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
+        (Path(od) / "review-report.md").write_text("# Review\nAll clear.")
+        (Path(od) / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
 
         # Step 11: present results
-        r = self._run("--step", "11", "--mode", "full", "--output-dir", od)
+        r = self._run(repo, "--step", "11", "--mode", "full", "--output-dir", od)
         assert r.returncode == 0
-        assert (tmp_path / "pipeline-result.json").is_file()
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert (Path(od) / "pipeline-result.json").is_file()
+        result = json.loads((Path(od) / "pipeline-result.json").read_text())
         assert result["verdict"] == "APPROVE"
         assert result["status"] == "success"
         assert result["review_baseline_saved"] is True
