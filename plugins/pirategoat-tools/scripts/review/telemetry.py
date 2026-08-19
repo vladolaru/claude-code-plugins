@@ -841,6 +841,10 @@ class ReviewTelemetry:
         manifest["availability"]["worktree_hygiene"] = (
             manifest["worktree_hygiene"] is not None
         )
+        manifest["usage"] = (
+            manifest_sections.build_usage_manifest(self.output_dir)
+        )
+        manifest["availability"]["usage"] = manifest["usage"] is not None
         manifest["skipped_steps"] = (
             manifest_sections.build_skipped_steps_manifest(self.output_dir)
         )

@@ -25,7 +25,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/critic_adjustments.py` | Sole writer that carries the decision critic's `decision-critic-adjustments.json` into `review-findings.json` — closed action vocabulary, all-or-nothing batch validation, per-finding `critic_adjustment` provenance, and crash-safe idempotence via `adjustment_id` recorded on both sides. The step-10 REVISE briefing runs it before the report edit; step 11 re-runs it defensively for runs that follow no briefing. |
 | `scripts/review/reconciliation_context.py` | Pre-gathers agent findings, source snippets, scope annotations into a single context. Produces both JSON (`reconciliation-context.json`) and Markdown (`reconciliation-context.md`) via `to_markdown()`. The reconciliator reads the Markdown version (~40% more token-efficient). Called by pipeline step 8 after per-reviewer Markdown materialization; it does not render those human-facing artifacts itself. |
 | `scripts/review/telemetry.py` | JSONL telemetry logging. `ReviewTelemetry` class captures pipeline timing, agent start/complete lifecycle, snapshots, and summaries. |
-| `scripts/review/manifest_sections.py` | Pure builders for dispatch, coverage, dependency-refresh, and reviewer-Markdown outcome sections in durable review manifests. |
+| `scripts/review/manifest_sections.py` | Pure builders for dispatch, coverage, dependency-refresh, reviewer-Markdown outcome, worktree-hygiene, and token-usage sections in durable review manifests. |
 | `scripts/containment.py` | Single implementation for pipeline repo-boundary decisions. Filesystem-resolved callers and telemetry's POSIX-only lexical caller keep their own failure policy while sharing the containment decision. |
 | `scripts/git_paths.py` | Single grammar implementation for Git C-quoted paths. Review-config provenance, telemetry, and scoped-diff parsing keep their caller-specific failure policies while sharing escape and octal decoding. |
 | `agents/shared/reviewer-protocol.md` | Shared behavioral rules for all reviewer agents. Bootstrap extracts sections via skip-list. |
@@ -496,6 +496,28 @@ Run `pytest plugins/pirategoat-tools/tests/analysis/test_review_transcript.py -v
 *Why reconstruct identity from transcripts instead of using `SubagentStop` / `PostToolUse` hooks?* The hooks do emit `agent_id`, `agent_type`, `resolvedModel`, and `totalToolUseCount` directly, which would replace the correlation layer (session discovery, run-window bounding, dispatch-prompt parsing, and its four warning codes). They would **not** replace transcript parsing itself: `observed_reads` still requires reading each subagent transcript, so this is roughly a quarter of the module, not all of it. The deciding tradeoff is that hooks only measure runs after install, while the parser reads history — including the historical cohort the budget-utilisation baseline is built on. Correlation failure is already reported explicitly rather than silently dropping agents from denominators, so the current design degrades honestly.
 
 *Why does this module parse session JSONL when `session_analyzer.py` already does?* Their contracts are deliberately different: `session_analyzer.py` retains prose (prompts, commands, categorized text) for human-facing ad-hoc reports, while this module must never expose those bodies. The 2026-08-03 census found that the prior three-reader tally was not a full census: JSONL is read by `review_metrics/load.py::_read_jsonl` (plus its strict variant), `review_transcript.py::_read_jsonl` and `_bounded_jsonl_entries`, `session_analyzer.py`, two sites in `session_metrics.py`, and `telemetry.py::_read_events`, which now counts skipped gaps. Keep these readers separate because their contracts differ across binary/text input, strict/tolerant failure, and report/skip behavior, while the genuinely shared surface remains about 15 lines. Reopen this decision only if a malformed-line-handling fix has to be re-discovered per copy.
+
+#### `scripts/analysis/usage_snapshot.py`
+
+Captures one review run's token usage into its own run directory as `usage-snapshot.json`. Invoked by pipeline step 11 as a subprocess; also runnable by hand over a finished run.
+
+```bash
+python3 scripts/analysis/usage_snapshot.py --output-dir <run dir> [--sessions-root ~/.claude/projects]
+```
+
+It is a thin projection over `review_metrics.measure_run` (which drives `review_transcript.py`), never a second correlation implementation. It resolves the run manifest through `ReviewTelemetry.manifest_path` — the producer's own marker-file derivation — and falls back to `run-config.json` for a `session_id` the manifest lacks.
+
+**Why a subprocess seam, not an import.** `scripts/analysis/` already loads `scripts/review/`'s telemetry, dispatch-status, and critic contracts by exact path. Importing the analysis package back into `orchestration.py` would close that loop and make finalize depend on the analysis import graph; the CLI keeps the dependency one-way.
+
+**The two halves are labelled independently, and that is the point.** At finalize every subagent transcript is closed — reviewers, reconciliator, and critic have all returned — so subagent usage is complete evidence. The orchestrator is measuring its own still-open session, so its number is partial by construction. The enrichment's own `completeness.agent_data` cannot express this: it is ANDed with the orchestrator's `main_data_complete`, so one unresolved tool call in the main session reports every closed reviewer transcript as incomplete. The subagent label is therefore derived from subagent-scoped facts (correlated-vs-expected executions plus the agent-scoped warning codes), and the orchestrator label is gated on `window.closed` so a capture-time snapshot can never read `complete`.
+
+**Window substitution.** A running manifest has no `ended_at`, and an unbounded window closes at the first human turn after it opens — the requester's next message in an interactive review. The capture substitutes its own instant as the window end, in its private view only; the manifest on disk is untouched, and `window.closed` records which kind of window the numbers cover. Re-running over a settled manifest is what upgrades a partial orchestrator half.
+
+**Availability doctrine.** An unreadable, absent, or transcript-less run (Codex writes no Claude-format transcripts) still writes the artifact with `missing` and null payloads — a recorded absence, distinct from a run that never attempted the capture and has no artifact. Per-model buckets key on the DISPATCHED model (`claude-opus-5[1m]`), not the per-message model inside the transcript (`claude-opus-5`), because the bracketed variant is separately priced.
+
+The snapshot reaches two durable surfaces: the run manifest's `usage` section beside `availability.usage`, and a compact `usage` block in `pipeline-result.json` (a pirategoat-bot consumer surface). Both project through `manifest_sections.build_usage_manifest()`, so they cannot disagree about what a usable measurement is.
+
+Run `pytest plugins/pirategoat-tools/tests/analysis/test_usage_snapshot.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py -v` after changing the CLI or its step-11 seam.
 
 #### `scripts/analysis/session_analyzer.py`
 

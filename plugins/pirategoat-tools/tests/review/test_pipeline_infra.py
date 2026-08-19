@@ -577,6 +577,20 @@ class TestCLIIntegration:
         assert not (tmp_path / ".worktree-baseline.json").exists()
         assert not (tmp_path / "worktree-hygiene.json").exists()
 
+    def test_step_1_clears_the_usage_snapshot(self, tmp_path):
+        """A previous run's token usage must never stand in for this one.
+
+        The snapshot is a per-run measurement like the hygiene artifacts;
+        surviving it would let a rerun in the same output dir publish an
+        older run's cost as its own.
+        """
+        (tmp_path / "usage-snapshot.json").write_text(
+            '{"schema": 1, "availability": {"subagents": "complete"}}'
+        )
+        self._run("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42")
+        assert not (tmp_path / "usage-snapshot.json").exists()
+
     def test_step_1_clears_per_agent_and_reconciliation_artifacts(self, tmp_path):
         """Agent sidecars, markers, and reconciliation context are per-run artifacts.
 

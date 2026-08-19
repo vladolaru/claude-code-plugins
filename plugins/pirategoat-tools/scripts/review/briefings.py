@@ -1528,7 +1528,12 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         actions.append(f"- `{od}/pipeline-result.json` — status, verdict, report_path, "
                        "findings_path, critic_verdict, degradation_notes, "
                        "worktree_hygiene (compact hygiene summary; null when "
-                       "the run never measured it)")
+                       "the run never measured it), usage (compact token "
+                       "usage: subagent totals, per-model split, agents "
+                       "measured, and each half's availability — subagent "
+                       "usage is complete at finalize, orchestrator usage is "
+                       "partial because its own session is still open; null "
+                       "when the run never measured usage)")
 
         if mode == "incremental":
             actions.append("Baseline saved. Next run reviews only new commits.")

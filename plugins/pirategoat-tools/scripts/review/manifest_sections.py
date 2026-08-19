@@ -48,6 +48,17 @@ _REVIEWER_MARKDOWN_STATUSES = frozenset({
 _WORKTREE_HYGIENE_STATUSES = frozenset({
     "clean", "changed_during_review", "unknown",
 })
+_USAGE_AVAILABILITY_STATES = frozenset({"complete", "partial", "missing"})
+# Mirrors the token-usage vocabulary the analysis package accumulates. The
+# two halves of a snapshot are summed over the same field set, so a map
+# missing any of them is not a usable measurement.
+_USAGE_FIELDS = (
+    "input_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "effective_input_tokens",
+    "output_tokens",
+)
 
 
 def read_json_file(output_dir: str, name: str) -> Optional[dict]:
@@ -592,6 +603,104 @@ def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
         "baseline_captured_at": (
             captured_at if isinstance(captured_at, str) else None
         ),
+    }
+
+
+def _safe_usage_map(value: Any) -> Optional[Dict[str, int]]:
+    """Return one complete token-usage map, or None for unusable evidence.
+
+    All-or-nothing on purpose: a map missing a field or carrying a
+    non-integer count cannot be summed or compared, and filling the hole
+    with a zero would publish a fabricated measurement beside real ones.
+    """
+    if not isinstance(value, dict):
+        return None
+    usage: Dict[str, int] = {}
+    for field in _USAGE_FIELDS:
+        count = value.get(field)
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            return None
+        usage[field] = count
+    return usage
+
+
+def _safe_agent_count(value: Any) -> Optional[int]:
+    """Return a countable agent total, or None when it was not measured."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
+
+
+def build_usage_manifest(output_dir: str) -> Optional[dict]:
+    """Project the step-11 token-usage snapshot into the manifest.
+
+    None means the run never measured usage — the artifact is absent or
+    unreadable, as on an older run, a run whose finalize never reached the
+    capture, or one whose capture could not write. That is a different
+    fact from a snapshot that ran and found nothing to measure (a Codex
+    host writes no Claude-format transcripts at all), which carries
+    availability "missing" and projects as a section like any other
+    outcome.
+
+    The two halves keep separate availability labels because their
+    warrants differ: every subagent transcript is closed when the snapshot
+    is taken, while the orchestrator is measuring its own still-open
+    session. Flattening them would let a structurally partial number be
+    read as a complete one.
+    """
+    data = read_json_file(output_dir, "usage-snapshot.json")
+    if data is None:
+        return None
+
+    availability = data.get("availability")
+    availability = availability if isinstance(availability, dict) else {}
+
+    def state(name: str) -> str:
+        value = availability.get(name)
+        if isinstance(value, str) and value in _USAGE_AVAILABILITY_STATES:
+            return value
+        return "missing"
+
+    by_model_raw = data.get("usage_by_model")
+    by_model: Dict[str, Dict[str, int]] = {}
+    if isinstance(by_model_raw, dict):
+        for model, usage in by_model_raw.items():
+            safe = _safe_usage_map(usage)
+            if isinstance(model, str) and safe is not None:
+                by_model[model] = safe
+
+    rows_raw = data.get("subagent_usage")
+    rows: List[dict] = []
+    if isinstance(rows_raw, list):
+        for row in rows_raw:
+            if not isinstance(row, dict) or not isinstance(
+                row.get("agent"), str
+            ):
+                continue
+            model = row.get("model")
+            rows.append({
+                "agent": row["agent"],
+                "model": model if isinstance(model, str) else None,
+                "usage": _safe_usage_map(row.get("usage")),
+            })
+
+    counts = data.get("agents_measured")
+    counts = counts if isinstance(counts, dict) else {}
+    captured_at = data.get("captured_at")
+    return {
+        "captured_at": captured_at if isinstance(captured_at, str) else None,
+        "availability": {
+            "subagents": state("subagents"),
+            "orchestrator": state("orchestrator"),
+        },
+        "agents_measured": {
+            "measured": _safe_agent_count(counts.get("measured")),
+            "expected": _safe_agent_count(counts.get("expected")),
+        },
+        "subagent_totals": _safe_usage_map(data.get("subagent_totals")),
+        "orchestrator_usage": _safe_usage_map(data.get("orchestrator_usage")),
+        "usage_by_model": by_model,
+        "by_agent": rows,
     }
 
 

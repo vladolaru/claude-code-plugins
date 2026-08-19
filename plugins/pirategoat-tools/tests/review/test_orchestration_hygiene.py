@@ -21,6 +21,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review import orchestration as orchestration_mod
 from review.orchestration import (
     PROBE_MARKER,
     _capture_worktree_baseline,
@@ -420,3 +421,144 @@ class TestStepElevenHygieneNotes:
         assert result["worktree_hygiene"] is None
         hygiene = json.loads((out / "worktree-hygiene.json").read_text())
         assert hygiene["status"] == "unknown"
+
+
+class TestStepElevenUsageSnapshot:
+    """Finalize also records what the run cost.
+
+    The capture is a subprocess seam so `scripts/review/` never imports
+    `scripts/analysis/`. Its failure mode is deliberately quiet: missing
+    transcripts are normal on a Codex host and on every run older than this
+    feature, so an absent snapshot reads as unmeasured and degrades nothing
+    — the same reasoning that keeps hygiene "unknown" silent.
+    """
+
+    def _step_11(self, out):
+        return _orchestrate_step_11("pr", {}, {}, {}, str(out))
+
+    def _usage_snapshot(self, subagents="complete", orchestrator="partial"):
+        def usage(output):
+            return {
+                "input_tokens": 1,
+                "cache_creation_input_tokens": 2,
+                "cache_read_input_tokens": 3,
+                "effective_input_tokens": 6,
+                "output_tokens": output,
+            }
+        return {
+            "schema": 1,
+            "captured_at": "2026-08-19T10:43:00+00:00",
+            "window": {"started_at": "2026-08-19T10:00:00+00:00",
+                       "ended_at": "2026-08-19T10:43:00+00:00",
+                       "closed": False},
+            "availability": {"subagents": subagents,
+                             "orchestrator": orchestrator},
+            "reason": None,
+            "agents_measured": {"measured": 14, "expected": 14},
+            "subagent_usage": [],
+            "subagent_totals": usage(200825),
+            "usage_by_model": {"claude-opus-5[1m]": usage(99000),
+                               "claude-sonnet-5": usage(101825)},
+            "orchestrator_usage": usage(82725),
+        }
+
+    def _fake_capture(self, monkeypatch, payload):
+        """Stand in for the CLI without spawning it."""
+        def fake(cmd, cwd=None, timeout=60):
+            if payload is not None:
+                out_dir = Path(cmd[cmd.index("--output-dir") + 1])
+                (out_dir / "usage-snapshot.json").write_text(payload)
+            return "", payload is not None
+        monkeypatch.setattr(orchestration_mod, "_run_subprocess", fake)
+
+    def test_capture_records_an_absence_rather_than_nothing(self, git_repo):
+        """No telemetry for this run: the artifact still lands, saying so."""
+        repo, out = git_repo
+        _seed_step_11(out)
+        self._step_11(out)
+
+        snapshot = json.loads((out / "usage-snapshot.json").read_text())
+        result = json.loads((out / "pipeline-result.json").read_text())
+
+        assert snapshot["availability"] == {
+            "subagents": "missing", "orchestrator": "missing",
+        }
+        assert result["usage"]["availability"] == snapshot["availability"]
+        assert result["usage"]["subagent_effective_input"] is None
+        assert result["usage"]["subagent_output"] is None
+        assert result["status"] == "success"
+        assert result["degradation_notes"] == []
+
+    def test_compact_block_mirrors_a_measured_snapshot(self, git_repo,
+                                                       monkeypatch):
+        repo, out = git_repo
+        _seed_step_11(out)
+        self._fake_capture(
+            monkeypatch, json.dumps(self._usage_snapshot())
+        )
+
+        self._step_11(out)
+        result = json.loads((out / "pipeline-result.json").read_text())
+
+        assert result["usage"] == {
+            "subagent_effective_input": 6,
+            "subagent_output": 200825,
+            "by_model": {
+                "claude-opus-5[1m]": {"eff_in": 6, "out": 99000},
+                "claude-sonnet-5": {"eff_in": 6, "out": 101825},
+            },
+            "agents_measured": "14/14",
+            "availability": {
+                "subagents": "complete", "orchestrator": "partial",
+            },
+        }
+        assert result["status"] == "success"
+        assert result["degradation_notes"] == []
+
+    def test_failed_capture_reads_unmeasured_and_degrades_nothing(
+        self, git_repo, monkeypatch
+    ):
+        """A Codex host and every pre-feature run land here. Spending
+        `status` on a legacy-normal absence would teach consumers to ignore
+        the one field that means the review underperformed."""
+        repo, out = git_repo
+        _seed_step_11(out)
+        self._fake_capture(monkeypatch, None)
+
+        self._step_11(out)
+        result = json.loads((out / "pipeline-result.json").read_text())
+
+        assert not (out / "usage-snapshot.json").exists()
+        assert result["usage"] is None
+        assert result["status"] == "success"
+        assert result["degradation_notes"] == []
+
+    def test_unreadable_snapshot_reads_unmeasured(self, git_repo, monkeypatch):
+        repo, out = git_repo
+        _seed_step_11(out)
+        self._fake_capture(monkeypatch, "[]")
+
+        self._step_11(out)
+        result = json.loads((out / "pipeline-result.json").read_text())
+
+        assert result["usage"] is None
+        assert result["status"] == "success"
+
+    def test_measured_missing_half_is_reported_not_zeroed(self, git_repo,
+                                                          monkeypatch):
+        """A snapshot whose subagent half is missing publishes no totals."""
+        repo, out = git_repo
+        _seed_step_11(out)
+        payload = self._usage_snapshot(subagents="missing",
+                                       orchestrator="missing")
+        payload["subagent_totals"] = None
+        payload["usage_by_model"] = None
+        payload["agents_measured"] = {"measured": 0, "expected": None}
+        self._fake_capture(monkeypatch, json.dumps(payload))
+
+        self._step_11(out)
+        result = json.loads((out / "pipeline-result.json").read_text())
+
+        assert result["usage"]["subagent_effective_input"] is None
+        assert result["usage"]["by_model"] == {}
+        assert result["usage"]["agents_measured"] == "0/?"

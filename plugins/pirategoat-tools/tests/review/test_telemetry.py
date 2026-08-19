@@ -569,6 +569,7 @@ class TestRunManifest:
             "transcript": False,
             "coverage": False,
             "worktree_hygiene": False,
+            "usage": False,
             "skipped_steps": False,
         }
         assert manifest["coverage"] is None
@@ -3545,6 +3546,191 @@ class TestWorktreeHygieneManifest:
 
         assert manifest["worktree_hygiene"] is None
         assert manifest["availability"]["worktree_hygiene"] is False
+
+
+class TestUsageManifest:
+    """The manifest records the step-11 token-usage snapshot.
+
+    The snapshot has two halves with independent warrants: subagent
+    transcripts are closed at capture time and can read "complete", while
+    the orchestrator is measuring its own still-open session. The
+    projection must preserve that split rather than flattening it into one
+    "usage was measured" bit.
+    """
+
+    def _telemetry(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        log_dir = tmp_path / "logs"
+        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
+        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
+                run_id="run-1")
+        return t, out_dir
+
+    def _usage(self, output=7):
+        return {
+            "input_tokens": 1,
+            "cache_creation_input_tokens": 2,
+            "cache_read_input_tokens": 3,
+            "effective_input_tokens": 6,
+            "output_tokens": output,
+        }
+
+    def _snapshot(self, **overrides):
+        snapshot = {
+            "schema": 1,
+            "captured_at": "2026-08-19T10:43:00+00:00",
+            "window": {"started_at": "2026-08-19T10:00:00+00:00",
+                       "ended_at": "2026-08-19T10:43:00+00:00",
+                       "closed": False},
+            "availability": {"subagents": "complete",
+                             "orchestrator": "partial"},
+            "reason": None,
+            "agents_measured": {"measured": 2, "expected": 2},
+            "subagent_usage": [
+                {"agent": "code-reviewer", "model": "claude-opus-5[1m]",
+                 "usage": self._usage(output=5)},
+                {"agent": "security-reviewer", "model": "claude-sonnet-5",
+                 "usage": self._usage(output=2)},
+            ],
+            "subagent_totals": self._usage(),
+            "usage_by_model": {"claude-opus-5[1m]": self._usage(output=5),
+                               "claude-sonnet-5": self._usage(output=2)},
+            "orchestrator_usage": self._usage(output=9),
+        }
+        snapshot.update(overrides)
+        return snapshot
+
+    def _write(self, output_dir, snapshot):
+        (Path(output_dir) / "usage-snapshot.json").write_text(
+            json.dumps(snapshot)
+        )
+
+    def test_absent_artifact_yields_none(self, mod, tmp_path):
+        build = mod.manifest_sections.build_usage_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_malformed_artifact_yields_none(self, mod, tmp_path):
+        (tmp_path / "usage-snapshot.json").write_text("[]")
+        build = mod.manifest_sections.build_usage_manifest
+        assert build(str(tmp_path)) is None
+
+    def test_artifact_projected_into_a_section(self, mod, tmp_path):
+        self._write(tmp_path, self._snapshot())
+
+        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
+
+        assert section["captured_at"] == "2026-08-19T10:43:00+00:00"
+        assert section["availability"] == {
+            "subagents": "complete", "orchestrator": "partial",
+        }
+        assert section["agents_measured"] == {"measured": 2, "expected": 2}
+        assert section["subagent_totals"]["output_tokens"] == 7
+        assert section["orchestrator_usage"]["output_tokens"] == 9
+        assert section["usage_by_model"]["claude-opus-5[1m]"][
+            "output_tokens"] == 5
+        assert section["by_agent"] == [
+            {"agent": "code-reviewer", "model": "claude-opus-5[1m]",
+             "usage": self._usage(output=5)},
+            {"agent": "security-reviewer", "model": "claude-sonnet-5",
+             "usage": self._usage(output=2)},
+        ]
+
+    def test_measured_missing_is_not_absent(self, mod, tmp_path):
+        """A run that tried and found no transcripts is a section, not None.
+
+        Only a run that never attempted the capture has no artifact — the
+        same distinction hygiene draws between a measured "unknown" and an
+        absent measurement.
+        """
+        self._write(tmp_path, self._snapshot(
+            availability={"subagents": "missing", "orchestrator": "missing"},
+            reason="missing_session_id",
+            agents_measured={"measured": 0, "expected": None},
+            subagent_usage=[],
+            subagent_totals=None,
+            usage_by_model=None,
+            orchestrator_usage=None,
+        ))
+
+        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
+
+        assert section is not None
+        assert section["availability"] == {
+            "subagents": "missing", "orchestrator": "missing",
+        }
+        assert section["subagent_totals"] is None
+        assert section["orchestrator_usage"] is None
+        assert section["usage_by_model"] == {}
+        assert section["by_agent"] == []
+        assert section["agents_measured"] == {"measured": 0, "expected": None}
+
+    def test_unrecognized_availability_degrades_to_missing(self, mod, tmp_path):
+        """A well-typed label outside the vocabulary is not a measurement."""
+        self._write(tmp_path, self._snapshot(
+            availability={"subagents": "excellent", "orchestrator": 7},
+        ))
+
+        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
+
+        assert section["availability"] == {
+            "subagents": "missing", "orchestrator": "missing",
+        }
+
+    def test_damaged_usage_maps_are_dropped_not_zeroed(self, mod, tmp_path):
+        """A partially typed usage map is unusable evidence, not a zero."""
+        self._write(tmp_path, self._snapshot(
+            subagent_totals={"output_tokens": "lots"},
+            orchestrator_usage={"output_tokens": 4},
+            # JSON keys are always strings, so only the value side of
+            # a model bucket can be damaged.
+            usage_by_model={"claude-sonnet-5": None},
+            subagent_usage=[
+                {"agent": "code-reviewer", "model": 5, "usage": self._usage()},
+                {"agent": 7, "model": "x", "usage": self._usage()},
+                "not-a-row",
+            ],
+        ))
+
+        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
+
+        assert section["subagent_totals"] is None
+        assert section["orchestrator_usage"] is None
+        assert section["usage_by_model"] == {}
+        assert section["by_agent"] == [
+            {"agent": "code-reviewer", "model": None, "usage": self._usage()},
+        ]
+
+    def test_non_integer_agent_counts_are_dropped(self, mod, tmp_path):
+        self._write(tmp_path, self._snapshot(
+            agents_measured={"measured": True, "expected": -1},
+        ))
+
+        section = mod.manifest_sections.build_usage_manifest(str(tmp_path))
+
+        assert section["agents_measured"] == {
+            "measured": None, "expected": None,
+        }
+
+    def test_manifest_wires_the_section_and_availability_flag(
+        self, mod, tmp_path
+    ):
+        t, out_dir = self._telemetry(mod, tmp_path)
+        self._write(out_dir, self._snapshot())
+
+        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+        manifest = _read_manifest(t)
+
+        assert manifest["usage"]["availability"]["subagents"] == "complete"
+        assert manifest["availability"]["usage"] is True
+
+    def test_absent_artifact_is_recorded_as_unavailable(self, mod, tmp_path):
+        t, _out_dir = self._telemetry(mod, tmp_path)
+
+        manifest = _read_manifest(t)
+
+        assert manifest["usage"] is None
+        assert manifest["availability"]["usage"] is False
 
 
 class TestSkippedStepsManifest:

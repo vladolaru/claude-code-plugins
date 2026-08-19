@@ -30,6 +30,7 @@ try:
         verify_dependency_refresh,
     )
     from . import critic_adjustments
+    from . import manifest_sections
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -54,6 +55,7 @@ except ImportError:
         verify_dependency_refresh,
     )
     from review import critic_adjustments
+    from review import manifest_sections
 
 
 # Reserved marker for pipeline-created probe files. Nothing user-owned
@@ -71,6 +73,13 @@ PROBE_MARKER = "pirategoat-probe"
 # reports every path relative to the repository root regardless of where it
 # is invoked, which is why both halves pin the root explicitly below.
 _GIT_STATUS_ARGS = ["status", "--porcelain", "--untracked-files=all"]
+
+# The usage capture correlates the main session transcript with every
+# subagent transcript the run produced, so its cost scales with the JSONL
+# the run wrote — tens of megabytes for a large review. A minute is
+# generous for that parse and small enough that a hung capture cannot hold
+# finalize open; the timeout expiring simply leaves the run unmeasured.
+USAGE_SNAPSHOT_TIMEOUT = 60
 
 # ---------------------------------------------------------------------------
 # Dispatch Plan Persistence
@@ -289,6 +298,70 @@ def _capture_worktree_baseline(output_dir):
         )
     except OSError:
         pass
+
+
+def _capture_usage_snapshot(output_dir):
+    """Capture the run's token usage into `usage-snapshot.json`.
+
+    A subprocess rather than an import on purpose: the measurement lives in
+    `scripts/analysis/`, which already depends on `scripts/review/` for the
+    telemetry and dispatch-status contracts. Importing it back here would
+    close that loop and make the pipeline's finalize path depend on the
+    analysis package's import graph.
+
+    Returns the compact summary for `pipeline-result.json`, or None when the
+    run has no snapshot to report.
+    """
+    _run_subprocess(
+        [
+            sys.executable,
+            str(SCRIPTS_DIR.parent / "analysis" / "usage_snapshot.py"),
+            "--output-dir", str(output_dir),
+        ],
+        timeout=USAGE_SNAPSHOT_TIMEOUT,
+    )
+    return _usage_summary(output_dir)
+
+
+def _usage_summary(output_dir):
+    """Compact token-usage projection for `pipeline-result.json`.
+
+    Built from the manifest section rather than from the raw artifact, so
+    both durable surfaces sanitize the snapshot exactly once and cannot
+    disagree about what a usable measurement looks like.
+
+    None means the run has no snapshot at all — the capture never ran,
+    failed, or wrote something unreadable. A snapshot that ran and measured
+    nothing is different: it reports its own "missing" availability with
+    null totals, never zeros, so a consumer can tell an unmeasured run from
+    a run measured at zero tokens.
+    """
+    section = manifest_sections.build_usage_manifest(str(output_dir))
+    if section is None:
+        return None
+    totals = section["subagent_totals"] or {}
+    counts = section["agents_measured"]
+
+    def count(name):
+        value = counts.get(name)
+        return value if isinstance(value, int) else "?"
+
+    return {
+        "subagent_effective_input": totals.get("effective_input_tokens"),
+        "subagent_output": totals.get("output_tokens"),
+        "by_model": {
+            model: {
+                "eff_in": usage["effective_input_tokens"],
+                "out": usage["output_tokens"],
+            }
+            for model, usage in section["usage_by_model"].items()
+        },
+        "agents_measured": f"{count('measured')}/{count('expected')}",
+        # Both halves, never flattened: the subagent number is complete
+        # evidence at finalize while the orchestrator's is partial by
+        # construction, and a single flag could not say that.
+        "availability": section["availability"],
+    }
 
 
 def _check_worktree_hygiene(output_dir):
@@ -1032,6 +1105,15 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # the hygiene artifact, and the run manifest's `worktree_hygiene` section
     # already state.
 
+    # What the review cost, captured while the evidence still exists. Every
+    # subagent transcript is closed by now, so their usage is completely
+    # measurable; the orchestrator is measuring its own still-open session
+    # and says so. A failed or absent capture is silent for the same reason
+    # hygiene "unknown" is: a Codex host writes no Claude-format transcripts
+    # at all, and so does every run older than this feature, so a
+    # legacy-normal absence must never spend the `status` field.
+    usage_summary = _capture_usage_snapshot(output_dir)
+
     if not verdict_data:
         degradation_notes.append("review-verdict.json not found")
     if not os.path.isfile(report_path):
@@ -1084,6 +1166,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
             os.path.join(output_dir, ".branch-review-baseline.json")
         ),
         "worktree_hygiene": hygiene_summary,
+        "usage": usage_summary,
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
     with open(result_path, "w") as f:

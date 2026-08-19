@@ -237,6 +237,9 @@ _STALE_ARTIFACTS = [
     # measured.
     ".worktree-baseline.json",
     "worktree-hygiene.json",
+    # Same per-run rule: a surviving snapshot would let a rerun in this
+    # output dir publish a previous run's token cost as its own.
+    "usage-snapshot.json",
 ]
 
 # Files to preserve across runs
