@@ -1406,9 +1406,18 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("")
     actions.append("**Wait for the critic to finish — do not run in background.**")
     actions.append("")
+    actions.append(
+        "Write the critic's verdict now — before acting on it, and before "
+        "any adjustments:"
+    )
+    actions.append(f"```json")
+    actions.append(f'// Save to: {od}/decision-critic-verdict.json')
+    actions.append(f'{{"verdict": "<STAND | REVISE | ESCALATE>"}}')
+    actions.append(f"```")
+    actions.append("")
     actions.append("Act on the critic's verdict:")
     actions.append("")
-    actions.append("**STAND** — No changes needed. Proceed to writing verdict files.")
+    actions.append("**STAND** — No changes needed. Proceed to writing the final review verdict.")
     actions.append("")
     actions.append(
         "**REVISE** — the machine-readable ledger updates first, the prose second:"
@@ -1432,21 +1441,21 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     )
     actions.append("```")
     actions.append(
+        f"This refuses — no writes at all — unless "
+        f"`{od}/decision-critic-verdict.json` (written above) says REVISE; "
+        f"the CLI enforces the REVISE-only gate itself, it does not just "
+        f"trust this branch."
+    )
+    actions.append(
         f"4) Edit `{od}/review-report.md` so it matches the updated findings — "
         f"counts, severity table, and finding list must agree with the JSON."
     )
-    actions.append("5) Write verdict files.")
+    actions.append("5) Write the final review verdict.")
     actions.append("")
     actions.append("**ESCALATE** — Override review verdict to **COMMENT** regardless of report, "
-                   "then write verdict files.")
+                   "then write the final review verdict.")
     actions.append("")
-    actions.append("Write the critic's verdict (before any adjustments):")
-    actions.append(f"```json")
-    actions.append(f'// Save to: {od}/decision-critic-verdict.json')
-    actions.append(f'{{"verdict": "<STAND | REVISE | ESCALATE>"}}')
-    actions.append(f"```")
-    actions.append("")
-    actions.append("Then write the final review verdict:")
+    actions.append("Write the final review verdict:")
     actions.append(f"```json")
     actions.append(f'// Save to: {od}/review-verdict.json')
     actions.append(f'{{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}}')

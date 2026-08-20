@@ -18,8 +18,12 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
+    REFUSAL_EXIT_CODE,
+    REFUSAL_NO_VERDICT,
+    REFUSAL_VERDICT_NOT_REVISE,
     apply_adjustments,
     pending_count,
+    read_critic_verdict,
 )
 from review.orchestration import _orchestrate_step_11
 from review.reconciliation_context import build_critic_context
@@ -55,7 +59,23 @@ def _issue(id_, severity="low"):
             "confidence": 0.9}
 
 
+@pytest.fixture
+def revise_verdict(tmp_path):
+    """Write a REVISE verdict so apply_adjustments' gate lets the call through.
+
+    Most of this file's tests exercise validation, writing, and batch
+    logic that is orthogonal to the REVISE gate itself — that gate has
+    its own dedicated coverage in TestCriticVerdictGate. This fixture
+    supplies the one passing precondition once so the rest of the suite
+    keeps testing what it was written to test, instead of every test
+    hand-rolling the same `decision-critic-verdict.json` setup.
+    """
+    _write_critic_verdict(tmp_path, "REVISE")
+
+
 class TestApplyAdjustments:
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
     def test_no_adjustments_file_is_a_noop(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111")])
         result = apply_adjustments(str(tmp_path))
@@ -199,10 +219,80 @@ class TestApplyAdjustments:
         # The removed issue is out of the counted population entirely.
         assert "cccc3333" not in {i["id"] for i in data["issues"]}
 
+    def test_add_action_round_trip(self, tmp_path):
+        """The `add` action's full solo round trip.
+
+        `promote` has end-to-end coverage in
+        TestCriticContextRoundTrip (context render -> critic adjustment
+        -> apply -> ledger). `add` never had an equivalent belt-and-braces
+        check beyond the mixed-batch assertions above — this pins the
+        generated id shape, provenance, and summary recount for an `add`
+        landing on its own.
+        """
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "add", "id": None,
+            "fields": {"severity": "high", "title": "unbounded retry",
+                       "file": "internal/queue/retry.go",
+                       "description": "no ceiling on attempts",
+                       "recommendation": "cap attempts"},
+            "rationale": "critic found it independently",
+        }])
+        result = apply_adjustments(str(tmp_path))
+        assert result == {"status": "applied", "applied": 1}
+
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert len(data["issues"]) == 2
+        added = data["issues"][1]
+        assert re.fullmatch(r"[0-9a-f]{8}", added["id"]), (
+            f"generated id must be 8 lowercase hex chars, got {added['id']!r}"
+        )
+        assert added["id"] != "aaaa1111"
+        assert added["title"] == "unbounded retry"
+        assert added["critic_adjustment"] == {
+            "action": "add", "rationale": "critic found it independently",
+        }
+        assert data["summary"]["total_issues"] == 2
+        assert data["summary"]["by_severity"] == {
+            "critical": 0, "high": 1, "medium": 0, "low": 1, "info": 0,
+        }
+
+    def test_add_action_reapply_idempotent(self, tmp_path):
+        """A second apply over the same adjustments file must not append
+        a second copy of the added finding — the crash-safety contract
+        TestCrashSafety pins for `promote`, exercised here for `add`."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "add", "id": None,
+            "fields": {"severity": "high", "title": "unbounded retry",
+                       "file": "internal/queue/retry.go",
+                       "description": "no ceiling on attempts",
+                       "recommendation": "cap attempts"},
+            "rationale": "critic found it independently",
+        }])
+        first = apply_adjustments(str(tmp_path))
+        assert first == {"status": "applied", "applied": 1}
+        after_first = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        assert len(after_first["issues"]) == 2
+
+        second = apply_adjustments(str(tmp_path))
+        assert second == {"status": "nothing_pending", "applied": 0}
+        after_second = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        assert len(after_second["issues"]) == 2, (
+            "a re-apply must not append a duplicate finding"
+        )
+        assert after_second == after_first
+
 
 class TestCrashSafety:
     """Application is recorded on both sides, so no crash point can either
     lose the batch or apply it twice."""
+
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
 
     def test_crash_between_writes_converges_without_double_applying(
         self, tmp_path
@@ -241,7 +331,11 @@ class TestCrashSafety:
             is True
 
     def test_no_temp_files_survive_success_or_rejection(self, tmp_path):
-        expected = ["decision-critic-adjustments.json", "review-findings.json"]
+        expected = [
+            "decision-critic-adjustments.json",
+            "decision-critic-verdict.json",
+            "review-findings.json",
+        ]
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
         _write_adjustments(tmp_path, [{
             "action": "promote", "id": "aaaa1111",
@@ -289,6 +383,8 @@ class TestArtifactEncoding:
 
 
 class TestBatchCoherence:
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
     def test_duplicate_target_in_one_batch_is_rejected(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
         _write_adjustments(tmp_path, [
@@ -402,6 +498,8 @@ class TestScopeLinePairing:
     """schemas/review-output.ts:36-37 and output.py's renderer treat
     scope/line as a pair; a patch must never split them."""
 
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
     def test_add_without_a_line_is_marked_file_scoped(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111")])
         _write_adjustments(tmp_path, [{
@@ -495,6 +593,8 @@ class TestCLI:
     """The step-11 wiring calls this as a script, so the process contract
     (exit status + stdout/stderr channels) is part of the interface."""
 
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
     def _run(self, output_dir):
         return subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "--output-dir", str(output_dir)],
@@ -545,6 +645,139 @@ class TestCLI:
         assert "obliterate" in proc.stderr
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"
+
+
+class TestCriticVerdictGate:
+    """The gate lives inside apply_adjustments itself (see module
+    docstring), so every caller — CLI, step 11, and any future one —
+    shares it. These tests exercise the function directly and via the
+    CLI subprocess, deliberately WITHOUT the `revise_verdict` fixture
+    the rest of this file relies on, since the gate itself is what's
+    under test here."""
+
+    def test_apply_refuses_without_verdict_file(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        before = (tmp_path / "review-findings.json").read_bytes()
+
+        result = apply_adjustments(str(tmp_path))
+
+        assert result == {
+            "status": "refused", "applied": 0, "reason": REFUSAL_NO_VERDICT,
+        }
+        assert (tmp_path / "review-findings.json").read_bytes() == before, (
+            "a refusal must write nothing"
+        )
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "decision-critic-adjustments.json", "review-findings.json",
+        ], "the adjustments file must be untouched too — no id allocation"
+
+    def test_apply_refuses_on_stand(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        _write_critic_verdict(tmp_path, "STAND")
+        before = (tmp_path / "review-findings.json").read_bytes()
+
+        result = apply_adjustments(str(tmp_path))
+
+        assert result == {
+            "status": "refused", "applied": 0,
+            "reason": f"{REFUSAL_VERDICT_NOT_REVISE} (STAND)",
+        }
+        assert (tmp_path / "review-findings.json").read_bytes() == before
+
+    def test_apply_refuses_on_unparseable_verdict(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        (tmp_path / "decision-critic-verdict.json").write_text("{not json")
+        before = (tmp_path / "review-findings.json").read_bytes()
+
+        result = apply_adjustments(str(tmp_path))
+
+        assert result == {
+            "status": "refused", "applied": 0, "reason": REFUSAL_NO_VERDICT,
+        }
+        assert (tmp_path / "review-findings.json").read_bytes() == before
+
+    def test_apply_proceeds_on_revise(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        _write_critic_verdict(tmp_path, "REVISE")
+
+        result = apply_adjustments(str(tmp_path))
+
+        assert result == {"status": "applied", "applied": 1}
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "critical"
+
+    def test_cli_exit_code_on_refusal(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        _write_critic_verdict(tmp_path, "STAND")
+
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
+            capture_output=True, text=True, timeout=60,
+        )
+
+        assert proc.returncode == REFUSAL_EXIT_CODE
+        assert proc.returncode not in (0, 1), (
+            "the refusal exit code must be distinct from success (0) and "
+            "the validation/IO error code (1)"
+        )
+        assert "REFUSED" in proc.stderr
+        assert REFUSAL_VERDICT_NOT_REVISE in proc.stderr
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low"
+
+
+class TestReadCriticVerdict:
+    """Unit coverage for the reader apply_adjustments' gate is built on —
+    it is deliberately permissive (returns the raw string or None) and
+    lets the caller decide what None or an unexpected string means."""
+
+    def test_missing_file_returns_none(self, tmp_path):
+        assert read_critic_verdict(str(tmp_path)) is None
+
+    def test_malformed_json_returns_none(self, tmp_path):
+        (tmp_path / "decision-critic-verdict.json").write_text("{not json")
+        assert read_critic_verdict(str(tmp_path)) is None
+
+    def test_non_object_json_returns_none(self, tmp_path):
+        (tmp_path / "decision-critic-verdict.json").write_text('["REVISE"]')
+        assert read_critic_verdict(str(tmp_path)) is None
+
+    def test_non_string_verdict_field_returns_none(self, tmp_path):
+        (tmp_path / "decision-critic-verdict.json").write_text(
+            json.dumps({"verdict": 1})
+        )
+        assert read_critic_verdict(str(tmp_path)) is None
+
+    def test_missing_verdict_key_returns_none(self, tmp_path):
+        (tmp_path / "decision-critic-verdict.json").write_text(
+            json.dumps({"reason": "no verdict field at all"})
+        )
+        assert read_critic_verdict(str(tmp_path)) is None
+
+    @pytest.mark.parametrize("verdict", ["REVISE", "STAND", "ESCALATE", "SKIPPED"])
+    def test_valid_verdict_string_is_returned_as_is(self, tmp_path, verdict):
+        _write_critic_verdict(tmp_path, verdict)
+        assert read_critic_verdict(str(tmp_path)) == verdict
 
 
 class TestVerdictSyncHardening:

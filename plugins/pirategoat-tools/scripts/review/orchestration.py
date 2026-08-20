@@ -998,22 +998,16 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
 
 
 def _orchestrate_step_11(mode, config, state, context, output_dir):
-    # Read critic verdict from file (written by LLM at step 10)
-    critic_path = os.path.join(output_dir, "decision-critic-verdict.json")
-    if os.path.isfile(critic_path):
-        try:
-            with open(critic_path) as f:
-                critic_data = json.load(f)
-            raw_verdict = critic_data.get("verdict", "unavailable")
-            # Map SKIPPED → unavailable so downstream consumers
-            # (pirategoat-bot) correctly show "not cross-validated"
-            state["critic_verdict"] = (
-                "unavailable" if raw_verdict == "SKIPPED" else raw_verdict
-            )
-        except (json.JSONDecodeError, OSError):
-            state["critic_verdict"] = "unavailable"
-    else:
-        state["critic_verdict"] = "unavailable"
+    # Read critic verdict from file (written by LLM at step 10). The file
+    # read/parse itself is shared with critic_adjustments.py's own gate —
+    # one parser, one home — so this only adds the presentation mapping
+    # that reader deliberately leaves out: SKIPPED → unavailable, so
+    # downstream consumers (pirategoat-bot) correctly show "not
+    # cross-validated", and a missing/unparseable file → unavailable too.
+    raw_verdict = critic_adjustments.read_critic_verdict(output_dir)
+    state["critic_verdict"] = (
+        "unavailable" if raw_verdict in (None, "SKIPPED") else raw_verdict
+    )
 
     verdict_path = os.path.join(output_dir, "review-verdict.json")
     verdict_data = None
@@ -1053,11 +1047,23 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         critic_verdict = state.get("critic_verdict", "unavailable")
         if critic_verdict == "REVISE":
             try:
-                critic_adjustments.apply_adjustments(output_dir)
+                apply_result = critic_adjustments.apply_adjustments(output_dir)
             except (ValueError, OSError, json.JSONDecodeError) as err:
                 degradation_notes.append(
                     f"critic adjustments not applied: {err}"
                 )
+            else:
+                # Belt-and-braces: this branch only runs when the state
+                # computed above already says REVISE, so apply_adjustments'
+                # own gate (reading the same file) should never refuse
+                # here. Surfacing it anyway if it somehow does keeps a
+                # future divergence between the two reads from silently
+                # doing nothing instead of degrading loudly.
+                if apply_result.get("status") == "refused":
+                    degradation_notes.append(
+                        f"critic adjustments not applied: refused "
+                        f"({apply_result.get('reason')})"
+                    )
         else:
             try:
                 pending = critic_adjustments.pending_count(output_dir)

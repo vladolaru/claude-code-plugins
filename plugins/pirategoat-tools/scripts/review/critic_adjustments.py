@@ -23,6 +23,18 @@ recorded and the batch applies normally. Without that record, a crash
 between the two writes would re-apply patches onto an already-patched
 ledger and `prior` would report the critic's own output as the
 reconciled state.
+
+Adjustments are a REVISE-only channel: `apply_adjustments()` refuses to
+read the adjustments file or write anything unless
+decision-critic-verdict.json on disk says REVISE. This gate lives here,
+not in a caller, so every apply path — the CLI, step 11's defensive
+re-run, and any future caller — shares one authority check instead of
+each re-implementing it. A refusal returns `{"status": "refused",
+"applied": 0, "reason": "no_verdict" | "verdict_not_revise (<VERDICT>)"}`
+and touches no file. The CLI prints the reason and exits
+`REFUSAL_EXIT_CODE` (3) — distinct from 0 (success) and 1 (validation/IO
+error) — so a script depending on this command notices a refusal instead
+of reading a silent no-op.
 """
 
 import argparse
@@ -51,7 +63,53 @@ VALID_SEVERITIES = ("critical", "high", "medium", "low", "info")
 
 ADJUSTMENTS_FILENAME = "decision-critic-adjustments.json"
 FINDINGS_FILENAME = "review-findings.json"
+CRITIC_VERDICT_FILENAME = "decision-critic-verdict.json"
 APPLIED_IDS_KEY = "applied_critic_adjustments"
+
+# The one verdict that sanctions applying adjustments. Everything else —
+# STAND, ESCALATE, an unrecognized string, a missing file — refuses.
+REVISE_VERDICT = "REVISE"
+
+# Refusal reasons returned by apply_adjustments() under the gate. Both
+# collapse a missing file and an unparseable one into the same reason
+# because read_critic_verdict() cannot distinguish them either — from the
+# gate's perspective there is simply no usable verdict to act on.
+REFUSAL_NO_VERDICT = "no_verdict"
+REFUSAL_VERDICT_NOT_REVISE = "verdict_not_revise"
+
+# Distinct from 0 (success) and 1 (validation/IO error, see main()) so a
+# caller can tell "refused by the authority gate" apart from either.
+REFUSAL_EXIT_CODE = 3
+
+
+def read_critic_verdict(output_dir):
+    """Read the critic's raw verdict string from CRITIC_VERDICT_FILENAME.
+
+    Returns the `verdict` field as-is (e.g. "STAND", "REVISE", "SKIPPED",
+    or any other string the critic wrote) or None if the file is absent,
+    unreadable, not valid JSON, not a JSON object, or has no string
+    `verdict` field. This reader is deliberately permissive — it answers
+    "what does the file say", not "is that an acceptable value" — the
+    caller decides what to do with the result. `apply_adjustments()`'s
+    gate below only ever proceeds on the literal "REVISE"; orchestration's
+    own `state["critic_verdict"]` bookkeeping additionally maps "SKIPPED"
+    to "unavailable" for downstream consumers, which is a presentation
+    concern this reader does not make.
+    """
+    path = os.path.join(output_dir, CRITIC_VERDICT_FILENAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    verdict = data.get("verdict")
+    if not isinstance(verdict, str):
+        return None
+    return verdict
 
 
 def _validate_fields(fields, entry_label):
@@ -248,7 +306,30 @@ def apply_adjustments(output_dir):
     whole call loudly BEFORE anything is written — a critic decision that
     cannot land must not silently vanish, and a half-applied batch must
     not exist.
+
+    Gated on the critic's verdict, checked before anything else is read
+    or written: adjustments are a REVISE-only channel (see module
+    docstring), so any other verdict — or none on file — refuses the
+    whole call and returns `{"status": "refused", ...}` instead of
+    touching a file. This is the one gate every caller shares: the CLI,
+    step 11's defensive re-run, and any future caller all go through this
+    function, so none of them can apply adjustments a STAND or ESCALATE
+    verdict never sanctioned.
     """
+    verdict = read_critic_verdict(output_dir)
+    # Two independent checks, not one combined condition: a missing or
+    # unparseable verdict file and a present-but-wrong verdict are
+    # different failure modes with different reasons, and keeping them as
+    # separate `if`s means a defect in either check only ever manifests
+    # against the scenario it guards.
+    if verdict is None:
+        return {"status": "refused", "applied": 0, "reason": REFUSAL_NO_VERDICT}
+    if verdict != REVISE_VERDICT:
+        return {
+            "status": "refused", "applied": 0,
+            "reason": f"{REFUSAL_VERDICT_NOT_REVISE} ({verdict})",
+        }
+
     adj_path = os.path.join(output_dir, ADJUSTMENTS_FILENAME)
     findings_path = os.path.join(output_dir, FINDINGS_FILENAME)
     if not os.path.isfile(adj_path):
@@ -409,6 +490,12 @@ def apply_adjustments(output_dir):
 def main():
     parser = argparse.ArgumentParser(
         description="Apply decision-critic adjustments to review-findings.json",
+        epilog=(
+            "Exit codes: 0 = applied (or nothing pending); "
+            "1 = validation/IO error; "
+            f"{REFUSAL_EXIT_CODE} = refused — {CRITIC_VERDICT_FILENAME} does "
+            "not say REVISE, so nothing was written."
+        ),
     )
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
@@ -417,6 +504,9 @@ def main():
     except (ValueError, OSError, json.JSONDecodeError) as err:
         print(f"ERROR: {err}", file=sys.stderr)
         sys.exit(1)
+    if result.get("status") == "refused":
+        print(f"REFUSED: {result['reason']}", file=sys.stderr)
+        sys.exit(REFUSAL_EXIT_CODE)
     print(json.dumps(result))
 
 
