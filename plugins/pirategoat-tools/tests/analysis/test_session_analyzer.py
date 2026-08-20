@@ -27,6 +27,42 @@ _spec = importlib.util.spec_from_file_location("analyze_reviewer_sessions", str(
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
+_bootstrap_spec = importlib.util.spec_from_file_location(
+    "review_bootstrap_for_session_test",
+    str(PLUGIN_ROOT / "scripts" / "review" / "agent" / "bootstrap.py"),
+)
+_bootstrap_mod = importlib.util.module_from_spec(_bootstrap_spec)
+_bootstrap_spec.loader.exec_module(_bootstrap_mod)
+
+
+def _real_bootstrap_builder_command(tmp_path, *, plugin_version=""):
+    """Extract the builder command from REAL build_output() prose.
+
+    Every other test in this file hand-writes the envelope string, so an
+    envelope-shape change in bootstrap leaves them all green while session
+    analysis silently stops recognizing builder saves. This helper is the
+    one that would fail.
+    """
+    prompt = _bootstrap_mod.build_output(
+        agent_name="security-reviewer",
+        plugin_root=str(PLUGIN_ROOT),
+        status="OK",
+        review_rules="",
+        domain_rules=None,
+        scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+        exploration_scope=None,
+        output_dir=str(tmp_path),
+        pr_number="42",
+        reviewer_name="security",
+        not_diffed_count=0,
+        has_php=False,
+        plugin_version=plugin_version,
+    )
+    start = prompt.index("PIRATEGOAT_PLUGIN_ROOT=")
+    end = prompt.index("\nPY", start) + len("\nPY")
+    return prompt[start:end]
+
+
 extract_agent_findings = _mod.extract_agent_findings
 extract_ingest_outcomes = _mod.extract_ingest_outcomes
 compute_survival_rate = _mod.compute_survival_rate
@@ -553,6 +589,82 @@ class TestBashBuilderRecognition:
     """Compliant reviewers save via the mandated Bash heredoc, not Write —
     session analysis must recognize that mechanism or new sessions produce
     empty per-agent quality records."""
+
+    @pytest.mark.parametrize(
+        "plugin_version", ["1.114.0", ""], ids=["stamped", "unstamped"]
+    )
+    def test_recognizes_the_envelope_real_bootstrap_actually_emits(
+        self, tmp_path, plugin_version
+    ):
+        """Pins recognition to the producer, not to a hand-written string.
+
+        The rest of this class builds its own envelope text, so a change to
+        bootstrap's envelope shape cannot fail any of them — this one reads
+        the real `build_output()` prose and would.
+        """
+        command = _real_bootstrap_builder_command(
+            tmp_path, plugin_version=plugin_version
+        )
+
+        env = _mod._builder_heredoc_env(command)
+
+        assert env is not None
+        assert env["PIRATEGOAT_REVIEWER_NAME"] == "security"
+        assert env["PIRATEGOAT_PR_ID"] == "42"
+        assert env["PIRATEGOAT_PLUGIN_VERSION"] == plugin_version
+        assert _mod._categorize_tool_call("Bash", {"command": command})["category"] == "builder-output"
+
+    def test_pre_1_114_envelope_is_still_recognized(self):
+        """Sessions recorded before the version assignment stay measurable.
+
+        Nothing here reads the appended variable, so refusing the older
+        four-assignment form would report saves that happened as no-save.
+        """
+        legacy = (
+            "PIRATEGOAT_PLUGIN_ROOT='/plug' "
+            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
+            "PIRATEGOAT_REVIEWER_NAME='security' "
+            "PIRATEGOAT_PR_ID='42' python3 <<'PY'\n"
+            "builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
+            "PY"
+        )
+
+        env = _mod._builder_heredoc_env(legacy)
+
+        assert env is not None
+        assert set(env) == {
+            "PIRATEGOAT_PLUGIN_ROOT",
+            "PIRATEGOAT_OUTPUT_DIR",
+            "PIRATEGOAT_REVIEWER_NAME",
+            "PIRATEGOAT_PR_ID",
+        }
+        assert _mod._categorize_tool_call("Bash", {"command": legacy})["category"] == "builder-output"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            pytest.param(
+                "PIRATEGOAT_PLUGIN_ROOT=/p PIRATEGOAT_OUTPUT_DIR=/o "
+                "PIRATEGOAT_REVIEWER_NAME=security python3 <<PY\npass\nPY",
+                id="missing-required-name",
+            ),
+            pytest.param(
+                "PIRATEGOAT_PLUGIN_ROOT=/p PIRATEGOAT_OUTPUT_DIR=/o "
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "EXTRA=safe python3 <<PY\npass\nPY",
+                id="foreign-assignment",
+            ),
+            pytest.param(
+                "PIRATEGOAT_PLUGIN_ROOT=/p PIRATEGOAT_PLUGIN_ROOT=/other "
+                "PIRATEGOAT_OUTPUT_DIR=/o PIRATEGOAT_REVIEWER_NAME=security "
+                "PIRATEGOAT_PR_ID=42 python3 <<PY\npass\nPY",
+                id="duplicate-assignment",
+            ),
+        ],
+    )
+    def test_non_envelope_commands_are_not_builder_output(self, command):
+        assert _mod._builder_heredoc_env(command) is None
+        assert _mod._categorize_tool_call("Bash", {"command": command})["category"] != "builder-output"
 
     def test_synthesizes_review_record_from_heredoc(self):
         record = _mod._builder_review_from_heredoc(_builder_heredoc())

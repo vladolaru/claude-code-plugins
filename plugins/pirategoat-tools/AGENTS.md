@@ -131,6 +131,29 @@ and scans every Python file under `scripts/` for the unambiguous containment
 spellings (`commonpath`, `is_relative_to`, `commonprefix`). Only the exact shared
 module is exempt — do not add inline containment checks or an allowlist.
 
+### Artifact Schemas
+
+**RULE: an artifact that carries a `schema` field gets that field bumped in the same commit as any change to its shape.** A shape change is a key added, removed, or re-typed. When you make one: bump the producing constant, update `schemas/review-output.ts` if the artifact is declared there, and note the bump in the changelog.
+
+The key is always the integer `schema` — never `schema_version`, never a `version` string. Both of those existed and were retired in 1.114.0.
+
+Not every JSON file in a run directory carries one, and this rule does not ask you to add it to them. `pipeline-state.json`, `pipeline-result.json`, `run-config.json`, `dispatch-plan.json`, `review-verdict.json`, `reconciliation-context.json`, and the critic / dependency-refresh reports carry no `schema` and are read only by this plugin within a single run. The field earns its place where an artifact **outlives the run that wrote it, or is parsed by a consumer that did not write it** — that is the criterion for deciding whether a new artifact needs one. The families that meet it today:
+
+| Artifact | Producing constant |
+|---|---|
+| `<agent>-review.json`, `review-findings.json` | `REVIEW_OUTPUT_SCHEMA` — `scripts/review/agent/output.py` |
+| Telemetry JSONL events + `<log>.manifest.json` | `EVENT_SCHEMA` — `scripts/review/telemetry.py` |
+| `usage-snapshot.json` | `SNAPSHOT_SCHEMA` — `scripts/analysis/usage_snapshot.py` |
+| `observed_reads` payload in transcript enrichment | `_OBSERVED_READS_SCHEMA` — `scripts/analysis/review_transcript.py`. The same-named constant in `review_metrics/contracts.py` is the *consumer's* expected value, and must be bumped in lockstep |
+| `review_run_metrics.py --format json` report | `_REPORT_SCHEMA` — `scripts/analysis/review_metrics/render.py` |
+| Per-agent sidecars: deferred files, advisory entitlement, scope summary, worktree baseline / hygiene | literal `1` at the write site |
+
+**Exception — `review-context.json` and `issue-context.json` carry `version: 1`, and that key is not ours.** pirategoat-bot writes both files and asserts on that field (`src/orchestrator-review.test.js`, `src/orchestrator-linear.test.js`). Renaming it to `schema` would break the bot. Leave it alone.
+
+Readers accept exactly the schema they were written against and route anything else down their unsupported path — never a crash, and never a silent read of fields whose meaning the producer did not vouch for. Dropping support for an old schema is allowed; reporting a *wrong measurement* for artifacts written under it is not (see `_BOOTSTRAP_BUILDER_ENV_REQUIRED` in `scripts/analysis/review_transcript.py` for the shape this takes when the artifact is a transcript).
+
+This rule exists because the review JSONs shipped a `version: "1.0.0"` string that survived six format changes unbumped: a schema number that lags the shape is worse than none, because it states a compatibility guarantee the producer is not honoring.
+
 ### Pipeline Briefing Design
 
 The step briefings in `review/briefings.py` follow deliberate design patterns. These are inline rules — see `docs/patterns/curated-context-pipeline.md` for the general principles and rationale behind them.
@@ -402,10 +425,6 @@ Verdict is auto-calculated from issue severities:
 - Any high (or 5+ mediums) → `request_changes`
 - Any medium → `comment`
 - Otherwise → `approve`
-
-### Artifact Schemas
-
-**RULE: every JSON artifact this plugin writes carries an integer `schema` field, and you bump it in the same commit as any shape change.** One convention, one key name — `schema`, never `schema_version`, never a `version` string. A shape change is a key added, removed, or re-typed; when you make one, bump that artifact's `schema` constant, update `schemas/review-output.ts` if the artifact is declared there, and note the bump in the changelog. The producing constants are `REVIEW_OUTPUT_SCHEMA` (`review/agent/output.py`), `EVENT_SCHEMA` (`review/telemetry.py`, covering both JSONL events and the run manifest), `SNAPSHOT_SCHEMA` (`analysis/usage_snapshot.py`), and the `_*_SCHEMA` contracts in `analysis/review_metrics/contracts.py`; smaller sidecars carry a literal `1`. Readers accept exactly the schema they were written against and route anything else down their unsupported path — never a crash, never a silent read of fields whose meaning the producer did not vouch for. This rule exists because the review JSONs shipped a `version: "1.0.0"` string that survived six format changes unbumped: a schema number that lags the shape is worse than none, because it tells consumers a compatibility claim the producer is not honoring.
 
 ### Cross-Repo Dependency: pirategoat-bot
 

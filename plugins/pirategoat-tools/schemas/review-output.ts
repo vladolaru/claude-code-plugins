@@ -4,12 +4,15 @@
  * These schemas define the structured output format for all review agents,
  * enabling reliable parsing, automation, and integration.
  *
- * SCHEMA MAINTENANCE: every artifact this plugin writes carries an integer
- * `schema` field. When a shape changes — a key added, removed, or re-typed —
- * bump that artifact's `schema` in the SAME commit as the change, update the
- * interface below to match, and note the bump in the changelog. A schema
- * number that lags the shape is worse than none: it tells consumers a
- * compatibility claim the producer is not honoring.
+ * SCHEMA MAINTENANCE: the artifacts declared here carry an integer `schema`
+ * field (REVIEW_OUTPUT_SCHEMA in scripts/review/agent/output.py). When their
+ * shape changes — a key added, removed, or re-typed — bump it in the SAME
+ * commit as the change, update the interface below to match, and note the
+ * bump in the changelog. A schema number that lags the shape is worse than
+ * none: it states a compatibility guarantee the producer is not honoring.
+ * Other artifact families carry their own `schema` constants; see the
+ * Artifact Schemas section of the plugin's AGENTS.md for the full list and
+ * for which artifacts deliberately carry no schema at all.
  *
  * Implements: Proposal #3 (Structured Output) from Tier 1 agentic patterns
  */

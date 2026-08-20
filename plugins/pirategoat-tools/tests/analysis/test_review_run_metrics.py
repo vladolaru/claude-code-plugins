@@ -1196,6 +1196,59 @@ class TestLoadRuns:
                 ],
                 id="unsupported-schema-mid-stream",
             ),
+            # Control-plane events never reach _strict_lifecycle_event —
+            # only agent_start/agent_complete do — so the per-event loop in
+            # _running_lifecycle_overlay is the ONLY schema guard a `step`
+            # or `pipeline_end` event ever passes. Without these cases the
+            # loop's schema conjunct can be deleted with every other test
+            # still green, and an overlay would silently accept control-plane
+            # events whose field meanings its producer never vouched for.
+            pytest.param(
+                [
+                    _pipeline_start("running-run"),
+                    {
+                        "schema": 2,
+                        "run_id": "running-run",
+                        "event": "step",
+                        "timestamp": "2026-07-19T10:00:05+00:00",
+                        "step": 6,
+                        "phase": "REVIEW",
+                        "title": "Dispatch Agents",
+                    },
+                ],
+                id="unsupported-schema-on-step-event",
+            ),
+            pytest.param(
+                [
+                    _pipeline_start("running-run"),
+                    _with_legacy_schema_key(
+                        {
+                            "schema": 1,
+                            "run_id": "running-run",
+                            "event": "step",
+                            "timestamp": "2026-07-19T10:00:05+00:00",
+                            "step": 6,
+                            "phase": "REVIEW",
+                            "title": "Dispatch Agents",
+                        }
+                    ),
+                ],
+                id="pre-rename-schema-key-on-step-event",
+            ),
+            pytest.param(
+                [
+                    _pipeline_start("running-run"),
+                    {**_pipeline_end("running-run"), "schema": 2},
+                ],
+                id="unsupported-schema-on-pipeline-end",
+            ),
+            pytest.param(
+                [
+                    _pipeline_start("running-run"),
+                    _with_legacy_schema_key(_pipeline_end("running-run")),
+                ],
+                id="pre-rename-schema-key-on-pipeline-end",
+            ),
         ],
     )
     def test_invalid_running_lifecycle_overlay_fails_closed_family_locally(

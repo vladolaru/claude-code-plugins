@@ -1040,6 +1040,66 @@ class TestAnalyzeSubagent:
         assert result["tool_failures"][0]["recovered"] is False
         assert secret not in " ".join(_flatten_strings(result))
 
+    def test_pre_1_114_envelope_is_still_a_measured_builder_attempt(
+        self, tmp_path
+    ):
+        """Transcripts are immutable; a reader that stops recognizing them lies.
+
+        Every transcript recorded before 1.114.0 carries the four-assignment
+        envelope. Refusing it would report `builder_attempted: false` for
+        saves that demonstrably happened — a measured false, which is a wrong
+        answer rather than a missing one, and which cohort.py would bucket
+        into runs_without_builder_attempts instead of the unknown bucket that
+        exists for genuinely unobservable state. Nothing here reads the
+        appended version, so the older generation stays fully measurable.
+        """
+        command = (
+            "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
+            "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+            "python3 <<'PY'\nbuilder.save(output_dir)\nPY"
+        )
+        transcript = _write_jsonl(
+            tmp_path / "legacy-envelope.jsonl",
+            [
+                _assistant(_call("builder", "Bash", command=command)),
+                _result(
+                    "builder",
+                    "RECORDED COUNTS: safe",
+                    is_error=None,
+                    structured={"exitCode": 0},
+                ),
+            ],
+        )
+
+        result = analyze_subagent(transcript, tmp_path, [])
+
+        assert result["artifact_writes"] == {
+            "builder_attempted": True,
+            "builder_attempts": 1,
+            "builder_successes": 1,
+            "builder_failures": 0,
+            "first_builder_attempt_succeeded": True,
+            "recovered": False,
+        }
+
+    def test_both_envelope_generations_are_recognized(self):
+        """The stable four names plus the heredoc shape ARE the envelope."""
+        stable = (
+            "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
+            "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+        )
+        assert is_bootstrap_builder_heredoc(
+            stable + "python3 <<PY\npass\nPY"
+        )
+        assert is_bootstrap_builder_heredoc(
+            stable + "PIRATEGOAT_PLUGIN_VERSION=1.114.0 python3 <<PY\npass\nPY"
+        )
+        # Empty-valued is the shape bootstrap emits when the run resolved
+        # no version, and must not read as a foreign assignment.
+        assert is_bootstrap_builder_heredoc(
+            stable + "PIRATEGOAT_PLUGIN_VERSION= python3 <<PY\npass\nPY"
+        )
+
     def test_real_bootstrap_builder_envelope_is_counted_as_one_attempt(
         self, tmp_path
     ):
@@ -1184,8 +1244,13 @@ class TestAnalyzeSubagent:
         "command",
         [
             pytest.param(
+                # Drops a REQUIRED name (PR_ID). Omitting the optional
+                # PIRATEGOAT_PLUGIN_VERSION instead is the pre-1.114.0
+                # envelope, which is recognized — see the legacy-generation
+                # tests below.
                 "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
-                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "PIRATEGOAT_REVIEWER_NAME=security "
+                "PIRATEGOAT_PLUGIN_VERSION=1.114.0 "
                 "python3 <<PY\npass\nPY",
                 id="missing-required-assignment",
             ),
@@ -1195,6 +1260,16 @@ class TestAnalyzeSubagent:
                 "PIRATEGOAT_PLUGIN_VERSION=1.114.0 EXTRA=safe "
                 "python3 <<PY\npass\nPY",
                 id="extra-assignment",
+            ),
+            pytest.param(
+                # Exactly as many assignments as the current envelope, but
+                # one of them is foreign. The length bound cannot see this —
+                # only the name-set upper bound rejects it, and without this
+                # case that bound can be deleted with the suite still green.
+                "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "EXTRA=safe python3 <<PY\npass\nPY",
+                id="foreign-assignment-in-place-of-version",
             ),
             pytest.param(
                 "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_PLUGIN_ROOT=/other "

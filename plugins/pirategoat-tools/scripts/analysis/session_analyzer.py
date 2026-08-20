@@ -53,18 +53,24 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from review_transcript import _result_state  # noqa: E402
 
-# The canonical one-shot builder envelope mandated by bootstrap: five env
+# The canonical one-shot builder envelope mandated by bootstrap: these
 # assignments (any order) followed by `python3 <<'PY'` on the first line.
-# bootstrap emits every name on every dispatch, empty-valued when the fact
-# is unknown, so this exact-set recognition never has to admit a variant.
-_BUILDER_ENV_NAMES = {
+# These four names are the envelope's stable identity — every generation of
+# bootstrap has emitted all of them, and reconstruction below reads only
+# these.
+_BUILDER_ENV_REQUIRED = frozenset({
     "PIRATEGOAT_PLUGIN_ROOT",
     "PIRATEGOAT_OUTPUT_DIR",
     "PIRATEGOAT_REVIEWER_NAME",
     "PIRATEGOAT_PR_ID",
-    "PIRATEGOAT_PLUGIN_VERSION",
-}
-_BUILDER_ENV_COUNT = len(_BUILDER_ENV_NAMES)
+})
+# 1.114.0 appended the producing plugin version. Both generations are
+# recognized: the addition is additive and nothing here reads its value, so
+# a pre-1.114.0 transcript remains fully measurable. Refusing it would
+# report saves that demonstrably happened as no-save — a wrong measurement
+# rather than a missing one, and transcripts are immutable.
+_BUILDER_ENV_OPTIONAL = frozenset({"PIRATEGOAT_PLUGIN_VERSION"})
+_BUILDER_ENV_NAMES = frozenset(_BUILDER_ENV_REQUIRED | _BUILDER_ENV_OPTIONAL)
 # Must mirror ReviewOutputBuilder.add_issue()'s FULL positional order — a
 # parameter missing here is silently dropped from fully positional calls
 # (a dropped severity_floor records the pre-floor severity). A contract
@@ -113,18 +119,25 @@ def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
         tokens = shlex.split(first_line)
     except ValueError:
         return None
-    if (
-        len(tokens) != _BUILDER_ENV_COUNT + 2
-        or tokens[-2:] != ["python3", "<<PY"]
+    if tokens[-2:] != ["python3", "<<PY"]:
+        return None
+    assignments = tokens[:-2]
+    if not (
+        len(_BUILDER_ENV_REQUIRED)
+        <= len(assignments)
+        <= len(_BUILDER_ENV_NAMES)
     ):
         return None
     env: dict[str, str] = {}
-    for token in tokens[:_BUILDER_ENV_COUNT]:
+    for token in assignments:
         name, separator, value = token.partition("=")
         if separator != "=":
             return None
+        if name in env:  # a repeated assignment is not the mandated form
+            return None
         env[name] = value
-    if set(env) != _BUILDER_ENV_NAMES:
+    # Every required name present, nothing beyond the known optional one.
+    if not _BUILDER_ENV_REQUIRED <= set(env) <= _BUILDER_ENV_NAMES:
         return None
     return env
 
