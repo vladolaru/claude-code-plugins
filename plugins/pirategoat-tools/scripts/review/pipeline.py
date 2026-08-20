@@ -242,10 +242,15 @@ _STALE_ARTIFACTS = [
     # output dir publish a previous run's token cost as its own.
     "usage-snapshot.json",
     # And a surviving synthesis-agent lifecycle would let a rerun publish
-    # a previous run's reconciliator/critic durations as its own. Its
-    # dispatch markers are already swept by the `*.started` glob above,
-    # which is the same sweep the reviewer markers rely on.
+    # a previous run's reconciliator/critic durations as its own.
     "synthesis-agents.json",
+    # Its dispatch markers need their own pattern: they are deliberately
+    # NOT named `<agent>.started` (that suffix is the reviewer contract
+    # other tools scan, and a synthesis marker landing in it got treated
+    # as a reviewer and renamed away), and `*.started` does not match
+    # `*.synthesis-started`. A surviving marker would make finalize
+    # report last run's dispatch as this run's stall.
+    "*.synthesis-started",
 ]
 
 # Files to preserve across runs

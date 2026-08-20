@@ -29,6 +29,16 @@ from review import synthesis_lifecycle as lifecycle
 T0 = datetime(2026, 8, 19, 12, 0, 0, tzinfo=timezone.utc)
 
 
+def _marker(out, name):
+    """The dispatch marker's path, via the production spelling.
+
+    Never `out / f"{name}.started"`: that literal is what the reviewer
+    contract owns, and hardcoding any suffix here would let the tests keep
+    passing while the writer and the reader drifted onto different files.
+    """
+    return Path(lifecycle.marker_path(str(out), name))
+
+
 def _set_mtime(path, when):
     stamp = when.timestamp()
     os.utime(path, (stamp, stamp))
@@ -53,14 +63,38 @@ def out(tmp_path):
 
 
 class TestDispatchMarker:
+    def test_the_marker_is_namespaced_out_of_the_reviewer_suffix(self, out):
+        """The whole point of the suffix: a tool scanning for reviewer
+        markers must not be able to see these. pirategoat-bot's resume
+        path did exactly that scan and treated both synthesis agents as
+        reviewers — seeding them as permanently NOT_DISPATCHED and
+        renaming their markers away as orphans, which erased the stall
+        signal in the one window where the marker is the only record."""
+        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        assert lifecycle.MARKER_SUFFIX == ".synthesis-started"
+        assert not list(out.glob("*.started"))
+        assert [path.name for path in out.glob(f"*{lifecycle.MARKER_SUFFIX}")] == [
+            f"{lifecycle.RECONCILIATOR}{lifecycle.MARKER_SUFFIX}"
+        ]
+
+    def test_writer_and_reader_share_one_suffix(self, out):
+        """They resolve the path through the same helper, so a marker the
+        writer creates is always one the reader can find. A writer with
+        its own spelling would read downstream as an agent that never
+        started — indistinguishable from a failed dispatch."""
+        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
+        payload = lifecycle.observe(str(out), finalize=True, now=T0)
+        assert _entry(payload, lifecycle.DECISION_CRITIC) is not None
+
     def test_marker_matches_bootstrap_format(self, out):
-        """One UTC ISO timestamp in `<agent>.started` — the same file
-        name and body agent/bootstrap.py writes for reviewers, so the
-        `*.started` sweep and any shared reader keep working."""
+        """One UTC ISO timestamp — bootstrap's marker BODY — under a
+        deliberately different name. The reviewer `*.started` suffix is a
+        contract other tools scan, so a synthesis marker must not land in
+        it; the body stays identical because the parsing is shared."""
         stamp = lifecycle.mark_dispatched(
             str(out), lifecycle.RECONCILIATOR, now=T0
         )
-        marker = out / f"{lifecycle.RECONCILIATOR}.started"
+        marker = _marker(out, lifecycle.RECONCILIATOR)
         assert marker.is_file()
         assert marker.read_text() == stamp
         parsed = datetime.fromisoformat(marker.read_text())
@@ -174,7 +208,7 @@ class TestStallDetection:
         assert entry["stalled"] is True
 
     def test_unreadable_marker_still_counts_as_dispatched(self, out):
-        (out / f"{lifecycle.RECONCILIATOR}.started").write_text("not-a-time")
+        _marker(out, lifecycle.RECONCILIATOR).write_text("not-a-time")
         payload = lifecycle.observe(
             str(out), finalize=True, now=T0 + timedelta(seconds=60)
         )
@@ -184,7 +218,7 @@ class TestStallDetection:
         assert entry["stalled"] is True
 
     def test_naive_marker_timestamp_is_rejected(self, out):
-        (out / f"{lifecycle.RECONCILIATOR}.started").write_text(
+        _marker(out, lifecycle.RECONCILIATOR).write_text(
             "2026-08-19T12:00:00"
         )
         payload = lifecycle.observe(str(out), now=T0)
@@ -397,7 +431,7 @@ class TestStepEightDispatchMarker:
         mod._orchestrate_step_8(
             "full", {}, {"resolved_params": {}}, {}, str(out)
         )
-        assert (out / f"{lifecycle.RECONCILIATOR}.started").is_file()
+        assert _marker(out, lifecycle.RECONCILIATOR).is_file()
 
     def test_no_marker_when_the_context_gate_fails(self, out, monkeypatch):
         """A step that raises never dispatched anything — a marker here
@@ -419,7 +453,7 @@ class TestStepEightDispatchMarker:
             mod._orchestrate_step_8(
                 "full", {}, {"resolved_params": {}}, {}, str(out)
             )
-        assert not (out / f"{lifecycle.RECONCILIATOR}.started").exists()
+        assert not _marker(out, lifecycle.RECONCILIATOR).exists()
 
     def test_no_marker_while_the_readiness_gate_is_still_waiting(
         self, out, monkeypatch
@@ -438,7 +472,7 @@ class TestStepEightDispatchMarker:
         mod._orchestrate_step_8(
             "full", {}, {"resolved_params": {}}, {}, str(out)
         )
-        assert not (out / f"{lifecycle.RECONCILIATOR}.started").exists()
+        assert not _marker(out, lifecycle.RECONCILIATOR).exists()
 
 
 class TestStepTenDispatchMarker:
@@ -446,7 +480,7 @@ class TestStepTenDispatchMarker:
         orchestration_mod._orchestrate_step_10(
             "full", {}, {}, {}, str(out)
         )
-        assert (out / f"{lifecycle.DECISION_CRITIC}.started").is_file()
+        assert _marker(out, lifecycle.DECISION_CRITIC).is_file()
 
     def test_no_marker_when_quick_mode_skips_the_critic(self, out):
         """A critic that never ran has no duration. No marker means no
@@ -459,7 +493,7 @@ class TestStepTenDispatchMarker:
             "full", {"quick": True}, state, {}, str(out)
         )
         assert state["step_decisions"]["10"]["critic_skipped"] is True
-        assert not (out / f"{lifecycle.DECISION_CRITIC}.started").exists()
+        assert not _marker(out, lifecycle.DECISION_CRITIC).exists()
 
         payload = lifecycle.observe(str(out), finalize=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC) is None
@@ -482,7 +516,7 @@ class TestStepTenReEntryDoesNotManufactureAStall:
         # Step 10 dispatches the critic; it finishes 665s later.
         mod._orchestrate_step_10("full", {}, {}, {}, str(out))
         dispatched = datetime.fromisoformat(
-            (out / f"{lifecycle.DECISION_CRITIC}.started").read_text()
+            _marker(out, lifecycle.DECISION_CRITIC).read_text()
         )
         verdict = out / "decision-critic-verdict.json"
         verdict.write_text('{"verdict": "REVISE"}')
@@ -528,7 +562,7 @@ class TestStepTenReEntryDoesNotManufactureAStall:
         )
 
         assert state["step_decisions"]["10"]["critic_skipped"] is True
-        assert not (out / f"{lifecycle.DECISION_CRITIC}.started").exists()
+        assert not _marker(out, lifecycle.DECISION_CRITIC).exists()
         assert _entry(_read(out), lifecycle.RECONCILIATOR)["duration_ms"] == (
             41_000
         )
@@ -549,7 +583,7 @@ class TestStepTenReEntryDoesNotManufactureAStall:
         # Critic returns REVISE; the orchestrator applies adjustments,
         # rewriting the ledger far later than the reconciliator finished.
         dispatched = datetime.fromisoformat(
-            (out / f"{lifecycle.DECISION_CRITIC}.started").read_text()
+            _marker(out, lifecycle.DECISION_CRITIC).read_text()
         )
         verdict = out / "decision-critic-verdict.json"
         verdict.write_text('{"verdict": "REVISE"}')

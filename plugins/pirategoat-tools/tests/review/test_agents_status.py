@@ -803,12 +803,28 @@ class TestWaitMode:
 class TestSynthesisMarkersAreInvisible:
     """The synthesis agents are measured elsewhere and must not leak here.
 
-    `review-reconciliator.started` and `decision-reviewer.started` share
-    the reviewer marker format on purpose (one `*.started` sweep, one
-    reader), so this pins the structural reason they still cannot move
-    this module's counts: it iterates the dispatch plan, and neither
-    agent is ever in one. A future edit that scanned the directory for
-    `*.started` instead would fail here.
+    TWO independent guards, and this class keeps both honest even though
+    either alone would suffice today.
+
+    1. NAMESPACING (primary, since the markers were renamed). Synthesis
+       markers end `.synthesis-started`, not `.started`, so a directory
+       scan for the reviewer suffix cannot see them at all. That is what
+       enforces the separation now: pirategoat-bot's resume path ran
+       exactly such a scan and treated every hit as a reviewer, seeding
+       both synthesis agents as permanently NOT_DISPATCHED and renaming
+       their markers away as orphans. A name list maintained by hand in
+       another repo is a contract nobody enforces; the suffix is one
+       nobody has to.
+
+    2. DISPATCH-PLAN ITERATION (this module's own guard). agents_status
+       reports on the agents in `dispatch-plan.json` and nothing else,
+       and neither synthesis agent is ever in one.
+
+    Namespacing makes the first test near-trivial, which is the point —
+    the invariant should be cheap to hold. The second test deliberately
+    plants the OLD, reviewer-suffixed names to prove guard 2 still stands
+    alone, so a future revert of the suffix cannot silently take both
+    guards down at once.
     """
 
     SYNTHESIS_MARKERS = (
@@ -817,8 +833,36 @@ class TestSynthesisMarkersAreInvisible:
     )
 
     def _plant(self, tmp_path):
+        """Real markers, through the production writer."""
+        for name in self.SYNTHESIS_MARKERS:
+            synthesis_lifecycle.mark_dispatched(str(tmp_path), name)
+
+    def _plant_with_reviewer_suffix(self, tmp_path):
+        """Synthesis names under the REVIEWER suffix — the pre-namespacing
+        collision, simulated so guard 2 is pinned on its own."""
         for name in self.SYNTHESIS_MARKERS:
             _start_agent(tmp_path, name)
+
+    def test_synthesis_markers_do_not_carry_the_reviewer_suffix(
+        self, tmp_path
+    ):
+        self._plant(tmp_path)
+        assert not list(tmp_path.glob("*.started"))
+        assert len(list(tmp_path.glob("*.synthesis-started"))) == 2
+
+    def test_dispatch_plan_iteration_holds_without_namespacing(
+        self, mod, tmp_path
+    ):
+        """Guard 2, alone: even under the colliding old names, these
+        agents cannot appear, because they are not in the plan."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        before = mod.check_status(str(tmp_path))
+        self._plant_with_reviewer_suffix(tmp_path)
+
+        assert mod.check_status(str(tmp_path)) == before
 
     def test_counts_unchanged_with_synthesis_markers_present(
         self, mod, tmp_path

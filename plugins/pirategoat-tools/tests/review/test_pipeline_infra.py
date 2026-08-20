@@ -605,6 +605,33 @@ class TestCLIIntegration:
         assert (tmp_path / "run-config.json").is_file()
         assert (tmp_path / ".branch-review-baseline.json").is_file()
 
+    def test_step_1_clears_synthesis_dispatch_markers(self, tmp_path):
+        """The namespaced suffix needs its own sweep pattern.
+
+        `*.started` does not match `*.synthesis-started` — the reviewer
+        glob stops at a literal `.started` ending — so the markers stopped
+        being swept the moment they were renamed out of the reviewer
+        contract. A surviving marker makes finalize report last run's
+        dispatch as this run's stall, with no completion artifact to
+        contradict it.
+        """
+        import fnmatch
+
+        assert not fnmatch.fnmatch(
+            "review-reconciliator.synthesis-started", "*.started"
+        ), "the reviewer glob must NOT be relied on to sweep these"
+
+        for name in ("review-reconciliator", "decision-reviewer"):
+            (tmp_path / f"{name}.synthesis-started").write_text("2026-08-19T12:00:00+00:00")
+        (tmp_path / "synthesis-agents.json").write_text('{"schema": 1}')
+
+        run_pipeline("--step", "1", "--mode", "pr",
+                     "--output-dir", str(tmp_path), "--pr-number", "42",
+                     cwd=tmp_path)
+
+        assert not list(tmp_path.glob("*.synthesis-started"))
+        assert not (tmp_path / "synthesis-agents.json").exists()
+
     def test_step_1_clears_worktree_hygiene_artifacts(self, tmp_path):
         """Hygiene artifacts are per-run measurements, not run-dir state.
 

@@ -20,8 +20,11 @@ use, minus the polling:
    produce the briefing that hands the agent off. The script owns that
    moment — the LLM performs the Task call, so the script cannot observe
    the agent's own boot, but it CAN stamp the instant it asked for one.
-   The marker is byte-compatible with bootstrap's: `<agent>.started`,
-   one UTC ISO timestamp, swept by pipeline.py's `*.started` glob.
+   The marker's BODY is byte-compatible with bootstrap's — one UTC ISO
+   timestamp — but its NAME deliberately is not. It carries
+   MARKER_SUFFIX, which namespaces it away from the reviewer
+   `*.started` contract other tools scan; see that constant for why the
+   separation has to be structural rather than a courtesy.
 
 2. **Completion.** Observed at the NEXT step the script re-enters —
    step 9 for the reconciliator, step 11 (finalize) for both — by the
@@ -74,6 +77,29 @@ except ImportError:  # pragma: no cover - direct-path import fallback
 
 LIFECYCLE_FILENAME = "synthesis-agents.json"
 LIFECYCLE_SCHEMA = 1
+
+# The dispatch marker's suffix, and the reason it is not `.started`.
+#
+# These markers used to share the reviewer suffix exactly, on the theory
+# that one format meant one reader. The opposite was true: pirategoat-bot's
+# resume path scans the run directory for `*.started` and treats every hit
+# as a REVIEWER, so it seeded both synthesis agents as permanently
+# NOT_DISPATCHED rows AND renamed their markers away as orphans — erasing
+# the stall signal inside the exact crash window this feature exists to
+# capture. Between dispatch and the next observation the marker is the
+# ONLY record that the agent was ever handed off.
+#
+# The bot can filter two names defensively, but a hand-maintained mirror
+# of our names in another repo is a contract nobody enforces; a third
+# synthesis agent would reintroduce the collision silently. The suffix
+# makes it structural instead — anything ending `.started` is a reviewer,
+# anything ending here is not, and no name list has to stay in sync.
+#
+# One constant, used by BOTH the writer and the reader through
+# marker_path(). A writer that spelled its own suffix would produce a
+# marker its own reader could not find, which reads downstream as an
+# agent that never started.
+MARKER_SUFFIX = ".synthesis-started"
 
 # The row shape, declared ONCE. Three modules write it — this producer,
 # manifest_sections.build_synthesis_agents_manifest(), and the metrics
@@ -131,8 +157,12 @@ _AGENT_STEPS = {name: step for name, step, _ in SYNTHESIS_AGENTS}
 
 
 def marker_path(output_dir, name):
-    """Path of one synthesis agent's dispatch marker."""
-    return os.path.join(output_dir, f"{name}.started")
+    """Path of one synthesis agent's dispatch marker.
+
+    The single place MARKER_SUFFIX is applied, so the writer and the
+    reader cannot disagree about what file they are talking about.
+    """
+    return os.path.join(output_dir, f"{name}{MARKER_SUFFIX}")
 
 
 def mark_dispatched(output_dir, name, *, now=None):
