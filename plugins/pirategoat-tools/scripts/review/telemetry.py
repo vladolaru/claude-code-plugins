@@ -66,7 +66,11 @@ MARKER_FILE = ".telemetry-log-path"
 # so no artifact was ever published claiming schema 2 without this key.
 # Bumping to 3 here would publish a compatibility boundary between two
 # shapes that never both existed in the wild. Revisit the moment 1.114.0
-# is tagged: the next `outcome` key after that is a real 2 -> 3 bump.
+# is tagged: the next `outcome` key after that is a real 2 -> 3 bump —
+# and at that same moment the missing-digest-means-tampered adjudication
+# gains a cross-version edge worth re-checking: a run started under a
+# pre-digest build and finalized after an upgrade reads
+# modified_out_of_channel (today that window is developer-local only).
 EVENT_SCHEMA = 2
 # Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
 # pipeline's _FULL_SHA_RE contract for durable git identity.

@@ -284,8 +284,11 @@ export interface ReviewOutput {
     // publishes the result in pipeline-result.json as `post_apply_integrity`
     // — `"intact"`, or `"modified_out_of_channel"` (plus a degradation note
     // and a degraded run status). The field is ABSENT from that result, not
-    // null, when there was no ledger to verify; a consumer must not read
-    // absence as "verified intact".
+    // null, in two cases a consumer cannot tell apart from the key alone:
+    // no ledger existed to verify, or the ledger existed but could not be
+    // read (unreadable bytes are not evidence of tampering — the fault is
+    // recorded by its own degradation note instead). Either way a consumer
+    // must not read absence as "verified intact".
     //
     // A findings file carrying no content_digest reads as
     // `"modified_out_of_channel"`, deliberately: within the version that
