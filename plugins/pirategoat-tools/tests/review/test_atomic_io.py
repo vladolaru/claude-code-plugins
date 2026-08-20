@@ -83,13 +83,15 @@ class TestSameDirectoryTempFile:
 
 
 def _calls_os_replace(source_path):
-    """True if the file's AST contains a call-shaped `os.replace` access.
+    """True if the file's AST contains an `os.replace` attribute access.
 
     An AST check (not a text scan) so mentioning `os.replace` in a
     comment or docstring — like atomic_io.py's own module docstring, or
     critic_adjustments.py's docstring naming the mechanism it delegates
-    to — is free. Only an actual `os.replace(...)`-shaped attribute
-    access counts as a spelling of the pattern this test guards against.
+    to — is free. Matches any `os.replace` attribute access, called or
+    not, so aliasing it into a variable is caught too. Scoped to this
+    codebase's universal `import os` convention: a `from os import
+    replace` spelling would not be matched (none exists under scripts/).
     """
     import ast
 
