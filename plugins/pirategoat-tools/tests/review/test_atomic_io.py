@@ -19,7 +19,8 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 class TestCrashSafety:
     def test_atomic_write_json_replaces_not_truncates(self, tmp_path, monkeypatch):
         """A failed os.replace must leave the pre-existing file untouched —
-        never a truncated or partially-written artifact."""
+        never a truncated or partially-written artifact — and must not
+        leak its temp file into the directory either."""
         path = tmp_path / "target.json"
         path.write_text('{"original": true}')
 
@@ -32,6 +33,19 @@ class TestCrashSafety:
             atomic_write_json(str(path), {"new": True})
 
         assert path.read_text() == '{"original": true}'
+        # The failed write's temp file must be cleaned up — the target is
+        # the ONLY thing left in the directory, not target.json plus an
+        # orphaned tmpXXXXXX sibling.
+        assert list(tmp_path.iterdir()) == [path]
+
+    def test_successful_write_leaves_no_temp_file(self, tmp_path):
+        """A normal write leaves only the target behind — the temp file
+        used to stage it is renamed away, not left as a sibling."""
+        path = tmp_path / "target.json"
+
+        atomic_write_json(str(path), {"ok": True})
+
+        assert list(tmp_path.iterdir()) == [path]
 
 
 class TestEncoding:
@@ -70,22 +84,26 @@ class TestSameDirectoryTempFile:
 
 class TestNoStrayAtomicSpellings:
     def test_no_stray_atomic_spellings(self):
-        """Pins the consolidation against future drift: no file under
-        scripts/review/ or scripts/analysis/ may reimplement the
-        temp-file-then-os.replace pattern outside atomic_io.py, except
-        agent/output.py's deliberately different staged-nonce protocol."""
+        """Pins the consolidation against future drift: no file anywhere
+        under scripts/ may call os.replace outside atomic_io.py, except
+        agent/output.py's deliberately different staged-nonce protocol.
+        Triggers on `os.replace` alone (with or without NamedTemporaryFile
+        alongside it) — a second, differently-shaped atomic-write spelling
+        is still a spelling this consolidation is meant to catch."""
         allowed = {
             SCRIPTS_DIR / "review" / "atomic_io.py",
             SCRIPTS_DIR / "review" / "agent" / "output.py",
         }
         hits = set()
-        for root in (SCRIPTS_DIR / "review", SCRIPTS_DIR / "analysis"):
-            for path in root.rglob("*.py"):
-                text = path.read_text(encoding="utf-8")
-                if "NamedTemporaryFile" in text and "os.replace" in text:
-                    hits.add(path)
+        for path in SCRIPTS_DIR.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "os.replace" in text:
+                hits.add(path)
 
         stray = hits - allowed
         assert not stray, f"Stray atomic-write spelling(s) found: {sorted(stray)}"
-        # Sanity check the scan itself is not vacuous.
-        assert SCRIPTS_DIR / "review" / "atomic_io.py" in hits
+        # Sanity check the scan itself is not vacuous, and that both
+        # allowlisted files are genuinely hit (not dead exemptions).
+        assert hits == allowed, (
+            f"Allowlist entries not actually matched: {sorted(allowed - hits)}"
+        )

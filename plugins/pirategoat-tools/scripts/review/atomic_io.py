@@ -3,9 +3,12 @@
 
 Every artifact this function touches replaces the old file in one step or
 leaves it untouched: write to a temp file in the SAME directory as the
-target (so ``os.replace`` is a same-filesystem rename, never a copy that
-could be interrupted mid-write), then ``os.replace`` it over the target. A
-half-written JSON file must never be observable on disk.
+target, then ``os.replace`` it over the target. ``os.replace`` never
+copies — it is a same-filesystem rename, and raises ``OSError`` (EXDEV)
+if the temp file and target are on different filesystems, so pinning the
+temp file to the target directory is what keeps that rename possible in
+the first place. A half-written JSON file must never be observable on
+disk.
 
 Before consolidation this was five separate spellings of the same nine
 lines: critic_adjustments.py's decision-critic ledger, orchestration.py's
@@ -37,10 +40,17 @@ def atomic_write_json(path, payload):
     ``\\uXXXX`` runs — lossless, but indistinguishable from corruption to
     whoever reads the artifact next. ``review-findings.json`` alone has
     three writers across a run (the review-reconciliator agent's first
-    write, this function applying decision-critic adjustments, and
-    orchestration.py's Rule 23 verdict sync) and all three now share this
-    encoding, so no writer's turn can make the file's prose unreadable to
-    the others.
+    write, critic_adjustments.py applying decision-critic adjustments
+    through this function, and orchestration.py's Rule 23 verdict sync,
+    also through this function) and all three now share this encoding, so
+    no writer's turn can make the file's prose unreadable to the others.
+
+    This guarantees the artifact is never TORN — never half-old,
+    half-new content — not that it survives a power loss: there is no
+    ``fsync`` here, matching every writer this replaces. A crash after
+    ``os.replace`` returns but before the OS has flushed the rename to
+    disk can still lose the write; that risk existed in all five prior
+    spellings and is unchanged by this consolidation.
     """
     directory = os.path.dirname(path) or "."
     temp_path = None

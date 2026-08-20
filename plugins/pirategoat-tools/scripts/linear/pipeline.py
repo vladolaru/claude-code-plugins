@@ -25,6 +25,7 @@ Zero external dependencies (stdlib only).
 
 import argparse
 import glob as glob_mod
+import importlib.util
 import json
 import os
 import re
@@ -34,6 +35,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+
+
+def _load_exact_path_module(name: str, path: Path):
+    """Load a module by exact file path, not package import.
+
+    This script runs as a standalone subprocess (bot mode) or is loaded
+    by tests via the same exact-path mechanism (see how tests load this
+    very file, and how `_init_events` below reaches its sibling
+    `events.py`) — never as a package import — so a relative import to
+    `scripts/review/atomic_io.py` would have no parent package to
+    resolve against.
+    """
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_ATOMIC_IO_CONTRACT = _load_exact_path_module(
+    "linear_atomic_io_contract", SCRIPTS_DIR.parent / "review" / "atomic_io.py"
+)
+atomic_write_json = _ATOMIC_IO_CONTRACT.atomic_write_json
 
 # ---------------------------------------------------------------------------
 # Pipeline Identity
@@ -1410,9 +1433,8 @@ def _write_failed_result(output_dir, mode, context, error, events=None):
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
     try:
-        with open(result_path, "w") as f:
-            json.dump(pipeline_result, f, indent=2)
-    except OSError:
+        atomic_write_json(result_path, pipeline_result)
+    except (OSError, TypeError, ValueError):
         pass
     if events:
         events.pipeline_failed(step=1, error=error)
@@ -1701,9 +1723,8 @@ def _orchestrate_step(step, mode, config, state, context, output_dir, events=Non
 
         result_path = os.path.join(output_dir, "pipeline-result.json")
         try:
-            with open(result_path, "w") as f:
-                json.dump(pipeline_result, f, indent=2)
-        except OSError:
+            atomic_write_json(result_path, pipeline_result)
+        except (OSError, TypeError, ValueError):
             pass
 
         # Emit pipeline_complete event
