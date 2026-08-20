@@ -1520,8 +1520,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # answer, not a null-valued one: "nothing was verified" is a different
     # statement from "verified, and it was intact", and a consumer must
     # not be able to read the first as the second. Absence carries BOTH
-    # unmeasured cases — no findings file, or one that could not be read at all —
-    # since neither licenses a claim about the ledger's content.
+    # unmeasured cases — no findings file, or one that could not be
+    # read at all — since neither licenses a claim about the ledger's
+    # content.
     if findings_integrity is not None:
         pipeline_result["post_apply_integrity"] = findings_integrity
     result_path = os.path.join(output_dir, "pipeline-result.json")

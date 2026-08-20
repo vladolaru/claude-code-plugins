@@ -1636,8 +1636,8 @@ def _step_11_present_results(mode, state, context, config, output_dir):
                        "(\"intact\" or \"modified_out_of_channel\" — "
                        "whether review-findings.json still matches the "
                        "digest its last sanctioned write stamped; the key "
-                       "is absent entirely — never null — when there was no "
-                       "ledger to verify, meaning either no findings file "
+                       "is absent entirely — never null — when there "
+                       "was no ledger to verify: either no findings file "
                        "or one that could not be read at all)")
 
         if mode == "incremental":

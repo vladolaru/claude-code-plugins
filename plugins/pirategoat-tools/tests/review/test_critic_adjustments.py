@@ -1892,11 +1892,17 @@ class TestFindingsDigest:
         this check is pointed at, an adversarial hand edit.
         """
         path = tmp_path / "review-findings.json"
-        path.write_text(
-            '{"issues": [], "title": "bad \\ud800 char"}', encoding="utf-8"
-        )
+        # Stamp a clean ledger first, then inject the surrogate around the
+        # surviving string digest: an unstamped fixture would short-circuit
+        # at the digest-shape guard and never reach the total serialization
+        # this test exists to pin.
+        write_findings(str(tmp_path), {"issues": [], "title": "clean"})
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["title"] = "bad \ud800 char"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)  # default ensure_ascii escapes the surrogate
 
-        # Unstamped, so the answer is "modified" — but the point is that
+        # Tampered, so the answer is "modified" — but the point is that
         # there IS an answer rather than a traceback out of finalize.
         assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
 
