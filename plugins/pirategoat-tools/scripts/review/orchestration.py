@@ -29,6 +29,7 @@ try:
         verify_dependency_refresh,
     )
     from .atomic_io import atomic_write_json
+    from .reviewer_names import derive_reviewer_name
     from . import critic_adjustments
     from . import manifest_sections
     from . import synthesis_lifecycle
@@ -56,6 +57,7 @@ except ImportError:
         verify_dependency_refresh,
     )
     from review.atomic_io import atomic_write_json
+    from review.reviewer_names import derive_reviewer_name
     from review import critic_adjustments
     from review import manifest_sections
     from review import synthesis_lifecycle
@@ -960,13 +962,13 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             review_files = []
             completed = []
             for name in dispatched_names:
-                # Only a trailing "-reviewer" maps to "-review" — repo
-                # reviewer ids may carry "reviewer" mid-string.
-                stem = (
-                    f"{name[: -len('-reviewer')]}-review"
-                    if name.endswith("-reviewer") else name
+                # One rule, one home: reviewer_names.derive_reviewer_name
+                # owns the trailing-"-reviewer" strip (repo reviewer ids
+                # may carry "reviewer" mid-string), and every name maps to
+                # "<derived>-review.json" exactly as save() publishes it.
+                review_file = os.path.join(
+                    output_dir, f"{derive_reviewer_name(name)}-review.json"
                 )
-                review_file = os.path.join(output_dir, f"{stem}.json")
                 if os.path.isfile(review_file):
                     completed.append(name)
                     review_files.append(review_file)
