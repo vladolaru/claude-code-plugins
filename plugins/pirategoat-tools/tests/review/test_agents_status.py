@@ -16,6 +16,7 @@ PLUGIN_ROOT = TESTS_DIR.parent
 SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "agents_status.py"
 
 from review import dispatch_status
+from review import synthesis_lifecycle
 
 
 def _load_module():
@@ -810,7 +811,10 @@ class TestSynthesisMarkersAreInvisible:
     `*.started` instead would fail here.
     """
 
-    SYNTHESIS_MARKERS = ("review-reconciliator", "decision-reviewer")
+    SYNTHESIS_MARKERS = (
+        synthesis_lifecycle.RECONCILIATOR,
+        synthesis_lifecycle.DECISION_CRITIC,
+    )
 
     def _plant(self, tmp_path):
         for name in self.SYNTHESIS_MARKERS:

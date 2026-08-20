@@ -10,6 +10,8 @@ from .contracts import (
     _ANSI_ESCAPE_RE,
     _CRITIC_VERDICTS,
     _REPORT_SCHEMA,
+    _SYNTHESIS_DECISION_CRITIC,
+    _SYNTHESIS_RECONCILIATOR,
     _TABLE_CELL_LIMIT,
 )
 
@@ -35,6 +37,13 @@ def _table_cell(value: object) -> str:
 
 
 def _duration_cell(value: object) -> str:
+    """One millisecond span as display seconds, or "—" when unmeasured.
+
+    The bool guard matters: `True` is an `int` in Python, so without it a
+    corrupted flag would render as a 0.0s phase — a fabricated
+    measurement in the one column whose whole job is telling measured
+    from unmeasured.
+    """
     return (
         f"{value / 1000:.1f}s"
         if isinstance(value, int) and not isinstance(value, bool)
@@ -65,7 +74,13 @@ def _synthesis_cell(section: object, state: str) -> str:
             return "stalled"
         return _duration_cell(row.get("duration_ms"))
 
-    return f"{cell('review-reconciliator')}/{cell('decision-reviewer')}"
+    # Identities come from the producer's own constants, never respelled
+    # here: a renamed agent must break this package's tests, not silently
+    # render two em-dashes forever.
+    return (
+        f"{cell(_SYNTHESIS_RECONCILIATOR)}/"
+        f"{cell(_SYNTHESIS_DECISION_CRITIC)}"
+    )
 
 
 def _table_row(run: dict[str, Any]) -> list[str]:
@@ -119,8 +134,7 @@ def _table_row(run: dict[str, Any]) -> list[str]:
     else:
         critic = "—"
     outcome_text = f"{raw}→{final}/{critic}"
-    wall = run.get("wall_time_ms")
-    wall_text = f"{wall / 1000:.1f}s" if isinstance(wall, int) else "—"
+    wall_text = _duration_cell(run.get("wall_time_ms"))
     synthesis_text = _synthesis_cell(
         run.get("synthesis_agents"), metrics.get("synthesis_agents", "missing")
     )

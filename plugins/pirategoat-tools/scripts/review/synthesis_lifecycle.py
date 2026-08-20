@@ -38,6 +38,18 @@ orchestrator's foreground, so nothing here can interrupt one. At
 finalize, a marker with no completion artifact records `stalled: true`
 and how long the stall had lasted when finalize looked.
 
+**Three timestamps, three meanings**, stated on the artifact itself in
+`semantics` so no consumer has to infer them:
+
+- `duration_ms` = completion artifact mtime - dispatch. The measured
+  phase.
+- `elapsed_ms` = this observation - dispatch. An upper bound on the
+  phase, and on a stalled agent the length of the stall so far.
+- section-level `observed_at` = when the LAST observation ran. It bounds
+  the whole section's freshness and is not any agent's clock; each row
+  carries its own `observed_at`, which may be older because a completed
+  row is carried forward verbatim rather than re-observed.
+
 **Availability, not zero.** A run older than this feature writes no
 marker and no `synthesis-agents.json`, so the manifest section is absent
 and its family reads "missing". A never-measured phase must never
@@ -62,6 +74,37 @@ except ImportError:  # pragma: no cover - direct-path import fallback
 
 LIFECYCLE_FILENAME = "synthesis-agents.json"
 LIFECYCLE_SCHEMA = 1
+
+# The row shape, declared ONCE. Three modules write it — this producer,
+# manifest_sections.build_synthesis_agents_manifest(), and the metrics
+# consumer's _sanitize_synthesis_agents() — and a key added to one of
+# them alone is a measurement that silently never reaches the manifest or
+# the cohort. Both projections assert parity against this tuple, so
+# teaching only one of the three fails loudly instead of green.
+ROW_KEYS = (
+    "agent",
+    "step",
+    "completion_artifact",
+    "verdict",
+    "started_at",
+    "completed_at",
+    "observed_at",
+    "duration_ms",
+    "elapsed_ms",
+    "stalled",
+)
+
+# What the numbers mean, carried ON the artifact and re-asserted by the
+# metrics consumer — the same self-description discipline the coverage
+# family's `semantics` key enforces. Two clocks per row plus a
+# section-level stamp is exactly the kind of shape a reader guesses wrong
+# about, and a guess here silently turns an upper bound into a
+# measurement.
+LIFECYCLE_SEMANTICS = (
+    "duration_ms=artifact_mtime_minus_dispatch; "
+    "elapsed_ms=observation_minus_dispatch; "
+    "section observed_at=last_observation"
+)
 
 RECONCILIATOR = "review-reconciliator"
 DECISION_CRITIC = "decision-reviewer"
@@ -96,10 +139,18 @@ def mark_dispatched(output_dir, name, *, now=None):
     """Stamp the moment the script handed `name` off for dispatch.
 
     Best-effort by construction: an unwritable marker costs the run a
-    measurement, never the review. Re-stamping is deliberate on a
-    re-entered step — the previous dispatch produced no completion (or
-    the step would not be re-entered), so the live attempt is the one
-    whose duration means anything.
+    measurement, never the review.
+
+    Re-stamping on a re-entered step is deliberate — the live attempt is
+    the one whose duration means anything — but it is ONLY safe because
+    the caller observes first. Step 10 is genuinely re-entered after a
+    completed critic (its own skip-decision comment says so: a rerun once
+    the reconciled verdict escalates), and a bare re-stamp there moves
+    the dispatch clock past an already-written completion artifact. The
+    next observation then reads the artifact as predating its dispatch,
+    discards it, and reports a finished 11-minute critique as
+    `stalled: true` with `elapsed_ms: 0`. Observing before re-stamping
+    carries the real completion forward and closes that window.
     """
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     try:
@@ -129,6 +180,30 @@ def _read_marker(output_dir, name):
     if parsed.tzinfo is None:
         return True, None
     return True, parsed
+
+
+def _artifact_verdict(path):
+    """The completion artifact's own `verdict` string, or None.
+
+    Read at observation because it changes what a duration MEANS. A critic
+    row carrying "SKIPPED" is not a critique that took N seconds — quick
+    mode skipped it, or it crashed and the orchestrator wrote the
+    handoff's fallback — so its span measures dispatch to
+    orchestrator-gave-up, an upper bound on a critique that may never have
+    started. Blending those into a critic duration statistic would drag
+    the cohort mean toward crash-resolution latency, so the aggregate
+    counts them apart. None is the honest answer for an absent,
+    unreadable, non-object, or verdict-less artifact.
+    """
+    try:
+        with open(path) as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    verdict = data.get("verdict")
+    return verdict if isinstance(verdict, str) else None
 
 
 def _artifact_mtime(path):
@@ -220,9 +295,8 @@ def observe(output_dir, *, finalize=False, now=None):
             # no row, and the section's presence is what tells a reader
             # the run was capable of measuring one.
             continue
-        completed_at = _artifact_mtime(
-            os.path.join(output_dir, artifact_name)
-        )
+        artifact_path = os.path.join(output_dir, artifact_name)
+        completed_at = _artifact_mtime(artifact_path)
         if (
             completed_at is not None
             and started_at is not None
@@ -236,6 +310,14 @@ def observe(output_dir, *, finalize=False, now=None):
             "agent": name,
             "step": step,
             "completion_artifact": artifact_name,
+            # What the agent concluded, which is what makes the duration
+            # beside it interpretable — see _artifact_verdict(). Read only
+            # from an artifact this dispatch can claim; a discarded one
+            # would attach a stale conclusion to a live dispatch.
+            "verdict": (
+                _artifact_verdict(artifact_path)
+                if completed_at is not None else None
+            ),
             "started_at": started_at.isoformat() if started_at else None,
             # The completion artifact's mtime — the closest available
             # proxy for when the agent actually finished.
@@ -252,6 +334,11 @@ def observe(output_dir, *, finalize=False, now=None):
 
     payload = {
         "schema": LIFECYCLE_SCHEMA,
+        "semantics": LIFECYCLE_SEMANTICS,
+        # The LAST observation, bounding the whole section's freshness.
+        # Not any one agent's clock: a carried-forward row keeps its own,
+        # older `observed_at` because re-observing it would replace the
+        # tightest bound the run has with a looser one.
         "observed_at": observed_at.isoformat(),
         "finalized": bool(finalize),
         "agents": entries,

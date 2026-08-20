@@ -7376,13 +7376,15 @@ class TestDamagedLegacyLogBytes:
 
 
 def _synthesis_row(agent: str, **overrides) -> dict:
+    reconciliator = agent == contracts._SYNTHESIS_RECONCILIATOR
     row = {
         "agent": agent,
-        "step": 8 if agent == "review-reconciliator" else 10,
+        "step": 8 if reconciliator else 10,
         "completion_artifact": (
-            "review-findings.json" if agent == "review-reconciliator"
+            "review-findings.json" if reconciliator
             else "decision-critic-verdict.json"
         ),
+        "verdict": "request_changes" if reconciliator else "STAND",
         "started_at": "2026-08-19T12:00:00+00:00",
         "completed_at": "2026-08-19T12:11:05+00:00",
         "observed_at": "2026-08-19T12:15:00+00:00",
@@ -7397,6 +7399,7 @@ def _synthesis_row(agent: str, **overrides) -> dict:
 def _synthesis_manifest(run_id: str = "run-1", *rows, **overrides) -> dict:
     manifest = _manifest(run_id)
     manifest["synthesis_agents"] = {
+        "semantics": contracts._SYNTHESIS_SEMANTICS,
         "observed_at": "2026-08-19T12:15:00+00:00",
         "finalized": True,
         "agents": list(rows),
@@ -7428,7 +7431,7 @@ class TestSynthesisAgentsMeasurement:
 
     def test_producer_availability_false_wins_over_a_payload(self):
         manifest = _synthesis_manifest(
-            "run-1", _synthesis_row("decision-reviewer")
+            "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
         )
         manifest["availability"]["synthesis_agents"] = False
         measured = measure_run(
@@ -7441,8 +7444,8 @@ class TestSynthesisAgentsMeasurement:
         measured = measure_run(
             _synthesis_manifest(
                 "run-1",
-                _synthesis_row("review-reconciliator", duration_ms=41_000),
-                _synthesis_row("decision-reviewer"),
+                _synthesis_row(contracts._SYNTHESIS_RECONCILIATOR, duration_ms=41_000),
+                _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC),
             ),
             Path("/nonexistent"), include_transcripts=False,
         )
@@ -7452,8 +7455,8 @@ class TestSynthesisAgentsMeasurement:
             for row in measured["synthesis_agents"]["agents"]
         }
         assert durations == {
-            "review-reconciliator": 41_000,
-            "decision-reviewer": 665_000,
+            contracts._SYNTHESIS_RECONCILIATOR: 41_000,
+            contracts._SYNTHESIS_DECISION_CRITIC: 665_000,
         }
 
     def test_measured_zero_dispatches_is_complete_not_missing(self):
@@ -7469,7 +7472,7 @@ class TestSynthesisAgentsMeasurement:
         measured phase — and never a silent drop."""
         measured = measure_run(
             _synthesis_manifest("run-1", _synthesis_row(
-                "review-reconciliator", completed_at=None,
+                contracts._SYNTHESIS_RECONCILIATOR, completed_at=None,
                 duration_ms=None, stalled=True,
             )),
             Path("/nonexistent"), include_transcripts=False,
@@ -7486,7 +7489,7 @@ class TestSynthesisAgentsMeasurement:
     def test_unusable_duration_never_becomes_zero(self, value):
         measured = measure_run(
             _synthesis_manifest(
-                "run-1", _synthesis_row("decision-reviewer", duration_ms=value)
+                "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC, duration_ms=value)
             ),
             Path("/nonexistent"), include_transcripts=False,
         )
@@ -7509,7 +7512,7 @@ class TestSynthesisAgentsMeasurement:
             include_transcripts=False,
         )
         beside = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row("decision-reviewer")),
+            _synthesis_manifest("run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)),
             Path("/nonexistent"), include_transcripts=False,
         )
         assert beside["lifecycle"] == plain["lifecycle"]
@@ -7526,8 +7529,8 @@ class TestSynthesisAgentsCohort:
             measure_run(
                 _synthesis_manifest(
                     run_id,
-                    _synthesis_row("review-reconciliator", duration_ms=recon),
-                    _synthesis_row("decision-reviewer", duration_ms=critic),
+                    _synthesis_row(contracts._SYNTHESIS_RECONCILIATOR, duration_ms=recon),
+                    _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC, duration_ms=critic),
                 ),
                 Path("/nonexistent"), include_transcripts=False,
             )
@@ -7537,16 +7540,19 @@ class TestSynthesisAgentsCohort:
             )
         ]
         block = aggregate_cohort(runs)["synthesis_agents"]
-        assert block["by_agent"]["decision-reviewer"] == {
+        assert block["by_agent"][contracts._SYNTHESIS_DECISION_CRITIC] == {
             "dispatched_runs": 2,
             "measured_runs": 2,
             "stalled_runs": 0,
+            "skipped_runs": 0,
             "total_ms": 1_300_000,
             "mean_ms": 650_000,
             "median_ms": 650_000,
             "max_ms": 700_000,
         }
-        assert block["by_agent"]["review-reconciliator"]["mean_ms"] == 50_000
+        assert block["by_agent"][
+            contracts._SYNTHESIS_RECONCILIATOR
+        ]["mean_ms"] == 50_000
         assert block["available_runs"] == 2
 
     def test_unmeasured_runs_contribute_nothing(self):
@@ -7567,17 +7573,18 @@ class TestSynthesisAgentsCohort:
         runs = [
             measure_run(
                 _synthesis_manifest("run-1", _synthesis_row(
-                    "decision-reviewer", completed_at=None,
+                    contracts._SYNTHESIS_DECISION_CRITIC, completed_at=None,
                     duration_ms=None, stalled=True,
                 )),
                 Path("/nonexistent"), include_transcripts=False,
             ),
         ]
         block = aggregate_cohort(runs)["synthesis_agents"]
-        assert block["by_agent"]["decision-reviewer"] == {
+        assert block["by_agent"][contracts._SYNTHESIS_DECISION_CRITIC] == {
             "dispatched_runs": 1,
             "measured_runs": 0,
             "stalled_runs": 1,
+            "skipped_runs": 0,
             "total_ms": None,
             "mean_ms": None,
             "median_ms": None,
@@ -7610,8 +7617,8 @@ class TestSynthesisAgentsRendering:
         measured = measure_run(
             _synthesis_manifest(
                 "run-1",
-                _synthesis_row("review-reconciliator", duration_ms=41_000),
-                _synthesis_row("decision-reviewer"),
+                _synthesis_row(contracts._SYNTHESIS_RECONCILIATOR, duration_ms=41_000),
+                _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC),
             ),
             Path("/nonexistent"), include_transcripts=False,
         )
@@ -7620,7 +7627,7 @@ class TestSynthesisAgentsRendering:
     def test_a_stall_renders_as_stalled_not_as_a_fast_phase(self):
         measured = measure_run(
             _synthesis_manifest("run-1", _synthesis_row(
-                "decision-reviewer", completed_at=None,
+                contracts._SYNTHESIS_DECISION_CRITIC, completed_at=None,
                 duration_ms=None, stalled=True,
             )),
             Path("/nonexistent"), include_transcripts=False,
@@ -7629,7 +7636,7 @@ class TestSynthesisAgentsRendering:
 
     def test_the_section_reaches_the_json_report(self):
         measured = measure_run(
-            _synthesis_manifest("run-1", _synthesis_row("decision-reviewer")),
+            _synthesis_manifest("run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)),
             Path("/nonexistent"), include_transcripts=False,
         )
         report = json.loads(
@@ -7639,5 +7646,123 @@ class TestSynthesisAgentsRendering:
             "duration_ms"
         ] == 665_000
         assert report["aggregate"]["synthesis_agents"]["by_agent"][
-            "decision-reviewer"
+            contracts._SYNTHESIS_DECISION_CRITIC
         ]["max_ms"] == 665_000
+
+
+class TestSynthesisAgentsSemanticsAndShape:
+    """The section must self-describe, and its shape is declared once."""
+
+    def test_a_section_without_the_declared_semantics_is_unreadable(self):
+        """The producer states what its two clocks mean ON the artifact.
+        A section carrying different (or no) semantics was written
+        against a contract this consumer cannot vouch for."""
+        manifest = _synthesis_manifest(
+            "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
+        )
+        del manifest["synthesis_agents"]["semantics"]
+        measured = measure_run(
+            manifest, Path("/nonexistent"), include_transcripts=False
+        )
+        assert measured["synthesis_agents"] is None
+        assert measured["metric_availability"]["synthesis_agents"] == "missing"
+
+    def test_semantics_names_both_clocks_and_the_section_stamp(self):
+        assert "duration_ms=artifact_mtime_minus_dispatch" in (
+            contracts._SYNTHESIS_SEMANTICS
+        )
+        assert "elapsed_ms=observation_minus_dispatch" in (
+            contracts._SYNTHESIS_SEMANTICS
+        )
+        assert "observed_at=last_observation" in contracts._SYNTHESIS_SEMANTICS
+
+    def test_semantics_survives_into_the_measured_run(self):
+        measured = measure_run(
+            _synthesis_manifest(
+                "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
+            ),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert measured["synthesis_agents"]["semantics"] == (
+            contracts._SYNTHESIS_SEMANTICS
+        )
+
+    def test_sanitizer_covers_exactly_the_declared_row_keys(self):
+        """Row-shape parity, consumer side. The shape is written by three
+        modules; a key taught to only two of them would otherwise vanish
+        here with every test green."""
+        measured = measure_run(
+            _synthesis_manifest(
+                "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
+            ),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        row = measured["synthesis_agents"]["agents"][0]
+        assert set(row) == set(contracts._SYNTHESIS_ROW_KEYS)
+
+    def test_an_undeclared_row_key_does_not_survive(self):
+        measured = measure_run(
+            _synthesis_manifest("run-1", _synthesis_row(
+                contracts._SYNTHESIS_DECISION_CRITIC, invented_key="x",
+            )),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert "invented_key" not in measured["synthesis_agents"]["agents"][0]
+
+
+class TestSkippedCriticIsNotACritiqueDuration:
+    """A SKIPPED row spans dispatch to orchestrator-gave-up.
+
+    Quick mode skipping the critic, or the critic crashing and the
+    handoff's fallback verdict being written, both produce a span that is
+    an upper bound on a critique that may never have started. Averaging
+    those into a critic duration statistic drags the cohort mean toward
+    crash-resolution latency.
+    """
+
+    def _run(self, run_id, verdict, duration_ms):
+        return measure_run(
+            _synthesis_manifest("run-" + run_id, _synthesis_row(
+                contracts._SYNTHESIS_DECISION_CRITIC,
+                verdict=verdict, duration_ms=duration_ms,
+            )),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+
+    def test_the_verdict_reaches_the_measured_row(self):
+        measured = self._run("1", contracts._CRITIC_VERDICT_SKIPPED, 900)
+        assert measured["synthesis_agents"]["agents"][0]["verdict"] == (
+            contracts._CRITIC_VERDICT_SKIPPED
+        )
+
+    def test_skipped_rows_are_excluded_from_the_statistics(self):
+        runs = [
+            self._run("1", "STAND", 600_000),
+            self._run("2", contracts._CRITIC_VERDICT_SKIPPED, 900),
+        ]
+        block = aggregate_cohort(runs)["synthesis_agents"]
+        agent = block["by_agent"][contracts._SYNTHESIS_DECISION_CRITIC]
+        assert agent == {
+            "dispatched_runs": 2,
+            "measured_runs": 1,
+            "stalled_runs": 0,
+            "skipped_runs": 1,
+            "total_ms": 600_000,
+            "mean_ms": 600_000,
+            "median_ms": 600_000,
+            "max_ms": 600_000,
+        }
+
+    def test_an_all_skipped_cohort_reports_no_duration_at_all(self):
+        runs = [self._run("1", contracts._CRITIC_VERDICT_SKIPPED, 900)]
+        agent = aggregate_cohort(runs)["synthesis_agents"]["by_agent"][
+            contracts._SYNTHESIS_DECISION_CRITIC
+        ]
+        assert agent["mean_ms"] is None
+        assert agent["skipped_runs"] == 1
+        assert agent["dispatched_runs"] == 1
+
+    def test_skipped_is_not_a_critique_verdict(self):
+        """It records that no critique happened, so a consumer measuring
+        critique outcomes must not find it in the verdict vocabulary."""
+        assert contracts._CRITIC_VERDICT_SKIPPED not in contracts._CRITIC_VERDICTS

@@ -1090,6 +1090,30 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
 
 
 def _orchestrate_step_10(mode, config, state, context, output_dir):
+    # Observe BEFORE anything else this step does — the same first-thing
+    # rule steps 9 and 11 follow — and here it is load-bearing twice over.
+    #
+    # 1. Step 10 is genuinely re-entered after a COMPLETED critic (the
+    #    skip-decision block below says so in as many words: a rerun once
+    #    the reconciled verdict escalates), and no observation runs
+    #    between step 10 and finalize. A bare re-stamp of the dispatch
+    #    marker would move the dispatch clock past the critic's
+    #    already-written verdict file; finalize would then read that file
+    #    as predating its own dispatch, discard it, and publish an
+    #    11-minute critique as `stalled: true` with `elapsed_ms: 0`.
+    #    Observing first carries the real completion forward, where it is
+    #    preserved verbatim.
+    #
+    # 2. It closes the REVISE window on the RECONCILIATOR. The
+    #    orchestrator applies critic adjustments to review-findings.json
+    #    between step 10 and step 11, so on a run whose step 9 never
+    #    observed, finalize alone would read the apply's mtime and fold
+    #    the critic's phase into the reconciliator's duration. Reading
+    #    here — before the critic is even dispatched, and on BOTH the
+    #    dispatch and skip branches — captures the ledger while its mtime
+    #    is still the reconciliator's own completion.
+    synthesis_lifecycle.observe(output_dir)
+
     # Read reconciliation verdict for quick-mode critic skip decision,
     # through the ledger's one shared reader. Inline, this was a fifth
     # spelling of open/parse/use with the narrower `(JSONDecodeError,
@@ -1272,10 +1296,22 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # moves the mtime this measurement reads as the reconciliator's
     # completion. Observing after those writes would report the
     # reconciliator as having finished at finalize time — the run's whole
-    # wall clock instead of its synthesis phase. Step 9 normally recorded
-    # that completion already and it is carried forward verbatim; this
-    # early placement is what keeps the number right on a run where step
-    # 9's observation never landed.
+    # wall clock instead of its synthesis phase.
+    #
+    # The guarantee is a chain, not this one placement. Steps 9, 10, and
+    # 11 each observe before doing anything else, and every observation
+    # carries an already-completed row forward verbatim, so the recorded
+    # completion is always the EARLIEST evidence any step saw:
+    #   step 9  — reads review-findings.json straight out of the
+    #             reconciliator's own write.
+    #   step 10 — reads it again before the critic is dispatched, which
+    #             is what covers a run whose step 9 never observed: the
+    #             orchestrator's REVISE adjustment apply lands on that
+    #             ledger between step 10 and here, and without step 10's
+    #             reading finalize would fold the critic's phase into the
+    #             reconciliator's duration.
+    #   step 11 — this call, which adds the critic's own completion and
+    #             is the last chance to observe before finalize writes.
     #
     # `finalize=True` is the stall adjudication: both agents run in the
     # orchestrator's foreground, so nothing here can interrupt one — the

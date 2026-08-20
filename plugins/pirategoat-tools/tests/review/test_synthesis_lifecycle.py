@@ -256,6 +256,107 @@ class TestArtifactEnvelope:
         assert on_disk["schema"] == lifecycle.LIFECYCLE_SCHEMA == 1
         assert on_disk["observed_at"] == T0.isoformat()
 
+    def test_the_artifact_states_what_its_clocks_mean(self, out):
+        """Two clocks per row plus a section stamp is exactly the shape a
+        reader guesses wrong about, and a guess turns an upper bound into
+        a measurement. Same self-description the coverage family's
+        `semantics` key provides."""
+        payload = lifecycle.observe(str(out), now=T0)
+        assert payload["semantics"] == lifecycle.LIFECYCLE_SEMANTICS
+        assert "duration_ms=artifact_mtime_minus_dispatch" in (
+            payload["semantics"]
+        )
+        assert "elapsed_ms=observation_minus_dispatch" in payload["semantics"]
+        assert "observed_at=last_observation" in payload["semantics"]
+
+    def test_section_observed_at_is_the_last_observation(self, out):
+        """It bounds the section's freshness and is NOT any agent's
+        clock: a carried-forward row keeps its own, older stamp."""
+        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        findings = out / "review-findings.json"
+        findings.write_text("{}")
+        _set_mtime(findings, T0 + timedelta(seconds=41))
+        lifecycle.observe(str(out), now=T0 + timedelta(seconds=45))
+
+        later = T0 + timedelta(seconds=900)
+        payload = lifecycle.observe(str(out), finalize=True, now=later)
+
+        assert payload["observed_at"] == later.isoformat()
+        assert _entry(payload, lifecycle.RECONCILIATOR)["observed_at"] == (
+            T0 + timedelta(seconds=45)
+        ).isoformat()
+
+    def test_rows_carry_exactly_the_declared_keys(self, out):
+        """Row-shape parity at the source. ROW_KEYS is the single
+        declaration the manifest builder and the metrics sanitizer both
+        assert against."""
+        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
+        payload = lifecycle.observe(str(out), finalize=True, now=T0)
+        assert payload["agents"]
+        for row in payload["agents"]:
+            assert set(row) == set(lifecycle.ROW_KEYS)
+
+
+class TestVerdictCapture:
+    """The verdict is what makes the duration beside it interpretable."""
+
+    def _complete_critic(self, out, verdict_payload):
+        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
+        verdict = out / "decision-critic-verdict.json"
+        verdict.write_text(verdict_payload)
+        _set_mtime(verdict, T0 + timedelta(seconds=665))
+        return lifecycle.observe(
+            str(out), finalize=True, now=T0 + timedelta(seconds=700)
+        )
+
+    def test_the_critics_verdict_rides_the_row(self, out):
+        payload = self._complete_critic(out, '{"verdict": "REVISE"}')
+        assert _entry(payload, lifecycle.DECISION_CRITIC)["verdict"] == "REVISE"
+
+    def test_a_skipped_critic_is_recorded_as_skipped(self, out):
+        """Its span measures dispatch to orchestrator-gave-up, not a
+        critique — the cohort needs to tell the two apart."""
+        payload = self._complete_critic(
+            out, '{"verdict": "SKIPPED", "reason": "crashed"}'
+        )
+        assert _entry(payload, lifecycle.DECISION_CRITIC)["verdict"] == (
+            "SKIPPED"
+        )
+
+    @pytest.mark.parametrize(
+        "payload", ['{"verdict": 5}', "{}", "[1, 2]", "not json", '"hello"'],
+        ids=["non-string", "no-key", "list", "unparseable", "scalar"],
+    )
+    def test_an_unreadable_verdict_is_none(self, out, payload):
+        result = self._complete_critic(out, payload)
+        assert _entry(result, lifecycle.DECISION_CRITIC)["verdict"] is None
+
+    def test_the_reconciliators_verdict_rides_its_row_too(self, out):
+        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        findings = out / "review-findings.json"
+        findings.write_text('{"verdict": "request_changes"}')
+        _set_mtime(findings, T0 + timedelta(seconds=41))
+        payload = lifecycle.observe(str(out), now=T0 + timedelta(seconds=45))
+        assert _entry(payload, lifecycle.RECONCILIATOR)["verdict"] == (
+            "request_changes"
+        )
+
+    def test_a_discarded_artifact_contributes_no_verdict(self, out):
+        """An artifact predating its dispatch is not this dispatch's
+        output, so attaching its conclusion to the live dispatch would
+        pair a stale verdict with a live phase."""
+        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
+        verdict = out / "decision-critic-verdict.json"
+        verdict.write_text('{"verdict": "STAND"}')
+        _set_mtime(verdict, T0 - timedelta(minutes=5))
+        payload = lifecycle.observe(
+            str(out), finalize=True, now=T0 + timedelta(seconds=60)
+        )
+        entry = _entry(payload, lifecycle.DECISION_CRITIC)
+        assert entry["verdict"] is None
+        assert entry["stalled"] is True
+
 
 # ---------------------------------------------------------------------------
 # Orchestration seams — the write and observation sites
@@ -362,6 +463,106 @@ class TestStepTenDispatchMarker:
 
         payload = lifecycle.observe(str(out), finalize=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC) is None
+
+
+class TestStepTenReEntryDoesNotManufactureAStall:
+    """The reproduced defect: a completed critic, then a step-10 re-run.
+
+    Step 10 IS re-entered after a completed critic — its own skip-decision
+    comment says so, a rerun once the reconciled verdict escalates — and
+    no observation runs between step 10 and finalize. A bare re-stamp of
+    the dispatch marker moved the clock past the critic's already-written
+    verdict file; finalize then read that file as predating its dispatch,
+    discarded it, and published a finished 11-minute critique as
+    `stalled: true` with `elapsed_ms: 0`.
+    """
+
+    def test_a_completed_critic_survives_a_step_10_re_entry(self, out):
+        mod = orchestration_mod
+        # Step 10 dispatches the critic; it finishes 665s later.
+        mod._orchestrate_step_10("full", {}, {}, {}, str(out))
+        dispatched = datetime.fromisoformat(
+            (out / f"{lifecycle.DECISION_CRITIC}.started").read_text()
+        )
+        verdict = out / "decision-critic-verdict.json"
+        verdict.write_text('{"verdict": "REVISE"}')
+        _set_mtime(verdict, dispatched + timedelta(seconds=665))
+
+        # Step 10 is RE-ENTERED, then finalize runs.
+        mod._orchestrate_step_10("full", {}, {}, {}, str(out))
+        mod._orchestrate_step_11("pr", {}, {}, {}, str(out))
+
+        entry = _entry(_read(out), lifecycle.DECISION_CRITIC)
+        assert entry["stalled"] is False
+        assert entry["duration_ms"] == 665_000
+        assert entry["verdict"] == "REVISE"
+
+    def test_step_10_observes_before_it_re_stamps(self, out):
+        """The ordering that makes the re-stamp safe, pinned directly."""
+        mod = orchestration_mod
+        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        findings = out / "review-findings.json"
+        findings.write_text('{"verdict": "request_changes"}')
+        _set_mtime(findings, T0 + timedelta(seconds=41))
+
+        mod._orchestrate_step_10("full", {}, {}, {}, str(out))
+
+        # The observation ran during step 10, not at finalize.
+        assert (out / lifecycle.LIFECYCLE_FILENAME).is_file()
+        assert _entry(_read(out), lifecycle.RECONCILIATOR)["duration_ms"] == (
+            41_000
+        )
+
+    def test_the_skip_branch_observes_too(self, out):
+        """The reconciliator's completion must be captured whether or not
+        a critic is dispatched, so the guarantee chain has no hole."""
+        from review.critic_adjustments import write_findings
+
+        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        write_findings(str(out), {"verdict": "approve", "issues": []})
+        _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
+
+        state = {}
+        orchestration_mod._orchestrate_step_10(
+            "full", {"quick": True}, state, {}, str(out)
+        )
+
+        assert state["step_decisions"]["10"]["critic_skipped"] is True
+        assert not (out / f"{lifecycle.DECISION_CRITIC}.started").exists()
+        assert _entry(_read(out), lifecycle.RECONCILIATOR)["duration_ms"] == (
+            41_000
+        )
+
+    def test_the_revise_apply_cannot_backdate_the_reconciliator(self, out):
+        """Step 9 never observed; the orchestrator's REVISE adjustment
+        apply rewrites review-findings.json between step 10 and finalize.
+        Without step 10's observation, finalize would read the apply's
+        mtime and fold the critic's phase into the reconciliator's."""
+        from review.critic_adjustments import write_findings
+
+        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
+        write_findings(str(out), {"verdict": "request_changes", "issues": []})
+        _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
+
+        orchestration_mod._orchestrate_step_10("full", {}, {}, {}, str(out))
+
+        # Critic returns REVISE; the orchestrator applies adjustments,
+        # rewriting the ledger far later than the reconciliator finished.
+        dispatched = datetime.fromisoformat(
+            (out / f"{lifecycle.DECISION_CRITIC}.started").read_text()
+        )
+        verdict = out / "decision-critic-verdict.json"
+        verdict.write_text('{"verdict": "REVISE"}')
+        _set_mtime(verdict, dispatched + timedelta(seconds=665))
+        write_findings(str(out), {"verdict": "request_changes", "issues": []})
+
+        orchestration_mod._orchestrate_step_11("pr", {}, {}, {}, str(out))
+
+        rows = _read(out)
+        assert _entry(rows, lifecycle.RECONCILIATOR)["duration_ms"] == 41_000
+        assert _entry(rows, lifecycle.DECISION_CRITIC)["duration_ms"] == (
+            665_000
+        )
 
 
 class TestStepNineObservation:

@@ -25,6 +25,8 @@ try:
     from .synthesis_lifecycle import (
         LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
         LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
+        LIFECYCLE_SEMANTICS as _SYNTHESIS_LIFECYCLE_SEMANTICS,
+        ROW_KEYS as _SYNTHESIS_ROW_KEYS,
     )
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,6 +45,8 @@ except ImportError:
     from review.synthesis_lifecycle import (
         LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
         LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
+        LIFECYCLE_SEMANTICS as _SYNTHESIS_LIFECYCLE_SEMANTICS,
+        ROW_KEYS as _SYNTHESIS_ROW_KEYS,
     )
 
 
@@ -90,6 +94,24 @@ def read_json_file(output_dir: str, name: str) -> Optional[dict]:
 def safe_dispatch_string(value: Any) -> Optional[str]:
     """Return a dispatch scalar only when it is a string."""
     return value if isinstance(value, str) else None
+
+
+def safe_nonnegative_int(value: Any) -> Optional[int]:
+    """One non-negative whole number, or None when it was not measured.
+
+    Shared by every manifest field whose absent-measurement value is None
+    rather than 0 — agent totals and millisecond spans alike. This was two
+    byte-identical private helpers in this same module, one of them named
+    for a count while returning a duration.
+
+    None must survive as itself: a stalled synthesis agent has no
+    duration, and substituting 0 would publish "finished instantly" for a
+    phase that never finished, exactly as a zeroed agent total would
+    publish "measured none" for a run that measured nothing.
+    """
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
 
 
 def safe_dispatch_strings(value: Any) -> List[str]:
@@ -628,18 +650,6 @@ def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
     }
 
 
-def _synthesis_count(value: Any) -> Optional[int]:
-    """One non-negative duration in ms, or None for unusable evidence.
-
-    None is the artifact's own "not measurable" value and must survive as
-    itself: a stalled agent has no duration, and substituting 0 would
-    publish "finished instantly" for a phase that never finished.
-    """
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        return None
-    return value
-
-
 def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
     """Project the reconciliator/critic lifecycle into the manifest.
 
@@ -683,14 +693,17 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
             step = row.get("step")
             rows.append({
                 "agent": row["agent"],
-                "step": (
-                    step
-                    if isinstance(step, int) and not isinstance(step, bool)
-                    else None
-                ),
+                "step": safe_nonnegative_int(step),
                 "completion_artifact": safe_dispatch_string(
                     row.get("completion_artifact")
                 ),
+                # What the agent concluded. It is what makes the duration
+                # beside it interpretable — a critic row reading "SKIPPED"
+                # measures dispatch to orchestrator-gave-up, an upper
+                # bound on a critique that may never have started, so the
+                # cohort counts those apart instead of averaging them into
+                # a critique duration.
+                "verdict": safe_dispatch_string(row.get("verdict")),
                 "started_at": safe_dispatch_string(row.get("started_at")),
                 # The completion artifact's mtime, not the observation —
                 # see the two-clock note on `observed_at` below.
@@ -700,12 +713,30 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
                 # so a reader can tell the measured phase from the moment
                 # it was noticed.
                 "observed_at": safe_dispatch_string(row.get("observed_at")),
-                "duration_ms": _synthesis_count(row.get("duration_ms")),
-                "elapsed_ms": _synthesis_count(row.get("elapsed_ms")),
+                "duration_ms": safe_nonnegative_int(row.get("duration_ms")),
+                "elapsed_ms": safe_nonnegative_int(row.get("elapsed_ms")),
                 "stalled": row.get("stalled") is True,
             })
 
+    # The projection vouches for the row shape it just built, against the
+    # producer's single declaration of it. Three modules write this shape;
+    # a key added to the producer alone would otherwise vanish here with
+    # every test still green.
+    assert all(set(row) == set(_SYNTHESIS_ROW_KEYS) for row in rows), (
+        "synthesis row projection drifted from synthesis_lifecycle.ROW_KEYS"
+    )
+
     return {
+        # The meaning of the two clocks, carried with the numbers rather
+        # than left to a reader's inference — the same self-description
+        # the coverage family's `semantics` key provides. Restated from
+        # the producer's constant, not the artifact's copy: this projection
+        # is what vouches for the shape above.
+        "semantics": _SYNTHESIS_LIFECYCLE_SEMANTICS,
+        # The LAST observation, bounding the section's freshness. Not any
+        # one agent's clock — a carried-forward row keeps its own, older
+        # `observed_at` because re-observing would loosen the tightest
+        # bound the run has.
         "observed_at": safe_dispatch_string(data.get("observed_at")),
         "finalized": data.get("finalized") is True,
         "agents": rows,
@@ -728,13 +759,6 @@ def _safe_usage_map(value: Any) -> Optional[Dict[str, int]]:
             return None
         usage[field] = count
     return usage
-
-
-def _safe_agent_count(value: Any) -> Optional[int]:
-    """Return a countable agent total, or None when it was not measured."""
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        return None
-    return value
 
 
 def build_usage_manifest(output_dir: str) -> Optional[dict]:
@@ -829,8 +853,8 @@ def build_usage_manifest(output_dir: str) -> Optional[dict]:
             "orchestrator": state("orchestrator"),
         },
         "agents_measured": {
-            "measured": _safe_agent_count(counts.get("measured")),
-            "expected": _safe_agent_count(counts.get("expected")),
+            "measured": safe_nonnegative_int(counts.get("measured")),
+            "expected": safe_nonnegative_int(counts.get("expected")),
         },
         "subagent_totals": _safe_usage_map(data.get("subagent_totals")),
         "orchestrator_usage": _safe_usage_map(data.get("orchestrator_usage")),

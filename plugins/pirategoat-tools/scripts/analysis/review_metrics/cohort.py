@@ -6,7 +6,12 @@ import statistics
 from collections import Counter
 from typing import Any, Iterable
 
-from .contracts import _AVAILABILITY_FAMILIES, _AVAILABILITY_STATES, _CRITIC_VERDICTS
+from .contracts import (
+    _AVAILABILITY_FAMILIES,
+    _AVAILABILITY_STATES,
+    _CRITIC_VERDICT_SKIPPED,
+    _CRITIC_VERDICTS,
+)
 from .sanitize import _nonnegative_int, _safe_wall_time_ms
 from .usage import _add_usage, _empty_usage
 from .load import _is_duplicate_conflict
@@ -328,9 +333,17 @@ def _aggregate_synthesis_agents(
     measure a zero, they measured nothing. "partial" runs DO contribute
     the durations they have, and their stalls are counted separately —
     dropping them would delete the only record of a hung synthesis agent.
+
+    A "SKIPPED" row is counted but never averaged. Its span is dispatch to
+    orchestrator-gave-up — quick mode skipping the critic, or the critic
+    crashing and the handoff's fallback verdict being written — which is
+    an upper bound on a critique that may never have started. Folding
+    those into `mean_ms` would drag a critique-duration statistic toward
+    crash-resolution latency, so they get their own `skipped_runs`.
     """
     durations: dict[str, list[int]] = {}
     stalled: Counter = Counter()
+    skipped: Counter = Counter()
     dispatched: Counter = Counter()
     measured_runs = 0
     for run in runs:
@@ -349,6 +362,9 @@ def _aggregate_synthesis_agents(
             dispatched[name] += 1
             if row.get("stalled") is True:
                 stalled[name] += 1
+            if row.get("verdict") == _CRITIC_VERDICT_SKIPPED:
+                skipped[name] += 1
+                continue
             duration = _nonnegative_int(row.get("duration_ms"))
             if duration is not None:
                 durations.setdefault(name, []).append(duration)
@@ -358,8 +374,11 @@ def _aggregate_synthesis_agents(
         values = durations.get(name, [])
         by_agent[name] = {
             "dispatched_runs": dispatched[name],
+            # Runs contributing to the statistics below — dispatched
+            # minus the stalled and the skipped.
             "measured_runs": len(values),
             "stalled_runs": stalled[name],
+            "skipped_runs": skipped[name],
             "total_ms": sum(values) if values else None,
             "mean_ms": (
                 _exact_statistic(statistics.mean(values)) if values else None

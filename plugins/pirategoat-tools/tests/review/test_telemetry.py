@@ -20,6 +20,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
+from review import synthesis_lifecycle as lifecycle_contract
 
 
 def _load_module():
@@ -3926,8 +3927,8 @@ class TestSynthesisAgentsManifest:
     list (finalize looked and found no dispatch markers), and the rows.
     """
 
-    RECONCILIATOR = "review-reconciliator"
-    CRITIC = "decision-reviewer"
+    RECONCILIATOR = lifecycle_contract.RECONCILIATOR
+    CRITIC = lifecycle_contract.DECISION_CRITIC
 
     def _row(self, agent, **overrides):
         row = {
@@ -3936,6 +3937,9 @@ class TestSynthesisAgentsManifest:
             "completion_artifact": (
                 "review-findings.json" if agent == self.RECONCILIATOR
                 else "decision-critic-verdict.json"
+            ),
+            "verdict": (
+                "request_changes" if agent == self.RECONCILIATOR else "STAND"
             ),
             "started_at": "2026-08-19T12:00:00+00:00",
             "completed_at": "2026-08-19T12:11:05+00:00",
@@ -3953,6 +3957,7 @@ class TestSynthesisAgentsManifest:
     def _artifact(self, *rows, **overrides):
         payload = {
             "schema": 1,
+            "semantics": lifecycle_contract.LIFECYCLE_SEMANTICS,
             "observed_at": "2026-08-19T12:15:00+00:00",
             "finalized": True,
             "agents": list(rows),
@@ -3985,6 +3990,7 @@ class TestSynthesisAgentsManifest:
         zero dispatches, not an unmeasured run."""
         self._write(tmp_path, self._artifact())
         assert self._build(mod, tmp_path) == {
+            "semantics": lifecycle_contract.LIFECYCLE_SEMANTICS,
             "observed_at": "2026-08-19T12:15:00+00:00",
             "finalized": True,
             "agents": [],
@@ -4112,3 +4118,84 @@ class TestSynthesisAgentsManifest:
         )
         assert with_synthesis["synthesis_agents"] is not None
         assert baseline["synthesis_agents"] is None
+
+
+class TestSynthesisAgentsManifestShape:
+    """The section self-describes, and its row shape is declared once."""
+
+    def _build(self, mod, tmp_path, payload):
+        (tmp_path / "synthesis-agents.json").write_text(json.dumps(payload))
+        return mod.manifest_sections.build_synthesis_agents_manifest(
+            str(tmp_path)
+        )
+
+    def _artifact(self, *rows):
+        return {
+            "schema": 1,
+            "semantics": lifecycle_contract.LIFECYCLE_SEMANTICS,
+            "observed_at": "2026-08-19T12:15:00+00:00",
+            "finalized": True,
+            "agents": list(rows),
+        }
+
+    def _row(self, **overrides):
+        row = {
+            key: None for key in lifecycle_contract.ROW_KEYS
+        }
+        row.update({
+            "agent": lifecycle_contract.DECISION_CRITIC,
+            "step": 10,
+            "completion_artifact": "decision-critic-verdict.json",
+            "verdict": "STAND",
+            "duration_ms": 665_000,
+            "elapsed_ms": 900_000,
+            "stalled": False,
+        })
+        row.update(overrides)
+        return row
+
+    def test_builder_covers_exactly_the_declared_row_keys(self, mod, tmp_path):
+        """Row-shape parity, producer side. Three modules write this
+        shape; teaching only one of them must fail loudly."""
+        section = self._build(mod, tmp_path, self._artifact(self._row()))
+        assert set(section["agents"][0]) == set(lifecycle_contract.ROW_KEYS)
+
+    def test_an_undeclared_row_key_is_dropped(self, mod, tmp_path):
+        section = self._build(
+            mod, tmp_path, self._artifact(self._row(invented_key="x"))
+        )
+        assert "invented_key" not in section["agents"][0]
+
+    def test_the_section_restates_the_declared_semantics(self, mod, tmp_path):
+        """Restated from the producer's constant, not copied from the
+        artifact — this projection is what vouches for the shape."""
+        payload = self._artifact(self._row())
+        payload["semantics"] = "something else entirely"
+        section = self._build(mod, tmp_path, payload)
+        assert section["semantics"] == lifecycle_contract.LIFECYCLE_SEMANTICS
+
+    def test_the_verdict_reaches_the_manifest(self, mod, tmp_path):
+        section = self._build(
+            mod, tmp_path, self._artifact(self._row(verdict="SKIPPED"))
+        )
+        assert section["agents"][0]["verdict"] == "SKIPPED"
+
+    @pytest.mark.parametrize(
+        "value", [None, 5, True, ["STAND"]],
+        ids=["null", "int", "bool", "list"],
+    )
+    def test_an_unusable_verdict_is_none(self, mod, tmp_path, value):
+        section = self._build(
+            mod, tmp_path, self._artifact(self._row(verdict=value))
+        )
+        assert section["agents"][0]["verdict"] is None
+
+    @pytest.mark.parametrize(
+        "value", [-1, "8", 8.0, True],
+        ids=["negative", "string", "float", "bool"],
+    )
+    def test_an_unusable_step_is_none(self, mod, tmp_path, value):
+        section = self._build(
+            mod, tmp_path, self._artifact(self._row(step=value))
+        )
+        assert section["agents"][0]["step"] is None

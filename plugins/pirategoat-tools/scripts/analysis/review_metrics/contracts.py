@@ -33,6 +33,11 @@ _CRITIC_CONTRACT = _load_exact_path_module(
     _REVIEW_DIR / "critic.py",
     "review critic contract unavailable",
 )
+_SYNTHESIS_CONTRACT = _load_exact_path_module(
+    "review_synthesis_lifecycle_contract",
+    _REVIEW_DIR / "synthesis_lifecycle.py",
+    "review synthesis lifecycle contract unavailable",
+)
 _ATOMIC_IO_CONTRACT = _load_exact_path_module(
     "review_atomic_io_contract",
     _REVIEW_DIR / "atomic_io.py",
@@ -147,6 +152,20 @@ _SAFE_RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,255}\Z")
 _PRODUCER_AGENT_NAME_RE = _DISPATCH_STATUS_CONTRACT.AGENT_NAME_RE
 _WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:")
 _CRITIC_VERDICTS = frozenset(_CRITIC_CONTRACT.CRITIC_VERDICTS)
+# Deliberately NOT in _CRITIC_VERDICTS: "SKIPPED" records that no critique
+# happened. The synthesis-agent aggregate needs it by name to keep
+# crash-resolution and quick-mode spans out of critique duration
+# statistics, and reads the producer's constant rather than respelling the
+# literal.
+_CRITIC_VERDICT_SKIPPED = _CRITIC_CONTRACT.CRITIC_VERDICT_SKIPPED
+# The synthesis-agent row shape and identities, owned by the producer. The
+# consumer mirrors them instead of respelling them, so a renamed agent or
+# a new row key breaks this package's tests rather than silently dropping
+# a measurement.
+_SYNTHESIS_ROW_KEYS = _SYNTHESIS_CONTRACT.ROW_KEYS
+_SYNTHESIS_SEMANTICS = _SYNTHESIS_CONTRACT.LIFECYCLE_SEMANTICS
+_SYNTHESIS_RECONCILIATOR = _SYNTHESIS_CONTRACT.RECONCILIATOR
+_SYNTHESIS_DECISION_CRITIC = _SYNTHESIS_CONTRACT.DECISION_CRITIC
 _RETAINED_CRITIC_VALUES = _CRITIC_VERDICTS | {"unavailable"}
 _TABLE_CELL_LIMIT = 120
 _MAX_WALL_TIME_MS = 365 * 24 * 60 * 60 * 1000
