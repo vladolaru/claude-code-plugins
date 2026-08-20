@@ -442,7 +442,7 @@ class TestToDict:
             "verdict",
             "summary", "issues", "unreviewed", "deferred_reviewed",
             "observations", "recommendations", "positive_observations",
-            "clearances", "meta",
+            "clearances", "narrative_summary", "meta",
         }
         assert expected_keys == set(d.keys())
 
@@ -2315,3 +2315,212 @@ class TestTypeScriptContractLockstep:
         )
         assert match is not None
         assert match.group(1).strip() == "string | null"
+
+
+# =============================================================================
+# TestNarrativeSummary
+# =============================================================================
+
+
+class TestNarrativeSummary:
+    """The reconciliator's overall-state prose needs a structured home.
+
+    Before the .md became a script render, that prose lived only in a
+    hand-written narrative file. Migrating it into the canonical JSON is
+    what lets the renderer own the artifact without losing content.
+    """
+
+    def test_absent_by_default_but_the_key_is_always_present(self):
+        d = ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
+        assert d["narrative_summary"] is None
+
+    def test_set_narrative_summary_serializes(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.set_narrative_summary("The change is sound but under-tested.")
+        assert b.to_dict()["narrative_summary"] == (
+            "The change is sound but under-tested."
+        )
+
+    def test_non_string_prose_is_coerced_like_every_other_free_field(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.set_narrative_summary(["line one", "line two"])
+        assert b.to_dict()["narrative_summary"] == "line one\nline two"
+
+    def test_blank_prose_records_absence_not_an_empty_string(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.set_narrative_summary("   ")
+        assert b.to_dict()["narrative_summary"] is None
+
+    def test_renders_as_an_assessment_section(self):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        b.set_narrative_summary("Two sentences of judgment.")
+        rendered = render_markdown(b.to_dict())
+        assert "## Assessment\n\nTwo sentences of judgment." in rendered
+
+    def test_absent_prose_renders_no_assessment_section(self):
+        rendered = render_markdown(
+            ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
+        )
+        assert "## Assessment" not in rendered
+
+
+# =============================================================================
+# TestReconciliationSectionsRender
+# =============================================================================
+
+
+class TestReconciliationSectionsRender:
+    """Every section the reconciliator's old narrative template carried has
+    to come out of the renderer, or migrating to a script render loses it."""
+
+    @staticmethod
+    def _findings(**extra):
+        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
+        b.add_issue("high", "Real problem", "a.py", "d", "r", line=4)
+        data = b.to_dict()
+        data.update(extra)
+        return data
+
+    def test_pipeline_metrics_line_renders_from_meta_reconciliation(self):
+        data = self._findings()
+        data["meta"]["reconciliation"] = {
+            "input_findings_count": 12,
+            "agents_contributing": 4,
+            "concerns_after_grouping": 5,
+            "false_positives_dropped": 3,
+            "out_of_scope_dropped": 1,
+            "verified_concerns": 4,
+            "merge_ratio": 0.58,
+            "not_applicable_count": 0,
+            "not_applicable_agents": [],
+            "reviewing_agents": ["code-reviewer"],
+            "dispatched_agents": ["code-reviewer"],
+            "missing_agents": [],
+        }
+        rendered = render_markdown(data)
+        assert "**Pipeline:** 12 findings from 4 reviewing agents" in rendered
+        assert "5 concerns after grouping" in rendered
+        assert "3 false positives dropped" in rendered
+        assert "1 out-of-scope dropped" in rendered
+
+    def test_not_applicable_agents_are_reported_with_reasons(self):
+        data = self._findings()
+        data["meta"]["reconciliation"] = {
+            "input_findings_count": 1,
+            "agents_contributing": 1,
+            "concerns_after_grouping": 1,
+            "false_positives_dropped": 0,
+            "out_of_scope_dropped": 0,
+            "verified_concerns": 1,
+            "merge_ratio": 0.0,
+            "not_applicable_count": 1,
+            "not_applicable_agents": [
+                {"name": "a11y-reviewer", "skip_reason": "no UI changed"},
+            ],
+            "reviewing_agents": ["code-reviewer"],
+            "dispatched_agents": ["code-reviewer", "a11y-reviewer"],
+            "missing_agents": [],
+        }
+        rendered = render_markdown(data)
+        assert "1 agent returned not-applicable" in rendered
+        assert "a11y-reviewer (no UI changed)" in rendered
+
+    def test_missing_reconciliation_metrics_render_nothing(self):
+        assert "**Pipeline:**" not in render_markdown(self._findings())
+
+    def test_recommendations_render_by_priority(self):
+        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
+        b.add_recommendation("immediate", "Fix the escaping")
+        b.add_recommendation("important", "Add a regression test")
+        b.add_recommendation("suggestions", "Rename the helper")
+        rendered = render_markdown(b.to_dict())
+        assert "## Recommendations\n" in rendered
+        assert "**Immediate:**" in rendered
+        assert "- Fix the escaping" in rendered
+        assert "**Important:**" in rendered
+        assert "- Add a regression test" in rendered
+        assert "**Suggestions:**" in rendered
+        assert "- Rename the helper" in rendered
+
+    def test_no_recommendations_renders_no_section(self):
+        assert "## Recommendations" not in render_markdown(self._findings())
+
+    def test_degraded_host_context_banner_leads_the_document(self):
+        data = self._findings(host_context_banner={
+            "degraded": True,
+            "reason": "partial_unresolved",
+            "message": "WooCommerce source was not resolved.",
+            "unresolved": [{"name": "woocommerce", "reason": "not found"}],
+        })
+        rendered = render_markdown(data)
+        assert rendered.startswith(
+            "> **⚠ Host Context Banner:** "
+            "WooCommerce source was not resolved.\n\n"
+        )
+        assert "# Reconciliator Review" in rendered
+
+    def test_undegraded_banner_is_not_rendered(self):
+        data = self._findings(host_context_banner={
+            "degraded": False, "reason": "", "message": "all resolved",
+            "unresolved": [],
+        })
+        assert not render_markdown(data).startswith(">")
+
+    def test_tradeoffs_ride_the_existing_observation_channel(self):
+        """The narrative's "Tradeoffs Identified" section has a structured
+        home already: verified, maintainer-intended compromises are
+        observations; unverified ones are findings."""
+        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
+        b.add_observation(
+            "cart.php",
+            "Trigger: bulk import. Population: verified at cart.php:88. "
+            "Intentional: throughput over per-row validation.",
+            category="tradeoff",
+        )
+        rendered = render_markdown(b.to_dict())
+        assert "## Observations" in rendered
+        assert "Trigger: bulk import." in rendered
+
+
+# =============================================================================
+# TestMaterializeFindingsMarkdown
+# =============================================================================
+
+
+class TestMaterializeFindingsMarkdown:
+    """One materializer, parameterized — never a second render path."""
+
+    def test_suffix_selects_the_findings_artifact(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+            b.add_issue("high", "T", "f.py", "d", "r", line=1)
+            b.set_narrative_summary("Overall: needs work.")
+            data = b.to_dict()
+            Path(d, "review-findings.json").write_text(json.dumps(data))
+            written = materialize_markdown(d, suffix="review-findings.json")
+            assert [os.path.basename(p) for p in written] == [
+                "review-findings.md",
+            ]
+            assert Path(d, "review-findings.md").read_text() == render_markdown(
+                data
+            )
+
+    def test_default_suffix_ignores_the_findings_artifact(self):
+        with tempfile.TemporaryDirectory() as d:
+            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            Path(d, "review-findings.json").write_text(
+                json.dumps(
+                    ReviewOutputBuilder(
+                        pr_id="1", reviewer="reconciliator"
+                    ).to_dict()
+                )
+            )
+            written = materialize_markdown(d)
+            assert [os.path.basename(p) for p in written] == [
+                "security-review.md",
+            ]
+            assert not Path(d, "review-findings.md").exists()
+
+    def test_missing_findings_json_writes_nothing_and_does_not_raise(self):
+        with tempfile.TemporaryDirectory() as d:
+            assert materialize_markdown(d, suffix="review-findings.json") == []

@@ -138,19 +138,71 @@ def _run_subprocess(cmd, cwd=None, timeout=60):
         return "", False
 
 
-def _materialize_reviewer_markdown(output_dir: str, output_builder_path: str) -> list:
-    """Render per-reviewer Markdown from the settled JSONs.
+def _materialize_markdown(
+    output_dir: str, output_builder_path: str, suffix: str = "-review.json",
+) -> list:
+    """Render derived Markdown from the settled JSONs in `output_dir`.
 
     Loads the output builder by exact adjacent path — the same contract the
     telemetry and dispatch-status loaders use — so a long-lived process
     can never render with a foreign checkout's semantics.
+
+    One entry point for both derived families: the per-reviewer
+    `<reviewer>-review.md` the step-8 readiness gate writes (the default
+    suffix) and `review-findings.md`, which steps 9 and 11 render from the
+    reconciliation ledger. The renderer itself lives in output.py; this is
+    only the loader, and there is deliberately no second one.
     """
     spec = importlib.util.spec_from_file_location(
         "_pirategoat_review_output", output_builder_path,
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.materialize_markdown(output_dir)
+    return module.materialize_markdown(output_dir, suffix=suffix)
+
+
+_FINDINGS_JSON = "review-findings.json"
+_FINDINGS_MD = "review-findings.md"
+
+
+def _render_findings_markdown(output_dir: str) -> tuple:
+    """Render `review-findings.md` from the reconciliation ledger.
+
+    Returns ``(outcome, error)``: ``outcome`` mirrors the reviewer-Markdown
+    vocabulary (``complete`` / ``failed``) with the same written/expected
+    accounting, and ``error`` is the exception text when the render failed.
+    Never raises — a derived artifact that could not be rendered is a
+    degradation to report, never a reason to abort a step.
+
+    ``expected`` is 0 when there is no ledger at all: nothing was asked of
+    the renderer, so nothing is missing. That is a different fact from a
+    ledger the renderer could not read, which reports ``failed``.
+    """
+    expected = 1 if os.path.isfile(
+        os.path.join(output_dir, _FINDINGS_JSON)
+    ) else 0
+    outcome = {
+        "ran": True, "written": 0, "expected": expected, "status": "complete",
+    }
+    if not expected:
+        return outcome, None
+    try:
+        written = _materialize_markdown(
+            output_dir,
+            str(SCRIPTS_DIR / "agent" / "output.py"),
+            suffix=_FINDINGS_JSON,
+        )
+    except Exception as err:  # noqa: BLE001 — best-effort by design
+        outcome["status"] = "failed"
+        return outcome, str(err)
+    outcome["written"] = len(written)
+    if not written:
+        # The materializer skips a ledger it cannot read (malformed JSON,
+        # missing required keys) and says so on stderr rather than
+        # raising. An unwritten .md is still an unrendered artifact.
+        outcome["status"] = "failed"
+        return outcome, f"renderer skipped {_FINDINGS_JSON}"
+    return outcome, None
 
 
 # ---------------------------------------------------------------------------
@@ -807,7 +859,7 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
     materialization_failed = False
     written_markdown = set()
     try:
-        written_paths = _materialize_reviewer_markdown(
+        written_paths = _materialize_markdown(
             output_dir, str(SCRIPTS_DIR / "agent" / "output.py"),
         )
         written_markdown = {
@@ -940,6 +992,28 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
 
 
 def _orchestrate_step_9(mode, config, state, context, output_dir):
+    # The step-8 completion path: the reconciliator has published
+    # review-findings.json and nothing else. review-findings.md is a
+    # mechanical render of that ledger, owned by the pipeline — the report
+    # this step is about to brief reads it, the step-10 critic falls back
+    # to it, and finalize offers it as the report of last resort. Rendering
+    # it here (rather than asking the agent to hand-write a narrative) is
+    # what makes those three consumers unable to read a stale artifact.
+    findings_markdown, render_error = _render_findings_markdown(output_dir)
+    if render_error:
+        print(
+            f"findings markdown materialization failed: {render_error}",
+            file=sys.stderr,
+        )
+    state["findings_markdown"] = findings_markdown
+    degradation = state.setdefault("degradation", {})
+    if findings_markdown["status"] == "complete":
+        degradation.pop("findings_markdown_incomplete", None)
+        if not degradation:
+            state.pop("degradation", None)
+    else:
+        degradation["findings_markdown_incomplete"] = True
+
     # Load inline coverage gaps and deferred-review claims computed at
     # reconciliation so the report briefing preserves the distinction
     # between proof gaps and unverified claims.
@@ -1228,9 +1302,9 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Rule 23: update review-findings.json verdict to match. The ledger has
     # three writers across a run — the review-reconciliator agent's first
     # write, critic_adjustments.py applying decision-critic adjustments,
-    # and this verdict sync. Only the latter two share atomic_io's atomic
-    # write today; the reconciliator's own write is still a plain
-    # truncating json.dump (agents/review-reconciliator.md), unconverted.
+    # and this verdict sync — and all three now go through atomic_io's
+    # atomic write (agents/review-reconciliator.md instructs the agent to
+    # call it).
     # For this write specifically: a truncating open here would leave the
     # artifact destroyable by a crash mid-write no matter how carefully
     # the adjustments path replaced it, and this write is the last one the
@@ -1274,6 +1348,29 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # fabricated one ("COMMENT", the same fallback `verdict` itself uses
     # below) that would misrepresent what review-verdict.json actually
     # said.
+
+    # Re-render review-findings.md from the FINAL ledger — after the
+    # critic adjustments landed and after the Rule 23 verdict sync, so the
+    # rendering describes the artifact the run actually publishes. This is
+    # the seam that closes the field-proven staleness: every critic REVISE
+    # used to leave the hand-written narrative showing pre-adjustment
+    # severities while the JSON and the report showed post-adjustment ones.
+    # Best-effort by construction — a render failure is a degradation note,
+    # never an exception out of finalize, and never a faked file.
+    findings_markdown, render_error = _render_findings_markdown(output_dir)
+    state["findings_markdown"] = findings_markdown
+    if render_error:
+        degradation_notes.append(
+            f"review-findings.md render failed: {render_error}"
+        )
+    # The report fallback above ran before this render, so a run whose
+    # report synthesis failed AND whose step 9 never rendered would have
+    # resolved report_path to None a few lines too early. Re-offer the
+    # freshly rendered ledger rather than publishing no report path at all.
+    if report_path is None:
+        findings_md_path = os.path.join(output_dir, _FINDINGS_MD)
+        if os.path.isfile(findings_md_path):
+            report_path = findings_md_path
 
     # Computed after the verdict sync: a degradation the sync discovers has
     # to reach the status it is reported beside, or the run publishes

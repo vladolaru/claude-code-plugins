@@ -11,7 +11,7 @@ You are the maintainer of pirategoat-tools, a code review orchestration plugin. 
 | `scripts/review/pipeline.py` | Executable facade for the unified 12-step review pipeline. Owns conditions, routing, state I/O, output formatting, telemetry/Git identity, and the CLI while re-exporting the split pipeline modules. Called by all three review commands with `--mode pr\|full\|incremental` and generated Codex adapters with `--host codex`. |
 | `scripts/review/pipeline_contract.py` | Shared path, host, step-sequence, timeout, and Git vocabulary used across the pipeline modules. |
 | `scripts/review/briefings.py` | Pure curated-context guidance, formatters, mission text, and output templates for the 12 review steps. |
-| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, dependency-refresh detection, dispatch-plan persistence, and readiness-gated per-reviewer Markdown materialization with outcome state. |
+| `scripts/review/orchestration.py` | Side-effecting per-step work, subprocess execution, dependency-refresh detection, dispatch-plan persistence, and readiness-gated derived-Markdown materialization with outcome state (per-reviewer at step 8, `review-findings.md` at steps 9 and 11). |
 | `../../scripts/generate_codex_compat.py` | Repository-level generator that converts canonical Claude Code commands into Codex command-skill adapters and emits this plugin's `.codex-plugin/plugin.json`. |
 | `scripts/review/agent_registry.json` | Agent registry — domain, protocols, dispatch class, triage criteria, model tier. |
 | `scripts/review/agent/bootstrap.py` | Builds the structured prompt each agent receives. Handles plugin root discovery, protocol extraction, scope discovery, and output instructions. When a primary domain matches nothing but a secondary domain does, `resolve_overall_status` flips the status to a scoped `OK` and injects a `COVERAGE NOTE` so the agent reviews the secondary files with an honestly-scoped verdict instead of silently masking the gap. |
@@ -106,10 +106,14 @@ Command (thin wrapper: pr-review.md, full-code-review.md, code-review.md)
   │       → reconciliation-context.json + reconciliation-context.md
   │
   ├─ review-reconciliator agent (semantic dedup + scope check + fact verification)
-  │   └─ Reads reconciliation-context.md → produces review-findings.json + review-findings.md
+  │   └─ Reads reconciliation-context.md → produces review-findings.json (JSON only)
   │
-  └─ decision-reviewer agent (independent stress test)
-      └─ Produces decision-critic-findings.md with STAND/REVISE/ESCALATE verdict
+  ├─ Step 9: renders review-findings.md from that JSON (same materializer as step 8)
+  │
+  ├─ decision-reviewer agent (independent stress test)
+  │   └─ Produces decision-critic-findings.md with STAND/REVISE/ESCALATE verdict
+  │
+  └─ Step 11: re-renders review-findings.md after critic adjustments + verdict sync
 ```
 
 ### Pipeline-Wide Containment
@@ -405,6 +409,8 @@ Each reviewer agent publishes one file in `OUTPUT_DIR`:
 - `<reviewer>-review.json` — the canonical artifact: structured findings written via `builder.save()` (see `schemas/review-output.ts` for types)
 
 The human-readable `<reviewer>-review.md` is derived from the canonical JSON, not written by reviewers — the step 8 readiness gate materializes it before reconciliation begins, and it remains renderable on demand via `python3 scripts/review/agent/output.py render|materialize`.
+
+`review-findings.md` follows the same rule one level up: the review-reconciliator publishes `review-findings.json` and nothing else, and the pipeline renders the Markdown from it through the SAME materializer (`materialize_markdown(output_dir, suffix="review-findings.json")`) at step 9 and again at step 11 — after the critic adjustments apply and after the Rule 23 verdict sync, so the rendering describes the ledger the run actually publishes. Every section the old hand-written narrative carried has a structured home: `narrative_summary` (the overall assessment), `meta.reconciliation` (the pipeline metrics and not-applicable agents), `recommendations`, `observations` (verified tradeoffs), and `host_context_banner`. A render failure is a degradation note, never an exception — and never a file that disagrees with its JSON.
 
 **ReviewOutputBuilder API** (`scripts/review/agent/output.py`):
 

@@ -180,6 +180,18 @@ export interface ReviewOutput {
     // Positive observations (optional)
     positive_observations?: string[];
 
+    // File-level informational notes that do NOT count toward the verdict.
+    // The reconciliator records verified, maintainer-intended tradeoffs here
+    // (category: "tradeoff") — trigger condition, affected population
+    // verified at file:line, and why the compromise is intentional.
+    observations?: Array<{ file: string; note: string; category: string }> | null;
+
+    // The producer's own reading of the change as a whole — two or three
+    // sentences the list of findings cannot express. Always present, null
+    // when the producer said nothing. Rendered as the "## Assessment"
+    // section of the derived Markdown.
+    narrative_summary: string | null;
+
     // Clearances (optional) — auditable absence claims ("nothing depends on
     // the removed X") carrying the verification method. Unlike positives,
     // these flow into the reconciliation context so clearance-vs-finding
@@ -199,7 +211,31 @@ export interface ReviewOutput {
         review_duration_ms?: number;
         confidence_score: ConfidenceScore; // Overall confidence
         tool_results_used?: string[]; // e.g., ['test-results', 'semgrep']
+
+        // Reconciliation accounting — present only on review-findings.json,
+        // written by the review-reconciliator after semantic dedup, scope
+        // checking, and fact verification. Renders as the "**Pipeline:**"
+        // line and the not-applicable coverage line.
+        reconciliation?: {
+            input_findings_count: number;
+            agents_contributing: number;
+            concerns_after_grouping: number;
+            false_positives_dropped: number;
+            out_of_scope_dropped: number;
+            verified_concerns: number;
+            merge_ratio: number;
+            not_applicable_count: number;
+            not_applicable_agents: Array<{ name: string; skip_reason: string }>;
+            reviewing_agents: string[];
+            dispatched_agents: string[];
+            missing_agents: string[];
+        };
     };
+
+    // Host context banner — present only on review-findings.json, copied
+    // through by the reconciliator when upstream host discovery was
+    // degraded. Rendered as a leading blockquote.
+    host_context_banner?: HostContextBanner | null;
 }
 
 /**

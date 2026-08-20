@@ -150,6 +150,16 @@ def render_markdown(data: Dict) -> str:
     """
     md = []
 
+    # Degraded host context leads the document. Reviewers' claims were
+    # scoped by this banner's presence, so a reader must meet it before
+    # any finding — the same position the reconciliator's hand-written
+    # narrative put it in, now rendered from the artifact's own field.
+    banner = data.get('host_context_banner')
+    if isinstance(banner, dict) and banner.get('degraded'):
+        md.append(
+            f"> **\u26a0 Host Context Banner:** {banner.get('message', '')}\n\n"
+        )
+
     md.append(f"# {data['reviewer'].title()} Review - PR #{data['pr_id']}\n\n")
     md.append("## Executive Summary\n\n")
     md.append(f"**Verdict:** {data['verdict'].upper()}\n")
@@ -203,6 +213,45 @@ def render_markdown(data: Dict) -> str:
                 f"{files}\n\n"
             )
 
+    # Reconciliation accounting — the narrative's "Pipeline:" line, now
+    # rendered from the metrics the producer already records under
+    # meta.reconciliation. Absent for ordinary reviewers, whose meta
+    # carries no such block.
+    meta = data.get('meta')
+    recon = meta.get('reconciliation') if isinstance(meta, dict) else None
+    if isinstance(recon, dict):
+        md.append(
+            f"**Pipeline:** {recon.get('input_findings_count', 0)} findings "
+            f"from {recon.get('agents_contributing', 0)} reviewing agents "
+            f"\u2192 {recon.get('verified_concerns', 0)} verified concerns "
+            f"({recon.get('concerns_after_grouping', 0)} concerns after "
+            f"grouping, {recon.get('false_positives_dropped', 0)} false "
+            f"positives dropped, {recon.get('out_of_scope_dropped', 0)} "
+            "out-of-scope dropped)\n\n"
+        )
+        # Not-applicable agents are reported separately and never counted
+        # toward approval confidence: they abstained, they did not review.
+        na_agents = recon.get('not_applicable_agents')
+        if isinstance(na_agents, list) and na_agents:
+            word = "agent" if len(na_agents) == 1 else "agents"
+            named = ", ".join(
+                f"{a.get('name')} ({a.get('skip_reason')})"
+                if isinstance(a, dict) else str(a)
+                for a in na_agents
+            )
+            md.append(
+                f"**Coverage:** {len(na_agents)} {word} returned "
+                f"not-applicable (changes outside their domain): "
+                f"{named}\n\n"
+            )
+
+    # The producer's own reading of the change as a whole. Nothing else in
+    # this artifact carries it, so without this section a mechanical render
+    # would drop the one judgment a list of findings cannot express.
+    if data.get('narrative_summary'):
+        md.append("## Assessment\n\n")
+        md.append(f"{data['narrative_summary']}\n\n")
+
     # Issues — every severity that counts toward total_issues must render,
     # or the Markdown claims findings it doesn't show.
     for sev in ['critical', 'high', 'medium', 'low', 'info']:
@@ -224,6 +273,22 @@ def render_markdown(data: Dict) -> str:
                 if issue.get('severity_floor'):
                     md.append(f"**Severity floor:** {issue['severity_floor']}\n\n")
                 md.append(f"**Fix:** {issue['recommendation']}\n\n")
+
+    # Recommendations — prioritized, and rendered because the producer
+    # recorded them. They were silently dropped from every derived
+    # Markdown before this: add_recommendation() wrote them to the JSON
+    # and nothing ever read them back out.
+    recommendations = data.get('recommendations')
+    if isinstance(recommendations, dict) and any(recommendations.values()):
+        md.append("## Recommendations\n\n")
+        for priority in ('immediate', 'important', 'suggestions'):
+            entries = recommendations.get(priority) or []
+            if not entries:
+                continue
+            md.append(f"**{priority.title()}:**\n\n")
+            for entry in entries:
+                md.append(f"- {entry}\n")
+            md.append("\n")
 
     # Clearances — absence claims with their verification method
     if data.get('clearances'):
@@ -250,18 +315,28 @@ def render_markdown(data: Dict) -> str:
     return ''.join(md)
 
 
-def materialize_markdown(output_dir: str) -> List[str]:
-    """Render <reviewer>-review.md beside every *-review.json in output_dir.
+def materialize_markdown(
+    output_dir: str, *, suffix: str = "-review.json"
+) -> List[str]:
+    """Render <name>.md beside every <name>.json matching `suffix`.
 
     Derived artifacts for humans browsing the output directory: idempotent,
     regenerated from the settled canonical JSON, read by no pipeline
-    consumer (readiness, reconciliation, and the bot all key on the JSON).
-    Malformed JSONs are skipped with a note on stderr — grading and
-    reconciliation report those failures on their own channels.
+    consumer for control flow (readiness, reconciliation, and the bot all
+    key on the JSON). Malformed JSONs are skipped with a note on stderr —
+    grading and reconciliation report those failures on their own channels.
+
+    `suffix` is what lets ONE materializer own every derived Markdown in a
+    run directory: the default covers the per-reviewer family the step-8
+    readiness gate renders, and `suffix="review-findings.json"` (an exact
+    filename, which is also a suffix that nothing else in the directory
+    matches) covers the reconciliation ledger the pipeline renders at
+    steps 9 and 11. A second copy of this loop is how the two would
+    eventually disagree about what a rendering means.
     """
     written: List[str] = []
     for name in sorted(os.listdir(output_dir)):
-        if not name.endswith("-review.json"):
+        if not name.endswith(suffix):
             continue
         json_path = os.path.join(output_dir, name)
         try:
@@ -294,6 +369,9 @@ class ReviewOutputBuilder:
         self.recommendations = {'immediate': [], 'important': [], 'suggestions': []}
         self.positive_observations = []
         self.clearances = []
+        # Agent-authored: the producer's own reading of the change as a
+        # whole. The reconciliator's overall-state prose lives here.
+        self.narrative_summary = None
         # Agent-authored: gaps the reviewer declared (plus, after save(),
         # the derived fill below merged in).
         self.unreviewed = []
@@ -464,6 +542,19 @@ class ReviewOutputBuilder:
             "note": note,
             "category": category,
         })
+
+    def set_narrative_summary(self, text):
+        """Record the overall-state prose this artifact's verdict summarizes.
+
+        Two or three sentences answering "what is the overall state of this
+        code?" — the one judgment a list of findings cannot express, and
+        the reason the reconciliation Markdown was hand-written before the
+        pipeline took ownership of rendering it. Blank prose records
+        absence rather than an empty string, so a consumer never has to
+        distinguish "said nothing" from "said ''".
+        """
+        coerced = _coerce_text(text).strip()
+        self.narrative_summary = coerced or None
 
     def add_recommendation(self, priority: str, text: str):
         """Add recommendation (priority: immediate, important, suggestions)."""
@@ -1002,6 +1093,10 @@ class ReviewOutputBuilder:
             'recommendations': self.recommendations if any(self.recommendations.values()) else None,
             'positive_observations': self.positive_observations if self.positive_observations else None,
             'clearances': self.clearances if self.clearances else None,
+            # Always present, null when unset — same contract as
+            # `unreviewed` above: a consumer reads absence off the value,
+            # never off the key.
+            'narrative_summary': self.narrative_summary,
             'meta': {
                 'files_reviewed': self.files_reviewed,
                 'unreviewed_autofilled': (

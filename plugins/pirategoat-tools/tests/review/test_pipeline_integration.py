@@ -30,6 +30,14 @@ _dispatch_spec.loader.exec_module(_dispatch_mod)
 build_dispatch_plan = _dispatch_mod.build_dispatch_plan
 load_registry = _dispatch_mod.load_registry
 
+_output_spec = importlib.util.spec_from_file_location(
+    "pipeline_integration_review_output",
+    str(_SCRIPTS_DIR / "review" / "agent" / "output.py"),
+)
+_output_mod = importlib.util.module_from_spec(_output_spec)
+_output_spec.loader.exec_module(_output_mod)
+_render_markdown = _output_mod.render_markdown
+
 
 @pytest.fixture(scope="module")
 def mod(pipeline_mod):
@@ -1257,7 +1265,7 @@ class TestStep8Orchestration:
             ),
         )
         original_materialize = mod._orchestrate_step_8.__globals__[
-            "_materialize_reviewer_markdown"
+            "_materialize_markdown"
         ]
 
         def publish_then_materialize(output_dir, output_builder_path):
@@ -1268,7 +1276,7 @@ class TestStep8Orchestration:
 
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_reviewer_markdown",
+            "_materialize_markdown",
             publish_then_materialize,
         )
 
@@ -1314,7 +1322,7 @@ class TestStep8Orchestration:
         unrelated_markdown.write_text("# Different reviewer\n")
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_reviewer_markdown",
+            "_materialize_markdown",
             lambda *_args, **_kwargs: [str(unrelated_markdown)],
         )
 
@@ -1357,7 +1365,7 @@ class TestStep8Orchestration:
         )
         monkeypatch.setitem(
             mod._orchestrate_step_8.__globals__,
-            "_materialize_reviewer_markdown",
+            "_materialize_markdown",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("renderer crashed")
             ),
@@ -1528,6 +1536,97 @@ class TestStep9Orchestration:
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state.get("inline_coverage_gaps") == {}
+
+
+class TestStep9FindingsMarkdown:
+    """`review-findings.md` is a script render of the reconciliator's JSON.
+
+    The reconciliator publishes JSON only; the pipeline owns the Markdown,
+    so the two can never disagree the way a hand-written narrative did.
+    """
+
+    @staticmethod
+    def _findings(**extra):
+        data = _review_json("reconciliator")
+        data["issues"] = [{
+            "id": "aaaa1111",
+            "category": "general",
+            "severity": "high",
+            "title": "Unescaped output",
+            "file": "a.php",
+            "line": 12,
+            "description": "d",
+            "recommendation": "r",
+            "confidence": 0.9,
+        }]
+        data["summary"]["total_issues"] = 1
+        data["summary"]["by_severity"]["high"] = 1
+        data.update(extra)
+        return data
+
+    def test_step_9_renders_findings_markdown_from_the_json(
+        self, mod, tmp_path
+    ):
+        data = self._findings()
+        (tmp_path / "review-findings.json").write_text(json.dumps(data))
+        state = {"resolved_params": {}}
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        rendered = (tmp_path / "review-findings.md").read_text()
+        assert rendered == _render_markdown(data)
+        assert "Unescaped output" in rendered
+        assert state["findings_markdown"] == {
+            "ran": True, "written": 1, "expected": 1, "status": "complete",
+        }
+
+    def test_step_9_overwrites_a_stale_findings_markdown(self, mod, tmp_path):
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps(self._findings())
+        )
+        (tmp_path / "review-findings.md").write_text("# stale narrative\n")
+        mod._orchestrate_step(9, "full", {}, {"resolved_params": {}}, {},
+                              str(tmp_path))
+        assert "stale narrative" not in (
+            tmp_path / "review-findings.md"
+        ).read_text()
+
+    def test_step_9_records_a_render_failure_instead_of_raising(
+        self, mod, tmp_path, capsys
+    ):
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps(self._findings())
+        )
+        monkey = mod._orchestrate_step_9.__globals__
+        original = monkey["_materialize_markdown"]
+        monkey["_materialize_markdown"] = (
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                RuntimeError("renderer crashed")
+            )
+        )
+        state = {"resolved_params": {}}
+        try:
+            mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+        finally:
+            monkey["_materialize_markdown"] = original
+
+        assert state["findings_markdown"] == {
+            "ran": True, "written": 0, "expected": 1, "status": "failed",
+        }
+        assert state["degradation"]["findings_markdown_incomplete"] is True
+        assert "findings markdown materialization failed: renderer crashed" in (
+            capsys.readouterr().err
+        )
+
+    def test_step_9_without_findings_json_records_nothing_rendered(
+        self, mod, tmp_path
+    ):
+        state = {"resolved_params": {}}
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+        assert state["findings_markdown"] == {
+            "ran": True, "written": 0, "expected": 0, "status": "complete",
+        }
+        assert not (tmp_path / "review-findings.md").exists()
 
 
 class TestStep10Orchestration:
@@ -1803,7 +1902,12 @@ class TestFullSequenceIntegration:
         # Pre-write verdict, report, and findings as if steps 8-10 ran
         (Path(od) / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (Path(od) / "review-report.md").write_text("# Review\nAll clear.")
-        (Path(od) / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
+        # A complete ledger, the way ReviewOutputBuilder writes it: step 11
+        # renders review-findings.md from this file, and a stub the renderer
+        # cannot read would degrade the run for a reason no real run has.
+        (Path(od) / "review-findings.json").write_text(
+            json.dumps(_review_json("reconciliator"))
+        )
 
         # Step 11: present results
         r = run_pipeline("--step", "11", "--mode", "full", "--output-dir", od, cwd=repo)

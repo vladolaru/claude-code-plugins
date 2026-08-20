@@ -358,11 +358,37 @@ def _seed_step_11(out):
     """
     (out / "review-verdict.json").write_text(json.dumps({"verdict": "APPROVE"}))
     (out / "review-report.md").write_text("# report")
+    # Complete enough for the Markdown renderer step 11 runs over it: a
+    # stub would add a render-failure note and defeat the empty-notes
+    # baseline every assertion below depends on.
     (out / "review-findings.json").write_text(json.dumps({
+        "pr_id": "42",
         "reviewer": "reconciliator",
+        "timestamp": "2026-08-13T10:00:00",
+        "plugin_version": None,
+        "schema": 1,
         "verdict": "APPROVE",
-        "summary": {"total_issues": 0, "by_severity": {}},
+        "summary": {
+            "total_issues": 0,
+            "by_severity": {
+                "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+            },
+        },
         "issues": [],
+        "unreviewed": None,
+        "deferred_reviewed": [],
+        "observations": None,
+        "recommendations": None,
+        "positive_observations": None,
+        "clearances": None,
+        "narrative_summary": None,
+        "meta": {
+            "files_reviewed": 1,
+            "unreviewed_autofilled": None,
+            "review_duration_ms": 10,
+            "confidence_score": 0.9,
+            "tool_results_used": None,
+        },
     }))
     (out / "decision-critic-verdict.json").write_text(
         json.dumps({"verdict": "STAND"})

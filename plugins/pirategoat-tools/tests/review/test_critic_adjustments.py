@@ -32,16 +32,45 @@ from review.orchestration import _orchestrate_step_11
 from review.reconciliation_context import build_critic_context
 
 
-def _write_findings(output_dir, issues):
+def _write_findings(output_dir, issues, **extra):
+    """Write a reconciliation ledger shaped the way the producer writes it.
+
+    The adjustment writer reads only `issues`, but step 11 now renders
+    `review-findings.md` from this same file, and the renderer is a pure
+    function of the whole artifact. A minimal stub here would make every
+    step-11 test report a render failure the pipeline would never see in a
+    real run, where the ledger always comes from ReviewOutputBuilder.
+    """
     sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for i in issues:
         sev[i["severity"]] += 1
-    (Path(output_dir) / "review-findings.json").write_text(json.dumps({
+    data = {
+        "pr_id": "42",
         "reviewer": "reconciliator",
+        "timestamp": "2026-08-13T10:00:00",
+        "plugin_version": None,
+        "schema": 1,
         "verdict": "REQUEST_CHANGES",
         "summary": {"total_issues": len(issues), "by_severity": sev},
         "issues": issues,
-    }))
+        "unreviewed": None,
+        "deferred_reviewed": [],
+        "observations": None,
+        "recommendations": None,
+        "positive_observations": None,
+        "clearances": None,
+        "narrative_summary": None,
+        "meta": {
+            "files_reviewed": 1,
+            "unreviewed_autofilled": None,
+            "review_duration_ms": 10,
+            "confidence_score": 0.9,
+            "tool_results_used": None,
+        },
+    }
+    data.update(extra)
+    (Path(output_dir) / "review-findings.json").write_text(json.dumps(data))
+    return data
 
 
 def _write_adjustments(output_dir, adjustments):
@@ -58,8 +87,8 @@ def _write_critic_verdict(output_dir, verdict):
 
 def _issue(id_, severity="low"):
     return {"id": id_, "severity": severity, "title": "t", "file": "f.go",
-            "description": "d", "recommendation": "r", "category": "general",
-            "confidence": 0.9}
+            "line": 10, "description": "d", "recommendation": "r",
+            "category": "general", "confidence": 0.9}
 
 
 @pytest.fixture
@@ -1428,3 +1457,115 @@ class TestStepElevenAppliesAdjustments:
         assert any("critic adjustments not applied" in n
                    for n in result["degradation_notes"])
         assert result["status"] == "degraded"
+
+
+class TestStepElevenRerendersFindingsMarkdown:
+    """`review-findings.md` must describe the FINAL ledger, not the one the
+    reconciliator first published.
+
+    Field-proven defect: after every critic REVISE, the hand-written
+    narrative still showed pre-adjustment severities while the JSON and the
+    report showed post-adjustment ones — a guaranteed-stale fallback
+    artifact, and the one the step-10 critic fallback and the failure-path
+    report fallback both point at.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+    def _step_11(self, output_dir):
+        return _orchestrate_step_11("pr", {}, {}, {}, str(output_dir))
+
+    def _seed(self, tmp_path, severity="high"):
+        issue = _issue("aaaa1111", severity)
+        issue["title"] = "Unescaped output"
+        _write_findings(tmp_path, [issue])
+        _write_critic_verdict(tmp_path, "REVISE")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "REQUEST_CHANGES"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+
+    def test_demoted_severity_reaches_the_markdown(self, tmp_path):
+        """THE pin: a REVISE demote must be visible in the rendered file."""
+        self._seed(tmp_path, severity="high")
+        (tmp_path / "review-findings.md").write_text(
+            "## High Issues\n\n### Unescaped output\n"
+        )
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }])
+
+        self._step_11(tmp_path)
+
+        rendered = (tmp_path / "review-findings.md").read_text()
+        assert "## Low Issues" in rendered
+        assert "## High Issues" not in rendered
+        assert "Unescaped output" in rendered
+
+    def test_rendered_verdict_matches_the_rule_23_sync(self, tmp_path):
+        """The render runs after the verdict sync, so the Markdown carries
+        the verdict the run actually published."""
+        self._seed(tmp_path, severity="low")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        _write_critic_verdict(tmp_path, "STAND")
+
+        self._step_11(tmp_path)
+
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict"] == "APPROVE"
+        assert "**Verdict:** APPROVE" in (
+            tmp_path / "review-findings.md"
+        ).read_text()
+
+    def test_render_failure_is_recorded_not_raised(self, tmp_path, monkeypatch):
+        self._seed(tmp_path, severity="low")
+        import review.orchestration as orchestration_module
+
+        monkeypatch.setattr(
+            orchestration_module, "_materialize_markdown",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+
+        self._step_11(tmp_path)  # must not raise
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert any(
+            "review-findings.md render failed" in n
+            for n in result["degradation_notes"]
+        )
+        assert result["status"] == "degraded"
+
+    def test_missing_findings_json_renders_nothing_and_adds_no_note(
+        self, tmp_path
+    ):
+        _write_critic_verdict(tmp_path, "STAND")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+
+        self._step_11(tmp_path)
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert not (tmp_path / "review-findings.md").exists()
+        assert not any(
+            "render failed" in n for n in result["degradation_notes"]
+        )
+
+    def test_rendered_markdown_serves_the_report_fallback(self, tmp_path):
+        """Step 10's critic fallback and finalize's report fallback both
+        point at review-findings.md — now truthful, because the script
+        renders it here even when report synthesis never happened."""
+        self._seed(tmp_path, severity="low")
+        (tmp_path / "review-report.md").unlink()
+        _write_critic_verdict(tmp_path, "STAND")
+
+        self._step_11(tmp_path)
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["report_path"] == str(tmp_path / "review-findings.md")
