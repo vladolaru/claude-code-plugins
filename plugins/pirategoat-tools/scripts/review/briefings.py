@@ -1082,9 +1082,23 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                 ]
             else:
                 actions = [
-                    "Notifications are primary. END YOUR TURN and wait for "
-                    "the next subagent completion notification — do not "
-                    "poll in a loop.",
+                    "Sequence matters here — do these two things IN ORDER, "
+                    "not in parallel:",
+                    "",
+                    "1. If the step-7 watchdog may already have expired (or "
+                    "was never launched), launch a fresh one now with the "
+                    "remaining budget before the escalation above "
+                    "force-proceeds. Run it via a BACKGROUND Bash call "
+                    "(`run_in_background: true`) — it holds no model turn "
+                    "open, and in this state it may be the only remaining "
+                    "wake-up:",
+                    "```",
+                    f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds {remaining_budget}",
+                    "```",
+                    "2. THEN END YOUR TURN. Notifications are primary from "
+                    "here — wait for the next subagent completion "
+                    "notification (or the watchdog's exit); do not poll in "
+                    "a loop.",
                     "",
                     "On wake-up, run agents_status once:",
                     "```",
@@ -1093,15 +1107,6 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                     "- Exit code 0 (ALL_DONE): re-run step 8",
                     "- Exit code 2 (still running): end your turn again and "
                     "wait for the next wake-up",
-                    "",
-                    "If the step-7 watchdog may already have expired (or was "
-                    "never launched), launch a fresh one now with the "
-                    "remaining budget before the escalation above "
-                    "force-proceeds — it holds no model turn open:",
-                    "```",
-                    f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds {remaining_budget}",
-                    "```",
-                    "Run it via a BACKGROUND Bash call (`run_in_background: true`).",
                 ]
 
             return {

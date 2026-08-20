@@ -1405,6 +1405,13 @@ class TestStep8ReadinessGate:
         assert "run_in_background: true" in text
         assert "BACKGROUND" in text
         assert "holds no model turn open" in text.lower()
+        # Ordering pin (the I1/D1 defect class): ending the turn is
+        # terminal, so the watchdog instruction must come FIRST — a
+        # top-to-bottom executor that ends its turn before launching it
+        # loses what may be the only remaining wake-up in this state.
+        watchdog_pos = text.index("--wait")
+        end_turn_pos = text.index("END YOUR TURN")
+        assert watchdog_pos < end_turn_pos
         # Escalation text itself is untouched (settled design) — still
         # reachable only via the elapsed>=threshold branch, not asserted
         # here since this state hits the not-yet-escalated branch.
