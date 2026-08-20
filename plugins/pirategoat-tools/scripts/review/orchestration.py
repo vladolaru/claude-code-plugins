@@ -997,6 +997,65 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     return context
 
 
+def _sync_findings_verdict(findings_path, verdict):
+    """Rule 23: write ``verdict`` into review-findings.json's ``verdict``
+    field, and report exactly what happened instead of swallowing it.
+
+    Returns ``(state, reason)``:
+
+    - ``("synced", None)`` — the write landed (or the ledger already
+      carried this verdict; the write still runs either way, since
+      comparing first buys nothing an idempotent atomic replace doesn't
+      already give for free).
+    - ``("skipped_shape_mismatch", reason)`` — the ledger has nothing a
+      verdict can be written into: it is missing, or it parsed to
+      something other than a JSON object. Both are legitimate-but-degraded,
+      not I/O faults — nothing was read or written that then failed.
+    - ``("failed_io", reason)`` — the ledger exists and looks like an
+      object-shaped file on disk, but reading or writing it failed:
+      unparseable JSON (a `json.JSONDecodeError`, reported with a "parse"
+      reason) or an `OSError` on the read or the write (reported with an
+      "io" reason). These are the two outcomes that used to be a bare
+      ``pass`` here — the sync failed and finalize still reported success
+      beside it.
+
+    A missing findings file is folded into "skipped_shape_mismatch" rather
+    than treated as its own state or as "failed_io": by the time step 11
+    runs, step 8's reconciliation is the file's first writer and is a
+    handoff gate earlier in the pipeline (see briefings.py's step 8), so
+    an absent ledger here is already an abnormal run, not an I/O fault
+    against a file that was there a moment ago. It is the same "nowhere to
+    carry a verdict" shape hole as a non-object ledger — just discovered a
+    step earlier, before the file can even be opened — so it shares that
+    outcome's vocabulary instead of inventing a fourth one.
+    """
+    if not os.path.isfile(findings_path):
+        return "skipped_shape_mismatch", "review-findings.json not found"
+
+    try:
+        with open(findings_path) as f:
+            findings = json.load(f)
+    except json.JSONDecodeError as err:
+        return "failed_io", f"could not parse review-findings.json: {err}"
+    except OSError as err:
+        return "failed_io", f"could not read review-findings.json: {err}"
+
+    # A non-object ledger has nowhere to carry a verdict. The subscript
+    # assignment below would raise TypeError past this function and crash
+    # finalize outright — the same shape hole the adjustments apply closed
+    # on its own side.
+    if not isinstance(findings, dict):
+        return "skipped_shape_mismatch", "review-findings.json is not an object"
+
+    findings["verdict"] = verdict
+    try:
+        atomic_write_json(findings_path, findings)
+    except OSError as err:
+        return "failed_io", f"could not write review-findings.json: {err}"
+
+    return "synced", None
+
+
 def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Read critic verdict from file (written by LLM at step 10), through
     # critic_adjustments.py's own presentation wrapper — one parser and
@@ -1151,24 +1210,41 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # artifact destroyable by a crash mid-write no matter how carefully
     # the adjustments path replaced it, and this write is the last one the
     # run performs.
-    if verdict_data and os.path.isfile(findings_path):
-        try:
-            with open(findings_path) as f:
-                findings = json.load(f)
-            # A non-object ledger has nowhere to carry a verdict. The
-            # subscript assignment would raise TypeError past this except
-            # tuple and crash finalize outright — the same shape hole the
-            # adjustments apply closed on its own side.
-            if not isinstance(findings, dict):
-                degradation_notes.append(
-                    "verdict sync skipped: review-findings.json is not an "
-                    "object"
-                )
-            else:
-                findings["verdict"] = verdict
-                atomic_write_json(findings_path, findings)
-        except (json.JSONDecodeError, OSError):
-            pass
+    #
+    # The outcome is recorded through exactly one vocabulary —
+    # verdict_sync/verdict_sync_reason, produced by _sync_findings_verdict
+    # — surfaced both in pipeline-result.json and step 11's non-interactive
+    # status text (briefings.py), so a bot and a human reading either see
+    # the same claim. This replaces the bare `pass` that used to swallow a
+    # `json.JSONDecodeError` on read or an `OSError` on read/write: the
+    # sync failed and finalize still published `status: "success"` beside
+    # it, one of two silent failure modes left after the non-object ledger
+    # was hardened.
+    verdict_sync_state = None
+    verdict_sync_reason = None
+    findings_present = os.path.isfile(findings_path)
+    if verdict_data:
+        verdict_sync_state, verdict_sync_reason = _sync_findings_verdict(
+            findings_path, verdict
+        )
+        if verdict_sync_state != "synced" and findings_present:
+            # A missing ledger is already recorded by the
+            # "review-findings.json not found" note above (added while
+            # `findings_present` was computed) — this branch only adds a
+            # note for a shape or I/O failure discovered while reading or
+            # writing a file that *is* there, so the two checks never
+            # describe the same fact twice.
+            prefix = (
+                "verdict sync skipped"
+                if verdict_sync_state == "skipped_shape_mismatch"
+                else "verdict sync failed"
+            )
+            degradation_notes.append(f"{prefix}: {verdict_sync_reason}")
+    # else: no review-verdict.json to sync a verdict from — the
+    # "review-verdict.json not found" note above already covers this, and
+    # the sync is not attempted at all, matching the pre-existing gate.
+    # This task closes the sync's own silent failure modes, not this
+    # separate, already-surfaced one.
 
     # Computed after the verdict sync: a degradation the sync discovers has
     # to reach the status it is reported beside, or the run publishes
@@ -1187,6 +1263,8 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         ),
         "worktree_hygiene": hygiene_summary,
         "usage": usage_summary,
+        "verdict_sync": verdict_sync_state,
+        "verdict_sync_reason": verdict_sync_reason,
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
     atomic_write_json(result_path, pipeline_result)

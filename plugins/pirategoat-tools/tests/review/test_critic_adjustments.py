@@ -2,6 +2,7 @@
 finding-level decisions into review-findings.json."""
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from review.critic_adjustments import (
     read_critic_verdict,
 )
 from review import critic_adjustments as critic_adjustments_module
+from review import orchestration as orchestration_module
 from review.orchestration import _orchestrate_step_11
 from review.reconciliation_context import build_critic_context
 
@@ -827,14 +829,26 @@ class TestVerdictSyncHardening:
     adjustments apply replaces the ledger atomically, but the verdict sync
     ran last and wrote it with a truncating open, so a crash there left a
     truncated ledger regardless. It also assumed the file was an object.
+
+    The sync's outcome is recorded through exactly one vocabulary —
+    ``verdict_sync``/``verdict_sync_reason`` in pipeline-result.json — with
+    three states: "synced", "skipped_shape_mismatch" (a ledger that exists
+    but can't carry a verdict, or doesn't exist at all), and "failed_io"
+    (the ledger looked usable but reading or writing it raised). Every
+    non-synced state also degrades the run and appends a note, so a bare
+    ``pass`` can never publish `status: "success"` beside a sync that
+    didn't happen.
     """
+
+    def _write_verdict_and_report(self, tmp_path, verdict="COMMENT"):
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": verdict})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
 
     def test_verdict_sync_leaves_no_temp_residue(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "COMMENT"})
-        )
-        (tmp_path / "review-report.md").write_text("# report")
+        self._write_verdict_and_report(tmp_path)
         _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
 
         data = json.loads((tmp_path / "review-findings.json").read_text())
@@ -845,16 +859,18 @@ class TestVerdictSyncHardening:
         ]
         assert leftovers == [], f"temp files survived the sync: {leftovers}"
 
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict_sync"] == "synced"
+        assert result["verdict_sync_reason"] is None
+        assert result["status"] == "success"
+
     def test_list_shaped_ledger_degrades_instead_of_crashing(self, tmp_path):
         """The subscript assignment used to raise TypeError past the except
         tuple, taking finalize down with a review that had already run."""
         (tmp_path / "review-findings.json").write_text(
             json.dumps([_issue("aaaa1111", "low")])
         )
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "COMMENT"})
-        )
-        (tmp_path / "review-report.md").write_text("# report")
+        self._write_verdict_and_report(tmp_path)
         _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
 
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
@@ -868,6 +884,80 @@ class TestVerdictSyncHardening:
         assert json.loads(
             (tmp_path / "review-findings.json").read_text()
         ) == [_issue("aaaa1111", "low")]
+
+        assert result["verdict_sync"] == "skipped_shape_mismatch"
+        assert "not an object" in result["verdict_sync_reason"]
+
+    def test_corrupt_findings_json_reports_failed_io(self, tmp_path):
+        """Unparseable JSON used to hit the bare `except: pass` and publish
+        `status: "success"` beside a sync that never happened."""
+        (tmp_path / "review-findings.json").write_text("{not valid json")
+        self._write_verdict_and_report(tmp_path)
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict_sync"] == "failed_io"
+        assert "parse" in result["verdict_sync_reason"].lower()
+        assert any("verdict sync failed" in note
+                   for note in result["degradation_notes"])
+        assert result["status"] == "degraded"
+        # The unreadable file is left exactly as found.
+        assert (tmp_path / "review-findings.json").read_text() == (
+            "{not valid json"
+        )
+
+    def test_write_failure_reports_failed_io(self, tmp_path, monkeypatch):
+        """An OSError from the atomic writer used to hit the same bare
+        `except: pass` as a parse failure, on the write side instead of
+        the read side."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        self._write_verdict_and_report(tmp_path)
+
+        real_atomic_write_json = orchestration_module.atomic_write_json
+
+        def flaky_write(path, payload):
+            if os.path.basename(path) == "review-findings.json":
+                raise OSError("disk full")
+            return real_atomic_write_json(path, payload)
+
+        monkeypatch.setattr(
+            orchestration_module, "atomic_write_json", flaky_write
+        )
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict_sync"] == "failed_io"
+        assert "disk full" in result["verdict_sync_reason"]
+        assert any("verdict sync failed" in note
+                   for note in result["degradation_notes"])
+        assert result["status"] == "degraded"
+        # Step 11 still completed and published pipeline-result.json —
+        # the failure never propagated out of finalize.
+        assert (tmp_path / "pipeline-result.json").is_file()
+
+    def test_missing_findings_file_reports_skipped_shape_mismatch(
+        self, tmp_path
+    ):
+        """No review-findings.json at all — step 8's reconciliation is
+        supposed to guarantee it exists by the time step 11 runs, so an
+        absent ledger here is already abnormal. It shares the non-object
+        ledger's vocabulary rather than getting its own state, since both
+        are "nothing a verdict can be written into", not an I/O fault
+        against a file that was there.
+        """
+        self._write_verdict_and_report(tmp_path)
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict_sync"] == "skipped_shape_mismatch"
+        assert result["verdict_sync_reason"] == "review-findings.json not found"
+        assert result["degradation_notes"].count(
+            "review-findings.json not found"
+        ) == 1, (
+            "the pre-existing 'findings not found' check and the sync's "
+            "own recording must not both add a note for the same fact"
+        )
+        assert result["status"] == "degraded"
 
 
 class TestCriticContextRoundTrip:

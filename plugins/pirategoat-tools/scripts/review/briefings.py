@@ -1547,7 +1547,12 @@ def _step_11_present_results(mode, state, context, config, output_dir):
                        "measured, and each half's availability — subagent "
                        "usage is complete at finalize, orchestrator usage is "
                        "partial because its own session is still open; null "
-                       "when the run never measured usage)")
+                       "when the run never measured usage), verdict_sync "
+                       "(Rule 23's outcome syncing review-findings.json's "
+                       "verdict: \"synced\", \"skipped_shape_mismatch\", "
+                       "\"failed_io\", or null when the sync was never "
+                       "attempted) with verdict_sync_reason for the non-"
+                       "synced states")
 
         if mode == "incremental":
             actions.append("Baseline saved. Next run reviews only new commits.")
