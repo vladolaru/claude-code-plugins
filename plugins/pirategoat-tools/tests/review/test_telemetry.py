@@ -575,6 +575,9 @@ class TestRunManifest:
             "synthesis_agents": False,
             "usage": False,
             "skipped_steps": False,
+            "dependency_refresh": False,
+            "reviewer_markdown": False,
+            "findings_markdown": False,
         }
         assert manifest["coverage"] is None
 
@@ -3134,6 +3137,122 @@ class TestReviewerMarkdownManifest:
 
         assert manifest["reviewer_markdown"] is None
 
+    def test_availability_flag_tracks_the_payload(self, mod, tmp_path):
+        """Task 13: `availability["reviewer_markdown"]` used to not exist
+        at all — the section was written with no flag beside it. It now
+        shares the section's own top-level key, derived from whether the
+        section actually parsed, the same rule every other optional
+        section in `OPTIONAL_SECTION_AVAILABILITY_KEYS` follows."""
+        telemetry, out_dir = self._telemetry(mod, tmp_path)
+
+        absent_manifest = json.loads(Path(telemetry.manifest_path).read_text())
+        assert absent_manifest["availability"]["reviewer_markdown"] is False
+
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "reviewer_markdown": {
+                "ran": True,
+                "written": 1,
+                "expected": 1,
+                "status": "complete",
+            },
+        }))
+        telemetry.log_step(step=8, phase="SYNTHESIS", title="Reconcile")
+        measured_manifest = json.loads(Path(telemetry.manifest_path).read_text())
+        assert measured_manifest["availability"]["reviewer_markdown"] is True
+
+
+class TestFindingsMarkdownManifest:
+    """The manifest records the sanitized findings-Markdown outcome —
+    `reviewer_markdown`'s sibling family (steps 9 and 11's render of
+    `review-findings.md`, versus step 8's per-reviewer render), new in
+    Task 13. `build_findings_markdown_manifest` shares its validator with
+    `build_reviewer_markdown_manifest`, so this class mirrors
+    `TestReviewerMarkdownManifest` field for field, reading
+    `state["findings_markdown"]` instead."""
+
+    def _telemetry(self, mod, tmp_path):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        log_dir = tmp_path / "logs"
+        telemetry = mod.ReviewTelemetry(str(out_dir), log_dir=str(log_dir))
+        telemetry.start(
+            mode="full",
+            repo_path=str(tmp_path),
+            identifier="branch",
+            run_id="run-1",
+        )
+        return telemetry, out_dir
+
+    def test_absent_state_is_recorded_as_unavailable(self, mod, tmp_path):
+        telemetry, _out_dir = self._telemetry(mod, tmp_path)
+
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["findings_markdown"] is None
+        assert manifest["availability"]["findings_markdown"] is False
+
+    def test_state_outcome_is_sanitized_into_manifest(self, mod, tmp_path):
+        telemetry, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "findings_markdown": {
+                "ran": True,
+                "written": 1,
+                "expected": 1,
+                "status": "complete",
+                "ignored": "do not persist",
+            },
+        }))
+
+        telemetry.log_step(step=9, phase="VALIDATION", title="Render Findings")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["findings_markdown"] == {
+            "ran": True,
+            "written": 1,
+            "expected": 1,
+            "status": "complete",
+        }
+        assert manifest["availability"]["findings_markdown"] is True
+
+    def test_a_failed_render_is_recorded_not_dropped(self, mod, tmp_path):
+        telemetry, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "findings_markdown": {
+                "ran": True,
+                "written": 0,
+                "expected": 1,
+                "status": "failed",
+            },
+        }))
+
+        telemetry.log_step(step=9, phase="VALIDATION", title="Render Findings")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["findings_markdown"] == {
+            "ran": True,
+            "written": 0,
+            "expected": 1,
+            "status": "failed",
+        }
+        assert manifest["availability"]["findings_markdown"] is True
+
+    def test_malformed_state_outcome_is_unavailable(self, mod, tmp_path):
+        telemetry, out_dir = self._telemetry(mod, tmp_path)
+        (out_dir / "pipeline-state.json").write_text(json.dumps({
+            "findings_markdown": {
+                "ran": "yes",
+                "written": True,
+                "expected": -1,
+                "status": "complete",
+            },
+        }))
+
+        telemetry.log_step(step=9, phase="VALIDATION", title="Render Findings")
+        manifest = json.loads(Path(telemetry.manifest_path).read_text())
+
+        assert manifest["findings_markdown"] is None
+        assert manifest["availability"]["findings_markdown"] is False
+
 
 class TestDependencyRefreshManifest:
     """The manifest records the sanitized dependency-refresh report."""
@@ -3419,6 +3538,24 @@ class TestDependencyRefreshManifest:
         section = manifest["dependency_refresh"]
         assert section["requested"] is True
         assert section["reported"] is False
+
+    def test_availability_flag_tracks_the_payload(self, mod, tmp_path):
+        """Task 13: `availability["dependency_refresh"]` used to not
+        exist at all — the section was written with no flag beside it.
+        It now shares the section's own top-level key, derived from
+        whether the section actually parsed, the same rule every other
+        optional section in `OPTIONAL_SECTION_AVAILABILITY_KEYS`
+        follows."""
+        t, out_dir = self._telemetry(mod, tmp_path)
+
+        absent_manifest = json.loads(Path(t.manifest_path).read_text())
+        assert absent_manifest["availability"]["dependency_refresh"] is False
+
+        (out_dir / "run-config.json").write_text(json.dumps(
+            {"mode": "full", "refresh_dependencies": True}))
+        t.log_step(step=3, phase="SETUP", title="Gather Context")
+        requested_manifest = json.loads(Path(t.manifest_path).read_text())
+        assert requested_manifest["availability"]["dependency_refresh"] is True
 
 
 class TestWorktreeHygieneManifest:
@@ -4213,9 +4350,12 @@ class TestOptionalSectionAvailabilityKeysContract:
 
     A future engineer wiring a new section's availability flag directly
     into `_build_manifest` without adding it to the tuple (the reviewer's
-    exact probe: `dependency_refresh` gaining a flag) fails THIS
-    assertion — not the consumer-side sanitize pin three call frames
-    away in `review_metrics`, and not silently.
+    original probe scenario: Task 13 closed it for `dependency_refresh`
+    and `reviewer_markdown`, the two sections that used to lack a flag —
+    the probe below now simulates the same gap with a section name that
+    stays permanently fictional) fails THIS assertion — not the
+    consumer-side sanitize pin three call frames away in
+    `review_metrics`, and not silently.
     """
 
     def test_produced_keys_equal_the_declared_tuple_both_directions(
@@ -4247,7 +4387,7 @@ class TestOptionalSectionAvailabilityKeysContract:
 
         def _build_manifest_with_undeclared_flag(status):
             manifest = real_build_manifest(status)
-            manifest["availability"]["dependency_refresh"] = True
+            manifest["availability"]["speculative_section"] = True
             return manifest
 
         telemetry._build_manifest = _build_manifest_with_undeclared_flag
@@ -4259,4 +4399,4 @@ class TestOptionalSectionAvailabilityKeysContract:
         declared = set(mod.OPTIONAL_SECTION_AVAILABILITY_KEYS)
 
         assert produced != declared
-        assert "dependency_refresh" in produced - declared
+        assert "speculative_section" in produced - declared

@@ -65,10 +65,10 @@ _USAGE_FIELDS = (
     "effective_input_tokens",
     "output_tokens",
 )
-# The two section-status vocabularies are the producer's own private
-# constants — manifest_sections.py has no importable export for either —
-# reached via the same exact-path contract `_incomplete_agent_executions`
-# above uses, instead of restated literals. Widening either vocabulary in
+# The section-status vocabularies are the producer's own private
+# constants — manifest_sections.py has no importable export for most of
+# them — reached via the same exact-path contract `_incomplete_agent_executions`
+# above uses, instead of restated literals. Widening any vocabulary in
 # the producer therefore moves the consumer's fallback set in lockstep;
 # see tests/analysis/test_review_run_metrics.py's drift-detection pin.
 _WORKTREE_HYGIENE_STATUSES = (
@@ -76,6 +76,28 @@ _WORKTREE_HYGIENE_STATUSES = (
 )
 _USAGE_SNAPSHOT_AVAILABILITY_STATES = (
     _MANIFEST_SECTIONS_CONTRACT._USAGE_AVAILABILITY_STATES
+)
+_DEPENDENCY_REFRESH_STATUSES = (
+    _MANIFEST_SECTIONS_CONTRACT._DEPENDENCY_REFRESH_STATUSES
+)
+# Public on the producer (imported there from dependency_refresh.py, its
+# actual owner), unlike the private vocabularies above — still reached
+# through the same exact-path module rather than re-imported from
+# dependency_refresh.py directly, so there is one loading mechanism for
+# every manifest_sections.py-shaped constant this package borrows.
+_DEPENDENCY_REFRESH_SKIP_REASONS = (
+    _MANIFEST_SECTIONS_CONTRACT.DEPENDENCY_REFRESH_SKIP_REASONS
+)
+_MAX_DEPENDENCY_REFRESH_COMMANDS = (
+    _MANIFEST_SECTIONS_CONTRACT._MAX_DEPENDENCY_REFRESH_COMMANDS
+)
+_MAX_DIRTY_FILES = _MANIFEST_SECTIONS_CONTRACT._MAX_DIRTY_FILES
+# Shared by reviewer_markdown (step 8's per-reviewer render) and
+# findings_markdown (steps 9/11's review-findings.md render) — one
+# producer-side validator (`_sanitize_derived_markdown_outcome`) covers
+# both, so one vocabulary covers both here too.
+_DERIVED_MARKDOWN_STATUSES = (
+    _MANIFEST_SECTIONS_CONTRACT._DERIVED_MARKDOWN_STATUSES
 )
 _PIPELINE_FAMILIES = (
     "dispatch",
@@ -150,15 +172,23 @@ _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
 # _OBSERVED_READS_SCHEMA below. Bumped 1 -> 2 when the manifest's
 # `outcome` block gained `verdict_sync`. It stayed 2 when that block also
 # gained `post_apply_integrity`, and again when the manifest gained the
-# `synthesis_agents` section, both under the Artifact Schemas rule's
+# `synthesis_agents` section, and again when `_sanitize_manifest` started
+# actually publishing `dependency_refresh`/`reviewer_markdown`/
+# `findings_markdown` (Task 13 — the sections already existed on disk;
+# only the sanitized, consumer-facing view was dropping two of them and
+# never had the third), each under the Artifact Schemas rule's
 # unreleased-version carve-out — see the producer-side comment on
 # EVENT_SCHEMA for the tag evidence.
 _SUPPORTED_MANIFEST_SCHEMA = 2
 _OBSERVED_READS_SCHEMA = 2
 # The `--format json` report's own schema. It stayed 2 when each run row
-# and the cohort aggregate gained `synthesis_agents`, under the same
-# unreleased-version carve-out: 2 was introduced in 1.114.0 and 1.114.0 is
-# not tagged, so no report was ever published claiming 2 without the key.
+# and the cohort aggregate gained `synthesis_agents`, and again when each
+# run row gained `dependency_refresh`/`reviewer_markdown`/
+# `findings_markdown` (Task 13, same run-row source as the manifest
+# fields above — `measure_run()`'s output is dumped wholesale as each
+# row), under the same unreleased-version carve-out: 2 was introduced in
+# 1.114.0 and 1.114.0 is not tagged, so no report was ever published
+# claiming 2 without these keys.
 _REPORT_SCHEMA = 2
 _SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
 _DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES

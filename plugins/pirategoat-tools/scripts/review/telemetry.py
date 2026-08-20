@@ -67,6 +67,12 @@ MARKER_FILE = ".telemetry-log-path"
 # and 1.114.0 is still unreleased (the plugin's newest tag is
 # pirategoat-tools/v1.108.0), so no artifact was ever published claiming
 # schema 2 without these keys.
+#
+# The manifest then gained `availability["dependency_refresh"]` and
+# `availability["reviewer_markdown"]` (both sections already existed;
+# only their flags were missing) plus the new top-level
+# `findings_markdown` section and its own flag, again WITHOUT a further
+# bump, under the same still-unreleased carve-out.
 # Bumping to 3 here would publish a compatibility boundary between two
 # shapes that never both existed in the wild. Revisit the moment 1.114.0
 # is tagged: the next manifest key after that is a real 2 -> 3 bump —
@@ -82,21 +88,24 @@ EVENT_SCHEMA = 2
 # producer-declared-contract pattern `synthesis_lifecycle.ROW_KEYS` follows
 # — so a section added here joins the pin automatically instead of
 # silently shipping the "measured: true, payload dropped" gap Task 12
-# closed for worktree_hygiene, usage, and skipped_steps.
+# closed for worktree_hygiene, usage, and skipped_steps, and Task 13
+# closed for dependency_refresh, reviewer_markdown, and findings_markdown.
 #
 # `dispatch` is excluded: its payload is self-describing (no top-level
-# availability boolean of its own). `dependency_refresh` and
-# `reviewer_markdown` are excluded: neither carries a top-level
-# availability flag today. `pipeline`, `transcript`, and `lifecycle` are
-# excluded: each is an availability flag with no same-named top-level
-# section — `lifecycle`'s payload lives under `agents`, and `transcript`'s
-# comes from a measurement source outside the manifest entirely.
+# availability boolean of its own). `pipeline`, `transcript`, and
+# `lifecycle` are excluded: each is an availability flag with no
+# same-named top-level section — `lifecycle`'s payload lives under
+# `agents`, and `transcript`'s comes from a measurement source outside
+# the manifest entirely.
 OPTIONAL_SECTION_AVAILABILITY_KEYS = (
     "coverage",
     "worktree_hygiene",
     "synthesis_agents",
     "usage",
     "skipped_steps",
+    "dependency_refresh",
+    "reviewer_markdown",
+    "findings_markdown",
 )
 # Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
 # pipeline's _FULL_SHA_RE contract for durable git identity.
@@ -892,8 +901,20 @@ class ReviewTelemetry:
         manifest["dependency_refresh"] = (
             manifest_sections.build_dependency_refresh_manifest(self.output_dir)
         )
+        manifest["availability"]["dependency_refresh"] = (
+            manifest["dependency_refresh"] is not None
+        )
         manifest["reviewer_markdown"] = (
             manifest_sections.build_reviewer_markdown_manifest(self.output_dir)
+        )
+        manifest["availability"]["reviewer_markdown"] = (
+            manifest["reviewer_markdown"] is not None
+        )
+        manifest["findings_markdown"] = (
+            manifest_sections.build_findings_markdown_manifest(self.output_dir)
+        )
+        manifest["availability"]["findings_markdown"] = (
+            manifest["findings_markdown"] is not None
         )
         manifest["worktree_hygiene"] = (
             manifest_sections.build_worktree_hygiene_manifest(self.output_dir)

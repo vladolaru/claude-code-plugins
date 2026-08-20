@@ -9,8 +9,13 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from .contracts import (
+    _DEPENDENCY_REFRESH_SKIP_REASONS,
+    _DEPENDENCY_REFRESH_STATUSES,
+    _DERIVED_MARKDOWN_STATUSES,
     _DISPATCHED_STATUSES,
     _FIXED_WARNING_CODES,
+    _MAX_DEPENDENCY_REFRESH_COMMANDS,
+    _MAX_DIRTY_FILES,
     _MAX_WALL_TIME_MS,
     _OPTIONAL_SECTION_AVAILABILITY_KEYS,
     _PRODUCER_AGENT_NAME_RE,
@@ -1214,6 +1219,171 @@ def _sanitize_skipped_steps(value: object) -> list[dict[str, Any]] | None:
     return result
 
 
+def _sanitize_dependency_refresh(value: object) -> dict[str, Any] | None:
+    """Sanitize the dependency-refresh manifest section, or None.
+
+    None means the run never measured refresh at all — the section is
+    absent or the wrong shape, mirroring
+    `manifest_sections.build_dependency_refresh_manifest`'s own
+    "never requested and no artifact" absence. This is a second,
+    independent pass over what actually landed in the manifest (that
+    builder already reduced the raw run-config/self-report/verification
+    artifacts to this shape), so a status/skip-reason/exit-status outside
+    the producer's own vocabulary reads as "invalid" here exactly as it
+    does there, rather than surviving unchecked past a corrupted or
+    hand-edited manifest file.
+
+    `requested` and `reported` are the only fields the producer always
+    emits. `skipped`+`skipped_reason`+`dirty_files` and `verification`
+    are mutually exclusive verification-outcome shapes (the producer
+    never emits both — a skipped refresh has nothing to verify).
+    `status`+`tracked_files_dirty`+`commands` are, in producer-written
+    manifests, present exactly when the run's own self-report was read
+    (`reported: true`), independent of which verification shape (if any)
+    accompanies them. This defensive pass gates on the group's own key
+    presence rather than re-deriving that invariant from `reported` — a
+    hand-edited manifest pairing `reported: false` with a status group
+    republishes the group as found, evidence over inference.
+
+    Divergence from the producer, mirroring `_sanitize_worktree_hygiene`'s
+    own stricter-not-exact-parity precedent: `directory`/`command`/
+    `disallowed_commands`/`dirty_files` entries go through
+    `_safe_string`/`_safe_strings`' bounded, control-character-free shape
+    instead of the producer's bare length-slice, so an entry the producer
+    would keep verbatim (oversized past 4096 chars, empty, or carrying a
+    control character) reads as `None` (or is dropped, for the list
+    fields) here instead.
+
+    PII: none of these fields carry user-authored prose. `requested`/
+    `reported`/`skipped`/the three booleans in `verification` are plain
+    flags; `skipped_reason`/`status`/`exit_status` are closed,
+    producer-declared vocabularies; `dirty_files` are repository
+    source-tree paths; and `directory`/`command` are the fixed
+    package-manager install commands the orchestrator is allowed to run
+    (`composer install`, `npm ci`, …), not arbitrary reviewed-branch text.
+    """
+    if not isinstance(value, dict):
+        return None
+    requested = value.get("requested")
+    reported = value.get("reported")
+    if not isinstance(requested, bool) or not isinstance(reported, bool):
+        return None
+    result: dict[str, Any] = {"requested": requested, "reported": reported}
+
+    if value.get("skipped") is True:
+        skipped_reason = value.get("skipped_reason")
+        result["skipped"] = True
+        result["skipped_reason"] = (
+            skipped_reason
+            if skipped_reason in _DEPENDENCY_REFRESH_SKIP_REASONS
+            else "invalid"
+        )
+        result["dirty_files"] = _safe_strings(
+            value.get("dirty_files")
+        )[:_MAX_DIRTY_FILES]
+    elif isinstance(value.get("verification"), dict):
+        verification = value["verification"]
+        commands_allowed = verification.get("commands_allowed")
+        tracked_files_dirty = verification.get("tracked_files_dirty")
+        result["verification"] = {
+            "report_present": verification.get("report_present") is True,
+            "commands_allowed": (
+                commands_allowed if isinstance(commands_allowed, bool) else None
+            ),
+            "disallowed_commands": _safe_strings(
+                verification.get("disallowed_commands")
+            )[:_MAX_DEPENDENCY_REFRESH_COMMANDS],
+            "tracked_files_dirty": (
+                tracked_files_dirty
+                if isinstance(tracked_files_dirty, bool) else None
+            ),
+            "verification_failed": (
+                verification.get("verification_failed") is True
+            ),
+        }
+
+    if any(
+        key in value for key in ("status", "tracked_files_dirty", "commands")
+    ):
+        status = value.get("status")
+        result["status"] = (
+            status
+            if isinstance(status, str) and status in _DEPENDENCY_REFRESH_STATUSES
+            else "invalid"
+        )
+        tracked_files_dirty = value.get("tracked_files_dirty")
+        result["tracked_files_dirty"] = (
+            tracked_files_dirty if isinstance(tracked_files_dirty, bool) else None
+        )
+        commands_raw = value.get("commands")
+        commands: list[dict[str, Any]] = []
+        if isinstance(commands_raw, list):
+            for entry in commands_raw[:_MAX_DEPENDENCY_REFRESH_COMMANDS]:
+                if not isinstance(entry, dict):
+                    continue
+                exit_status = entry.get("exit_status")
+                commands.append({
+                    "directory": _safe_string(entry.get("directory")),
+                    "command": _safe_string(entry.get("command")),
+                    "exit_status": (
+                        exit_status
+                        if exit_status in ("ok", "failed") else "invalid"
+                    ),
+                })
+        result["commands"] = commands
+    return result
+
+
+def _sanitize_derived_markdown_outcome(value: object) -> dict[str, Any] | None:
+    """Sanitize one written/expected/status derived-Markdown outcome, or
+    None.
+
+    Shared by `reviewer_markdown` (step 8's per-reviewer
+    `<reviewer>-review.md`) and `findings_markdown` (steps 9/11's
+    `review-findings.md`) — the same written/expected/status vocabulary
+    `manifest_sections._validated_derived_markdown_outcome` validates for
+    both producer-side builders, reached here via
+    `contracts._DERIVED_MARKDOWN_STATUSES` rather than restated, mirroring
+    `_sanitize_worktree_hygiene`'s own producer-vocabulary reuse.
+
+    The shared vocabulary is a deliberate superset for `findings_markdown`:
+    its writers emit only `not_run`/`complete`/`failed`, while `partial`
+    comes solely from `reviewer_markdown`'s materialization path. One
+    family, one vocabulary — accepting `partial` on both is the cost of
+    the one-family design `briefings.py`'s shared status line already
+    established, not a flattened distinction.
+
+    PII: none. `ran`/`status` are booleans and a closed four-value
+    vocabulary; `written`/`expected` are plain non-negative file counts.
+    """
+    if not isinstance(value, dict):
+        return None
+    ran = value.get("ran")
+    written = value.get("written")
+    expected = value.get("expected")
+    status = value.get("status")
+    if (
+        not isinstance(ran, bool)
+        or not isinstance(written, int)
+        or isinstance(written, bool)
+        or written < 0
+        or not isinstance(expected, int)
+        or isinstance(expected, bool)
+        or expected < 0
+        or status not in _DERIVED_MARKDOWN_STATUSES
+        or (ran and status == "not_run")
+        or (not ran and status != "not_run")
+        or (status == "complete" and written != expected)
+    ):
+        return None
+    return {
+        "ran": ran,
+        "written": written,
+        "expected": expected,
+        "status": status,
+    }
+
+
 def _sanitize_summary(value: object) -> dict[str, Any]:
     raw_summary = value if isinstance(value, dict) else {}
     summary = _safe_scalar_map(
@@ -1273,6 +1443,11 @@ _OPTIONAL_SECTION_SANITIZERS: dict[str, Any] = {
     "synthesis_agents": _sanitize_synthesis_agents,
     "usage": _sanitize_usage_snapshot,
     "skipped_steps": _sanitize_skipped_steps,
+    "dependency_refresh": _sanitize_dependency_refresh,
+    # Same sanitizer function for both: one written/expected/status
+    # vocabulary, shared by the producer's own two builders.
+    "reviewer_markdown": _sanitize_derived_markdown_outcome,
+    "findings_markdown": _sanitize_derived_markdown_outcome,
 }
 
 
@@ -1404,6 +1579,9 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         "worktree_hygiene": optional_sections.get("worktree_hygiene"),
         "usage": optional_sections.get("usage"),
         "skipped_steps": optional_sections.get("skipped_steps"),
+        "dependency_refresh": optional_sections.get("dependency_refresh"),
+        "reviewer_markdown": optional_sections.get("reviewer_markdown"),
+        "findings_markdown": optional_sections.get("findings_markdown"),
         "outcome": _sanitize_outcome(value.get("outcome")),
         "availability": safe_availability,
         "warnings": warnings,

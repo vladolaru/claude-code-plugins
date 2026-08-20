@@ -54,7 +54,12 @@ _DEPENDENCY_REFRESH_STATUSES = frozenset({"completed", "partial", "failed"})
 _MAX_DEPENDENCY_REFRESH_COMMANDS = 32
 _MAX_DEPENDENCY_REFRESH_DIRECTORY_CHARS = 200
 _MAX_DEPENDENCY_REFRESH_COMMAND_CHARS = 500
-_REVIEWER_MARKDOWN_STATUSES = frozenset({
+# Shared by both derived-Markdown families (reviewer_markdown, step 8's
+# per-reviewer render; findings_markdown, steps 9/11's review-findings.md
+# render) — the same vocabulary `briefings.py`'s
+# `_derived_markdown_status_line(key=..., label=...)` already treats as
+# one family for its human-facing status line.
+_DERIVED_MARKDOWN_STATUSES = frozenset({
     "not_run", "complete", "partial", "failed",
 })
 _WORKTREE_HYGIENE_STATUSES = frozenset({
@@ -568,17 +573,17 @@ def build_dependency_refresh_manifest(output_dir: str):
     return result
 
 
-def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
-    """Project the script-owned reviewer-Markdown outcome into the manifest.
+def _validated_derived_markdown_outcome(outcome: Any) -> Optional[dict]:
+    """Validate one written/expected/status derived-Markdown outcome.
 
-    Its sibling `findings_markdown` (steps 9 and 11) deliberately has no
-    manifest section yet: it is folded into the availability retrofit that
-    covers this section and dependency_refresh's, so all three gain the
-    same "measured vs. never ran" vocabulary in one change rather than
-    this one copying today's shape a third time.
+    Shared by `build_reviewer_markdown_manifest` (step 8's per-reviewer
+    `<reviewer>-review.md`) and `build_findings_markdown_manifest` (steps
+    9 and 11's `review-findings.md`) — both record the exact same
+    ran/written/expected/status shape in pipeline state
+    (`_record_findings_markdown` in orchestration.py mirrors the shape
+    the reviewer-Markdown seam already used), so one validator covers
+    both families instead of restating the same checks twice.
     """
-    state = read_json_file(output_dir, "pipeline-state.json")
-    outcome = state.get("reviewer_markdown") if state is not None else None
     if not isinstance(outcome, dict):
         return None
 
@@ -594,7 +599,7 @@ def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
         or not isinstance(expected, int)
         or isinstance(expected, bool)
         or expected < 0
-        or status not in _REVIEWER_MARKDOWN_STATUSES
+        or status not in _DERIVED_MARKDOWN_STATUSES
         or (ran and status == "not_run")
         or (not ran and status != "not_run")
         or (status == "complete" and written != expected)
@@ -607,6 +612,26 @@ def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
         "expected": expected,
         "status": status,
     }
+
+
+def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
+    """Project the script-owned reviewer-Markdown outcome into the manifest."""
+    state = read_json_file(output_dir, "pipeline-state.json")
+    outcome = state.get("reviewer_markdown") if state is not None else None
+    return _validated_derived_markdown_outcome(outcome)
+
+
+def build_findings_markdown_manifest(output_dir: str) -> Optional[dict]:
+    """Project the script-owned findings-Markdown outcome into the manifest.
+
+    `reviewer_markdown`'s sibling: `state["findings_markdown"]` records
+    steps 9 and 11's render of `review-findings.md`
+    (`_record_findings_markdown` in orchestration.py), in the same shape
+    this shares a validator with.
+    """
+    state = read_json_file(output_dir, "pipeline-state.json")
+    outcome = state.get("findings_markdown") if state is not None else None
+    return _validated_derived_markdown_outcome(outcome)
 
 
 def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
