@@ -1167,11 +1167,43 @@ def _sync_findings_verdict(findings_path, verdict):
 
     findings["verdict"] = verdict
     try:
-        atomic_write_json(findings_path, findings)
+        # The shared findings writer, not the raw atomic write: this is
+        # an in-channel write, and it must re-stamp the content digest
+        # over what it just changed. Without the refresh this sync — the
+        # LAST write a run performs — would leave the ledger disagreeing
+        # with its own stamp, and finalize's integrity check would report
+        # every ordinary run as modified out of channel.
+        critic_adjustments.write_findings(findings_path, findings)
     except OSError as err:
         return "failed_io", f"could not write review-findings.json: {err}"
 
     return "synced", None
+
+
+def _combine_findings_integrity(before, after):
+    """Reduce the two integrity readings finalize takes to one verdict.
+
+    Two readings, because one cannot answer the question. The check has to
+    run BEFORE finalize's own in-channel writes, or the verdict sync —
+    which re-stamps as it writes — would launder every hand edit made
+    between the critic's apply and finalize, which is exactly the window
+    the field defect lived in. It also has to run AFTER them, or a sync
+    that stopped refreshing the stamp would publish a ledger nothing ever
+    verified. So both run, and the worse reading wins: `intact` is only
+    reported when the ledger verified on both sides of finalize's writes.
+
+    `None` on both sides means there was never a ledger to verify. A
+    ledger that was there before and is gone after (or unreadable after) is
+    NOT nothing-to-verify — something removed the run's own artifact
+    mid-finalize, which is an out-of-channel change like any other.
+    """
+    if before is None and after is None:
+        return None
+    if before == critic_adjustments.INTEGRITY_INTACT and (
+        after == critic_adjustments.INTEGRITY_INTACT
+    ):
+        return critic_adjustments.INTEGRITY_INTACT
+    return critic_adjustments.INTEGRITY_MODIFIED
 
 
 def _orchestrate_step_11(mode, config, state, context, output_dir):
@@ -1225,6 +1257,16 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # current_step`), so a completed step 8 is never re-entered — and the
     # applied_critic_adjustments record in the findings file survives to
     # the final artifact.
+    # Read the ledger's integrity BEFORE finalize writes to it. Every
+    # in-channel write re-stamps the content digest, so the defensive
+    # apply below and the verdict sync further down would both launder an
+    # out-of-channel edit made between the critic's apply and now — the
+    # exact window the field defect lived in, where an orchestrator
+    # rewrote an adjusted finding's title and recommendation by hand with
+    # no ledger entry. The second reading, after those writes, is taken
+    # further down; `_combine_findings_integrity` explains why both.
+    integrity_before = critic_adjustments.verify_findings_integrity(output_dir)
+
     if os.path.isfile(findings_path):
         critic_verdict = state.get("critic_verdict", "unavailable")
         if critic_verdict == "REVISE":
@@ -1386,6 +1428,27 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # below) that would misrepresent what review-verdict.json actually
     # said.
 
+    # The second integrity reading, taken after the last in-channel write
+    # (the verdict sync above) and before the pipeline result is
+    # assembled. The re-render below writes review-findings.md and never
+    # the JSON, so it cannot move this result either way — the order
+    # sync -> verify -> render is what is implemented, and a test pins
+    # that rendering first produces the same answer.
+    findings_integrity = _combine_findings_integrity(
+        integrity_before,
+        critic_adjustments.verify_findings_integrity(output_dir),
+    )
+    if findings_integrity == critic_adjustments.INTEGRITY_MODIFIED:
+        # Detection is the whole mechanism: the edit already happened and
+        # cannot be undone from here, so the run says so out loud rather
+        # than publishing a ledger with invisible hand edits in it.
+        degradation_notes.append(
+            "review-findings.json was modified out of channel — its content "
+            "does not match the digest its last sanctioned write stamped "
+            "(decision-critic-adjustments.json is the only write path for "
+            "changing findings)"
+        )
+
     # Re-render review-findings.md from the FINAL ledger — after the
     # critic adjustments landed and after the Rule 23 verdict sync, so the
     # rendering describes the artifact the run actually publishes. This is
@@ -1429,6 +1492,12 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "verdict_sync": verdict_sync_state,
         "verdict_sync_reason": verdict_sync_reason,
     }
+    # Present only when there was a ledger to check. Absent is a third
+    # answer, not a null-valued one: "no findings file to verify" is a
+    # different statement from "verified, and it was intact", and a
+    # consumer must not be able to read the first as the second.
+    if findings_integrity is not None:
+        pipeline_result["post_apply_integrity"] = findings_integrity
     result_path = os.path.join(output_dir, "pipeline-result.json")
     atomic_write_json(result_path, pipeline_result)
 

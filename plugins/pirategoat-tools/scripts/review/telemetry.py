@@ -58,6 +58,15 @@ MARKER_FILE = ".telemetry-log-path"
 # but the schema they were written against down their existing
 # unsupported path rather than silently reading a field the producer
 # never vouched for.
+#
+# The `outcome` block then gained `post_apply_integrity` (finalize's
+# ledger-tamper check) WITHOUT a further bump, under the Artifact Schemas
+# rule's carve-out: schema 2 was introduced in 1.114.0 and 1.114.0 is
+# still unreleased (the plugin's newest tag is pirategoat-tools/v1.108.0),
+# so no artifact was ever published claiming schema 2 without this key.
+# Bumping to 3 here would publish a compatibility boundary between two
+# shapes that never both existed in the wild. Revisit the moment 1.114.0
+# is tagged: the next `outcome` key after that is a real 2 -> 3 bump.
 EVENT_SCHEMA = 2
 # Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
 # pipeline's _FULL_SHA_RE contract for durable git identity.
@@ -817,6 +826,15 @@ class ReviewTelemetry:
                 "verdict": pipeline_result.get("verdict"),
                 "critic_verdict": pipeline_result.get("critic_verdict"),
                 "verdict_sync": pipeline_result.get("verdict_sync"),
+                # Null here carries a real meaning, matching the
+                # pipeline result's ABSENT field: there was no findings
+                # ledger to verify. The manifest keeps the key present so
+                # the outcome block's shape stays constant across runs;
+                # a cohort query reads null as "not measured", never as
+                # "measured intact".
+                "post_apply_integrity": pipeline_result.get(
+                    "post_apply_integrity"
+                ),
             },
             "availability": {
                 "pipeline": True,

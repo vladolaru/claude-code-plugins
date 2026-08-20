@@ -215,13 +215,17 @@ output['meta']['reconciliation'] = {
     'missing_agents': MISSING_LIST,            # dispatched but no output (crashed/timed out)
 }
 
-# Write the ONE artifact you produce — atomically. review-findings.json has
-# three writers across a run (this one, critic_adjustments.py applying the
-# decision critic's adjustments, and the pipeline's end-of-run verdict sync)
-# and all three share atomic_io, so no writer can leave a torn file for the
-# next one. A plain truncating open() here would be the only exception.
-from review.atomic_io import atomic_write_json
-atomic_write_json(f"{output_dir}/review-findings.json", output)
+# Write the ONE artifact you produce — through the ONE sanctioned write
+# path. review-findings.json has three writers across a run (this one,
+# critic_adjustments.py applying the decision critic's adjustments, and the
+# pipeline's end-of-run verdict sync) and all three call write_findings():
+# it stamps a content digest over the ledger and replaces the file
+# atomically, so no writer can leave a torn file for the next one and the
+# pipeline can tell at finalize whether anything edited the ledger outside
+# this channel. A plain open() or a bare atomic write here would publish a
+# ledger the run then reports as modified out of channel.
+from review.critic_adjustments import write_findings
+write_findings(f"{output_dir}/review-findings.json", output)
 ```
 
 **Do not write any Markdown.** `review-findings.md` is rendered from the JSON
@@ -273,4 +277,4 @@ When an agent has `verdict: "not_applicable"`, it means "these changes are outsi
 
 ## Host Context Banner
 
-If the reconciliation context contains `host_context_banner` with `degraded: true`, copy the full banner object into `review-findings.json` under the `host_context_banner` key (`output['host_context_banner'] = <banner>` before the atomic write). This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it. The renderer prepends the banner's `message` to `review-findings.md` as a blockquote on its own; do not write that blockquote yourself.
+If the reconciliation context contains `host_context_banner` with `degraded: true`, copy the full banner object into `review-findings.json` under the `host_context_banner` key (`output['host_context_banner'] = <banner>` before the `write_findings()` call). This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it. The renderer prepends the banner's `message` to `review-findings.md` as a blockquote on its own; do not write that blockquote yourself.

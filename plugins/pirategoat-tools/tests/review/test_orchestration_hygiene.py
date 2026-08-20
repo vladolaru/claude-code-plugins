@@ -22,6 +22,7 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from review import orchestration as orchestration_mod
+from review.critic_adjustments import write_findings
 from review.orchestration import (
     PROBE_MARKER,
     _capture_worktree_baseline,
@@ -360,8 +361,12 @@ def _seed_step_11(out):
     (out / "review-report.md").write_text("# report")
     # Complete enough for the Markdown renderer step 11 runs over it: a
     # stub would add a render-failure note and defeat the empty-notes
-    # baseline every assertion below depends on.
-    (out / "review-findings.json").write_text(json.dumps({
+    # baseline every assertion below depends on. Written through the
+    # sanctioned findings writer for the same reason — it stands in for
+    # the reconciliator's own in-channel write, and a raw one would seed
+    # the unstamped ledger finalize now reports as an out-of-channel
+    # rewrite.
+    write_findings(str(out / "review-findings.json"), {
         "pr_id": "42",
         "reviewer": "reconciliator",
         "timestamp": "2026-08-13T10:00:00",
@@ -389,7 +394,7 @@ def _seed_step_11(out):
             "confidence_score": 0.9,
             "tool_results_used": None,
         },
-    }))
+    })
     (out / "decision-critic-verdict.json").write_text(
         json.dumps({"verdict": "STAND"})
     )

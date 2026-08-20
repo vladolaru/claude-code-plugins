@@ -121,7 +121,10 @@ _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
 # Lockstep with review/telemetry.py's EVENT_SCHEMA — this is the
 # consumer's expected value for the producer's constant, same pairing as
 # _OBSERVED_READS_SCHEMA below. Bumped 1 -> 2 when the manifest's
-# `outcome` block gained `verdict_sync`.
+# `outcome` block gained `verdict_sync`. It stayed 2 when that block
+# also gained `post_apply_integrity`, under the Artifact Schemas rule's
+# unreleased-version carve-out — see the producer-side comment on
+# EVENT_SCHEMA for the tag evidence.
 _SUPPORTED_MANIFEST_SCHEMA = 2
 _OBSERVED_READS_SCHEMA = 2
 _REPORT_SCHEMA = 2

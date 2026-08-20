@@ -956,7 +956,15 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
     summary = _sanitize_summary(value.get("summary"))
     result = {"summary": summary}
     result.update(
-        _safe_scalar_map(value, ("pipeline_status", "verdict", "verdict_sync"))
+        _safe_scalar_map(
+            value,
+            (
+                "pipeline_status",
+                "verdict",
+                "verdict_sync",
+                "post_apply_integrity",
+            ),
+        )
     )
     critic_verdict = value.get("critic_verdict")
     if isinstance(critic_verdict, str) and critic_verdict in _RETAINED_CRITIC_VALUES:

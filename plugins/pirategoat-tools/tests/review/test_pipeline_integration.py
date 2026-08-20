@@ -14,6 +14,9 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 PLUGIN_ROOT = TESTS_DIR.parent
 _SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
+sys.path.insert(0, str(_SCRIPTS_DIR))
+from review.critic_adjustments import write_findings
+
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.pipeline_process import (
     add_commit as _add_commit,
@@ -1902,11 +1905,15 @@ class TestFullSequenceIntegration:
         # Pre-write verdict, report, and findings as if steps 8-10 ran
         (Path(od) / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (Path(od) / "review-report.md").write_text("# Review\nAll clear.")
-        # A complete ledger, the way ReviewOutputBuilder writes it: step 11
-        # renders review-findings.md from this file, and a stub the renderer
-        # cannot read would degrade the run for a reason no real run has.
-        (Path(od) / "review-findings.json").write_text(
-            json.dumps(_review_json("reconciliator"))
+        # A complete ledger, the way ReviewOutputBuilder writes it, published
+        # through the sanctioned findings writer the way the reconciliator
+        # does: step 11 renders review-findings.md from this file and
+        # verifies its content digest, so a stub the renderer cannot read —
+        # or a raw write carrying no digest — would degrade the run for a
+        # reason no real run has.
+        write_findings(
+            str(Path(od) / "review-findings.json"),
+            _review_json("reconciliator"),
         )
 
         # Step 11: present results

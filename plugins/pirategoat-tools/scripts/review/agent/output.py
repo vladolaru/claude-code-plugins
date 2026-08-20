@@ -51,7 +51,10 @@ from typing import List, Optional, Dict, Any
 # made within the same UNRELEASED version that introduced the current number
 # updates the TypeScript contract in the same commit but does NOT bump. The
 # number states a compatibility guarantee only once released, so bumping
-# here would publish a shape no artifact ever had.
+# here would publish a shape no artifact ever had. That carve-out is why
+# review-findings.json's `content_digest` (the ledger tamper stamp) landed
+# without a bump: schema 1 was introduced in 1.114.0, and 1.114.0 is
+# unreleased — the plugin's newest tag is pirategoat-tools/v1.108.0.
 REVIEW_OUTPUT_SCHEMA = 1
 
 _VALID_SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')

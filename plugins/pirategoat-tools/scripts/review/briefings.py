@@ -1499,6 +1499,17 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"trust this branch."
     )
     actions.append(
+        f"`{od}/decision-critic-adjustments.json` plus this command is the "
+        f"ONLY write path into the findings ledger. Do not hand-edit "
+        f"`{od}/review-findings.json` — not with an editor, not with an "
+        f"ad-hoc `python3 -c`, not to \"just fix\" a title or a "
+        f"recommendation. Every sanctioned write stamps a content digest, "
+        f"and finalize re-checks it: an edit made outside this channel is "
+        f"reported as `post_apply_integrity: \"modified_out_of_channel\"` "
+        f"and degrades the run. A change worth making is worth making as "
+        f"an adjustment entry, where it carries provenance."
+    )
+    actions.append(
         "An applying batch also WITHDRAWS the reconciler's "
         "`narrative_summary` — its adjustments can correct any finding but "
         "not ledger-level prose, so an assessment the batch may have "
@@ -1621,7 +1632,12 @@ def _step_11_present_results(mode, state, context, config, output_dir):
                        "verdict: \"synced\", \"skipped_shape_mismatch\", "
                        "\"failed_io\", or null when the sync was never "
                        "attempted) with verdict_sync_reason for the non-"
-                       "synced states")
+                       "synced states, and post_apply_integrity "
+                       "(\"intact\" or \"modified_out_of_channel\" — "
+                       "whether review-findings.json still matches the "
+                       "digest its last sanctioned write stamped; the key "
+                       "is absent entirely when there was no ledger to "
+                       "verify)")
 
         if mode == "incremental":
             actions.append("Baseline saved. Next run reviews only new commits.")
