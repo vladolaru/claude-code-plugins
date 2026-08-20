@@ -21,17 +21,17 @@ import sys
 from conftest import PIPELINE_SCRIPT_PATH
 
 
-def run_pipeline(*args, cwd, env=None, timeout=None):
+def run_pipeline(*args, cwd, env=None):
     """Invoke review/pipeline.py as a subprocess, isolated to `cwd`.
 
-    `cwd` is a required keyword argument — see module docstring. `env` and
-    `timeout` fold in the variations that used to justify separate,
-    per-class `_run` copies (dependency-refresh env overrides, waiting-gate
-    timeouts) into keyword parameters of this single helper.
+    `cwd` is a required keyword argument — see module docstring. `env`
+    folds in the one variation that used to justify separate, per-class
+    `_run` copies (dependency-refresh env overrides) as a keyword
+    parameter of this single helper.
     """
     cmd = [sys.executable, str(PIPELINE_SCRIPT_PATH), *args]
     return subprocess.run(
-        cmd, capture_output=True, text=True, cwd=str(cwd), env=env, timeout=timeout,
+        cmd, capture_output=True, text=True, cwd=str(cwd), env=env,
     )
 
 
