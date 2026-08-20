@@ -58,6 +58,8 @@ except ImportError:
     from review import critic_adjustments
     from review import manifest_sections
 
+from git_paths import decode_git_c_quoted_path
+
 
 # Reserved marker for pipeline-created probe files. Nothing user-owned
 # may carry it, which is what makes the step-11 residue sweep a safe,
@@ -431,16 +433,30 @@ def _check_worktree_hygiene(output_dir):
             # repo root; `--untracked-files=all` lists every untracked file
             # individually, so a probe inside a directory that did not exist
             # at baseline is visible here instead of being hidden behind a
-            # single "?? newdir/" entry. The path is used exactly as git
-            # printed it: git quotes any path that could carry leading or
-            # trailing whitespace, so stripping cannot rescue a path but can
-            # remap one — it would resolve "probe.go " to a different file.
+            # single "?? newdir/" entry. Git C-quotes any path carrying
+            # bytes that need escaping (non-ASCII under core.quotePath's
+            # default, control characters, quotes, leading/trailing
+            # whitespace), so the printed text is not always the filename:
+            # the shared decoder recovers the on-disk name, with
+            # surrogateescape because an unlink must address the exact
+            # bytes. A malformed quoted line decodes to None and fails
+            # closed — reported as an ordinary entry below, never acted on.
+            # Unquoted lines pass through byte-identical; in particular no
+            # stripping happens, which would remap "probe.go " to a
+            # different file.
             remaining = []
             for line in current:
-                path = line[3:]
-                abs_path = os.path.join(verified_root, path)
+                path, _was_quoted = decode_git_c_quoted_path(
+                    line[3:], errors="surrogateescape"
+                )
+                abs_path = (
+                    os.path.join(verified_root, path)
+                    if path is not None
+                    else None
+                )
                 if (
-                    line[:2] == "??"
+                    path is not None
+                    and line[:2] == "??"
                     and PROBE_MARKER in os.path.basename(path)
                     # Defense in depth, and the one thing that stops a
                     # marker-named symlink to a directory from being

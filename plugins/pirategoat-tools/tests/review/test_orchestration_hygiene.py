@@ -171,6 +171,49 @@ class TestHygieneCheck:
         assert result["probe_residue_removed"] == [f"newpkg/{probe.name}"]
         assert result["status"] == "clean"
 
+    def test_probe_with_git_quoted_path_swept(self, git_repo):
+        """A probe whose porcelain line git C-quotes is still swept.
+
+        Under core.quotePath (default true) any non-ASCII byte makes git
+        print the path as a C-quoted string — '"zz-\\303\\244-..."' — so
+        the printed text is not the filename. The sweep must decode it
+        or the probe silently survives: the quoted string is not a path
+        that exists on disk.
+        """
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        probe = repo / f"zz-ä-{PROBE_MARKER}.txt"
+        probe.write_text("probe")
+        # Test validity guard: this scenario must actually produce a
+        # quoted line, or the test stops exercising the decoder.
+        lines = orchestration_mod._git_status_lines(str(repo))
+        assert any(line.startswith('?? "') for line in lines)
+        result = _check_worktree_hygiene(str(out))
+        assert not probe.exists()
+        assert len(result["probe_residue_removed"]) == 1
+        recorded = result["probe_residue_removed"][0]
+        assert PROBE_MARKER in recorded
+        assert not recorded.startswith('"')
+        assert result["status"] == "clean"
+
+    def test_malformed_quoted_line_fails_closed(self, git_repo, monkeypatch):
+        """A malformed C-quoted line is reported, never acted on.
+
+        Real git output cannot produce one, but the sweep unlinks files,
+        so the decode policy must fail closed: an undecodable path means
+        no delete, and the raw line surfaces as an ordinary entry.
+        """
+        repo, out = git_repo
+        _capture_worktree_baseline(str(out))
+        bad = f'?? "zz-\\q-{PROBE_MARKER}.txt'
+        monkeypatch.setattr(
+            orchestration_mod, "_git_status_lines", lambda root: [bad]
+        )
+        result = _check_worktree_hygiene(str(out))
+        assert result["probe_residue_removed"] == []
+        assert bad in result["new_files"]
+        assert result["status"] == "changed_during_review"
+
     def test_baseline_from_another_repo_never_sweeps(
         self, git_repo, tmp_path, monkeypatch
     ):
