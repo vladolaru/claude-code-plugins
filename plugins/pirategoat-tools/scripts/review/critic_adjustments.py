@@ -81,9 +81,12 @@ CRITIC_VERDICT_FILENAME = "decision-critic-verdict.json"
 APPLIED_IDS_KEY = "applied_critic_adjustments"
 # The rejection half of the same audit trail: entries the orchestrator's
 # spot-check refuted (`rejected: true` + `rejection_reason`) were, before
-# this key existed, visible only in decision-critic-adjustments.json —
-# a file no downstream reader consults — so a rejected decision left no
-# trace in the artifact bot mode, baselines, and metrics actually read.
+# this key existed, visible only in decision-critic-adjustments.json — a
+# file apply_adjustments() reads but nothing downstream consults — so a
+# rejected decision left no trace in review-findings.json, the artifact
+# bot mode, baselines, and metrics actually read. This key carries that
+# trace now; no reader consumes it yet, but the fact is at least on the
+# artifact the readers already open, not only on one they never do.
 # apply_adjustments() writes one record per newly-settled rejection here;
 # see _load_rejected_records() for the read side of the idempotence check.
 REJECTED_ADJUSTMENTS_KEY = "rejected_critic_adjustments"
@@ -657,10 +660,18 @@ def apply_adjustments(output_dir):
     Rejected entries (`rejected: true` + `rejection_reason`) are never
     applied, but a newly-settled rejection still costs one findings write:
     its `adjustment_id`, `action`, target id, and `rejection_reason` land
-    in `REJECTED_ADJUSTMENTS_KEY` so a decision the orchestrator's
-    spot-check refuted has a trace in the artifact bot mode, baselines,
-    and metrics actually read — before this, a rejection was visible only
-    in decision-critic-adjustments.json, which none of them consult.
+    in `REJECTED_ADJUSTMENTS_KEY` — before this, a rejection was visible
+    only in decision-critic-adjustments.json, which apply_adjustments()
+    itself is the only reader of. The audit record now lands on the
+    artifact bot mode, baselines, and metrics actually read; no reader
+    consumes the key yet, but the trace exists on the right artifact for
+    when one does. An entry carrying both `applied: true` and
+    `rejected: true` (a hand-edited adjustments doc) is never audited
+    here: the applied mutation is ground truth, and recording both would
+    publish two contradictory outcomes for one `adjustment_id`. A
+    `rejected: true` entry with a missing or blank `rejection_reason`
+    refuses the whole batch — the reason is the entire payload of the
+    audit record.
 
     Gated on the critic's verdict, checked before anything else is read
     or written: adjustments are a REVISE-only channel (see module
@@ -691,18 +702,24 @@ def apply_adjustments(output_dir):
         return {"status": "no_adjustments", "applied": 0}
     with open(adj_path, "r", encoding="utf-8") as f:
         doc = json.load(f)
+    # Shape-check the WHOLE document before any field inside it, mirroring
+    # read_findings_file()'s FINDINGS_READ_NOT_OBJECT twenty lines below:
+    # a non-object doc ([], "hello", 5 — all valid JSON) is a distinct
+    # diagnosis from "an object with the wrong schema", and collapsing the
+    # two would misreport a shape defect as a content defect (a critic
+    # fixing 'schema' on a payload that isn't even a dict yet gets nowhere).
+    if not isinstance(doc, dict):
+        raise ValueError(f"{ADJUSTMENTS_FILENAME} must be a JSON object")
     # Doc-level shape check, same tier as the 'adjustments' list check right
     # below: schema describes the WHOLE document's contract, not one entry,
-    # so it is validated before any entry is even looked at. `doc.get(...)`
-    # is guarded the same way as the 'adjustments' read below — a doc that
-    # is not an object at all reads as a missing schema, not a crash.
-    schema = doc.get("schema") if isinstance(doc, dict) else None
+    # so it is validated before any entry is even looked at.
+    schema = doc.get("schema")
     if schema != ADJUSTMENTS_SCHEMA:
         raise ValueError(
             f"{ADJUSTMENTS_FILENAME}: 'schema' must be {ADJUSTMENTS_SCHEMA}, "
             f"got {schema!r}"
         )
-    adjustments = doc.get("adjustments") if isinstance(doc, dict) else None
+    adjustments = doc.get("adjustments")
     if not isinstance(adjustments, list):
         raise ValueError(
             f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"
@@ -758,21 +775,35 @@ def apply_adjustments(output_dir):
     seen_targets = {}
     removed_in_batch = {}
     for idx, entry in enumerate(adjustments):
+        label = f"adjustment[{idx}]"
         entry_state = _entry_state(entry, already_recorded)
         if entry_state == _SETTLED:
-            if entry.get("rejected") is True:
+            # `applied is True` wins over a coexisting `rejected: true`:
+            # the applied mutation already landed and IS the ground truth
+            # for this decision, so a rejected flag added to it afterward
+            # (a post-hoc hand edit of the adjustments doc, since the
+            # step-10 briefing never sets both) is tampering with that
+            # doc, not a second decision — auditing it would assert two
+            # contradictory outcomes for one adjustment_id.
+            if entry.get("rejected") is True and entry.get("applied") is not True:
                 existing_id = entry.get("adjustment_id")
                 if not (
                     isinstance(existing_id, str)
                     and existing_id in already_rejected_ids
                 ):
+                    reason = entry.get("rejection_reason")
+                    if not isinstance(reason, str) or not reason.strip():
+                        raise ValueError(
+                            f"{label}: rejected entries must carry a "
+                            f"non-empty 'rejection_reason' — it is the "
+                            f"entire payload of the audit record"
+                        )
                     newly_rejected.append(entry)
             continue
         if entry_state == _CATCH_UP:
             # The findings write landed; only the flag write was lost.
             catch_up.append(entry)
             continue
-        label = f"adjustment[{idx}]"
         action = entry.get("action")
         if action not in ACTIONS:
             raise ValueError(

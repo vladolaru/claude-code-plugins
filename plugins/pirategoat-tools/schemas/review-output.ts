@@ -263,12 +263,18 @@ export interface ReviewOutput {
     // Critic decisions the orchestrator's spot-check refuted (`rejected:
     // true` + `rejection_reason` in decision-critic-adjustments.json).
     // Present after the first batch that settled at least one rejection.
-    // A rejected entry is never applied to `issues`, so this is the ONLY
-    // place a rejection is auditable — the source file it also lives in
-    // is read only by apply_adjustments() itself, never by a downstream
-    // consumer. Cumulative across every batch the ledger absorbs, the
-    // same way applied_critic_adjustments is; apply_adjustments()
-    // dedupes by adjustment_id so a re-run never appends a duplicate.
+    // A rejected entry is never applied to `issues` — the target finding
+    // is never mutated — so this is the ONLY place a rejection is
+    // auditable. The source file it also lives in is read only by
+    // apply_adjustments() itself, never by a downstream consumer.
+    // Cumulative across every batch the ledger absorbs, the same way
+    // applied_critic_adjustments is; apply_adjustments() dedupes by
+    // adjustment_id so a re-run never appends a duplicate. An entry
+    // carrying BOTH `applied: true` and `rejected: true` (a post-hoc hand
+    // edit of decision-critic-adjustments.json) is never recorded here —
+    // the applied mutation is ground truth, and auditing the coexisting
+    // rejected flag would publish two contradictory outcomes for one
+    // adjustment_id.
     rejected_critic_adjustments?: Array<{
         adjustment_id: string;
         action: string | null;

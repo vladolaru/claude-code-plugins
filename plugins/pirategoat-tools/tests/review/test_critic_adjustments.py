@@ -451,6 +451,68 @@ class TestRejectionAudit:
         assert len(records) == 1
         assert records[0]["target_id"] == "bbbb2222"
 
+    @pytest.mark.parametrize("bad_reason", [None, "", "   "])
+    def test_missing_or_blank_rejection_reason_refuses_the_whole_batch(
+        self, tmp_path, bad_reason
+    ):
+        """rejection_reason is the entire payload of the audit record —
+        a rejected entry without one is refused loudly, the same
+        all-or-nothing style an unknown action or invalid severity gets,
+        instead of silently writing an empty string into the ledger."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        entry = {
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+            "rejected": True,
+        }
+        if bad_reason is not None:
+            entry["rejection_reason"] = bad_reason
+        _write_adjustments(tmp_path, [entry])
+        with pytest.raises(ValueError, match="non-empty 'rejection_reason'"):
+            apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert REJECTED_ADJUSTMENTS_KEY not in data  # nothing written
+
+    def test_applied_and_rejected_on_the_same_entry_keeps_the_applied_record_only(
+        self, tmp_path
+    ):
+        """A hand edit that adds `rejected: true` to an already-applied
+        entry is tampering with decision-critic-adjustments.json, not a
+        second decision — the applied mutation is ground truth, and
+        auditing the coexisting rejected flag would publish two
+        contradictory outcomes for one adjustment_id."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+        }])
+        apply_adjustments(str(tmp_path))
+        after_apply = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        assert after_apply["issues"][0]["severity"] == "high"
+        assert REJECTED_ADJUSTMENTS_KEY not in after_apply
+
+        adj_path = tmp_path / "decision-critic-adjustments.json"
+        doc = json.loads(adj_path.read_text())
+        doc["adjustments"][0]["rejected"] = True
+        doc["adjustments"][0]["rejection_reason"] = "hand-edited after apply"
+        adj_path.write_text(json.dumps(doc))
+
+        result = apply_adjustments(str(tmp_path))
+        assert result == {"status": "nothing_pending", "applied": 0}
+        after_second = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        assert after_second == after_apply, (
+            "findings must be byte-equal — no rejection record, applied "
+            "record intact"
+        )
+        assert REJECTED_ADJUSTMENTS_KEY not in after_second
+        assert after_second["applied_critic_adjustments"] == (
+            after_apply["applied_critic_adjustments"]
+        )
+
 
 class TestCrashSafety:
     """Application is recorded on both sides, so no crash point can either
@@ -727,6 +789,26 @@ class TestAdjustmentsSchemaValidation:
         })
         with pytest.raises(ValueError, match="'schema' must be 1"):
             apply_adjustments(str(tmp_path))
+
+    @pytest.mark.parametrize("shape", [[{"id": "aaaa1111"}], "hello", 5])
+    def test_non_object_doc_fails_as_a_shape_error_not_a_schema_error(
+        self, tmp_path, shape
+    ):
+        """[], "hello", and 5 are all valid JSON but not a document with a
+        'schema' field to be wrong about — the diagnosis must name the
+        actual defect (not a JSON object), the same distinction
+        read_findings_file() draws for the findings ledger twenty lines
+        away, rather than misreporting it as a missing/invalid schema."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        (tmp_path / "decision-critic-adjustments.json").write_text(
+            json.dumps(shape)
+        )
+        with pytest.raises(
+            ValueError, match="decision-critic-adjustments.json must be a JSON object"
+        ):
+            apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low"  # nothing written
 
 
 class TestScopeLinePairing:

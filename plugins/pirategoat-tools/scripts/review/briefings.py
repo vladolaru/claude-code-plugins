@@ -1482,7 +1482,10 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"2) Spot-check the claims with `git grep`/`Read`. Mark any adjustment "
         f'the spot-check refutes with `"rejected": true` plus a '
         f"`rejection_reason` — a refuted decision stays visible as rejected, "
-        f"it is not deleted."
+        f"it is not deleted. `rejection_reason` is enforced, not optional: "
+        f"a `rejected: true` entry with a missing or blank reason refuses "
+        f"the whole batch — the reason is the entire audit trail for why "
+        f"the decision did not land."
     )
     actions.append(
         f"3) Carry the surviving adjustments into `{od}/review-findings.json`:"
