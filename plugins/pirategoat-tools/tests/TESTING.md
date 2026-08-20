@@ -1,34 +1,52 @@
 # Testing Framework
 
-Testing for pirategoat-tools uses fast, deterministic code-based graders — no model calls. All tests are pytest-based and run in under 25 seconds.
+Testing for pirategoat-tools uses fast, deterministic code-based graders — no model calls. All tests are pytest-based. The full suite (5106 passed, 24 skipped as of this writing) takes roughly 80-95 seconds on a warm run (measured 2026-08-20, three runs) — up from the ~25s this file once claimed, as the suite grew; re-measure with `time pytest plugins/pirategoat-tools/tests/ -q` rather than trusting a stale number here.
 
 ## Architecture Overview
+
+Audited against `ls -R plugins/pirategoat-tools/tests/` on 2026-08-20 (excludes `__pycache__/` and `.pytest_cache/`, which are build artifacts, not test files). **No `__init__.py` anywhere in this tree** — see [Package namespace rule](#package-namespace-rule) below; `test_pytest_layout.py` enforces it repo-wide.
 
 ```
 tests/
 ├── TESTING.md                        # This file
-├── __init__.py                       # Package marker
 ├── conftest.py                       # Shared fixtures + sys.path setup (SCRIPTS_DIR on path)
+├── test_annotation_evaluation.py     # Deferred-annotation (PEP 649) drift guard for every scripts/ module
+├── test_codex_marketplace.py         # Generated Codex marketplace/plugin.json compatibility tests
+├── test_containment_contract.py      # scripts/containment.py repo-boundary contract tests
+├── test_git_paths.py                 # Shared Git C-quoted path grammar tests
+├── test_pytest_layout.py             # Repo-wide guard: no __init__.py under any plugin's tests/
 ├── review/                           # Tests for scripts/review/
 │   ├── test_pipeline.py              # briefings.py through the pipeline.py compatibility facade
 │   ├── test_pipeline_infra.py        # pipeline.py + pipeline_contract.py routing, state, and CLI
 │   ├── test_pipeline_integration.py  # orchestration.py through the pipeline.py compatibility facade
 │   ├── test_plan_dispatch.py         # Dispatch planning tests
 │   ├── test_context.py               # Review context collection tests
+│   ├── test_agent_registry.py        # agent_registry.json schema/completeness/cross-reference tests
 │   ├── test_agents_status.py         # Agent readiness gate tests
-│   ├── test_workspace_setup.py       # Workspace setup tests
+│   ├── test_atomic_io.py             # Shared atomic-JSON-write primitive tests
+│   ├── test_bootstrap_host_injection.py  # Host Context injection in agent bootstrap
+│   ├── test_criteria_coverage.py     # Every registry triage criterion has a dispatching probe
 │   ├── test_critic.py                # Decision critic tests
-│   ├── test_telemetry.py             # Telemetry logging tests
-│   ├── test_synthesis_lifecycle.py   # Reconciliator/critic lifecycle measurement
-│   ├── test_agent_registry.py        # Agent registry validation tests
+│   ├── test_critic_adjustments.py    # decision-critic-adjustments.json -> review-findings.json writer
+│   ├── test_critic_context.py        # build_critic_context() tests
+│   ├── test_dependency_refresh.py    # Stale dependency-root detection tests
+│   ├── test_orchestration_hygiene.py # Step-3 hygiene baseline + step-11 sweep/usage-capture tests
+│   ├── test_reconciliation_context.py  # reconciliation_context.py tests
 │   ├── test_registry_docs.py         # AGENTS.md registry reference pinned to the registry
+│   ├── test_review_config.py         # Repo-contributed review config loader tests
+│   ├── test_synthesis_lifecycle.py   # Reconciliator/critic lifecycle measurement
+│   ├── test_telemetry.py             # Telemetry logging + manifest-section tests
+│   ├── test_user_settings.py         # Requester-side machine-local settings tests
+│   ├── test_workspace_setup.py       # Workspace setup tests
 │   └── agent/                        # Tests for scripts/review/agent/
 │       ├── test_bootstrap.py         # Bootstrap unit tests (direct imports)
 │       ├── test_bootstrap_integration.py  # Bootstrap integration (smoke + category reps + build_output)
-│       ├── test_scope.py             # Scope filtering unit tests
-│       ├── test_scope_routing.py     # Domain routing (direct function calls + branch freshness)
+│       ├── test_bootstrap_repo_rules.py   # Repo-contributed review-rule injection tests
+│       ├── test_diff_noise_filter.py # Semantic diff noise filter tests
+│       ├── test_ecosystem_integration_reviewer.py  # ecosystem-integration-reviewer compliance test
 │       ├── test_output.py            # ReviewOutputBuilder unit tests
-│       └── test_diff_noise_filter.py # Semantic diff noise filter tests
+│       ├── test_scope.py             # Scope filtering unit tests
+│       └── test_scope_routing.py     # Domain routing (direct function calls + branch freshness)
 ├── linear/                           # Tests for scripts/linear/
 │   ├── test_pipeline.py              # Linear issue pipeline tests
 │   ├── test_pipeline_guidance.py     # Linear pipeline briefing tests
@@ -37,28 +55,57 @@ tests/
 │   ├── test_briefing.py              # Iterative review briefing tests
 │   ├── test_cli.py                   # CLI argument tests
 │   ├── test_codex.py                 # Codex integration tests
+│   ├── test_effort.py                # Adaptive reasoning-effort resolution tests
 │   ├── test_loop.py                  # Review loop tests
 │   └── test_telemetry.py            # Iterative review telemetry tests
 ├── analysis/                         # Tests for scripts/analysis/
+│   ├── test_review_run_metrics.py    # review_run_metrics.py / review_metrics/ package tests
+│   ├── test_review_transcript.py     # Privacy-preserving transcript enrichment tests
+│   ├── test_session_analyzer.py      # Session analyzer tests
 │   ├── test_session_metrics.py       # Session metrics extraction tests
-│   ├── test_usage_snapshot.py        # Durable token-usage snapshot CLI tests
-│   └── test_session_analyzer.py      # Session analyzer tests
+│   └── test_usage_snapshot.py        # Durable token-usage snapshot CLI tests
+├── hosts/                            # Tests for scripts/hosts/
+│   ├── conftest.py                   # Shared host-resolver fixtures
+│   ├── test_chain.py                 # Resolver chain composition tests
+│   ├── test_ecosystem_cache_cli.py   # ecosystem_cache.py CLI tests
+│   ├── test_host_context.py          # host_context.py CLI tests
+│   ├── test_types.py                 # Host-context data type tests
+│   ├── cache/
+│   │   └── test_manager.py           # Ecosystem cache manager tests
+│   ├── fixtures/                     # Resolver test fixtures (.keep only — populated at test time)
+│   └── resolvers/                    # Tests for scripts/hosts/resolvers/
+│       ├── test_docker_compose.py    # docker-compose resolver tests
+│       ├── test_ecosystem_cache.py   # ecosystem-cache resolver tests
+│       ├── test_explicit.py          # .pirategoat/config.json resolver tests
+│       ├── test_plugin_headers.py    # plugin-headers resolver tests
+│       ├── test_sibling.py           # sibling-convention resolver tests
+│       ├── test_vendor.py            # vendor/node_modules library-dep resolver tests
+│       └── test_wp_env.py            # wp-env resolver tests
 ├── commands/                         # Tests for commands/
 │   └── test_commands.py              # Structural + review command tests (incl. pr-update, switch-to)
 ├── grading/                          # Test graders and offline compliance grading
 │   ├── test_graders.py               # Tests for the graders themselves
+│   ├── test_answer_keys.py           # Detection-benchmark answer-key validation against fixtures
+│   ├── test_eval_agent_compliance.py # Offline grading tool's own harness tests
 │   └── eval_agent_compliance.py      # Offline grading tool for review output files
 ├── helpers/                          # Shared test utilities
 │   ├── graders.py                    # Shared grading functions
 │   ├── command_helpers.py            # Shared helpers for command tests
-│   └── context_fixtures.py          # Review context fixture generators
+│   ├── context_fixtures.py          # Review context fixture generators
+│   └── pipeline_process.py           # Shared subprocess helper for invoking review/pipeline.py
 └── fixtures/
     ├── no-code-changes.diff          # Docs-only diff for NO_DOMAIN_FILES tests
     ├── php-source.diff               # PHP source: SQL injection, tight coupling
-    ├── js-ts-source.diff             # JS/TS source: XSS, hardcoded API key
+    ├── php-clean-source.diff         # PHP source with no findings (false-positive probe)
     ├── php-test-only.diff            # PHP tests: missing assertions, over-mocking
+    ├── php-with-ci-config.diff       # PHP source alongside CI config changes
+    ├── js-ts-source.diff             # JS/TS source: XSS, hardcoded API key
+    ├── js-clean-source.diff          # JS source with no findings (false-positive probe)
     ├── js-test-only.diff             # JS tests: snapshot overuse, weak assertions
+    ├── go-source.diff                # Go source domain-routing fixture
+    ├── go-test-only.diff             # Go tests domain-routing fixture
     ├── e2e-test-only.diff            # E2E tests: hard-coded waits
+    ├── ci-config-changes.diff        # CI/toolchain-only config diff
     ├── mixed-code-and-tests.diff     # Cart logic + PHP/JS tests
     ├── wp-hooks-and-i18n.diff        # WP plugin: hooks, i18n, escaping, $wpdb
     └── multi-file-realistic.diff     # 7 files across all 9 domains
@@ -106,7 +153,7 @@ Counts below are **collected** tests, not test methods — parameterized classes
 | `TestVerificationMethodContract` | 6 | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
 | `TestDismissalDisciplineContract` | 3 | Dismissal/mitigation verification applies to ALL findings, not a subset. |
 | `TestCanonicalExecutableBuilderSource` | 4 | Bootstrap is the sole executable `ReviewOutputBuilder` command source, and its envelope carries the producing plugin version (read from the run-config stamp, emitted empty when unknown so the envelope's five-assignment shape stays constant for the transcript analyzers). |
-| `TestTestingDocCounts` | 11 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context, pipeline infrastructure, telemetry) are checked in the documented direction only. |
+| `TestTestingDocCounts` | 15 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context, pipeline infrastructure, telemetry) are checked in the documented direction only. |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
@@ -120,43 +167,54 @@ Also includes `TestBranchFreshness` — 6 integration tests that run `review/age
 
 ###Command Structure Evals (`commands/test_commands.py`)
 
-Deterministic pytest suite that validates structural properties of command files. Shared helpers live in `helpers/command_helpers.py`. No network or model calls.
+Deterministic pytest suite that validates structural properties of command files (59 collected tests across 10 classes). Shared helpers live in `helpers/command_helpers.py`. No network or model calls. `TestAllCommandsStructural` is parameterized over every registered command (`ALL_COMMANDS`) — this is where per-command structural checks for `pr-update.md`, `switch-to.md`, and every other non-review command live today; there is no longer a dedicated `TestPrUpdate`/`TestSwitchTo` class per command.
 
-| Class | What it verifies |
-|---|---|
-| `TestFrontmatter` | All commands exist, have valid YAML frontmatter with `description` field |
-| `TestScriptReferences` | Scripts referenced in commands (`review/pipeline.py`) exist on disk |
-| `TestReviewCommandsReferenceUnifiedScript` | All review commands reference `review/pipeline.py` with correct mode |
-| `TestMarketplaceRegistration` | All review commands are registered in `marketplace.json` |
-| `TestCodeReviewIterative` | `code-review.md` has incremental mode, full/reset option, baseline reference |
-| `TestFullCodeReview` | `full-code-review.md` has full mode |
-| `TestBaselineFileGrading` | `.branch-review-baseline.json` round-trip: valid baseline files pass, incremented counts pass, explicit ranges pass |
-| `TestPrReview` | `pr-review.md` is a thin wrapper delegating to `review/pipeline.py` |
-| `TestUnifiedMission` | All review commands reference the unified pipeline mission |
-| `TestPrUpdate` | `pr-update.md` structural validation: file exists, frontmatter, marketplace registration, not in review commands |
-| `TestSwitchTo` | `switch-to.md` structural validation: file exists, frontmatter, marketplace registration |
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestFrontmatter` | 9 | All review commands have valid YAML frontmatter with a `description` field |
+| `TestAllCommandsStructural` | 21 | Every registered command file exists, has valid frontmatter with a real `description`, and is registered in `marketplace.json`; non-review commands are asserted absent from `ALL_REVIEW_COMMANDS` |
+| `TestScriptReferences` | 4 | Review commands reference `review/pipeline.py`, which exists on disk |
+| `TestReviewCommandsReferenceUnifiedScript` | 3 | Each review command passes the correct `--mode` to `review/pipeline.py` (`pr-review.md` → `pr`, `full-code-review.md` → `full`, `code-review.md` → computed incremental/full) |
+| `TestReviewRunIdentity` | 3 | Review commands link pipeline telemetry to the active Claude session |
+| `TestMarketplaceRegistration` | 3 | Review commands are registered in `marketplace.json` |
+| `TestCodeReviewIterative` | 3 | `code-review.md` has incremental mode, full/reset option, baseline reference |
+| `TestFullCodeReview` | 1 | `full-code-review.md` has full mode |
+| `TestUnifiedMission` | 9 | All review commands reference the unified pipeline mission |
+| `TestDependencyRefreshFlagDocumented` | 3 | Every review command documents the `--refresh-deps` opt-in |
 
 ###ReviewOutputBuilder Unit Tests (`review/agent/test_output.py`)
 
-Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py`. Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, JSON, markdown), and file output.
+Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/output.py` (238 collected tests across 27 classes). Tests cover initialization, issue addition with validation, recommendations, verdict calculation, serialization (dict, markdown), file output, the NOT DIFFED coverage APIs, advisory-channel accounting, and the reconciliator-facing rendering this class grew once `review-findings.md` became a mechanical render of the JSON (Task 7) rather than reconciliator-written prose.
 
-| Class | What it verifies |
-|---|---|
-| `TestBuilderInit` | pr_id/reviewer stored, defaults (empty lists, confidence 0.95), timestamp is ISO |
-| `TestAddIssue` | Returns 8-char ID, stores all fields, severity case-insensitive, invalid severity raises, confidence boundaries, extra kwargs, defaults |
-| `TestAddRecommendation` | Valid priorities store, invalid silently ignored, multiple per bucket |
-| `TestAddPositive` | Stores observations in insertion order |
-| `TestSetFilesReviewed` | Stores count |
-| `TestSetConfidence` | Valid range works, invalid raises ValueError |
-| `TestAddToolResult` | Stores tool names, deduplicates |
-| `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
-| `TestToDict` | All top-level keys, severity counts, meta structure, None for empty fields, `schema: 1` (no retired `version` string), and `plugin_version` resolution — envelope variable first, then the run-config stamp for envelope-bypassing callers, null when neither is readable |
-| `TestToJson` | json.loads(to_json()) roundtrips to match to_dict() |
-| `TestToMarkdown` | Header format, issues grouped by severity, positive observations |
-| `TestSave` | Creates both files, JSON matches to_dict(), return paths correct |
-| `TestAddDeferredReviewed` | Explicit claims of NOT DIFFED files actually read: the path grammar shared with `add_unreviewed()`, add-time membership validation against the deferred sidecar, that a claim never moves the verdict, all-or-nothing batch validation (a mid-batch rejection records nothing, and names every offender), and duplicate/already-recorded dedup semantics |
-| `TestSaveTimeDeferredValidation` | `save()` as the coverage authority: batch-rejected declarations and claims, declare+claim contradictions rejected even without a sidecar, per-save recomputed `meta.unreviewed_autofilled` backfill, and the `UNREVIEWED … / CLAIMED REVIEWED` echo |
-| `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the serialized artifact describe one shape: the identity block (`pr_id`/`reviewer`/`timestamp`/`plugin_version`/`schema`) is declared and emitted, the retired `version` field is gone from both, `schema` is typed `number`, and `plugin_version` is typed nullable |
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestAddIssue` | 16 | Returns 8-char ID, stores all fields, severity case-insensitive, invalid severity raises, confidence boundaries, extra kwargs, defaults |
+| `TestAddClearance` | 6 | `add_clearance()` records auditable "nothing depends on this" claims |
+| `TestAddRecommendation` | 3 | Valid priorities store, invalid silently ignored, multiple per bucket |
+| `TestNonStringFieldCoercion` | 5 | `add_issue()` coerces free-form text fields to strings rather than rejecting non-string input |
+| `TestSetConfidence` | 2 | Valid range works, invalid raises ValueError |
+| `TestAddToolResult` | 1 | Stores tool names, deduplicates |
+| `TestCalculateVerdict` | 9 | All 9 verdict boundaries (approve/comment/request_changes/block) |
+| `TestToDict` | 13 | All top-level keys, severity counts, meta structure, None for empty fields, `schema: 1` (no retired `version` string), and `plugin_version` resolution — envelope variable first, then the run-config stamp for envelope-bypassing callers, null when neither is readable |
+| `TestToMarkdown` | 5 | Header format, issues grouped by severity, positive observations |
+| `TestRenderMarkdown` | 4 | Markdown is a pure function of the canonical JSON dict — same dict in, same Markdown out |
+| `TestMaterializeMarkdown` | 6 | The on-demand `materialize` CLI/function reads a saved JSON and writes its derived Markdown |
+| `TestSave` | 9 | `save()` publishes the review JSON as the single canonical artifact; creates both files, JSON matches to_dict(), return paths correct |
+| `TestFileScopedIssues` | 6 | `line=None` records a first-class file-scoped issue (`scope: "file"`) that still counts toward the verdict — no silent demotion |
+| `TestLineRequired` | 2 | Invalid line values still raise for point defects — the file-scoped path never becomes a way to skip validation |
+| `TestAddObservation` | 4 | `add_observation()` stores file-level notes outside the finding pipeline, in insertion order |
+| `TestAddUnreviewed` | 30 | `add_unreviewed()` declares NOT DIFFED coverage gaps through the builder — path grammar, dedup, and sidecar validation |
+| `TestAddDeferredReviewed` | 25 | Explicit claims of NOT DIFFED files actually read: the path grammar shared with `add_unreviewed()`, add-time membership validation against the deferred sidecar, that a claim never moves the verdict, all-or-nothing batch validation (a mid-batch rejection records nothing, and names every offender), and duplicate/already-recorded dedup semantics |
+| `TestNotApplicable` | 9 | `mark_not_applicable()` produces a `not_applicable` verdict with `skip_reason`, zero findings |
+| `TestAdvisoryChannel` | 23 | Advisory-channel findings are listed but never gate the verdict; entitlement and suppression accounting |
+| `TestSaveTimeDeferredValidation` | 21 | `save()` as the coverage authority: batch-rejected declarations and claims, declare+claim contradictions rejected even without a sidecar, per-save recomputed `meta.unreviewed_autofilled` backfill, and the `UNREVIEWED … / CLAIMED REVIEWED` echo |
+| `TestTypeScriptContractLockstep` | 4 | `schemas/review-output.ts` and the serialized artifact describe one shape: the identity block (`pr_id`/`reviewer`/`timestamp`/`plugin_version`/`schema`) is declared and emitted, the retired `version` field is gone from both, `schema` is typed `number`, and `plugin_version` is typed nullable |
+| `TestNarrativeSummary` | 6 | The reconciliator's overall-state prose (`narrative_summary`) gets a structured home in `to_dict()`/`to_markdown()`, including the withdrawn-summary audit record left by an applying critic adjustment |
+| `TestReconciliationSectionsRender` | 9 | Every section the reconciliator's old hand-written narrative template carried (recommendations, observations, host context banner, `meta.reconciliation`) now has a rendered home |
+| `TestMaterializeFindingsMarkdown` | 5 | One materializer, parameterized — `review-findings.md` and `<reviewer>-review.md` share the same render path, never a second one |
+| `TestAssessmentProvenance` | 6 | `## Assessment` is prose about a ledger that keeps changing after critic adjustments — provenance is pinned so a stale claim can't outlive the finding it described |
+| `TestRemovedByCriticSection` | 4 | The ledger deliberately keeps what the critic took out, rendered as an audit section rather than silently vanishing |
+| `TestRendererFaithfulness` | 5 | Minors that all share one failure mode: the renderer showing content that contradicts what the JSON actually says (e.g. a header claiming a section exists over content that was dropped) |
 
 ###Reconciliation Context Tests (`review/test_reconciliation_context.py`)
 
@@ -229,6 +287,8 @@ Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projecti
 | `TestDependencyRefreshManifest` | 15 | `build_dependency_refresh_manifest()` sanitizes the trusted-branch refresh report — requested/reported flags, the mutually exclusive skipped/verification shapes, and the status/commands group that only appears once the self-report was read. Task 13 added `test_availability_flag_tracks_the_payload`, pinning `availability.dependency_refresh` beside the section — the flag did not exist before this task even though the section itself always did |
 | `TestReviewerMarkdownManifest` | 5 | `build_reviewer_markdown_manifest()` projects step 8's per-reviewer render outcome via the shared `_sanitize_derived_markdown_outcome` validator. Task 13 added `test_availability_flag_tracks_the_payload`, the same before-this-task gap `TestDependencyRefreshManifest` closes |
 | `TestFindingsMarkdownManifest` | 4 | New in Task 13, closing the Task 7 deferral: `build_findings_markdown_manifest()` projects steps 9/11's `review-findings.md` render outcome from `state["findings_markdown"]`, sharing its validator (and its written/expected/status vocabulary) with `TestReviewerMarkdownManifest`'s sibling rather than restating it |
+
+**Historical-data note:** `thoughts_length` was removed from live events (`test_telemetry.py::TestNoFabricatedMeasurements`, elsewhere in this file), but manifests and JSONL logs written before that fix still carry `args.thoughts_length: 0` on every `step`/`pipeline_end` event — a measurement that never happened, published as a measured zero, on every pre-fix run. Nothing reads the key today. Any future historical-cohort work over pre-fix logs must treat `thoughts_length` as unmeasured noise, not data — do not average it, do not use its presence/absence to date a run, and do not infer anything from its value being 0.
 
 ###Synthesis Agent Lifecycle Tests (`review/test_synthesis_lifecycle.py`)
 
@@ -482,7 +542,7 @@ These principles guide all testing decisions. Follow them when adding or modifyi
 
 ### 1. Code-based graders, not model-based
 
-All graders are deterministic Python functions. No LLM calls in the grading path. This keeps tests fast (~20s for the full suite), reproducible (same input = same result), and cheap (no API costs).
+All graders are deterministic Python functions. No LLM calls in the grading path. This keeps tests fast (~80-95s for the full suite as of 2026-08-20 — see the header above), reproducible (same input = same result), and cheap (no API costs).
 
 ### 2. Grade outcomes, not paths
 
@@ -497,6 +557,14 @@ Every grader has tests for both:
 ### 4. Test the graders too
 
 `grading/test_graders.py` validates that grading functions work correctly on synthetic inputs. This prevents false passes (grader too lenient) and false failures (grader too strict). A grader bug could silently undermine the entire eval system.
+
+### 4a. Mutation-verify what a guard claims to pin
+
+Trusting a test that "passed" is not the same as verifying it would fail if the behavior it claims to pin broke. This project mutation-verifies load-bearing guards — deliberately breaking the production code the test claims to cover and confirming the test goes red — before trusting a green run as evidence. Two failure modes from this session's own mutation passes are easy to reproduce if you skip the discipline below:
+
+**Mutate each conjunct in isolation, not the predicate that contains it.** Mutating a compound condition as a whole (e.g. flipping `and` to `or`, or negating the whole expression) only proves that the mutation testing tool found *some* input where the test fails — and a short-circuiting boolean predicate fails on whichever operand it evaluates first, so a conjunct can be completely dead (never actually checked by any assertion) while the containing predicate's mutation still turns a test red for an unrelated reason. This session's `window_closed` conjunct was "verified" this way — the containing predicate's mutation failed a test, so the guard was marked covered — and `window_closed` itself was in fact unpinned; no assertion in the suite depended on its value. Mutate each conjunct of a compound condition on its own (flip just that one clause, leave the rest untouched) and confirm a *specific*, attributable test failure for each.
+
+**A removal guard written from the writer's side is tautological — it must be broken from the reader's side.** When a field, key, or code path is deleted, the natural guard to write is "assert the writer no longer produces X." That guard can never fail once the writer has genuinely stopped writing X, regardless of whether anything downstream still tolerates, silently ignores, or mis-handles X's absence — it proves the deletion happened, not that removing it was safe. Mutate from the reader's side instead: reintroduce X at each site a prior writer used to emit it, one deletion site at a time, and confirm each reintroduction is independently caught. Testing all deletion sites by restoring them together only proves the union is caught, not that any individual site regressing alone would be. This session's projection-allowlist deletion was "verified" by a writer-side check that could never fail by construction — the reader-side reintroduction test was the one that actually mattered, and it had to be run once per deletion site to mean anything.
 
 ### 5. Skip-list resilience
 
@@ -610,6 +678,8 @@ Integration tests run the actual bootstrap script against real `reviewer-protoco
 
 Integration tests that shell out to scripts (which run git commands) use temporary git repos created from `.diff` fixtures via `setup_temp_git_repo()` in `conftest.py`. This isolates tests from the real repository state — dirty working trees, recent commits, and branch structure don't affect results. The scripts resolve their plugin files via their own script path (`os.path.abspath(__file__)`), so changing `cwd` to a temp repo only affects git operations.
 
+**Known latent risk — `tests/review/test_plan_dispatch.py`:** ~40 `build_dispatch_plan()` call sites run with no CWD control at all. This is verified INERT today (the unmocked sites assert only structural facts, not anything CWD-sensitive), but it is the exact same coupling shape a real pipeline test class once had that caused a deleted-user-files incident when a git-mutating call ran against a developer's real working tree. A future assertion added to this file without `monkeypatch.chdir` isolation — or a change that makes `build_dispatch_plan()` itself touch the filesystem beyond reading — can reintroduce that bug class. Isolate new assertions here the same way Principle 9 isolates everything else.
+
 ## How To
 
 ### Add a new reviewer agent
@@ -682,14 +752,15 @@ function_under_test = _mod.function_name
 
 ### Package namespace rule
 
-**Test directories that mirror `scripts/` package names MUST NOT have `__init__.py` files.**
+**No directory under `plugins/*/tests/` may have an `__init__.py` file — not just the ones that mirror `scripts/` package names.**
 
-`scripts/review/` is a Python package (has `__init__.py`). If `tests/review/` also has `__init__.py`, Python caches whichever `review` package it discovers first — making `from review.agent.output import ...` resolve to the wrong package depending on test execution order.
+`scripts/review/` is a Python package (has `__init__.py`). If `tests/review/` also has `__init__.py`, Python caches whichever `review` package it discovers first — making `from review.agent.output import ...` resolve to the wrong package depending on test execution order. That was the original, narrower reasoning. It has since been superseded by a repo-wide rule: this plugin is one of several under `plugins/*/tests/`, and an `__init__.py` at any `tests/` root makes that whole suite importable as the top-level package `tests` — the second plugin's suite then collides with the first's in the same pytest session (`ModuleNotFoundError`, or a conftest registered "under a different name"). `tests/helpers/` and `tests/commands/` have no same-named production package to shadow, but they still must not carry `__init__.py`, because the collision risk is repo-wide, not per-directory.
 
 - `tests/review/` — NO `__init__.py` (would shadow `scripts/review/`)
 - `tests/review/agent/` — NO `__init__.py` (same reason)
-- `tests/helpers/` — HAS `__init__.py` (no collision, unique name)
-- `tests/commands/` — HAS `__init__.py` (no collision)
+- `tests/helpers/`, `tests/commands/`, and every other subdirectory — NO `__init__.py` (repo-wide multi-plugin collision risk, not a per-directory judgment call)
+
+`tests/test_pytest_layout.py::TestMultiPluginCollection` enforces this for the whole repo: it fails if any `__init__.py` exists under any `plugins/*/tests/` tree, and it pins the root `pytest.ini`'s `--import-mode=importlib` setting that makes namespace packages (no `__init__.py` required) work correctly for path-derived, cross-plugin-unique module names.
 
 ### Importing from helpers/
 

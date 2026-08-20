@@ -1937,6 +1937,10 @@ class TestTestingDocCounts:
          "review/test_telemetry.py", "partial"),
         ("###Synthesis Agent Lifecycle Tests",
          "review/test_synthesis_lifecycle.py", "full"),
+        ("###ReviewOutputBuilder Unit Tests",
+         "review/agent/test_output.py", "full"),
+        ("###Command Structure Evals",
+         "commands/test_commands.py", "full"),
     )
     FULL_TABLES = tuple(row for row in TABLES if row[2] == "full")
 
