@@ -2470,7 +2470,9 @@ class TestReconciliationSectionsRender:
     def test_no_recommendations_renders_no_section(self):
         assert "## Recommendations" not in render_markdown(self._findings())
 
-    def test_degraded_host_context_banner_leads_the_document(self):
+    def test_degraded_host_context_banner_leads_the_body(self):
+        """Directly under the title — the H1 stays first so one grader rule
+        covers every rendering (see TestRendererFaithfulness)."""
         data = self._findings(host_context_banner={
             "degraded": True,
             "reason": "partial_unresolved",
@@ -2478,11 +2480,12 @@ class TestReconciliationSectionsRender:
             "unresolved": [{"name": "woocommerce", "reason": "not found"}],
         })
         rendered = render_markdown(data)
-        assert rendered.startswith(
+        assert rendered.startswith("# Reconciliator Review - PR #9\n\n")
+        assert (
             "> **⚠ Host Context Banner:** "
             "WooCommerce source was not resolved.\n\n"
-        )
-        assert "# Reconciliator Review" in rendered
+            "## Executive Summary"
+        ) in rendered
 
     def test_undegraded_banner_is_not_rendered(self):
         data = self._findings(host_context_banner={
@@ -2591,3 +2594,193 @@ class TestMaterializeFindingsMarkdown:
             assert result.returncode == 0, result.stderr
             assert "security-review.md" in result.stdout
             assert not Path(d, "review-findings.md").exists()
+
+
+# =============================================================================
+# TestAssessmentProvenance
+# =============================================================================
+
+
+class TestAssessmentProvenance:
+    """`## Assessment` is prose about a ledger that keeps changing.
+
+    The reconciler writes it; the decision critic then mutates the findings
+    it summarizes. The critic's vocabulary reaches every issue but no
+    ledger-level prose, so a withdrawn or demoted finding described in the
+    Assessment survives every correction channel — the rendered file
+    contradicting the list printed beneath it.
+    """
+
+    @staticmethod
+    def _findings(**extra):
+        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
+        b.add_issue("low", "Minor problem", "a.py", "d", "r", line=4)
+        data = b.to_dict()
+        data.update(extra)
+        return data
+
+    def test_prose_carries_a_provenance_marker(self):
+        data = self._findings(narrative_summary="All clear on the whole.")
+        rendered = render_markdown(data)
+        assert "## Assessment\n\nAll clear on the whole." in rendered
+        assert "reconciler-authored" in rendered.lower()
+        assert "not adjusted by the decision critic" in rendered.lower()
+
+    def test_withdrawn_summary_renders_the_withdrawal_notice(self):
+        data = self._findings(
+            narrative_summary=None,
+            applied_critic_adjustments=["a1b2c3"],
+        )
+        rendered = render_markdown(data)
+        assert "## Assessment" in rendered
+        assert "withdrawn" in rendered.lower()
+        assert "critic adjustments applied" in rendered.lower()
+        assert "see the report" in rendered.lower()
+
+    def test_no_summary_and_no_adjustments_renders_no_assessment(self):
+        assert "## Assessment" not in render_markdown(self._findings())
+
+    def test_an_empty_adjustment_list_is_not_a_withdrawal(self):
+        """A ledger the critic reached but never changed said nothing about
+        the assessment — the reconciler simply wrote none."""
+        data = self._findings(
+            narrative_summary=None, applied_critic_adjustments=[],
+        )
+        assert "## Assessment" not in render_markdown(data)
+
+    def test_surviving_prose_beside_adjustments_still_renders_as_prose(self):
+        """Defensive: an older ledger patched before the invalidation
+        existed keeps its prose rather than being retroactively hidden."""
+        data = self._findings(
+            narrative_summary="Legacy prose.",
+            applied_critic_adjustments=["a1b2c3"],
+        )
+        rendered = render_markdown(data)
+        assert "Legacy prose." in rendered
+        assert "withdrawn" not in rendered.lower()
+
+
+# =============================================================================
+# TestRemovedByCriticSection
+# =============================================================================
+
+
+class TestRemovedByCriticSection:
+    """The ledger deliberately keeps what the critic took out. A reading
+    copy that silently drops it hides the audit trail the JSON preserved."""
+
+    @staticmethod
+    def _with_removed(removed):
+        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
+        b.add_issue("low", "Kept", "a.py", "d", "r", line=4)
+        data = b.to_dict()
+        data["removed_by_critic"] = removed
+        return data
+
+    def test_removed_findings_render_with_their_rationale(self):
+        rendered = render_markdown(self._with_removed([{
+            "id": "dead1234", "severity": "high", "title": "Phantom leak",
+            "file": "b.py", "line": 12, "description": "d",
+            "recommendation": "r",
+            "critic_adjustment": {
+                "action": "remove",
+                "rationale": "The guard on line 9 already prevents it.",
+            },
+        }]))
+        assert "## Removed by the Decision Critic" in rendered
+        assert "Phantom leak" in rendered
+        assert "The guard on line 9 already prevents it." in rendered
+        assert "`b.py`" in rendered
+
+    def test_a_removal_without_rationale_still_lists_the_finding(self):
+        rendered = render_markdown(self._with_removed([{
+            "id": "dead1234", "severity": "high", "title": "Phantom leak",
+            "file": "b.py", "line": 12, "description": "d",
+            "recommendation": "r",
+        }]))
+        assert "Phantom leak" in rendered
+        assert "no rationale recorded" in rendered
+
+    def test_no_removals_renders_no_section(self):
+        assert "Removed by the Decision Critic" not in render_markdown(
+            self._with_removed([])
+        )
+
+    def test_removed_findings_do_not_leak_into_the_severity_sections(self):
+        rendered = render_markdown(self._with_removed([{
+            "id": "dead1234", "severity": "high", "title": "Phantom leak",
+            "file": "b.py", "line": 12, "description": "d",
+            "recommendation": "r",
+        }]))
+        assert "## High Issues" not in rendered
+
+
+# =============================================================================
+# TestRendererFaithfulness
+# =============================================================================
+
+
+class TestRendererFaithfulness:
+    """Minors that all share one failure mode: the renderer showing a
+    heading whose content it dropped, or dropping content outright."""
+
+    @staticmethod
+    def _base():
+        b = ReviewOutputBuilder(pr_id="9", reviewer="reconciliator")
+        b.add_issue("low", "T", "a.py", "d", "r", line=4)
+        return b.to_dict()
+
+    def test_multiline_banner_quotes_every_line(self):
+        """The banner is hand-copied by an agent; an LLM reformat that adds
+        a newline would drop the rest of the message out of the blockquote."""
+        data = self._base()
+        data["host_context_banner"] = {
+            "degraded": True, "reason": "partial_unresolved",
+            "message": "WooCommerce was not resolved.\nReviewer claims are "
+                       "scoped accordingly.",
+            "unresolved": [],
+        }
+        rendered = render_markdown(data)
+        assert "> **⚠ Host Context Banner:** WooCommerce was not resolved.\n" in rendered
+        assert "> Reviewer claims are scoped accordingly.\n" in rendered
+
+    def test_banner_follows_the_h1_so_the_document_still_starts_with_it(self):
+        """`grade_review_markdown` requires the file to start with '# ' —
+        one rule for every rendering, and prominence survives either way."""
+        data = self._base()
+        data["host_context_banner"] = {
+            "degraded": True, "reason": "fully_unavailable",
+            "message": "Nothing resolved.", "unresolved": [],
+        }
+        rendered = render_markdown(data)
+        assert rendered.startswith("# Reconciliator Review - PR #9\n")
+        assert "> **⚠ Host Context Banner:** Nothing resolved." in rendered
+        assert rendered.index("Host Context Banner") < rendered.index(
+            "## Executive Summary"
+        )
+
+    def test_unknown_recommendation_priorities_render_rather_than_vanish(self):
+        data = self._base()
+        data["recommendations"] = {
+            "immediate": ["Fix the escaping"],
+            "urgent": ["Roll back the migration"],
+        }
+        rendered = render_markdown(data)
+        assert "## Recommendations" in rendered
+        assert "- Fix the escaping" in rendered
+        assert "**Urgent:**" in rendered
+        assert "- Roll back the migration" in rendered
+
+    def test_only_unknown_priorities_still_render_a_populated_section(self):
+        data = self._base()
+        data["recommendations"] = {"urgent": ["Roll back the migration"]}
+        rendered = render_markdown(data)
+        assert "## Recommendations" in rendered
+        assert "- Roll back the migration" in rendered
+
+    def test_a_header_is_never_emitted_over_dropped_content(self):
+        """Every priority empty is not a section — the old guard used
+        `any(values)` and could emit a header with nothing beneath it."""
+        data = self._base()
+        data["recommendations"] = {"immediate": [], "urgent": []}
+        assert "## Recommendations" not in render_markdown(data)

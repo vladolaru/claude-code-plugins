@@ -20,6 +20,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
+    WITHDRAWN_SUMMARY_KEY,
     REFUSAL_EXIT_CODE,
     REFUSAL_NO_VERDICT,
     REFUSAL_VERDICT_NOT_REVISE,
@@ -1569,3 +1570,153 @@ class TestStepElevenRerendersFindingsMarkdown:
 
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["report_path"] == str(tmp_path / "review-findings.md")
+
+
+class TestNarrativeSummaryInvalidation:
+    """Prose that summarizes a mutable ledger cannot be corrected, only
+    withdrawn.
+
+    The critic's vocabulary reaches every field of every issue, but
+    `narrative_summary` is ledger-level prose no adjustment can address. A
+    demoted critical still described as "one CRITICAL blocker" survives the
+    whole correction pipeline and renders directly above the list that
+    contradicts it. The pipeline cannot re-derive the prose (it is LLM
+    output), so an applying batch withdraws it — auditably.
+    """
+
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
+    _SUMMARY = "One CRITICAL blocker: the payment path is unescaped."
+
+    def _seed(self, tmp_path, severity="critical"):
+        _write_findings(
+            tmp_path, [_issue("aaaa1111", severity)],
+            narrative_summary=self._SUMMARY,
+        )
+
+    def test_an_applying_batch_withdraws_the_summary(self, tmp_path):
+        self._seed(tmp_path)
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }])
+        result = apply_adjustments(tmp_path)
+        assert result["applied"] == 1
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["narrative_summary"] is None
+
+    def test_the_withdrawn_text_stays_auditable(self, tmp_path):
+        self._seed(tmp_path)
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }])
+        apply_adjustments(tmp_path)
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        withdrawn = data[WITHDRAWN_SUMMARY_KEY]
+        assert len(withdrawn) == 1
+        assert withdrawn[0]["text"] == self._SUMMARY
+        # Tied to the exact decisions that caused it, the same way each
+        # touched finding names the action that touched it.
+        assert withdrawn[0]["withdrawn_by"] == data[APPLIED_IDS_KEY]
+
+    def test_a_batch_that_applies_nothing_leaves_the_summary_alone(
+        self, tmp_path
+    ):
+        self._seed(tmp_path)
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "r",
+            "rejected": True, "rejection_reason": "spot-check refuted it",
+        }])
+        result = apply_adjustments(tmp_path)
+        assert result["applied"] == 0
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["narrative_summary"] == self._SUMMARY
+        assert WITHDRAWN_SUMMARY_KEY not in data
+
+    def test_a_refused_call_leaves_the_summary_alone(self, tmp_path):
+        self._seed(tmp_path)
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "r",
+        }])
+        _write_critic_verdict(tmp_path, "STAND")
+        assert apply_adjustments(tmp_path)["status"] == "refused"
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["narrative_summary"] == self._SUMMARY
+
+    def test_no_summary_to_withdraw_records_no_withdrawal(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "critical")])
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "r",
+        }])
+        apply_adjustments(tmp_path)
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["narrative_summary"] is None
+        assert WITHDRAWN_SUMMARY_KEY not in data
+
+    def test_a_second_batch_appends_rather_than_overwrites(self, tmp_path):
+        """Two rounds of adjustments are two withdrawals — the first must
+        not be erased by the second."""
+        self._seed(tmp_path)
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "r",
+        }])
+        apply_adjustments(tmp_path)
+        # A second reconciliation pass writes fresh prose, then a second
+        # critic round adjusts again.
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        data["narrative_summary"] = "Second assessment."
+        atomic_write_json(str(tmp_path / "review-findings.json"), data)
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r2",
+        }])
+        apply_adjustments(tmp_path)
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        texts = [entry["text"] for entry in data[WITHDRAWN_SUMMARY_KEY]]
+        assert texts == [self._SUMMARY, "Second assessment."]
+
+
+class TestStepElevenWithdrawsContradictedProse:
+    """The reproduced defect, end to end.
+
+    A critical finding described in the Assessment, demoted by the critic:
+    the rendered Markdown used to print the demotion in its issue list and
+    the stale "one CRITICAL blocker" claim directly above it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_cwd(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+    def test_demoted_finding_is_not_still_described_as_critical(
+        self, tmp_path
+    ):
+        issue = _issue("aaaa1111", "critical")
+        issue["title"] = "Unescaped payment path"
+        _write_findings(
+            tmp_path, [issue],
+            narrative_summary=(
+                "One CRITICAL blocker: the payment path is unescaped."
+            ),
+        )
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }])
+        _write_critic_verdict(tmp_path, "REVISE")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "COMMENT"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        rendered = (tmp_path / "review-findings.md").read_text()
+        assert "## Low Issues" in rendered
+        assert "CRITICAL blocker" not in rendered
+        assert "withdrawn" in rendered.lower()

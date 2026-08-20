@@ -66,6 +66,24 @@ FINDINGS_FILENAME = "review-findings.json"
 CRITIC_VERDICT_FILENAME = "decision-critic-verdict.json"
 APPLIED_IDS_KEY = "applied_critic_adjustments"
 
+# Where a withdrawn `narrative_summary` goes. The adjustment vocabulary
+# addresses issues — severity, title, scope, the fields of one finding —
+# and deliberately cannot address ledger-level prose. That leaves the
+# reconciler's assessment as the one part of the artifact a critic round
+# can invalidate but not correct: "one CRITICAL blocker" stays written
+# above a list where the critical has just been demoted to low.
+#
+# The pipeline cannot re-derive that prose (it is LLM output, not a
+# projection of the findings), so an applying batch withdraws it rather
+# than leaving it to contradict the ledger it summarizes. Withdrawn, not
+# deleted: the text moves here beside the ids of the decisions that
+# withdrew it, the same way a removed finding moves into
+# `removed_by_critic` carrying the action that removed it. A list, because
+# a second reconciliation-plus-critic round is a second withdrawal and
+# must not erase the first.
+WITHDRAWN_SUMMARY_KEY = "withdrawn_narrative_summary"
+NARRATIVE_SUMMARY_KEY = "narrative_summary"
+
 # The one verdict that sanctions applying adjustments. Everything else —
 # STAND, ESCALATE, an unrecognized string, a missing file — refuses.
 # Literal, not imported: critic.py's CRITIC_VERDICTS is the canonical
@@ -335,6 +353,33 @@ def pending_count(output_dir):
     return count
 
 
+def _withdraw_narrative_summary(findings, recorded_ids):
+    """Retract prose the applied batch may have just contradicted.
+
+    Called only when a batch actually applied, so a refused, settled, or
+    fully rejected call leaves the assessment exactly as the reconciler
+    wrote it — nothing changed, nothing to withdraw.
+
+    A ledger with no summary records no withdrawal: there is no text to
+    keep auditable, and fabricating an empty entry would claim a retraction
+    that never happened.
+    """
+    prior = findings.get(NARRATIVE_SUMMARY_KEY)
+    findings[NARRATIVE_SUMMARY_KEY] = None
+    if not isinstance(prior, str) or not prior.strip():
+        return
+    withdrawn = findings.get(WITHDRAWN_SUMMARY_KEY)
+    if not isinstance(withdrawn, list):
+        withdrawn = []
+    withdrawn.append({
+        "text": prior,
+        # The exact decisions that cost the assessment its standing, so the
+        # retraction can be read back against the batch that caused it.
+        "withdrawn_by": list(recorded_ids),
+    })
+    findings[WITHDRAWN_SUMMARY_KEY] = withdrawn
+
+
 def apply_adjustments(output_dir):
     """Apply pending critic adjustments once; return a result dict.
 
@@ -514,6 +559,7 @@ def apply_adjustments(output_dir):
     if applied:
         _recount_summary(findings, issues)
         findings[APPLIED_IDS_KEY] = recorded_ids
+        _withdraw_narrative_summary(findings, recorded_ids)
         if newly_allocated:
             # Ids only — the applied flags belong after the findings write.
             atomic_write_json(adj_path, doc)

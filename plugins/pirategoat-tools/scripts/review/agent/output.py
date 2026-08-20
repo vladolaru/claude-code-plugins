@@ -156,17 +156,27 @@ def render_markdown(data: Dict) -> str:
     """
     md = []
 
-    # Degraded host context leads the document. Reviewers' claims were
-    # scoped by this banner's presence, so a reader must meet it before
-    # any finding — the same position the reconciliator's hand-written
-    # narrative put it in, now rendered from the artifact's own field.
+    md.append(f"# {data['reviewer'].title()} Review - PR #{data['pr_id']}\n\n")
+
+    # Degraded host context, directly under the title: reviewers' claims
+    # were scoped by this banner's presence, so a reader must meet it
+    # before any finding. It follows the H1 rather than preceding it
+    # because every rendering this function produces is graded on starting
+    # with "# " (tests/helpers/graders.py) — one rule for one renderer, and
+    # the first thing after the title is prominent enough.
+    #
+    # Every line carries the quote marker, not just the first: the banner
+    # message is hand-copied through an agent, and a reformat that
+    # introduces a newline would otherwise drop the remainder out of the
+    # blockquote entirely.
     banner = data.get('host_context_banner')
     if isinstance(banner, dict) and banner.get('degraded'):
-        md.append(
-            f"> **\u26a0 Host Context Banner:** {banner.get('message', '')}\n\n"
-        )
-
-    md.append(f"# {data['reviewer'].title()} Review - PR #{data['pr_id']}\n\n")
+        message = _coerce_text(banner.get('message', ''))
+        lines = message.split("\n") or [""]
+        md.append(f"> **\u26a0 Host Context Banner:** {lines[0]}\n")
+        for line in lines[1:]:
+            md.append(f"> {line}\n")
+        md.append("\n")
     md.append("## Executive Summary\n\n")
     md.append(f"**Verdict:** {data['verdict'].upper()}\n")
     md.append(f"**Total Issues:** {data['summary']['total_issues']}\n\n")
@@ -255,9 +265,30 @@ def render_markdown(data: Dict) -> str:
     # The producer's own reading of the change as a whole. Nothing else in
     # this artifact carries it, so without this section a mechanical render
     # would drop the one judgment a list of findings cannot express.
+    #
+    # It is also the one part of this document the decision critic cannot
+    # correct: its adjustment vocabulary addresses issues, and this is
+    # ledger-level prose. So an applying batch WITHDRAWS it
+    # (critic_adjustments.py) rather than leaving a stale claim rendered
+    # above the list that contradicts it, and this renders the withdrawal
+    # instead of silently dropping the section — an absent Assessment and a
+    # retracted one are different facts. Prose that survived a critic round
+    # untouched still renders as prose: that is the STAND case, and the
+    # marker below says exactly whose words they are.
     if data.get('narrative_summary'):
         md.append("## Assessment\n\n")
         md.append(f"{data['narrative_summary']}\n\n")
+        md.append(
+            "*Reconciler-authored assessment, not adjusted by the decision "
+            "critic.*\n\n"
+        )
+    elif data.get('applied_critic_adjustments'):
+        md.append("## Assessment\n\n")
+        md.append(
+            "The producer's assessment was withdrawn when critic "
+            "adjustments applied; see the report for the current "
+            "assessment.\n\n"
+        )
 
     # Issues — every severity that counts toward total_issues must render,
     # or the Markdown claims findings it doesn't show.
@@ -286,16 +317,29 @@ def render_markdown(data: Dict) -> str:
     # Markdown before this: add_recommendation() wrote them to the JSON
     # and nothing ever read them back out.
     recommendations = data.get('recommendations')
-    if isinstance(recommendations, dict) and any(recommendations.values()):
-        md.append("## Recommendations\n\n")
-        for priority in ('immediate', 'important', 'suggestions'):
+    if isinstance(recommendations, dict):
+        # The three known priorities render first and in their meaningful
+        # order; anything else the producer wrote renders after, labelled
+        # by its own key. Rendering only the known three would let an
+        # unexpected priority print a heading with its content dropped
+        # underneath — a document that shows a section it did not show.
+        known = ('immediate', 'important', 'suggestions')
+        ordered = list(known) + [
+            key for key in recommendations if key not in known
+        ]
+        groups = []
+        for priority in ordered:
             entries = recommendations.get(priority) or []
             if not entries:
                 continue
-            md.append(f"**{priority.title()}:**\n\n")
-            for entry in entries:
-                md.append(f"- {entry}\n")
-            md.append("\n")
+            groups.append(f"**{priority.title()}:**\n\n")
+            groups.extend(f"- {entry}\n" for entry in entries)
+            groups.append("\n")
+        # The header is emitted only once something will actually appear
+        # beneath it.
+        if groups:
+            md.append("## Recommendations\n\n")
+            md.extend(groups)
 
     # Clearances — absence claims with their verification method
     if data.get('clearances'):
@@ -305,6 +349,31 @@ def render_markdown(data: Dict) -> str:
             md.append(f"  - Method: {c['method']}\n")
             if c.get('evidence'):
                 md.append(f"  - Evidence: {c['evidence']}\n")
+        md.append("\n")
+
+    # What the critic took out. The ledger deliberately moves a removed
+    # finding into `removed_by_critic` rather than deleting it, so the
+    # decision stays auditable; a reading copy that dropped the section
+    # would hide exactly the record the JSON went out of its way to keep.
+    removed = data.get('removed_by_critic')
+    if isinstance(removed, list) and removed:
+        md.append("## Removed by the Decision Critic\n\n")
+        for entry in removed:
+            if not isinstance(entry, dict):
+                continue
+            adjustment = entry.get('critic_adjustment')
+            rationale = (
+                adjustment.get('rationale')
+                if isinstance(adjustment, dict) else None
+            )
+            location = f"`{entry.get('file')}`"
+            if entry.get('line'):
+                location += f" line {entry['line']}"
+            md.append(
+                f"- **{entry.get('title')}** ({entry.get('severity')}) — "
+                f"{location} — "
+                f"{rationale or 'no rationale recorded'}\n"
+            )
         md.append("\n")
 
     # Positive
@@ -1137,8 +1206,9 @@ class ReviewOutputBuilder:
         """Publish the review JSON — the single canonical artifact.
 
         Markdown is derived from this JSON on demand (render_markdown /
-        materialize_markdown; reconciliation materializes it for humans at
-        end of run), so there is no artifact pair to keep consistent: an
+        materialize_markdown; the pipeline materializes it for humans at
+        the step-8 readiness gate), so there is no artifact pair to keep
+        consistent: an
         interrupted re-save simply leaves the previous complete JSON
         visible, the normal semantics of an atomic single-file write.
         """

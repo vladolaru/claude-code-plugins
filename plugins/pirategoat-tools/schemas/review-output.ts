@@ -190,6 +190,14 @@ export interface ReviewOutput {
     // sentences the list of findings cannot express. Always present, null
     // when the producer said nothing. Rendered as the "## Assessment"
     // section of the derived Markdown.
+    //
+    // Also null when a decision-critic batch WITHDREW it: the critic's
+    // adjustment vocabulary addresses issues, not ledger-level prose, so an
+    // assessment the applied batch may have contradicted is retracted
+    // rather than corrected. The retracted text moves to
+    // withdrawn_narrative_summary below; null + a non-empty
+    // applied_critic_adjustments is what the renderer reads as "withdrawn"
+    // rather than "never written".
     narrative_summary: string | null;
 
     // Clearances (optional) — auditable absence claims ("nothing depends on
@@ -234,8 +242,31 @@ export interface ReviewOutput {
 
     // Host context banner — present only on review-findings.json, copied
     // through by the reconciliator when upstream host discovery was
-    // degraded. Rendered as a leading blockquote.
+    // degraded. Rendered as a blockquote directly under the H1.
     host_context_banner?: HostContextBanner | null;
+
+    // Decision-critic provenance — present only on review-findings.json,
+    // and only once critic_adjustments.py has applied a batch.
+
+    // Ids of the adjustments this ledger already contains. Present after
+    // the first applied batch; its non-emptiness beside a null
+    // narrative_summary is what distinguishes a withdrawn assessment from
+    // one the producer never wrote.
+    applied_critic_adjustments?: string[];
+
+    // Findings the critic removed. Moved out of `issues` rather than
+    // deleted, each carrying the `critic_adjustment` record that removed
+    // it, so the decision stays auditable. Rendered as the
+    // "## Removed by the Decision Critic" section.
+    removed_by_critic?: Issue[];
+
+    // Assessments retracted by an applying batch, oldest first. Each entry
+    // keeps the prose and the ids of the decisions that cost it its
+    // standing — withdrawn, never silently dropped.
+    withdrawn_narrative_summary?: Array<{
+        text: string;
+        withdrawn_by: string[];
+    }>;
 }
 
 /**

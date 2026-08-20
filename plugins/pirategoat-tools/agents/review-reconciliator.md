@@ -170,6 +170,12 @@ builder.add_issue(
 # The overall-state prose. Two or three sentences answering "what is the
 # overall state of this code?" — the one judgment a list of findings cannot
 # express. It renders as the "## Assessment" section.
+#
+# Keep finding-level claims OUT of it wherever you can state the same thing
+# about the change as a whole. The decision critic can adjust any finding
+# but cannot adjust this prose, so an assessment that names a severity or a
+# specific finding is retracted wholesale when the critic adjusts anything
+# — the pipeline withdraws it rather than let it contradict the ledger.
 builder.set_narrative_summary(
     "OVERALL_ASSESSMENT_2_TO_3_SENTENCES"
 )
@@ -259,7 +265,7 @@ Full quality metrics (input counts, grouping, false positives, out-of-scope, mer
 
 ## Handling Not-Applicable Agents
 
-When an agent has `verdict: "not_applicable"`, it means "these changes are outside my domain" — the agent abstained, it did not review. In your return signal and narrative:
+When an agent has `verdict: "not_applicable"`, it means "these changes are outside my domain" — the agent abstained, it did not review. In your return signal and in the findings JSON:
 
 - **Do NOT count not-applicable agents toward approval confidence.** They did not review the code.
 - **DO report them separately** so the orchestrator knows how many agents actually reviewed vs. abstained.

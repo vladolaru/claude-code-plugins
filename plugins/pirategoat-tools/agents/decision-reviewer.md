@@ -151,7 +151,13 @@ Write your complete analysis to `<Output Directory>/decision-critic-findings.md`
 adjustment you recommend must additionally be recorded in
 `<Output Directory>/decision-critic-adjustments.json` so the pipeline can
 carry it into `review-findings.json` — a recommendation that exists only
-as prose cannot reach the machine-readable ledger:
+as prose cannot reach the machine-readable ledger.
+
+The channel reaches findings, not ledger-level prose: every field of every
+finding is adjustable, and nothing else is. The reconciler's overall
+assessment in particular cannot be corrected by an adjustment — an applying
+batch withdraws it wholesale — so a claim you want changed has to be
+attached to a finding to be reachable at all:
 
 ```json
 {

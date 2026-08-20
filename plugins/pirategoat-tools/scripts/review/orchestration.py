@@ -164,6 +164,32 @@ def _materialize_markdown(
 _FINDINGS_JSON = "review-findings.json"
 _FINDINGS_MD = "review-findings.md"
 
+# What the step-10 briefing may point the decision critic at, best first.
+# Existence decides, not a flag: the branch this replaced read a
+# `report_synthesis_failed` key no writer under scripts/ ever set.
+_CRITIC_SOURCE_CANDIDATES = (
+    "review-report.md", _FINDINGS_MD, _FINDINGS_JSON,
+)
+
+
+def _record_findings_markdown(state, outcome):
+    """Record the findings-render outcome AND its degradation flag together.
+
+    Both render seams (step 9, step 11) call this. When they each did their
+    own recording, step 11 updated the outcome but not the flag, so a
+    step-9 failure that step 11 repaired left `findings_markdown_incomplete`
+    standing — and that flag is a fact the step-10 briefing reads. Two
+    writers of one paired fact is how the pair comes apart.
+    """
+    state["findings_markdown"] = outcome
+    degradation = state.setdefault("degradation", {})
+    if outcome["status"] == "complete":
+        degradation.pop("findings_markdown_incomplete", None)
+        if not degradation:
+            state.pop("degradation", None)
+    else:
+        degradation["findings_markdown_incomplete"] = True
+
 
 def _render_findings_markdown(output_dir: str) -> tuple:
     """Render `review-findings.md` from the reconciliation ledger.
@@ -1005,14 +1031,7 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
             f"findings markdown materialization failed: {render_error}",
             file=sys.stderr,
         )
-    state["findings_markdown"] = findings_markdown
-    degradation = state.setdefault("degradation", {})
-    if findings_markdown["status"] == "complete":
-        degradation.pop("findings_markdown_incomplete", None)
-        if not degradation:
-            state.pop("degradation", None)
-    else:
-        degradation["findings_markdown_incomplete"] = True
+    _record_findings_markdown(state, findings_markdown)
 
     # Load inline coverage gaps and deferred-review claims computed at
     # reconciliation so the report briefing preserves the distinction
@@ -1055,6 +1074,24 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
             state["reconciliation_verdict"] = findings.get("verdict", "")
         except (json.JSONDecodeError, OSError):
             state["reconciliation_verdict"] = ""
+
+    # Which artifact the decision critic can actually be pointed at.
+    # briefings.py is pure, so the filesystem question is answered here and
+    # travels in state — the same division that already puts
+    # `reconciliation_verdict` above rather than re-reading the ledger in
+    # the briefing. Recording `available` alongside the choice keeps the
+    # briefing from having to re-derive why it got the target it got.
+    available = [
+        name for name in _CRITIC_SOURCE_CANDIDATES
+        if os.path.isfile(os.path.join(output_dir, name))
+    ]
+    state["critic_source"] = {
+        "target": available[0] if available else None,
+        "available": available,
+        "render_incomplete": bool(
+            state.get("degradation", {}).get("findings_markdown_incomplete")
+        ),
+    }
 
     # Record critic skip decision for telemetry.
     # Clear any stale decision first (step 10 may be rerun after
@@ -1358,7 +1395,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Best-effort by construction — a render failure is a degradation note,
     # never an exception out of finalize, and never a faked file.
     findings_markdown, render_error = _render_findings_markdown(output_dir)
-    state["findings_markdown"] = findings_markdown
+    _record_findings_markdown(state, findings_markdown)
     if render_error:
         degradation_notes.append(
             f"review-findings.md render failed: {render_error}"

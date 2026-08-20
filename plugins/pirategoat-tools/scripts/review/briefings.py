@@ -1354,26 +1354,48 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 
     # Determine which file the critic should review.
     #
-    # The fallback used to be unconditional because review-findings.md was
-    # handoff-guaranteed: the reconciliator wrote it or step 8 refused to
-    # proceed. It is now a best-effort render the pipeline owns, and step 9
-    # records exactly whether it landed — so the fallback consults that
-    # signal instead of assuming it. When the render did not complete, the
-    # critic goes to the canonical ledger itself: it can read JSON, and a
-    # raw findings list is a worse read than a rendering but an infinitely
-    # better one than a file nobody wrote.
-    if degradation.get("report_synthesis_failed"):
-        if degradation.get("findings_markdown_incomplete"):
-            critic_target = f"{od}/review-findings.json"
+    # By EXISTENCE, recorded at step 10's orchestration into
+    # `state["critic_source"]`, because this module is pure. The two things
+    # this replaced were both proxies for existence and both wrong: a
+    # `report_synthesis_failed` degradation key that no writer under
+    # scripts/ ever set (so the fallback never fired, however badly step 9
+    # had gone), and the findings-render outcome, which reports `complete`
+    # for a run that had no ledger to render — pointing the critic at a
+    # Markdown file nobody wrote.
+    #
+    # Order is preference, not availability: the human report first, its
+    # pipeline-rendered stand-in second, and the canonical ledger last —
+    # the critic can read JSON, and a raw findings list is a worse read
+    # than a rendering but an infinitely better one than a missing file.
+    source = state.get("critic_source")
+    if isinstance(source, dict):
+        target_name = source.get("target")
+        if target_name is None:
+            # Measured absence: step 10 looked and found none of the three.
+            critic_target = f"{od}/review-report.md"
             situation.append(
-                "⚠️ Review report synthesis failed AND the findings Markdown "
-                "render did not complete — critic will review the raw "
-                "review-findings.json ledger instead."
+                "⚠️ No review artifact was found to stress-test — neither "
+                "review-report.md, review-findings.md, nor "
+                "review-findings.json is present. The critic has nothing to "
+                "read; expect its verdict to be unusable."
             )
         else:
-            critic_target = f"{od}/review-findings.md"
-            situation.append("⚠️ Review report synthesis failed — critic will review review-findings.md instead.")
+            critic_target = f"{od}/{target_name}"
+            if target_name != "review-report.md":
+                reason = (
+                    " (the findings Markdown render did not complete)"
+                    if target_name == "review-findings.json"
+                    and source.get("render_incomplete")
+                    else ""
+                )
+                situation.append(
+                    f"⚠️ `review-report.md` is missing — critic will review "
+                    f"`{target_name}` instead{reason}."
+                )
     else:
+        # No recorded facts at all (older state, or step 10's orchestration
+        # never ran). That is not a measured absence and must not render as
+        # one, so the nominal target stands.
         critic_target = f"{od}/review-report.md"
 
     has_findings = not degradation.get("reconciliation_failed")
@@ -1477,6 +1499,14 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"trust this branch."
     )
     actions.append(
+        "An applying batch also WITHDRAWS the reconciler's "
+        "`narrative_summary` — its adjustments can correct any finding but "
+        "not ledger-level prose, so an assessment the batch may have "
+        "contradicted is retracted (kept under "
+        "`withdrawn_narrative_summary`) rather than left standing. Your "
+        "step 4 below is where the current assessment gets written."
+    )
+    actions.append(
         f"4) Edit `{od}/review-report.md` so it matches the updated findings — "
         f"counts, severity table, and finding list must agree with the JSON."
     )
@@ -1524,12 +1554,14 @@ def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None)
     else:
         written = outcome.get("written", 0)
         expected = outcome.get("expected", 0)
-        if (
-            outcome.get("status") == "complete"
-            and written == expected
-            and written > 0
-        ):
-            return f"{label}: materialized {written}/{expected} files."
+        if outcome.get("status") == "complete" and written == expected:
+            if written > 0:
+                return f"{label}: materialized {written}/{expected} files."
+            # A completed render of zero sources is a measured zero, not a
+            # gap. Warning about it and offering a recovery command sends
+            # the reader after work that cannot exist — there is no source
+            # JSON in the directory for the command to render.
+            return f"{label}: nothing to render (no source JSON)."
         detail = f"materialization {outcome.get('status', 'incomplete')} ({written}/{expected} files)"
 
     command = (

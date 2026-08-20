@@ -2119,3 +2119,111 @@ class TestStep8ReviewFileStems:
         )
 
         assert state["agents"]["completed"] == ["repo-api-reviewer-v2-reviewer"]
+
+
+class TestStep10CriticSourceRecording:
+    """`briefings.py` is pure, so step 10's orchestration is what looks at
+    the filesystem — the same division that already puts
+    `reconciliation_verdict` in state rather than re-reading the ledger in
+    the briefing."""
+
+    @staticmethod
+    def _findings(tmp_path):
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps(_review_json("reconciliator"))
+        )
+
+    def test_records_the_first_present_artifact(self, mod, tmp_path):
+        self._findings(tmp_path)
+        (tmp_path / "review-report.md").write_text("# report")
+        (tmp_path / "review-findings.md").write_text("# findings")
+        state = {"resolved_params": {}}
+        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
+        assert state["critic_source"]["target"] == "review-report.md"
+        assert state["critic_source"]["available"] == [
+            "review-report.md", "review-findings.md", "review-findings.json",
+        ]
+
+    def test_falls_through_to_the_markdown_then_the_ledger(
+        self, mod, tmp_path
+    ):
+        self._findings(tmp_path)
+        (tmp_path / "review-findings.md").write_text("# findings")
+        state = {"resolved_params": {}}
+        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
+        assert state["critic_source"]["target"] == "review-findings.md"
+
+        (tmp_path / "review-findings.md").unlink()
+        state = {"resolved_params": {}}
+        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
+        assert state["critic_source"]["target"] == "review-findings.json"
+
+    def test_records_an_absence_rather_than_a_guess(self, mod, tmp_path):
+        state = {"resolved_params": {}}
+        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
+        assert state["critic_source"] == {
+            "target": None, "available": [], "render_incomplete": False,
+        }
+
+    def test_carries_the_render_outcome_as_the_reason(self, mod, tmp_path):
+        self._findings(tmp_path)
+        state = {
+            "resolved_params": {},
+            "degradation": {"findings_markdown_incomplete": True},
+        }
+        mod._orchestrate_step(10, "full", {}, state, {}, str(tmp_path))
+        assert state["critic_source"]["target"] == "review-findings.json"
+        assert state["critic_source"]["render_incomplete"] is True
+
+
+class TestFindingsMarkdownLockstep:
+    """One helper records the outcome and its degradation flag together.
+
+    Step 9 kept them in lockstep and step 11 updated only the outcome, so a
+    step-9 failure that step 11 repaired left the stale flag standing — and
+    the flag is what the step-10 fallback reads.
+    """
+
+    @staticmethod
+    def _findings(tmp_path):
+        data = _review_json("reconciliator")
+        (tmp_path / "review-findings.json").write_text(json.dumps(data))
+
+    def test_step_11_clears_a_stale_incomplete_flag_on_a_good_render(
+        self, mod, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        self._findings(tmp_path)
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        state = {"degradation": {"findings_markdown_incomplete": True}}
+
+        mod._orchestrate_step(11, "full", {}, state, {}, str(tmp_path))
+
+        assert state["findings_markdown"]["status"] == "complete"
+        assert "findings_markdown_incomplete" not in state.get(
+            "degradation", {}
+        )
+
+    def test_step_11_sets_the_flag_when_its_own_render_fails(
+        self, mod, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        self._findings(tmp_path)
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "APPROVE"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+        monkeypatch.setitem(
+            mod._orchestrate_step_11.__globals__,
+            "_materialize_markdown",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        state = {}
+
+        mod._orchestrate_step(11, "full", {}, state, {}, str(tmp_path))
+
+        assert state["findings_markdown"]["status"] == "failed"
+        assert state["degradation"]["findings_markdown_incomplete"] is True

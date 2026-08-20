@@ -1,6 +1,7 @@
 """Tests for review/briefings.py through the pipeline.py compatibility facade."""
 
 import json
+import pathlib
 import re
 import sys
 from pathlib import Path
@@ -1808,13 +1809,28 @@ class TestStep10DecisionCritic:
         assert "review-report.md" in text
         assert "report" in text.lower()  # label for the report path
 
-    def test_report_synthesis_failed_includes_findings_md_as_report(self, mod, tmp_path):
-        """When report synthesis failed, the report path should be review-findings.md."""
-        state = {"completed_steps": [], "degradation": {"report_synthesis_failed": True}}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
+    def test_absent_report_puts_findings_md_in_the_dispatch_prompt(
+        self, mod, tmp_path
+    ):
+        """When no review-report.md was written, the report path handed to
+        the critic is review-findings.md.
+
+        Previously keyed on `degradation["report_synthesis_failed"]`, a flag
+        nothing under scripts/ ever set — so this asserted a fallback that
+        could not fire in production. It now keys on the existence facts
+        step 10's orchestration records.
+        """
+        state = {
+            "completed_steps": [],
+            "critic_source": {
+                "target": "review-findings.md",
+                "available": ["review-findings.md", "review-findings.json"],
+                "render_incomplete": False,
+            },
+        }
+        g = mod.get_step_guidance(10, "pr", state, {}, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert "review-findings.md" in text
+        assert f"{tmp_path}/review-findings.md" in text
 
     def test_step_10_dispatch_includes_output_dir(self, mod, tmp_path):
         """Step 10 dispatch prompt should include the output directory path."""
@@ -1894,54 +1910,111 @@ class TestCriticVerdictPersistence:
         assert not (tmp_path / "decision-critic-verdict.json").exists()
 
 
-class TestStep10FallbackFollowsTheRenderOutcome:
-    """The critic's fallback target must be a file that exists.
+class TestStep10CriticSource:
+    """The critic's source is chosen by what EXISTS, not by a flag.
 
-    `review-findings.md` used to be handoff-guaranteed — the reconciliator
-    wrote it or step 8 did not proceed. It is now a best-effort script
-    render, and step 9 records exactly the signal that says whether it
-    landed. Pointing the critic at it without consulting that signal is how
-    a degraded run sends the critic to a file no one wrote.
+    The old branch read `degradation["report_synthesis_failed"]` — a key no
+    writer under `scripts/` ever sets, the same dead-flag class this branch
+    already deleted once — and then used the render outcome as a proxy for
+    the Markdown's existence, which reports `complete` for a run that had no
+    ledger to render. Both roads led to the same place: the critic pointed
+    at a file nobody wrote.
+
+    `briefings.py` is pure, so step 10's orchestration records the existence
+    facts into state, the way it already records `reconciliation_verdict`.
     """
 
-    def _guidance(self, mod, tmp_path, degradation):
-        state = {"completed_steps": [], "degradation": degradation}
+    def _guidance(self, mod, tmp_path, critic_source=None, **state_extra):
+        state = {"completed_steps": [], **state_extra}
+        if critic_source is not None:
+            state["critic_source"] = critic_source
         return mod.get_step_guidance(
             10, "pr", state, {}, config={"mode": "pr"},
             output_dir=str(tmp_path),
         )
 
-    def test_report_failure_alone_still_falls_back_to_the_markdown(
-        self, mod, tmp_path
-    ):
-        g = self._guidance(
-            mod, tmp_path, {"report_synthesis_failed": True}
-        )
-        text = "\n".join(g["situation"] + g["actions"])
-        assert "review-findings.md" in text
-
-    def test_an_incomplete_render_redirects_the_critic_to_the_json(
-        self, mod, tmp_path
-    ):
-        g = self._guidance(mod, tmp_path, {
-            "report_synthesis_failed": True,
-            "findings_markdown_incomplete": True,
+    def test_report_present_is_the_critic_target(self, mod, tmp_path):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-report.md",
+            "available": ["review-report.md", "review-findings.json"],
+            "render_incomplete": False,
         })
         text = "\n".join(g["situation"] + g["actions"])
-        assert f"{tmp_path}/review-findings.json" in text
+        assert f"{tmp_path}/review-report.md" in text
         assert "review-findings.md" not in text
-        # And it says why, so the critic knows it is reading raw findings.
-        assert "render" in text.lower()
 
-    def test_a_healthy_report_ignores_the_render_outcome(
+    def test_missing_report_falls_back_to_the_rendered_markdown(
         self, mod, tmp_path
     ):
-        g = self._guidance(
-            mod, tmp_path, {"findings_markdown_incomplete": True}
-        )
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-findings.md",
+            "available": ["review-findings.md", "review-findings.json"],
+            "render_incomplete": False,
+        })
         text = "\n".join(g["situation"] + g["actions"])
-        assert "review-report.md" in text
-        assert "review-findings.md" not in text
+        # Assert the CRITIC TARGET specifically. `review-report.md` still
+        # appears further down as the file the REVISE flow tells the
+        # orchestrator to bring into agreement with the ledger — a
+        # different instruction, unaffected by which artifact the critic
+        # reads.
+        assert (
+            f"Report path (for critic.py --report): "
+            f"{tmp_path}/review-findings.md"
+        ) in text
+        assert "`review-report.md` is missing" in text
+
+    def test_missing_markdown_falls_back_to_the_json_ledger(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-findings.json",
+            "available": ["review-findings.json"],
+            "render_incomplete": False,
+        })
+        situation = "\n".join(g["situation"])
+        assert "review-findings.json" in situation
+        assert "review-findings.md" not in situation
+
+    def test_an_incomplete_render_is_named_as_the_reason(self, mod, tmp_path):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": "review-findings.json",
+            "available": ["review-findings.json"],
+            "render_incomplete": True,
+        })
+        situation = "\n".join(g["situation"])
+        assert "render" in situation.lower()
+
+    def test_nothing_present_says_so_instead_of_naming_a_missing_file(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(mod, tmp_path, critic_source={
+            "target": None, "available": [], "render_incomplete": False,
+        })
+        situation = "\n".join(g["situation"])
+        assert "no review artifact" in situation.lower()
+
+    def test_unrecorded_source_keeps_the_nominal_report_target(
+        self, mod, tmp_path
+    ):
+        """No `critic_source` key at all — older state, or step 10's
+        orchestration never ran — is not a measured absence, so it must not
+        render as one."""
+        g = self._guidance(mod, tmp_path)
+        text = "\n".join(g["situation"] + g["actions"])
+        assert f"{tmp_path}/review-report.md" in text
+        assert "no review artifact" not in text.lower()
+
+    def test_the_dead_flag_is_no_longer_consulted(self, mod, tmp_path):
+        """`report_synthesis_failed` has no writer; reading it made the
+        fallback depend on a fact nothing produced."""
+        source = pathlib.Path(
+            mod.__file__
+        ).parent.joinpath("briefings.py")
+        code = "\n".join(
+            line for line in source.read_text().splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        assert "report_synthesis_failed" not in code
 
 
 class TestStep11PresentResults:
@@ -1968,7 +2041,7 @@ class TestStep11PresentResults:
     @pytest.mark.parametrize("interactive", [True, False])
     @pytest.mark.parametrize(
         ("expected", "status"),
-        [(2, "partial"), (0, "complete")],
+        [(2, "partial"), (1, "failed")],
     )
     def test_zero_reviewer_markdown_includes_regeneration_command(
         self, mod, tmp_path, interactive, expected, status
@@ -2128,6 +2201,35 @@ class TestStep11PresentResults:
         assert len(lines) == 1
         assert "did not run" in lines[0]
 
+    @pytest.mark.parametrize(
+        "key,label",
+        [("reviewer_markdown", "Reviewer Markdown"),
+         ("findings_markdown", "Findings Markdown")],
+    )
+    def test_nothing_to_render_is_reported_without_a_recovery_command(
+        self, mod, tmp_path, key, label
+    ):
+        """A completed render of zero sources is a measured zero, not a
+        gap: there is nothing to regenerate, so offering the command
+        would send the reader after work that cannot exist."""
+        state = {
+            "completed_steps": [],
+            key: {
+                "ran": True, "written": 0, "expected": 0,
+                "status": "complete",
+            },
+        }
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": True},
+            output_dir=str(tmp_path),
+        )
+        lines = [l for l in guidance["actions"] if f"{label}:" in l]
+        assert len(lines) == 1
+        assert "⚠️" not in lines[0]
+        assert "regenerate" not in lines[0]
+        assert "nothing to render" in lines[0]
+
     def test_incremental_mentions_baseline_saved(self, mod, tmp_path):
         config = {"mode": "incremental", "interactive": True}
         state = {"completed_steps": []}
@@ -2224,11 +2326,19 @@ class TestDegradedPaths:
         text = "\n".join(g["actions"])
         assert "raw agent" in text.lower() or "degraded" in text.lower()
 
-    def test_scenario_b_report_synthesis_failed(self, mod, tmp_path):
-        """Step 10 should fall back to review-findings.md when review-report.md missing."""
-        state = {"completed_steps": [], "degradation": {"report_synthesis_failed": True}}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx)
+    def test_scenario_b_report_missing(self, mod, tmp_path):
+        """Step 10 falls back to review-findings.md when review-report.md is
+        absent — established by step 10's recorded existence facts, not by
+        the writer-less `report_synthesis_failed` flag this once read."""
+        state = {
+            "completed_steps": [],
+            "critic_source": {
+                "target": "review-findings.md",
+                "available": ["review-findings.md"],
+                "render_incomplete": False,
+            },
+        }
+        g = mod.get_step_guidance(10, "pr", state, {})
         text = "\n".join(g["actions"])
         assert "review-findings.md" in text
 
