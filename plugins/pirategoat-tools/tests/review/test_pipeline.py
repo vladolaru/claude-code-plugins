@@ -962,6 +962,48 @@ class TestStep7SaveReviewBaseline:
         assert "sleep" in text.lower() and "not" in text.lower() or "do not poll" in text.lower()
         assert "notification" in text.lower() or "run_in_background" in text.lower()
 
+    def test_claude_host_wait_uses_notifications_and_watchdog(self, mod, tmp_path):
+        """Claude-host wait guidance: end-turn + notification wake-up + named
+        anti-patterns + a background watchdog launched right after dispatch."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+
+        assert "END YOUR TURN" in text
+        assert "notification" in text.lower()
+        # Named anti-patterns
+        assert "no foreground" in text.lower() and "sleep" in text.lower()
+        assert "keepalive" in text.lower()
+        assert "polling without a new notification" in text.lower()
+        # Watchdog: background wait as a guaranteed wake-up
+        assert "--wait" in text
+        assert "--max-seconds 1500" in text
+        assert "BACKGROUND" in text
+
+        # Must not carry the Codex-host cadence
+        assert "once a minute" not in text.lower()
+        assert "--max-seconds 60" not in text
+
+    def test_codex_host_wait_uses_per_minute_polling(self, mod, tmp_path):
+        """Codex-host wait guidance: foreground --wait --max-seconds 60 cadence,
+        not the Claude notification/end-turn mechanism."""
+        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
+        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(7, "full", state, ctx, config=config, output_dir=str(tmp_path))
+        text = "\n".join(g["actions"])
+
+        assert "--wait" in text
+        assert "--max-seconds 60" in text
+        assert "once a minute" in text.lower()
+        assert "exit code 3" in text.lower()
+
+        # Must not carry the Claude-host end-turn/notification mechanism
+        assert "END YOUR TURN" not in text
+        assert "keepalive" not in text.lower()
+        assert "--max-seconds 1500" not in text
+
 
 class TestStep8Reconcile:
     """Step 8: Reconcile + Verify. main() reads dispatch-plan.json + review files, passes to get_step_guidance()."""

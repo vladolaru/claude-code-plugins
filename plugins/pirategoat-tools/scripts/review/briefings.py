@@ -920,6 +920,7 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
     """Step 7: Save Review Baseline — script writes file internally."""
     git = context.get("git", {})
     git_range = state.get("resolved_params", {}).get("git_range") or git.get("git_range", "")
+    od = output_dir or "<OUTPUT_DIR>"
 
     situation = [
         f"Review baseline saved to `.branch-review-baseline.json`.",
@@ -942,14 +943,54 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
                    "timestamp, review type, and git range.")
 
     actions.append("")
-    actions.append("**Wait for agents before step 8.** Agents run in the background — "
-                   "wait for notifications, then check status:")
-    actions.append(f"```")
-    actions.append(f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{output_dir or '<OUTPUT_DIR>'}\"")
-    actions.append(f"```")
-    actions.append("- Exit code 0 (ALL_DONE): proceed to step 8")
-    actions.append("- Exit code 2 (still running): wait for more notifications, re-check")
-    actions.append("- NOT_DISPATCHED agents: dispatch them first, then re-check")
+    actions.append("**Wait for agents before step 8.**")
+    actions.append("")
+
+    if _host(config) == HOST_CODEX:
+        actions.extend([
+            "Poll for completion once a minute — the wait lives inside the "
+            "script, so each call blocks for up to 60 seconds before "
+            "returning control to you:",
+            "```",
+            f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 60",
+            "```",
+            "- Exit code 0 (ALL_DONE): proceed to step 8",
+            "- Exit code 3 (60s elapsed, still running): print one progress "
+            "line and re-run the same call",
+            "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "",
+            "Expect roughly 10 calls for a typical phase.",
+        ])
+    else:
+        actions.extend([
+            "Notifications are primary. After dispatching, END YOUR TURN — "
+            "each subagent's completion notification is your wake-up signal.",
+            "",
+            "On wake-up, run agents_status once:",
+            "```",
+            f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"",
+            "```",
+            "- Exit code 0 (ALL_DONE): proceed to step 8",
+            "- Exit code 2 (still running): end your turn again and wait for "
+            "the next notification",
+            "- NOT_DISPATCHED agents: dispatch them first, then re-check",
+            "",
+            "Do not do any of these while waiting:",
+            "- No foreground `sleep` — the harness blocks it",
+            "- No keepalive loops — empty turns just to \"stay alive\"",
+            "- No polling without a new notification — re-checking status "
+            "without a fresh wake-up signal wastes turns",
+            "",
+            "As a safety net, immediately after dispatching, launch ONE "
+            "watchdog in the BACKGROUND so you get a guaranteed wake-up even "
+            "if a per-agent notification is missed — it holds nothing open "
+            "and its expiry (past the 1200s agent timeout) is itself a "
+            "wake-up signal:",
+            "```",
+            f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 1500",
+            "```",
+            "Run this via a BACKGROUND Bash call, not in the foreground.",
+        ])
 
     return {
         "phase": "EXECUTION",
