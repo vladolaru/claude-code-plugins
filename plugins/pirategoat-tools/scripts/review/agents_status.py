@@ -12,7 +12,9 @@ Four states per dispatched agent:
 Exit codes:
     0  ALL_DONE: true (nothing left to wait for — all finished or timed out)
     2  ALL_DONE: false (some agents still running or not dispatched)
-    1  Error (no dispatch plan, bad JSON; also: --wait given without --max-seconds)
+    1  Error (no dispatch plan, bad JSON; also: --wait given without
+       --max-seconds, --max-seconds <= 0, or --max-seconds given without
+       --wait)
     3  --wait only: --max-seconds elapsed before ALL_DONE became true
 
 --wait mode (script-owned polling, no model calls, no subprocesses): blocks
@@ -21,8 +23,9 @@ the no-wait path at a 1-2s grain, and returns the instant nothing is left to
 wait for. --wait REQUIRES --max-seconds — this script refuses to block
 unbounded. On expiry it exits 3, distinct from the no-wait path's 0/1/2, so
 callers can tell "gave up after N seconds" apart from "nothing to wait for"
-or "still running, check again". The no-wait invocation (no --wait flag) is
-byte-identical in behavior to before --wait existed.
+or "still running, check again". The no-wait path's status-check behavior
+(exit codes, stdout) is unchanged from before --wait existed; only --help
+text differs, since it now also documents --wait/--max-seconds.
 """
 
 import argparse
@@ -264,13 +267,29 @@ def main():
     )
     parser.add_argument(
         "--max-seconds", type=float, default=None,
-        help="Required with --wait: maximum seconds to block before exiting 3.",
+        help="Required with --wait: maximum seconds (> 0) to block before "
+        "exiting 3. Rejected without --wait — it would silently do nothing.",
     )
     args = parser.parse_args()
+
+    if args.max_seconds is not None and not args.wait:
+        print(
+            "ERROR: --max-seconds has no effect without --wait "
+            "(did you mean to pass --wait too?)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if args.wait and args.max_seconds is None:
         print(
             "ERROR: --wait requires --max-seconds (refusing to block unbounded)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if args.max_seconds is not None and args.max_seconds <= 0:
+        print(
+            f"ERROR: --max-seconds must be > 0, got {args.max_seconds}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -280,6 +299,11 @@ def main():
             result, expired = wait_for_all_done(args.output_dir, args.max_seconds)
             print(format_output(result))
             if expired:
+                # Both streams are typically merged by the caller (e.g. a
+                # Codex subprocess capture) — flush stdout first so the
+                # status table above is never interleaved after this
+                # stderr line in the merged read order.
+                sys.stdout.flush()
                 print(
                     f"EXPIRED: --max-seconds={args.max_seconds} elapsed before "
                     "ALL_DONE",

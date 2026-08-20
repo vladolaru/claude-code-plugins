@@ -54,6 +54,43 @@ def _finish_agent(tmp_path, name, issues=None, verdict="APPROVE"):
     }))
 
 
+class _FakeClock:
+    """Deterministic now_fn/sleep_fn pair for wait_for_all_done tests.
+
+    now_fn() returns the current fake time. sleep_fn(seconds) advances the
+    fake clock by exactly the requested amount and records it in .sleeps —
+    so a test can assert both how long each requested sleep was and how
+    many were requested, with zero dependency on real wall-clock timing
+    (no flaky elapsed-time thresholds, no real `time.sleep`).
+
+    Guards against runaway loops: a mutation that disables the
+    --max-seconds expiry check would otherwise spin forever here (a fake
+    sleep never actually blocks), and unlike a subprocess call, an
+    in-process infinite loop has no timeout to kill it. The guard raises
+    once the loop clearly isn't converging, turning a hang into a fast,
+    clean test failure.
+    """
+
+    _MAX_SLEEPS = 200
+
+    def __init__(self, start=0.0):
+        self.now = start
+        self.sleeps = []
+
+    def now_fn(self):
+        return self.now
+
+    def sleep_fn(self, seconds):
+        self.sleeps.append(seconds)
+        if len(self.sleeps) > self._MAX_SLEEPS:
+            raise AssertionError(
+                f"wait_for_all_done slept {len(self.sleeps)} times without "
+                "expiring or finishing — runaway loop (--max-seconds check "
+                "disabled?)"
+            )
+        self.now += seconds
+
+
 class TestCheckStatus:
     def test_all_finished(self, mod, tmp_path):
         _write_plan(tmp_path, [
@@ -524,22 +561,84 @@ class TestOverrideStatuses:
 
 class TestWaitMode:
     """--wait / --max-seconds: script-owned polling. See module docstring for
-    the exit-code contract (0/2/1 unchanged, 3 added for --wait expiry)."""
+    the exit-code contract (0/2/1 unchanged, 3 added for --wait expiry).
+
+    Timing-sensitive properties (expiry-before-sleep, the final-sleep
+    clamp, waking on the very next poll) are pinned deterministically via
+    `_FakeClock`/injected `sleep_fn` — no real wall-clock elapsed-time
+    thresholds, so no flakiness. Each of those deterministic tests is
+    paired with one cheap subprocess smoke test that only proves the CLI
+    actually wires `--wait`/`--max-seconds` through to the real function;
+    the smoke tests carry no timing assertions of their own.
+    """
 
     def test_wait_returns_zero_immediately_when_all_done(self, mod, tmp_path):
-        """Already-satisfied status must not pay the poll-interval sleep."""
+        """Already-satisfied status must not sleep at all."""
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
         _start_agent(tmp_path, "code-reviewer")
         _finish_agent(tmp_path, "code-reviewer")
 
-        start = time.monotonic()
-        result, expired = mod.wait_for_all_done(str(tmp_path), max_seconds=30)
-        elapsed = time.monotonic() - start
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=30,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
 
         assert result["all_done"] is True
         assert expired is False
-        # DEFAULT_POLL_INTERVAL_SECONDS is 1.5s — a real sleep would show up here.
-        assert elapsed < 1.0, f"wait_for_all_done slept when already done ({elapsed}s)"
+        assert clock.sleeps == [], "wait_for_all_done slept when already done"
+
+    def test_wait_all_done_cli_smoke(self, tmp_path):
+        """Cheap end-to-end smoke: the CLI wires --wait through for real."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path), "--wait", "--max-seconds", "30",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 0
+        assert "ALL_DONE: true" in r.stdout
+
+    def test_wait_checks_expiry_before_sleeping(self, mod, tmp_path):
+        """The poll that lands exactly on expiry must return WITHOUT
+        sleeping again — a mutation that sleeps unconditionally before
+        checking the remaining budget would add an extra sleep here."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        # Never finished — stays RUNNING for the whole fake-clock window.
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=3.0, poll_interval=1.5,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert expired is True
+        assert result["all_done"] is False
+        # 3 checks (t=0, 1.5, 3.0) but only 2 sleeps: the third check lands
+        # exactly on expiry and returns instead of sleeping a third time.
+        assert clock.sleeps == [1.5, 1.5]
+
+    def test_wait_clamps_final_sleep_to_remaining(self, mod, tmp_path):
+        """The last sleep before expiry must be clamped to whatever time is
+        actually left, not the full poll_interval — otherwise every wait
+        can overshoot --max-seconds by up to one poll grain."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+
+        clock = _FakeClock()
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=4.0, poll_interval=1.5,
+            sleep_fn=clock.sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert expired is True
+        # t=0 rem=4.0 -> sleep 1.5; t=1.5 rem=2.5 -> sleep 1.5; t=3.0
+        # rem=1.0 -> sleep clamped to 1.0, not the full 1.5s poll_interval.
+        assert clock.sleeps == [1.5, 1.5, 1.0]
 
     def test_wait_exit_3_on_expiry(self, tmp_path):
         """Unfinished agent + a short --max-seconds must exit 3, not 0/1/2."""
@@ -560,8 +659,61 @@ class TestWaitMode:
         assert r.returncode == 3
         assert "EXPIRED" in r.stderr
 
+    def test_wait_expired_status_flushed_before_stderr(self, tmp_path):
+        """On expiry, the status table (stdout) must precede EXPIRED
+        (stderr) in a MERGED stream — a caller that captures both on one
+        pipe (e.g. a Codex subprocess) must never see them interleaved out
+        of order."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path),
+            "--wait", "--max-seconds", "1",
+        ]
+        r = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=15,
+        )
+        assert r.returncode == 3
+        merged = r.stdout
+        assert merged.index("ALL_DONE:") < merged.index("EXPIRED:")
+
     def test_wait_wakes_on_completion(self, mod, tmp_path):
-        """Completion mid-wait must be observed well before --max-seconds."""
+        """Completion must be observed on the very first poll after it
+        happens — the loop has to re-check status on every iteration, not
+        return after a single pass."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+
+        clock = _FakeClock()
+        calls = {"n": 0}
+
+        def sleep_fn(seconds):
+            calls["n"] += 1
+            assert calls["n"] <= 200, "runaway loop — completion never observed"
+            clock.now += seconds
+            if calls["n"] == 2:
+                # Simulate the reviewer finishing partway through the wait.
+                _finish_agent(tmp_path, "code-reviewer")
+
+        result, expired = mod.wait_for_all_done(
+            str(tmp_path), max_seconds=30, poll_interval=1.5,
+            sleep_fn=sleep_fn, now_fn=clock.now_fn,
+        )
+
+        assert result["all_done"] is True
+        assert expired is False
+        # The check_status() call right after the 2nd sleep is the one
+        # that observes the finish — proves every iteration re-checks.
+        assert calls["n"] == 2
+
+    def test_wait_wakes_on_completion_cli_smoke(self, tmp_path):
+        """Cheap end-to-end smoke: a real background completion is
+        observed well inside --max-seconds. Timing precision belongs to
+        the deterministic test above; this only proves the CLI wiring
+        holds for a real, threaded completion."""
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
         _start_agent(tmp_path, "code-reviewer")
 
@@ -571,20 +723,47 @@ class TestWaitMode:
 
         thread = threading.Thread(target=_finish_late)
         thread.start()
-        start = time.monotonic()
-        result, expired = mod.wait_for_all_done(str(tmp_path), max_seconds=30)
-        elapsed = time.monotonic() - start
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path), "--wait", "--max-seconds", "30",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
         thread.join()
 
-        assert result["all_done"] is True
-        assert expired is False
-        assert elapsed < 10, f"wait_for_all_done did not wake promptly ({elapsed}s)"
+        assert r.returncode == 0
+        assert "ALL_DONE: true" in r.stdout
 
     def test_wait_requires_max_seconds(self, tmp_path):
         """--wait without --max-seconds refuses to block unbounded."""
         _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
 
         cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path), "--wait"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 1
+        assert "--max-seconds" in r.stderr
+
+    def test_max_seconds_requires_wait(self, tmp_path):
+        """--max-seconds without --wait is rejected, not silently ignored."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path), "--max-seconds", "30",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 1
+        assert "--wait" in r.stderr
+
+    @pytest.mark.parametrize("value", ["0", "-5"])
+    def test_max_seconds_must_be_positive(self, tmp_path, value):
+        """--max-seconds must be > 0 — 0 or negative is rejected loudly
+        rather than producing a wait that expires instantly or never."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path), "--wait", "--max-seconds", value,
+        ]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         assert r.returncode == 1
         assert "--max-seconds" in r.stderr

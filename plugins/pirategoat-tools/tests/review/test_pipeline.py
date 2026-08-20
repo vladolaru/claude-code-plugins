@@ -972,14 +972,33 @@ class TestStep7SaveReviewBaseline:
 
         assert "END YOUR TURN" in text
         assert "notification" in text.lower()
-        # Named anti-patterns
+        # Named anti-patterns. The "polling without..." bullet says
+        # "wake-up", not "notification" (M3, backlog #25 follow-up): the
+        # watchdog's own expiry is a legitimate wake-up but not a
+        # notification, so naming the anti-pattern after "notification"
+        # alone would misdescribe the one wake-up path this same briefing
+        # tells the orchestrator to rely on.
         assert "no foreground" in text.lower() and "sleep" in text.lower()
         assert "keepalive" in text.lower()
-        assert "polling without a new notification" in text.lower()
+        assert "polling without a new wake-up" in text.lower()
         # Watchdog: background wait as a guaranteed wake-up
         assert "--wait" in text
         assert "--max-seconds 1500" in text
         assert "BACKGROUND" in text
+        assert "run_in_background: true" in text
+        assert "holds no model turn open" in text.lower()
+
+        # Ordering (I1, backlog #25 follow-up): the watchdog must be
+        # launched BEFORE the instruction to end the turn — a top-to-bottom
+        # executor that ends its turn on reading step 1 would otherwise
+        # never reach the watchdog launch and silently lose the guaranteed
+        # wake-up.
+        watchdog_pos = text.index("--max-seconds 1500")
+        end_turn_pos = text.index("END YOUR TURN")
+        assert watchdog_pos < end_turn_pos, (
+            "the watchdog launch must appear before the END YOUR TURN "
+            "instruction, not after"
+        )
 
         # Must not carry the Codex-host cadence
         assert "once a minute" not in text.lower()
@@ -998,6 +1017,15 @@ class TestStep7SaveReviewBaseline:
         assert "--max-seconds 60" in text
         assert "once a minute" in text.lower()
         assert "exit code 3" in text.lower()
+        # I2, backlog #25 follow-up: the loop needs a stated termination —
+        # anchored to the same 1200s agent timeout the Claude branch names,
+        # plus the documented next move once step 8's own escalation is the
+        # real backstop.
+        assert "1200" in text
+        assert "20 min" in text
+        assert "escalation gate force-proceeds" in text.lower()
+        assert "typical run" in text.lower()
+        assert "typical phase" not in text.lower()
 
         # Must not carry the Claude-host end-turn/notification mechanism
         assert "END YOUR TURN" not in text
@@ -1347,6 +1375,63 @@ class TestStep8ReadinessGate:
         ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
         g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
         assert "WAITING" not in g["title"]
+
+    def _make_waiting_state(self):
+        return {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "waiting_on_agents": {
+                "running": ["security-reviewer"],
+                "not_dispatched": [],
+            },
+            "agents": {"dispatched": ["security-reviewer"], "completed": [], "failed": []},
+        }
+
+    def test_claude_host_waiting_uses_end_turn_and_fresh_watchdog(self, mod, tmp_path):
+        """Claude-host WAITING gate (backlog #25 follow-up, I4): mirrors
+        step 7's end-turn/notification mechanism, plus a fresh watchdog
+        sized to the remaining budget before escalation force-proceeds —
+        replacing the mechanism-free "wait, then re-run this step" prose
+        that produced the field improvisations in the first place."""
+        state = self._make_waiting_state()
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
+        assert "WAITING" in g["title"]
+        assert g["blocks_progress"] is True
+        text = "\n".join(g["actions"])
+
+        assert "END YOUR TURN" in text
+        assert "--wait" in text
+        assert "run_in_background: true" in text
+        assert "BACKGROUND" in text
+        assert "holds no model turn open" in text.lower()
+        # Escalation text itself is untouched (settled design) — still
+        # reachable only via the elapsed>=threshold branch, not asserted
+        # here since this state hits the not-yet-escalated branch.
+
+        # Must not carry the Codex-host cadence
+        assert "once a minute" not in text.lower()
+        assert "--max-seconds 60" not in text
+
+    def test_codex_host_waiting_uses_per_minute_polling(self, mod, tmp_path):
+        """Codex-host WAITING gate (backlog #25 follow-up, I4): mirrors
+        step 7's per-minute cadence, not the Claude end-turn mechanism."""
+        state = self._make_waiting_state()
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        config = {"host": "codex"}
+        g = mod.get_step_guidance(8, "pr", state, ctx, config=config, output_dir=str(tmp_path))
+        assert "WAITING" in g["title"]
+        assert g["blocks_progress"] is True
+        text = "\n".join(g["actions"])
+
+        assert "--wait" in text
+        assert "--max-seconds 60" in text
+        assert "once a minute" in text.lower()
+        assert "exit code 3" in text.lower()
+
+        # Must not carry the Claude-host end-turn/notification mechanism
+        assert "END YOUR TURN" not in text
+        assert "run_in_background" not in text
 
 
 class TestStep9ReviewReport:

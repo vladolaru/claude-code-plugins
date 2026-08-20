@@ -959,12 +959,31 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             "line and re-run the same call",
             "- NOT_DISPATCHED agents: dispatch them first, then re-check",
             "",
-            "Expect roughly 10 calls for a typical phase.",
+            "This terminates on its own: a RUNNING agent flips to TIMED_OUT "
+            f"at the configured agent timeout (default {DEFAULT_AGENT_TIMEOUT}s "
+            "/ 20 min), and a timed-out agent no longer blocks ALL_DONE, so "
+            "exit 0 arrives within about one more polling cycle even in the "
+            "worst case. If it doesn't, proceed to step 8 anyway — its own "
+            "escalation gate force-proceeds.",
+            "",
+            "Expect roughly 10 calls for a typical run.",
         ])
     else:
         actions.extend([
-            "Notifications are primary. After dispatching, END YOUR TURN — "
-            "each subagent's completion notification is your wake-up signal.",
+            "Sequence matters here — do these two things IN ORDER, not in "
+            "parallel:",
+            "",
+            "1. Immediately after dispatching, launch ONE watchdog in the "
+            "BACKGROUND (a Bash call with `run_in_background: true`) — a "
+            "guaranteed wake-up past the 1200s agent timeout even if every "
+            "per-agent notification is missed. It holds no model turn open "
+            "while it waits:",
+            "```",
+            f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 1500",
+            "```",
+            "2. THEN END YOUR TURN. Notifications are primary from here — "
+            "each subagent's completion notification is your wake-up "
+            "signal; do not do anything else while waiting.",
             "",
             "On wake-up, run agents_status once:",
             "```",
@@ -972,24 +991,14 @@ def _step_7_save_baseline(mode, state, context, config, output_dir):
             "```",
             "- Exit code 0 (ALL_DONE): proceed to step 8",
             "- Exit code 2 (still running): end your turn again and wait for "
-            "the next notification",
+            "the next wake-up",
             "- NOT_DISPATCHED agents: dispatch them first, then re-check",
             "",
             "Do not do any of these while waiting:",
             "- No foreground `sleep` — the harness blocks it",
             "- No keepalive loops — empty turns just to \"stay alive\"",
-            "- No polling without a new notification — re-checking status "
-            "without a fresh wake-up signal wastes turns",
-            "",
-            "As a safety net, immediately after dispatching, launch ONE "
-            "watchdog in the BACKGROUND so you get a guaranteed wake-up even "
-            "if a per-agent notification is missed — it holds nothing open "
-            "and its expiry (past the 1200s agent timeout) is itself a "
-            "wake-up signal:",
-            "```",
-            f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 1500",
-            "```",
-            "Run this via a BACKGROUND Bash call, not in the foreground.",
+            "- No polling without a new wake-up — re-checking status without "
+            "a fresh notification or watchdog expiry wastes turns",
         ])
 
     return {
@@ -1050,13 +1059,51 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
                 situation.append(
                     f"**Also not dispatched:** {', '.join(not_dispatched)} — dispatch these first."
                 )
-            actions = [
-                "Wait for running agents to finish, then re-run this step:",
-                f"```",
-                f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"",
-                f"```",
-                "When ALL_DONE is true, re-run step 8.",
-            ]
+
+            # Remaining budget before the escalation above force-proceeds —
+            # a fresh watchdog here should not outlive that backstop.
+            remaining_budget = max(1, int(escalation_threshold - elapsed))
+
+            if _host(config) == HOST_CODEX:
+                actions = [
+                    "Poll for completion once a minute — the wait lives "
+                    "inside the script, so each call blocks for up to 60 "
+                    "seconds before returning control to you:",
+                    "```",
+                    f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds 60",
+                    "```",
+                    "- Exit code 0 (ALL_DONE): re-run step 8",
+                    "- Exit code 3 (60s elapsed, still running): print one "
+                    "progress line and re-run the same call",
+                    "This terminates on its own within the "
+                    f"{agent_timeout}s agent timeout; if it doesn't, the "
+                    f"escalation above force-proceeds {escalation_threshold}s "
+                    "after waiting began.",
+                ]
+            else:
+                actions = [
+                    "Notifications are primary. END YOUR TURN and wait for "
+                    "the next subagent completion notification — do not "
+                    "poll in a loop.",
+                    "",
+                    "On wake-up, run agents_status once:",
+                    "```",
+                    f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\"",
+                    "```",
+                    "- Exit code 0 (ALL_DONE): re-run step 8",
+                    "- Exit code 2 (still running): end your turn again and "
+                    "wait for the next wake-up",
+                    "",
+                    "If the step-7 watchdog may already have expired (or was "
+                    "never launched), launch a fresh one now with the "
+                    "remaining budget before the escalation above "
+                    "force-proceeds — it holds no model turn open:",
+                    "```",
+                    f"python3 {SCRIPTS_DIR}/agents_status.py --output-dir \"{od}\" --wait --max-seconds {remaining_budget}",
+                    "```",
+                    "Run it via a BACKGROUND Bash call (`run_in_background: true`).",
+                ]
+
             return {
                 "phase": "SYNTHESIS",
                 "title": "Reconcile + Verify — WAITING",
