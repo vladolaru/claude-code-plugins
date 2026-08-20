@@ -129,7 +129,8 @@ class TestStart:
         )
 
         start = _read_events(path)[0]
-        assert start["schema_version"] == 1
+        assert start["schema"] == 1
+        assert "schema_version" not in start
         assert start["run_id"] == "run-1"
         assert start["pipeline"]["session_id"] == "session-123"
         assert start["pipeline"]["plugin_version"] == "1.108.0"
@@ -149,7 +150,7 @@ class TestStart:
         later_process.log_agent_start(agent_name="security-reviewer")
 
         identities = {
-            (event["schema_version"], event["run_id"])
+            (event["schema"], event["run_id"])
             for event in _read_events(telemetry.log_path)
         }
         assert identities == {(1, "run-1")}
@@ -501,7 +502,7 @@ class TestNoFabricatedMeasurements:
         """
         telemetry.start(run_id="run-1")
         old_event = {
-            "schema_version": mod.EVENT_SCHEMA_VERSION,
+            "schema": mod.EVENT_SCHEMA,
             "run_id": "run-1",
             "event": "step",
             "timestamp": "2026-01-01T00:00:00+00:00",
@@ -555,7 +556,8 @@ class TestRunManifest:
             Path(log_path).with_suffix(".manifest.json")
         )
         manifest = _read_manifest(telemetry)
-        assert manifest["schema_version"] == 1
+        assert manifest["schema"] == 1
+        assert "schema_version" not in manifest
         assert manifest["status"] == "running"
         assert manifest["run"]["id"] == "run-1"
         assert manifest["run"]["session_id"] == "session-1"
@@ -749,7 +751,7 @@ class TestRunManifest:
         ]
         assert _read_manifest(telemetry)["agents"]["completed"] == [
             {
-                "schema_version": 1,
+                "schema": 1,
                 "run_id": "run-1",
                 "event": "agent_complete",
                 "timestamp": raw_completions[-1]["timestamp"],

@@ -3776,7 +3776,7 @@ class TestEnrichRunTranscript:
 
         reviewer_complete = incomplete_family != "reviewer"
         synthesis_complete = incomplete_family != "synthesis"
-        assert result["observed_reads"]["schema_version"] == 2
+        assert result["observed_reads"]["schema"] == 2
         assert result["completeness"]["scope_comparable_reads"] is reviewer_complete
         assert (
             result["completeness"]["non_scope_comparable_reads"]
@@ -4197,7 +4197,7 @@ class TestEnrichRunTranscript:
         assert result["correlation"]["correlated_by_agent"] == {"critic": 2}
         assert result["correlation"]["complete"] is False
         assert result["observed_reads"] == {
-            "schema_version": 2,
+            "schema": 2,
             "all": [],
             "in_scope": [],
             "out_of_scope": [],

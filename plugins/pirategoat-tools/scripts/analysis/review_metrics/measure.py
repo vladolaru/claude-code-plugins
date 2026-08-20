@@ -13,7 +13,7 @@ from .contracts import (
     _AVAILABILITY_FAMILIES,
     _CRITIC_VERDICTS,
     _TRANSCRIPT_FAMILIES,
-    _OBSERVED_READS_SCHEMA_VERSION,
+    _OBSERVED_READS_SCHEMA,
     _USAGE_FIELDS,
     _load_exact_path_module,
     _parse_time,
@@ -362,12 +362,12 @@ def _sanitize_reads(
     if not isinstance(value, dict) or any(
         type(item) is not bool
         for item in (family_complete, scope_complete, non_scope_complete)
-    ) or type(value.get("schema_version")) is not int or value.get(
-        "schema_version"
-    ) != _OBSERVED_READS_SCHEMA_VERSION:
+    ) or type(value.get("schema")) is not int or value.get(
+        "schema"
+    ) != _OBSERVED_READS_SCHEMA:
         return None
     result: dict[str, Any] = {
-        "schema_version": _OBSERVED_READS_SCHEMA_VERSION
+        "schema": _OBSERVED_READS_SCHEMA
     }
     for name in (
         "all",

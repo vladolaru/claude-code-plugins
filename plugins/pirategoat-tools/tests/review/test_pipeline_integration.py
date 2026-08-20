@@ -87,7 +87,7 @@ def _review_json(reviewer):
         "pr_id": "42",
         "reviewer": reviewer,
         "timestamp": "2026-08-10T12:00:00",
-        "version": "1.0.0",
+        "schema": 1,
         "verdict": "approve",
         "summary": {
             "total_issues": 0,

@@ -41,6 +41,13 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 
+# The shape schemas/review-output.ts documents. Bump in the SAME commit as
+# any key added, removed, or re-typed in the serialized artifact, update the
+# TypeScript contract, and note the bump in the changelog. It replaced a
+# `version: "1.0.0"` string that survived six format changes unbumped —
+# an unmaintained compatibility claim is worse than none.
+REVIEW_OUTPUT_SCHEMA = 1
+
 _VALID_SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')
 _VALID_CHANNELS = ('blocking', 'advisory')
 _SEVERITY_RANK = {
@@ -137,8 +144,8 @@ def render_markdown(data: Dict) -> str:
     to_dict()/to_json() produce and the *-review.json file holds — so a
     rendering can never disagree with the artifact it came from.
 
-    Keys emitted since schema v1.0.0 are required (missing means KeyError —
-    the caller's problem); later schema additions are read with .get() and
+    Keys present in schema 1 are required (missing means KeyError — the
+    caller's problem); later schema additions are read with .get() and
     render only when present.
     """
     md = []
@@ -946,7 +953,7 @@ class ReviewOutputBuilder:
             'reviewer': self.reviewer,
             'timestamp': self.timestamp,
             'plugin_version': self._resolve_plugin_version(output_dir),
-            'version': '1.0.0',
+            'schema': REVIEW_OUTPUT_SCHEMA,
             'verdict': verdict,
             'summary': summary,
             'issues': self.issues,

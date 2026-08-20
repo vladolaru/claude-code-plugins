@@ -121,7 +121,7 @@ class TestCategoryRepresentatives:
     ):
         telemetry_log = tmp_path / "review.jsonl"
         telemetry_log.write_text(json.dumps({
-            "schema_version": 1,
+            "schema": 1,
             "run_id": "run-1",
             "event": "pipeline_start",
             "pipeline": {"repo_path": _get_fixture_repo()},
@@ -227,7 +227,7 @@ class TestCategoryRepresentatives:
         (the dispatch projection carries the override)."""
         telemetry_log = tmp_path / "review.jsonl"
         telemetry_log.write_text(json.dumps({
-            "schema_version": 1,
+            "schema": 1,
             "run_id": "run-1",
             "event": "pipeline_start",
             "pipeline": {"repo_path": _get_fixture_repo()},
@@ -261,7 +261,7 @@ class TestCategoryRepresentatives:
         the tier — a stray --model-tier flag must not override it."""
         telemetry_log = tmp_path / "review.jsonl"
         telemetry_log.write_text(json.dumps({
-            "schema_version": 1,
+            "schema": 1,
             "run_id": "run-1",
             "event": "pipeline_start",
             "pipeline": {"repo_path": _get_fixture_repo()},

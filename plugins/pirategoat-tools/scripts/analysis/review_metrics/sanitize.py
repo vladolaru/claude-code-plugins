@@ -18,7 +18,7 @@ from .contracts import (
     _SEVERITIES,
     _SUMMARY_FIELDS,
     _SUPPORTED_DISPATCH_STATUSES,
-    _SUPPORTED_MANIFEST_SCHEMA_VERSION,
+    _SUPPORTED_MANIFEST_SCHEMA,
     _SUPPORTED_MANIFEST_STATUSES,
     _WINDOWS_DRIVE_RE,
     _parse_time,
@@ -195,7 +195,7 @@ def _sanitize_steps(value: object) -> list[dict[str, Any]]:
                 "title",
             ),
         )
-        for name in ("schema_version", "step", "duration_since_prev_ms"):
+        for name in ("schema", "step", "duration_since_prev_ms"):
             count = _nonnegative_int(item.get(name)) if isinstance(item, dict) else None
             if count is not None:
                 step[name] = count
@@ -252,9 +252,9 @@ def _sanitize_agent_event(value: object, *, completed: bool) -> dict[str, Any]:
     agent = result.get("agent")
     if not isinstance(agent, str) or _PRODUCER_AGENT_NAME_RE.fullmatch(agent) is None:
         result.pop("agent", None)
-    schema_version = _nonnegative_int(value.get("schema_version"))
-    if schema_version is not None:
-        result["schema_version"] = schema_version
+    schema = _nonnegative_int(value.get("schema"))
+    if schema is not None:
+        result["schema"] = schema
     if completed:
         for name in ("duration_ms", "issue_count"):
             count = _nonnegative_int(value.get(name))
@@ -323,8 +323,8 @@ def _strict_lifecycle_event(
     expected_event = "agent_complete" if completed else "agent_start"
     if (
         not isinstance(value, dict)
-        or type(value.get("schema_version")) is not int
-        or value.get("schema_version") != _SUPPORTED_MANIFEST_SCHEMA_VERSION
+        or type(value.get("schema")) is not int
+        or value.get("schema") != _SUPPORTED_MANIFEST_SCHEMA
         or value.get("run_id") != run_id
         or value.get("event") != expected_event
         or _parse_time(value.get("timestamp")) is None
@@ -356,7 +356,7 @@ def _strict_lifecycle_event(
         if value["issue_count"] != sum(severities.values()):
             return None
         return {
-            "schema_version": value["schema_version"],
+            "schema": value["schema"],
             "run_id": value["run_id"],
             "event": value["event"],
             "timestamp": value["timestamp"],
@@ -383,7 +383,7 @@ def _strict_lifecycle_event(
     if "budget_target" in value and _nonnegative_exact_int(budget_target) is None:
         return None
     result = {
-        "schema_version": value["schema_version"],
+        "schema": value["schema"],
         "run_id": value["run_id"],
         "event": value["event"],
         "timestamp": value["timestamp"],
@@ -997,7 +997,7 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
     ):
         warnings.append("invalid_dispatch_projection")
     return {
-        "schema_version": _nonnegative_int(value.get("schema_version")) or 1,
+        "schema": _nonnegative_int(value.get("schema")) or 1,
         "status": status,
         "run": run,
         "steps": _sanitize_steps(value.get("steps")),
@@ -1014,7 +1014,7 @@ def _supported_manifest_envelope(value: object) -> bool:
     if not isinstance(value, dict):
         return False
     required = {
-        "schema_version",
+        "schema",
         "status",
         "run",
         "steps",
@@ -1025,9 +1025,9 @@ def _supported_manifest_envelope(value: object) -> bool:
     }
     if not required <= set(value):
         return False
-    if type(value.get("schema_version")) is not int or value.get(
-        "schema_version"
-    ) != _SUPPORTED_MANIFEST_SCHEMA_VERSION:
+    if type(value.get("schema")) is not int or value.get(
+        "schema"
+    ) != _SUPPORTED_MANIFEST_SCHEMA:
         return False
     status = value.get("status")
     if not isinstance(status, str) or status not in _SUPPORTED_MANIFEST_STATUSES:

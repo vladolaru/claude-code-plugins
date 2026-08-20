@@ -9,7 +9,7 @@ from typing import Any, Iterable
 from .contracts import (
     _ANSI_ESCAPE_RE,
     _CRITIC_VERDICTS,
-    _REPORT_SCHEMA_VERSION,
+    _REPORT_SCHEMA,
     _TABLE_CELL_LIMIT,
 )
 
@@ -169,7 +169,7 @@ def format_json(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
     """Render the stable structured report."""
     return json.dumps(
         {
-            "schema_version": _REPORT_SCHEMA_VERSION,
+            "schema": _REPORT_SCHEMA,
             "runs": runs,
             "aggregate": aggregate,
         },

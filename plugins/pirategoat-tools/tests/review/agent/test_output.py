@@ -10,6 +10,7 @@ Zero external dependencies beyond stdlib + pytest.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -437,7 +438,7 @@ class TestToDict:
         b.add_issue("medium", "Title", "f.py", "desc", "rec", line=1)
         d = b.to_dict()
         expected_keys = {
-            "pr_id", "reviewer", "timestamp", "plugin_version", "version",
+            "pr_id", "reviewer", "timestamp", "plugin_version", "schema",
             "verdict",
             "summary", "issues", "unreviewed", "deferred_reviewed",
             "observations", "recommendations", "positive_observations",
@@ -533,6 +534,21 @@ class TestToDict:
         b.save(str(tmp_path))
         saved = json.loads((tmp_path / "pr-review.json").read_text())
         assert saved["plugin_version"] == "1.114.0"
+
+    def test_schema_is_the_documented_shape_number(self):
+        """One `schema` convention across every artifact this plugin writes.
+
+        The retired `version: "1.0.0"` string was never bumped through six
+        format changes, so it asserted a compatibility guarantee nothing
+        maintained. `schema: 1` starts at the shape documented in
+        schemas/review-output.ts as of 1.114.0 and is bumped in the same
+        commit as any key added, removed, or re-typed.
+        """
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        d = b.to_dict()
+        assert d["schema"] == 1
+        assert isinstance(d["schema"], int)
+        assert "version" not in d
 
     def test_meta_structure(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
@@ -2144,3 +2160,55 @@ class TestSaveTimeDeferredValidation:
             "UNREVIEWED: 0 declared / 0 deferred | CLAIMED REVIEWED: 0" in out
         )
         assert "WARNING" not in out
+
+
+# =============================================================================
+# TestTypeScriptContractLockstep
+# =============================================================================
+
+
+class TestTypeScriptContractLockstep:
+    """schemas/review-output.ts and the builder describe one artifact.
+
+    The TypeScript file is the published contract downstream consumers read;
+    the builder is what actually lands on disk. When they drift, a consumer
+    is typed against a shape that no longer exists — and nothing fails.
+    """
+
+    @staticmethod
+    def _review_output_interface() -> str:
+        schema = (PLUGIN_ROOT / "schemas" / "review-output.ts").read_text()
+        match = re.search(
+            r"export interface ReviewOutput\s*\{(.*?)\n\}", schema, re.DOTALL
+        )
+        assert match is not None, "review-output.ts must declare ReviewOutput"
+        return match.group(1)
+
+    def test_identity_block_matches_the_serialized_artifact(self):
+        interface = self._review_output_interface()
+        declared = set(re.findall(r"^\s*(\w+)\??:", interface, re.MULTILINE))
+        serialized = set(ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict())
+
+        identity = {"pr_id", "reviewer", "timestamp", "plugin_version", "schema"}
+        assert identity <= declared
+        assert identity <= serialized
+
+    def test_retired_version_field_is_gone_from_both_sides(self):
+        interface = self._review_output_interface()
+        assert not re.search(r"^\s*version\??:", interface, re.MULTILINE)
+        assert "version" not in ReviewOutputBuilder(pr_id="1", reviewer="pr").to_dict()
+
+    def test_schema_is_declared_as_a_number(self):
+        interface = self._review_output_interface()
+        match = re.search(r"^\s*schema:\s*([^;]+);", interface, re.MULTILINE)
+        assert match is not None
+        assert match.group(1).strip() == "number"
+
+    def test_plugin_version_is_declared_nullable(self):
+        """Absence is part of the contract, not an error state."""
+        interface = self._review_output_interface()
+        match = re.search(
+            r"^\s*plugin_version:\s*([^;]+);", interface, re.MULTILINE
+        )
+        assert match is not None
+        assert match.group(1).strip() == "string | null"

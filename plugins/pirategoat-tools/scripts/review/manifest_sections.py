@@ -54,7 +54,7 @@ _USAGE_AVAILABILITY_STATES = frozenset({"complete", "partial", "missing"})
 # meanings this builder cannot vouch for, so it reads as unmeasured
 # rather than being projected on the assumption that the names still
 # mean what they mean here — the same rule the metrics consumer
-# applies to run manifests via _SUPPORTED_MANIFEST_SCHEMA_VERSION.
+# applies to run manifests via _SUPPORTED_MANIFEST_SCHEMA.
 _SUPPORTED_USAGE_SNAPSHOT_SCHEMA = 1
 # Mirrors the token-usage vocabulary the analysis package accumulates. The
 # two halves of a snapshot are summed over the same field set, so a map

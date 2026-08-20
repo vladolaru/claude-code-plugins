@@ -49,12 +49,12 @@ from git_paths import decode_git_c_quoted_path
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
-EVENT_SCHEMA_VERSION = 1
+EVENT_SCHEMA = 1
 # Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
 # pipeline's _FULL_SHA_RE contract for durable git identity.
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 _STEP_MANIFEST_FIELDS = (
-    "schema_version",
+    "schema",
     "run_id",
     "event",
     "timestamp",
@@ -64,7 +64,7 @@ _STEP_MANIFEST_FIELDS = (
     "duration_since_prev_ms",
 )
 _AGENT_START_MANIFEST_FIELDS = (
-    "schema_version",
+    "schema",
     "run_id",
     "event",
     "timestamp",
@@ -74,7 +74,7 @@ _AGENT_START_MANIFEST_FIELDS = (
     "budget_target",
 )
 _AGENT_COMPLETE_MANIFEST_FIELDS = (
-    "schema_version",
+    "schema",
     "run_id",
     "event",
     "timestamp",
@@ -241,7 +241,7 @@ class ReviewTelemetry:
             f.write(self._log_path)
 
         event = {
-            "schema_version": EVENT_SCHEMA_VERSION,
+            "schema": EVENT_SCHEMA,
             "run_id": run_id,
             "event": "pipeline_start",
             "timestamp": now.isoformat(),
@@ -477,8 +477,8 @@ class ReviewTelemetry:
 
     def _append(self, event: dict) -> None:
         """Append a JSON line to the log file."""
-        schema_version, run_id = self._read_event_identity()
-        event.setdefault("schema_version", schema_version)
+        schema, run_id = self._read_event_identity()
+        event.setdefault("schema", schema)
         event.setdefault("run_id", run_id)
         with open(self._log_path, "a") as f:
             f.write(json.dumps(event, separators=(",", ":")) + "\n")
@@ -783,7 +783,7 @@ class ReviewTelemetry:
             summary = {}
 
         manifest = {
-            "schema_version": EVENT_SCHEMA_VERSION,
+            "schema": EVENT_SCHEMA,
             "status": status,
             "run": {
                 "id": start.get("run_id", ""),
@@ -913,15 +913,15 @@ class ReviewTelemetry:
         """Read durable event identity from memory or the pipeline_start event."""
         run_id = getattr(self, "_run_id", "")
         if run_id:
-            return EVENT_SCHEMA_VERSION, run_id
+            return EVENT_SCHEMA, run_id
 
         start = self._read_first_event()
         if start is not None:
             return (
-                start.get("schema_version", EVENT_SCHEMA_VERSION),
+                start.get("schema", EVENT_SCHEMA),
                 start.get("run_id", ""),
             )
-        return EVENT_SCHEMA_VERSION, ""
+        return EVENT_SCHEMA, ""
 
     def _duration_since_prev(self, now: datetime) -> Optional[int]:
         """Calculate milliseconds since the previous event."""

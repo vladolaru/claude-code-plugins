@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .contracts import (
-    _SUPPORTED_MANIFEST_SCHEMA_VERSION,
+    _SUPPORTED_MANIFEST_SCHEMA,
     _incomplete_agent_executions,
     _parse_time,
     _project_agent_lifecycle,
@@ -95,7 +95,7 @@ def _privacy_reduced_lifecycle_event(
     missing/partial-data contract.
     """
     common = {
-        "schema_version": event["schema_version"],
+        "schema": event["schema"],
         "run_id": event["run_id"],
         "event": event["event"],
         "timestamp": event["timestamp"],
@@ -219,8 +219,8 @@ def _overlay_running_lifecycle(
 
     first = events[0]
     if (
-        type(first.get("schema_version")) is not int
-        or first.get("schema_version") != _SUPPORTED_MANIFEST_SCHEMA_VERSION
+        type(first.get("schema")) is not int
+        or first.get("schema") != _SUPPORTED_MANIFEST_SCHEMA
         or type(first.get("run_id")) is not str
         or first.get("run_id") != run_id
         or type(first.get("event")) is not str
@@ -236,8 +236,8 @@ def _overlay_running_lifecycle(
         event_name = event.get("event")
         timestamp = _parse_time(event.get("timestamp"))
         if (
-            type(event.get("schema_version")) is not int
-            or event.get("schema_version") != _SUPPORTED_MANIFEST_SCHEMA_VERSION
+            type(event.get("schema")) is not int
+            or event.get("schema") != _SUPPORTED_MANIFEST_SCHEMA
             or type(event.get("run_id")) is not str
             or event.get("run_id") != run_id
             or type(event_name) is not str
@@ -421,7 +421,7 @@ def _legacy_manifest(path: Path, *, invalid_sidecar: bool = False) -> dict[str, 
         warnings.append("invalid_manifest_fallback")
     summary = end.get("summary") if isinstance(end, dict) else {}
     manifest = {
-        "schema_version": _nonnegative_int(start.get("schema_version")) or 1,
+        "schema": _nonnegative_int(start.get("schema")) or 1,
         "status": "complete" if end else "running",
         "run": safe_pipeline,
         "steps": steps,
@@ -509,7 +509,7 @@ def _duplicate_conflict(
     ]
     started_at = max(timestamps).isoformat() if timestamps else None
     return {
-        "schema_version": _SUPPORTED_MANIFEST_SCHEMA_VERSION,
+        "schema": _SUPPORTED_MANIFEST_SCHEMA,
         "status": "duplicate_run_id_conflict",
         "run": {
             "id": f"duplicate-{digest}",

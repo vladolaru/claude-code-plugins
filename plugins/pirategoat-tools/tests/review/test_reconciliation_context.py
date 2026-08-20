@@ -156,7 +156,7 @@ def _make_review_json(
         "pr_id": pr_id,
         "reviewer": reviewer,
         "timestamp": "2026-04-04T10:00:00",
-        "version": "1.0.0",
+        "schema": 1,
         "verdict": verdict,
         "summary": {
             "total_issues": len(issues),

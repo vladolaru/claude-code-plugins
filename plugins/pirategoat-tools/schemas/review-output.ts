@@ -4,6 +4,13 @@
  * These schemas define the structured output format for all review agents,
  * enabling reliable parsing, automation, and integration.
  *
+ * SCHEMA MAINTENANCE: every artifact this plugin writes carries an integer
+ * `schema` field. When a shape changes — a key added, removed, or re-typed —
+ * bump that artifact's `schema` in the SAME commit as the change, update the
+ * interface below to match, and note the bump in the changelog. A schema
+ * number that lags the shape is worse than none: it tells consumers a
+ * compatibility claim the producer is not honoring.
+ *
  * Implements: Proposal #3 (Structured Output) from Tier 1 agentic patterns
  */
 
@@ -128,7 +135,7 @@ export interface ReviewOutput {
     reviewer: string; // 'architecture' | 'security' | 'performance' | 'tests' | 'patterns'
     timestamp: string; // ISO 8601
     plugin_version: string | null; // pirategoat-tools version that produced this artifact; null when the producer could not name itself
-    version: string; // Schema version for compatibility
+    schema: number; // Shape of this artifact — see SCHEMA MAINTENANCE above
 
     // Summary
     verdict: Verdict;
@@ -198,7 +205,7 @@ export interface ReviewOutput {
 export interface AggregatedReview {
     pr_id: string;
     timestamp: string;
-    version: string;
+    schema: number;
 
     // Overall verdict (most restrictive wins)
     overall_verdict: Verdict;

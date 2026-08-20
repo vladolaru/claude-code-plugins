@@ -403,6 +403,10 @@ Verdict is auto-calculated from issue severities:
 - Any medium → `comment`
 - Otherwise → `approve`
 
+### Artifact Schemas
+
+**RULE: every JSON artifact this plugin writes carries an integer `schema` field, and you bump it in the same commit as any shape change.** One convention, one key name — `schema`, never `schema_version`, never a `version` string. A shape change is a key added, removed, or re-typed; when you make one, bump that artifact's `schema` constant, update `schemas/review-output.ts` if the artifact is declared there, and note the bump in the changelog. The producing constants are `REVIEW_OUTPUT_SCHEMA` (`review/agent/output.py`), `EVENT_SCHEMA` (`review/telemetry.py`, covering both JSONL events and the run manifest), `SNAPSHOT_SCHEMA` (`analysis/usage_snapshot.py`), and the `_*_SCHEMA` contracts in `analysis/review_metrics/contracts.py`; smaller sidecars carry a literal `1`. Readers accept exactly the schema they were written against and route anything else down their unsupported path — never a crash, never a silent read of fields whose meaning the producer did not vouch for. This rule exists because the review JSONs shipped a `version: "1.0.0"` string that survived six format changes unbumped: a schema number that lags the shape is worse than none, because it tells consumers a compatibility claim the producer is not honoring.
+
 ### Cross-Repo Dependency: pirategoat-bot
 
 The `pirategoat-bot` Slack bot (at `~/Work/a8c/pirategoat-bot`) wraps this plugin's review pipeline. The two repos share integration contracts that must stay in sync:

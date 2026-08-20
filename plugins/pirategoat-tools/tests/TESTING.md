@@ -148,12 +148,13 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestSetConfidence` | Valid range works, invalid raises ValueError |
 | `TestAddToolResult` | Stores tool names, deduplicates |
 | `TestCalculateVerdict` | All 9 verdict boundaries (approve/comment/request_changes/block) |
-| `TestToDict` | All top-level keys, severity counts, meta structure, None for empty fields |
+| `TestToDict` | All top-level keys, severity counts, meta structure, None for empty fields, `schema: 1` (no retired `version` string), and `plugin_version` resolution — envelope variable first, then the run-config stamp for envelope-bypassing callers, null when neither is readable |
 | `TestToJson` | json.loads(to_json()) roundtrips to match to_dict() |
 | `TestToMarkdown` | Header format, issues grouped by severity, positive observations |
 | `TestSave` | Creates both files, JSON matches to_dict(), return paths correct |
 | `TestAddDeferredReviewed` | Explicit claims of NOT DIFFED files actually read: the path grammar shared with `add_unreviewed()`, add-time membership validation against the deferred sidecar, and that a claim never moves the verdict |
 | `TestSaveTimeDeferredValidation` | `save()` as the coverage authority: batch-rejected declarations and claims, declare+claim contradictions rejected even without a sidecar, per-save recomputed `meta.unreviewed_autofilled` backfill, and the `UNREVIEWED … / CLAIMED REVIEWED` echo |
+| `TestTypeScriptContractLockstep` | `schemas/review-output.ts` and the serialized artifact describe one shape: the identity block (`pr_id`/`reviewer`/`timestamp`/`plugin_version`/`schema`) is declared and emitted, the retired `version` field is gone from both, `schema` is typed `number`, and `plugin_version` is typed nullable |
 
 ###Reconciliation Context Tests (`review/test_reconciliation_context.py`)
 

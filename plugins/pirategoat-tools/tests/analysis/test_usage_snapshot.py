@@ -103,7 +103,7 @@ def _manifest(session_id, output_dir: Path, repo: Path, *,
               started: list[str] | None = None) -> dict:
     """A run manifest in the shape telemetry materializes."""
     return {
-        "schema_version": 1,
+        "schema": 1,
         "status": status,
         "run": {
             "id": "run-1",

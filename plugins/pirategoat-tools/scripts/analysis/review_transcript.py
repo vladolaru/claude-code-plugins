@@ -103,7 +103,7 @@ def _is_recognized_reviewer(name: str, recognized_agents: set[str]) -> bool:
 _NON_SCOPE_COMPARABLE_READ_AGENTS = (
     _NON_SCOPE_COMPARABLE_AGENTS | _SCOPE_EXEMPT_REVIEWERS
 )
-_OBSERVED_READS_SCHEMA_VERSION = 2
+_OBSERVED_READS_SCHEMA = 2
 
 
 def _read_jsonl(path: str | Path) -> tuple[list[dict[str, Any]], bool]:
@@ -2156,7 +2156,7 @@ def enrich_run_transcript(
         "by_agent": artifact_by_agent,
     }
     observed_reads = {
-        "schema_version": _OBSERVED_READS_SCHEMA_VERSION,
+        "schema": _OBSERVED_READS_SCHEMA,
         "all": sorted(read_all),
         "in_scope": sorted(read_in_scope),
         "out_of_scope": sorted(read_all - read_in_scope),

@@ -162,7 +162,7 @@ def test_sanitize_steps_drops_thoughts_length_from_old_logs():
         "timestamp": "2026-01-01T00:00:00+00:00",
         "phase": "VALIDATION",
         "title": "Decision Critic",
-        "schema_version": 1,
+        "schema": 1,
         "step": 10,
         "duration_since_prev_ms": 12,
         "args": {"bot_mode": True, "thoughts_length": 321},
@@ -187,7 +187,7 @@ def _manifest(
     session_id: str | None = None,
 ) -> dict:
     return {
-        "schema_version": 1,
+        "schema": 1,
         "status": "complete",
         "run": {
             "id": run_id,
@@ -260,13 +260,24 @@ def _running_manifest(run_id: str = "run-1") -> dict:
     return manifest
 
 
+def _with_legacy_schema_key(event: dict) -> dict:
+    """The same event as a pre-1.114.0 producer wrote it.
+
+    `schema_version` was this family's key before the rename. No reader
+    accepts it now, so an event spelled this way is unrecognizable input.
+    """
+    rekeyed = {k: v for k, v in event.items() if k != "schema"}
+    rekeyed["schema_version"] = event["schema"]
+    return rekeyed
+
+
 def _pipeline_start(
     run_id: str = "run-1",
     *,
     timestamp: str = "2026-07-19T10:00:00+00:00",
 ) -> dict:
     return {
-        "schema_version": 1,
+        "schema": 1,
         "run_id": run_id,
         "event": "pipeline_start",
         "timestamp": timestamp,
@@ -280,7 +291,7 @@ def _pipeline_end(
     timestamp: str = "2026-07-19T10:00:30+00:00",
 ) -> dict:
     return {
-        "schema_version": 1,
+        "schema": 1,
         "run_id": run_id,
         "event": "pipeline_end",
         "timestamp": timestamp,
@@ -293,7 +304,7 @@ def _step(
     timestamp: str = "2026-07-19T10:00:10+00:00",
 ) -> dict:
     return {
-        "schema_version": 1,
+        "schema": 1,
         "run_id": run_id,
         "event": "step",
         "timestamp": timestamp,
@@ -308,7 +319,7 @@ def _agent_start(
     timestamp: str = "2026-07-19T10:00:10+00:00",
 ) -> dict:
     return {
-        "schema_version": 1,
+        "schema": 1,
         "run_id": run_id,
         "event": "agent_start",
         "timestamp": timestamp,
@@ -327,7 +338,7 @@ def _agent_complete(
     timestamp: str = "2026-07-19T10:00:20+00:00",
 ) -> dict:
     return {
-        "schema_version": 1,
+        "schema": 1,
         "run_id": run_id,
         "event": "agent_complete",
         "timestamp": timestamp,
@@ -545,7 +556,7 @@ def _empty_reads(
         complete if non_scope_complete is None else non_scope_complete
     )
     return {
-        "schema_version": 2,
+        "schema": 2,
         "all": [],
         "in_scope": [],
         "out_of_scope": [],
@@ -1159,6 +1170,32 @@ class TestLoadRuns:
                 ],
                 id="completion-appended-before-later-start",
             ),
+            pytest.param(
+                [
+                    _with_legacy_schema_key(_pipeline_start("running-run")),
+                    _agent_start("code-reviewer", run_id="running-run"),
+                ],
+                id="pre-rename-schema-key-on-first-event",
+            ),
+            pytest.param(
+                [
+                    _pipeline_start("running-run"),
+                    _with_legacy_schema_key(
+                        _agent_start("code-reviewer", run_id="running-run")
+                    ),
+                ],
+                id="pre-rename-schema-key-mid-stream",
+            ),
+            pytest.param(
+                [
+                    _pipeline_start("running-run"),
+                    {
+                        **_agent_start("code-reviewer", run_id="running-run"),
+                        "schema": 2,
+                    },
+                ],
+                id="unsupported-schema-mid-stream",
+            ),
         ],
     )
     def test_invalid_running_lifecycle_overlay_fails_closed_family_locally(
@@ -1520,10 +1557,10 @@ class TestLoadRuns:
     @pytest.mark.parametrize(
         "field,value",
         [
-            ("schema_version", None),
-            ("schema_version", True),
-            ("schema_version", 1.0),
-            ("schema_version", 2),
+            ("schema", None),
+            ("schema", True),
+            ("schema", 1.0),
+            ("schema", 2),
             ("status", None),
             ("status", "success"),
         ],
@@ -1554,6 +1591,67 @@ class TestLoadRuns:
             "legacy_log_no_manifest",
             "invalid_manifest_fallback",
         ]
+
+    def test_pre_rename_manifest_is_unsupported_not_an_error(self, tmp_path):
+        """`schema_version` was this family's key before 1.114.0 renamed it.
+
+        The rename is clean — no reader accepts the old name — so artifacts
+        written before it are simply unrecognizable input. They must take
+        the same labeled unsupported-envelope path as any other unreadable
+        sidecar: a warning-carrying legacy fallback, never a crash and
+        never a silent acceptance of fields whose meaning is unvouched.
+        """
+        manifest = _manifest("sidecar-run")
+        manifest["schema_version"] = manifest.pop("schema")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-fallback"
+        assert run["warnings"] == [
+            "legacy_log_no_manifest",
+            "invalid_manifest_fallback",
+        ]
+
+    def test_pre_rename_manifest_without_a_log_yields_no_run(self, tmp_path):
+        """Nothing recognizable is left to measure, and that is reported.
+
+        The pre-rename field runs on a maintainer's machine fall here. The
+        contract is that they drop out of the cohort rather than entering
+        it with fields read under the wrong contract.
+        """
+        manifest = _manifest("sidecar-run")
+        manifest["schema_version"] = manifest.pop("schema")
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        assert load_runs(tmp_path) == []
+
+    def test_pre_rename_jsonl_events_still_reduce_to_a_labeled_legacy_run(
+        self, tmp_path
+    ):
+        """The tolerant JSONL path never claimed to validate the envelope.
+
+        It reconstructs what it can and labels the result legacy; an event
+        stream keyed the old way loses only the schema number it carried.
+        """
+        events = _legacy_events("legacy-old-key")
+        for event in events:
+            event.pop("schema", None)
+            # Deliberately not 1: the reconstruction's own default IS 1, so
+            # only a distinguishable number can show whether the old key was
+            # read or ignored.
+            event["schema_version"] = 7
+        _write_jsonl(tmp_path / "review.jsonl", events)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-old-key"
+        assert run["warnings"] == ["legacy_log_no_manifest"]
+        # The old key is not read as the new one: the reconstruction falls
+        # back to its default rather than adopting the unvouched number.
+        assert run["schema"] == 1
+        assert "schema_version" not in run
 
     @pytest.mark.parametrize("status", ["running", "complete"])
     def test_supported_sidecar_status_suppresses_sibling_legacy_log(
@@ -4379,8 +4477,8 @@ class TestLifecycleMeasurement:
     @pytest.mark.parametrize(
         "family,mutate",
         [
-            ("started", lambda event: event.pop("schema_version")),
-            ("started", lambda event: event.__setitem__("schema_version", True)),
+            ("started", lambda event: event.pop("schema")),
+            ("started", lambda event: event.__setitem__("schema", True)),
             ("started", lambda event: event.__setitem__("event", "agent_complete")),
             ("started", lambda event: event.__setitem__("run_id", "other-run")),
             ("started", lambda event: event.__setitem__("timestamp", "2026-07-19T10:00:10")),
@@ -4604,7 +4702,7 @@ class TestTranscriptFamilyAvailability:
             }
         )
         transcript["observed_reads"] = {
-            "schema_version": 2,
+            "schema": 2,
             "all": ["src/reviewer.py"],
             "in_scope": [],
             "out_of_scope": ["src/reviewer.py"],
@@ -5629,7 +5727,7 @@ class TestTranscriptFamilyAvailability:
                 "observed_reads",
                 "observed_reads",
                 {
-                    "schema_version": 2,
+                    "schema": 2,
                     "all": ["src/context.py"],
                     "in_scope": [],
                     "out_of_scope": ["src/context.py"],
@@ -5773,9 +5871,9 @@ class TestTranscriptFamilyAvailability:
     ):
         transcript = _complete_empty_transcript()
         if invalid_version is None:
-            transcript["observed_reads"].pop("schema_version")
+            transcript["observed_reads"].pop("schema")
         else:
-            transcript["observed_reads"]["schema_version"] = invalid_version
+            transcript["observed_reads"]["schema"] = invalid_version
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
         cohort = aggregate_cohort([measured])
@@ -5964,7 +6062,7 @@ class TestTranscriptFamilyAvailability:
             }
         )
         transcript["observed_reads"] = {
-            "schema_version": 2,
+            "schema": 2,
             "all": ["src/context.py"],
             "in_scope": [],
             "out_of_scope": ["src/context.py"],
@@ -6844,8 +6942,8 @@ class TestFormattingAndCli:
         runs = [_measured_run("run-json")]
         payload = json.loads(format_json(runs, aggregate_cohort(runs)))
 
-        assert set(payload) == {"schema_version", "runs", "aggregate"}
-        assert payload["schema_version"] == 2
+        assert set(payload) == {"schema", "runs", "aggregate"}
+        assert payload["schema"] == 2
 
     def test_json_exposes_lifecycle_and_partial_unknown_builder_evidence(
         self, monkeypatch, tmp_path
@@ -6909,7 +7007,7 @@ class TestFormattingAndCli:
 
         assert result == 0
         assert json.loads(output.read_text()) == {
-            "schema_version": 2,
+            "schema": 2,
             "runs": [],
             "aggregate": aggregate_cohort([]),
         }
