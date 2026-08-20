@@ -46,6 +46,12 @@ from typing import List, Optional, Dict, Any
 # TypeScript contract, and note the bump in the changelog. It replaced a
 # `version: "1.0.0"` string that survived six format changes unbumped —
 # an unmaintained compatibility claim is worse than none.
+#
+# One carve-out, matching the rule in the plugin's AGENTS.md: a shape change
+# made within the same UNRELEASED version that introduced the current number
+# updates the TypeScript contract in the same commit but does NOT bump. The
+# number states a compatibility guarantee only once released, so bumping
+# here would publish a shape no artifact ever had.
 REVIEW_OUTPUT_SCHEMA = 1
 
 _VALID_SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')
@@ -227,7 +233,8 @@ def render_markdown(data: Dict) -> str:
             f"({recon.get('concerns_after_grouping', 0)} concerns after "
             f"grouping, {recon.get('false_positives_dropped', 0)} false "
             f"positives dropped, {recon.get('out_of_scope_dropped', 0)} "
-            "out-of-scope dropped)\n\n"
+            "out-of-scope dropped). Full metrics in "
+            "`review-findings.json` \u2192 `meta.reconciliation`.\n\n"
         )
         # Not-applicable agents are reported separately and never counted
         # toward approval confidence: they abstained, they did not review.
@@ -1278,13 +1285,25 @@ if __name__ == '__main__':
     render_cmd.add_argument("json_path")
     mat_cmd = sub.add_parser(
         "materialize",
-        help="Write <reviewer>-review.md beside every *-review.json in a directory",
+        help="Write <name>.md beside every matching <name>.json in a directory",
     )
     mat_cmd.add_argument("output_dir")
+    mat_cmd.add_argument(
+        "--suffix",
+        default="-review.json",
+        help=(
+            "Which JSON family to render. Default renders every "
+            "<reviewer>-review.json; pass review-findings.json to render "
+            "the reconciliation ledger — the recovery command step 11 "
+            "prints when that render failed."
+        ),
+    )
     cli_args = parser.parse_args()
     if cli_args.command == "render":
         with open(cli_args.json_path, encoding="utf-8") as cli_handle:
             print(render_markdown(json.load(cli_handle)))
     else:
-        for written_path in materialize_markdown(cli_args.output_dir):
+        for written_path in materialize_markdown(
+            cli_args.output_dir, suffix=cli_args.suffix
+        ):
             print(written_path)

@@ -347,6 +347,15 @@ _DEFAULT_STATE = {
         "expected": 0,
         "status": "not_run",
     },
+    # Step 9's and step 11's render of review-findings.md, recorded in the
+    # same shape as its per-reviewer sibling above so both report through
+    # one status-line helper and read the same way in pipeline state.
+    "findings_markdown": {
+        "ran": False,
+        "written": 0,
+        "expected": 0,
+        "status": "not_run",
+    },
     "verdict": None,
 }
 

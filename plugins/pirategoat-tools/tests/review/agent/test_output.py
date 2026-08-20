@@ -2403,6 +2403,31 @@ class TestReconciliationSectionsRender:
         assert "3 false positives dropped" in rendered
         assert "1 out-of-scope dropped" in rendered
 
+    def test_pipeline_line_points_at_the_full_metrics_block(self):
+        """The narrative template ended its Pipeline line with a pointer to
+        the metrics block. Dropping it in the substitution would lose the
+        one hint a reader has that more accounting exists."""
+        data = self._findings()
+        data["meta"]["reconciliation"] = {
+            "input_findings_count": 12,
+            "agents_contributing": 4,
+            "concerns_after_grouping": 5,
+            "false_positives_dropped": 3,
+            "out_of_scope_dropped": 1,
+            "verified_concerns": 4,
+            "merge_ratio": 0.58,
+            "not_applicable_count": 0,
+            "not_applicable_agents": [],
+            "reviewing_agents": [],
+            "dispatched_agents": [],
+            "missing_agents": [],
+        }
+        rendered = render_markdown(data)
+        assert (
+            "Full metrics in `review-findings.json` \u2192 "
+            "`meta.reconciliation`." in rendered
+        )
+
     def test_not_applicable_agents_are_reported_with_reasons(self):
         data = self._findings()
         data["meta"]["reconciliation"] = {
@@ -2524,3 +2549,45 @@ class TestMaterializeFindingsMarkdown:
     def test_missing_findings_json_writes_nothing_and_does_not_raise(self):
         with tempfile.TemporaryDirectory() as d:
             assert materialize_markdown(d, suffix="review-findings.json") == []
+
+    def test_materialize_cli_accepts_the_suffix(self):
+        """The on-demand recovery path step 11 prints has to be able to
+        render the findings ledger, not only the per-reviewer family."""
+        output_py = (
+            Path(__file__).parents[3] / "scripts" / "review" / "agent"
+            / "output.py"
+        )
+        with tempfile.TemporaryDirectory() as d:
+            b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+            b.add_issue("high", "T", "f.py", "d", "r", line=1)
+            Path(d, "review-findings.json").write_text(json.dumps(b.to_dict()))
+            result = subprocess.run(
+                [sys.executable, str(output_py), "materialize", d,
+                 "--suffix", "review-findings.json"],
+                capture_output=True, text=True,
+            )
+            assert result.returncode == 0, result.stderr
+            assert "review-findings.md" in result.stdout
+            assert Path(d, "review-findings.md").is_file()
+
+    def test_materialize_cli_default_suffix_is_unchanged(self):
+        output_py = (
+            Path(__file__).parents[3] / "scripts" / "review" / "agent"
+            / "output.py"
+        )
+        with tempfile.TemporaryDirectory() as d:
+            ReviewOutputBuilder(pr_id="1", reviewer="security").save(d)
+            Path(d, "review-findings.json").write_text(
+                json.dumps(
+                    ReviewOutputBuilder(
+                        pr_id="1", reviewer="reconciliator"
+                    ).to_dict()
+                )
+            )
+            result = subprocess.run(
+                [sys.executable, str(output_py), "materialize", d],
+                capture_output=True, text=True,
+            )
+            assert result.returncode == 0, result.stderr
+            assert "security-review.md" in result.stdout
+            assert not Path(d, "review-findings.md").exists()

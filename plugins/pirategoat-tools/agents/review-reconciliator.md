@@ -141,7 +141,7 @@ For each verified concern:
 3. **Use `ReviewOutputBuilder`** to produce structured output:
 
 ```python
-import sys, os, json
+import sys, os
 
 # Use the output directory and builder path from the dispatch prompt
 output_dir = "OUTPUT_DIR_FROM_PROMPT"

@@ -539,7 +539,14 @@ def build_dependency_refresh_manifest(output_dir: str):
 
 
 def build_reviewer_markdown_manifest(output_dir: str) -> Optional[dict]:
-    """Project the script-owned reviewer-Markdown outcome into the manifest."""
+    """Project the script-owned reviewer-Markdown outcome into the manifest.
+
+    Its sibling `findings_markdown` (steps 9 and 11) deliberately has no
+    manifest section yet: it is folded into the availability retrofit that
+    covers this section and dependency_refresh's, so all three gain the
+    same "measured vs. never ran" vocabulary in one change rather than
+    this one copying today's shape a third time.
+    """
     state = read_json_file(output_dir, "pipeline-state.json")
     outcome = state.get("reviewer_markdown") if state is not None else None
     if not isinstance(outcome, dict):

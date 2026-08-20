@@ -1894,6 +1894,56 @@ class TestCriticVerdictPersistence:
         assert not (tmp_path / "decision-critic-verdict.json").exists()
 
 
+class TestStep10FallbackFollowsTheRenderOutcome:
+    """The critic's fallback target must be a file that exists.
+
+    `review-findings.md` used to be handoff-guaranteed — the reconciliator
+    wrote it or step 8 did not proceed. It is now a best-effort script
+    render, and step 9 records exactly the signal that says whether it
+    landed. Pointing the critic at it without consulting that signal is how
+    a degraded run sends the critic to a file no one wrote.
+    """
+
+    def _guidance(self, mod, tmp_path, degradation):
+        state = {"completed_steps": [], "degradation": degradation}
+        return mod.get_step_guidance(
+            10, "pr", state, {}, config={"mode": "pr"},
+            output_dir=str(tmp_path),
+        )
+
+    def test_report_failure_alone_still_falls_back_to_the_markdown(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(
+            mod, tmp_path, {"report_synthesis_failed": True}
+        )
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "review-findings.md" in text
+
+    def test_an_incomplete_render_redirects_the_critic_to_the_json(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(mod, tmp_path, {
+            "report_synthesis_failed": True,
+            "findings_markdown_incomplete": True,
+        })
+        text = "\n".join(g["situation"] + g["actions"])
+        assert f"{tmp_path}/review-findings.json" in text
+        assert "review-findings.md" not in text
+        # And it says why, so the critic knows it is reading raw findings.
+        assert "render" in text.lower()
+
+    def test_a_healthy_report_ignores_the_render_outcome(
+        self, mod, tmp_path
+    ):
+        g = self._guidance(
+            mod, tmp_path, {"findings_markdown_incomplete": True}
+        )
+        text = "\n".join(g["situation"] + g["actions"])
+        assert "review-report.md" in text
+        assert "review-findings.md" not in text
+
+
 class TestStep11PresentResults:
     def test_shows_verdict_interactive(self, mod, tmp_path):
         config = {"mode": "pr", "interactive": True}
@@ -2008,6 +2058,75 @@ class TestStep11PresentResults:
         ]
         assert lines == ["Reviewer Markdown: materialized 2/2 files."]
         assert "agent/output.py materialize" not in lines[0]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_findings_markdown_outcome_is_reported_beside_the_reviewer_one(
+        self, mod, tmp_path, interactive
+    ):
+        """Write-only state is unreportable state. Step 11 is where a run
+        says what it left behind, and the findings render is a best-effort
+        artifact three degraded paths depend on."""
+        state = {
+            "completed_steps": [],
+            "findings_markdown": {
+                "ran": True, "written": 1, "expected": 1,
+                "status": "complete",
+            },
+        }
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": interactive},
+            output_dir=str(tmp_path),
+        )
+        lines = [
+            line for line in guidance["actions"]
+            if "Findings Markdown:" in line
+        ]
+        assert lines == ["Findings Markdown: materialized 1/1 files."]
+
+    @pytest.mark.parametrize("interactive", [True, False])
+    def test_failed_findings_render_carries_its_own_recovery_command(
+        self, mod, tmp_path, interactive
+    ):
+        state = {
+            "completed_steps": [],
+            "findings_markdown": {
+                "ran": True, "written": 0, "expected": 1, "status": "failed",
+            },
+            "degradation": {"findings_markdown_incomplete": True},
+        }
+        guidance = mod.get_step_guidance(
+            11, "pr", state, {},
+            config={"mode": "pr", "interactive": interactive},
+            output_dir=str(tmp_path),
+        )
+        lines = [
+            line for line in guidance["actions"]
+            if "Findings Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert "0/1" in lines[0]
+        # The suffix is what makes the printed command actually rebuild the
+        # findings ledger rather than the per-reviewer family.
+        assert (
+            f"materialize {tmp_path} --suffix review-findings.json"
+            in lines[0]
+        )
+
+    def test_absent_findings_markdown_state_reports_it_did_not_run(
+        self, mod, tmp_path
+    ):
+        guidance = mod.get_step_guidance(
+            11, "pr", {"completed_steps": []}, {},
+            config={"mode": "pr", "interactive": True},
+            output_dir=str(tmp_path),
+        )
+        lines = [
+            line for line in guidance["actions"]
+            if "Findings Markdown:" in line
+        ]
+        assert len(lines) == 1
+        assert "did not run" in lines[0]
 
     def test_incremental_mentions_baseline_saved(self, mod, tmp_path):
         config = {"mode": "incremental", "interactive": True}

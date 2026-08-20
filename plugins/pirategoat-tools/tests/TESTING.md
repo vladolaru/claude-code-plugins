@@ -158,7 +158,7 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 
 ###Reconciliation Context Tests (`review/test_reconciliation_context.py`)
 
-Direct unit tests on `scripts/review/reconciliation_context.py` — agent-finding loading, scope and hunk checking, source-snippet extraction, severity normalization, and the `to_markdown()` rendering the reconciliator reads (238 collected tests across 22 classes). The deferred-coverage accounting classes are listed here because they carry the NOT DIFFED honesty contract from reviewer output into the reconciliation view; the remaining classes follow the same direct-unit-test pattern.
+Direct unit tests on `scripts/review/reconciliation_context.py` — agent-finding loading, scope and hunk checking, source-snippet extraction, severity normalization, and the `to_markdown()` rendering the reconciliator reads (239 collected tests across 22 classes). The deferred-coverage accounting classes are listed here because they carry the NOT DIFFED honesty contract from reviewer output into the reconciliation view; the remaining classes follow the same direct-unit-test pattern.
 
 | Class | Tests | What it verifies |
 |---|---|---|
@@ -198,7 +198,7 @@ Direct unit tests on the finalize-side accounting in `scripts/review/orchestrati
 
 ###Pipeline Infrastructure Tests (`review/test_pipeline_infra.py`)
 
-Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequence, routing, state I/O, output formatting, telemetry/Git identity, and the CLI (92 collected tests across 12 classes). The step-skip class is documented here because its records are what make a run auditable at all — reconciling 12 contract steps against 9 completions otherwise takes source archaeology; the remaining classes follow the routing/state/CLI split the module table above describes.
+Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequence, routing, state I/O, output formatting, telemetry/Git identity, and the CLI (96 collected tests across 12 classes). The step-skip class is documented here because its records are what make a run auditable at all — reconciling 12 contract steps against 9 completions otherwise takes source archaeology; the remaining classes follow the routing/state/CLI split the module table above describes.
 
 | Class | Tests | What it verifies |
 |---|---|---|

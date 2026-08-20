@@ -139,6 +139,8 @@ module is exempt — do not add inline containment checks or an allowlist.
 
 **RULE: an artifact that carries a `schema` field gets that field bumped in the same commit as any change to its shape.** A shape change is a key added, removed, or re-typed. When you make one: bump the producing constant, update `schemas/review-output.ts` if the artifact is declared there, and note the bump in the changelog.
 
+**One carve-out:** a shape change made within the same UNRELEASED version that introduced the current schema number updates the contract in the same commit but does NOT bump. The number states a compatibility guarantee only once released, so bumping before release publishes a shape no artifact ever had. Check `git tag` for the plugin's last released version before deciding — if the number's introducing version is already tagged, the carve-out does not apply and you bump.
+
 The key is always the integer `schema` — never `schema_version`, never a `version` string. Both of those existed and were retired in 1.114.0.
 
 Not every JSON file in a run directory carries one, and this rule does not ask you to add it to them. `pipeline-state.json`, `pipeline-result.json`, `run-config.json`, `dispatch-plan.json`, `review-verdict.json`, `reconciliation-context.json`, and the critic / dependency-refresh reports carry no `schema` and are read only by this plugin within a single run. The field earns its place where an artifact **outlives the run that wrote it, or is parsed by a consumer that did not write it** — that is the criterion for deciding whether a new artifact needs one. The families that meet it today:

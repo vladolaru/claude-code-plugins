@@ -1292,7 +1292,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         )
     if not os.path.isfile(report_path):
         degradation_notes.append("review-report.md not found")
-        alt = os.path.join(output_dir, "review-findings.md")
+        alt = os.path.join(output_dir, _FINDINGS_MD)
         report_path = alt if os.path.isfile(alt) else None
     if not os.path.isfile(findings_path):
         degradation_notes.append("review-findings.json not found")

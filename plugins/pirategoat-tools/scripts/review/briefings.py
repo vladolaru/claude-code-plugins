@@ -1352,10 +1352,27 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     situation = [_PHASE_TRANSITIONS["VALIDATION"]]
     actions = []
 
-    # Determine which file the critic should review
+    # Determine which file the critic should review.
+    #
+    # The fallback used to be unconditional because review-findings.md was
+    # handoff-guaranteed: the reconciliator wrote it or step 8 refused to
+    # proceed. It is now a best-effort render the pipeline owns, and step 9
+    # records exactly whether it landed — so the fallback consults that
+    # signal instead of assuming it. When the render did not complete, the
+    # critic goes to the canonical ledger itself: it can read JSON, and a
+    # raw findings list is a worse read than a rendering but an infinitely
+    # better one than a file nobody wrote.
     if degradation.get("report_synthesis_failed"):
-        critic_target = f"{od}/review-findings.md"
-        situation.append("⚠️ Review report synthesis failed — critic will review review-findings.md instead.")
+        if degradation.get("findings_markdown_incomplete"):
+            critic_target = f"{od}/review-findings.json"
+            situation.append(
+                "⚠️ Review report synthesis failed AND the findings Markdown "
+                "render did not complete — critic will review the raw "
+                "review-findings.json ledger instead."
+            )
+        else:
+            critic_target = f"{od}/review-findings.md"
+            situation.append("⚠️ Review report synthesis failed — critic will review review-findings.md instead.")
     else:
         critic_target = f"{od}/review-report.md"
 
@@ -1491,9 +1508,17 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
 # Step 11: Present Results
 # ---------------------------------------------------------------------------
 
-def _reviewer_markdown_status_line(state, output_dir):
-    """Summarize the derived reviewer-Markdown outcome for a human."""
-    outcome = state.get("reviewer_markdown")
+def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None):
+    """Summarize one derived-Markdown outcome for a human.
+
+    Both derived families — the per-reviewer `<reviewer>-review.md` rendered
+    at step 8 and `review-findings.md` rendered at steps 9 and 11 — are
+    best-effort renders that record the same written/expected/status
+    outcome, so they report through one helper rather than two that drift.
+    `suffix` is passed to the printed recovery command, which is what makes
+    that command rebuild the family the line is actually about.
+    """
+    outcome = state.get(key)
     if not isinstance(outcome, dict) or outcome.get("ran") is not True:
         detail = "materialization did not run"
     else:
@@ -1504,14 +1529,16 @@ def _reviewer_markdown_status_line(state, output_dir):
             and written == expected
             and written > 0
         ):
-            return f"Reviewer Markdown: materialized {written}/{expected} files."
+            return f"{label}: materialized {written}/{expected} files."
         detail = f"materialization {outcome.get('status', 'incomplete')} ({written}/{expected} files)"
 
     command = (
         f"python3 {shlex.quote(str(SCRIPTS_DIR / 'agent' / 'output.py'))} "
         f"materialize {shlex.quote(str(output_dir))}"
     )
-    return f"⚠️ Reviewer Markdown: {detail}; regenerate with: `{command}`."
+    if suffix:
+        command += f" --suffix {shlex.quote(suffix)}"
+    return f"⚠️ {label}: {detail}; regenerate with: `{command}`."
 
 
 def _step_11_present_results(mode, state, context, config, output_dir):
@@ -1567,7 +1594,13 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         if mode == "incremental":
             actions.append("Baseline saved. Next run reviews only new commits.")
 
-    actions.append(_reviewer_markdown_status_line(state, od))
+    actions.append(_derived_markdown_status_line(
+        state, od, key="reviewer_markdown", label="Reviewer Markdown",
+    ))
+    actions.append(_derived_markdown_status_line(
+        state, od, key="findings_markdown", label="Findings Markdown",
+        suffix="review-findings.json",
+    ))
 
     return {
         "phase": "OUTPUT",
