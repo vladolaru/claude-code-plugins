@@ -1001,6 +1001,12 @@ def _sync_findings_verdict(findings_path, verdict):
     """Rule 23: write ``verdict`` into review-findings.json's ``verdict``
     field, and report exactly what happened instead of swallowing it.
 
+    The assignment creates the ``verdict`` key if the ledger lacks one and
+    overwrites it otherwise — the ledger's other writers (the
+    review-reconciliator agent, critic_adjustments.py) always populate it,
+    so an object-shaped file missing the key is not a case this function
+    treats specially; it is written either way.
+
     Returns ``(state, reason)``:
 
     - ``("synced", None)`` — the write landed (or the ledger already
@@ -1020,13 +1026,14 @@ def _sync_findings_verdict(findings_path, verdict):
       beside it.
 
     A missing findings file is folded into "skipped_shape_mismatch" rather
-    than treated as its own state or as "failed_io": by the time step 11
-    runs, step 8's reconciliation is the file's first writer and is a
-    handoff gate earlier in the pipeline (see briefings.py's step 8), so
-    an absent ledger here is already an abnormal run, not an I/O fault
-    against a file that was there a moment ago. It is the same "nowhere to
-    carry a verdict" shape hole as a non-object ledger — just discovered a
-    step earlier, before the file can even be opened — so it shares that
+    than treated as its own state or as "failed_io": step 8's briefing
+    (briefings.py) instructs the orchestrator to dispatch the
+    reconciliator, whose write is the file's first — but that briefing is
+    LLM-followed guidance, not a gate anything in code enforces, so an
+    absent ledger by step 11 is already an abnormal run rather than a
+    contradiction of a guarantee. It is the same "nowhere to carry a
+    verdict" shape hole as a non-object ledger — just discovered a step
+    earlier, before the file can even be opened — so it shares that
     outcome's vocabulary instead of inventing a fourth one.
     """
     if not os.path.isfile(findings_path):
@@ -1066,13 +1073,19 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     )
 
     verdict_path = os.path.join(output_dir, "review-verdict.json")
-    verdict_data = None
-    if os.path.isfile(verdict_path):
-        try:
-            with open(verdict_path) as f:
-                verdict_data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass
+    # Parsed through the same shape-parsing core critic_adjustments.py's
+    # own verdict reader uses (`read_verdict_file()`), rather than a
+    # second, narrower reimplementation: `os.path.isfile` alone answers
+    # "does the file exist", and the shared parser answers "does it hold
+    # a usable verdict string" — two different facts step 11 needs kept
+    # apart below ("not found" vs. "found but unusable"). Reading this
+    # inline used to guard only `(json.JSONDecodeError, OSError)` and
+    # then call `.get()` unconditionally: a valid-JSON, non-object file
+    # (`[1, 2]`, `"hello"`, `5`) escaped that narrower guard, `.get()`
+    # raised `AttributeError` past it, and finalize crashed before
+    # pipeline-result.json was ever written.
+    verdict_found = os.path.isfile(verdict_path)
+    review_verdict_str = critic_adjustments.read_verdict_file(verdict_path)
 
     report_path = os.path.join(output_dir, "review-report.md")
     findings_path = os.path.join(output_dir, "review-findings.json")
@@ -1189,8 +1202,20 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # legacy-normal absence must never spend the `status` field.
     usage_summary = _capture_usage_snapshot(output_dir)
 
-    if not verdict_data:
+    if not verdict_found:
         degradation_notes.append("review-verdict.json not found")
+    elif review_verdict_str is None:
+        # Distinct from "not found": the file is there, but its shape
+        # (non-object, non-string `verdict`, or no `verdict` key at all —
+        # including an empty `{}`) means the shared parser has nothing
+        # usable to hand back. Truthiness on the raw parsed value used to
+        # stand in for "found and usable" here, which is wrong for a
+        # non-empty-but-malformed payload (`{"a": 1}`, `{"verdict": null}`,
+        # `42`, `"hello"`) — all truthy, none of them a real verdict.
+        degradation_notes.append(
+            "review-verdict.json is malformed: no usable string "
+            "\"verdict\" field"
+        )
     if not os.path.isfile(report_path):
         degradation_notes.append("review-report.md not found")
         alt = os.path.join(output_dir, "review-findings.md")
@@ -1198,7 +1223,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     if not os.path.isfile(findings_path):
         degradation_notes.append("review-findings.json not found")
 
-    verdict = verdict_data.get("verdict", "COMMENT") if verdict_data else "COMMENT"
+    verdict = review_verdict_str if review_verdict_str is not None else "COMMENT"
 
     # Rule 23: update review-findings.json verdict to match. The ledger has
     # three writers across a run — the review-reconciliator agent's first
@@ -1213,17 +1238,17 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     #
     # The outcome is recorded through exactly one vocabulary —
     # verdict_sync/verdict_sync_reason, produced by _sync_findings_verdict
-    # — surfaced both in pipeline-result.json and step 11's non-interactive
-    # status text (briefings.py), so a bot and a human reading either see
-    # the same claim. This replaces the bare `pass` that used to swallow a
-    # `json.JSONDecodeError` on read or an `OSError` on read/write: the
-    # sync failed and finalize still published `status: "success"` beside
-    # it, one of two silent failure modes left after the non-object ledger
-    # was hardened.
+    # — written into pipeline-result.json and documented (field name and
+    # vocabulary, not the run's actual value) in step 11's non-interactive
+    # output listing (briefings.py). This replaces the bare `pass` that
+    # used to swallow a `json.JSONDecodeError` on read or an `OSError` on
+    # read/write: the sync failed and finalize still published
+    # `status: "success"` beside it, one of two silent failure modes left
+    # after the non-object ledger was hardened.
     verdict_sync_state = None
     verdict_sync_reason = None
     findings_present = os.path.isfile(findings_path)
-    if verdict_data:
+    if review_verdict_str is not None:
         verdict_sync_state, verdict_sync_reason = _sync_findings_verdict(
             findings_path, verdict
         )
@@ -1240,11 +1265,15 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 else "verdict sync failed"
             )
             degradation_notes.append(f"{prefix}: {verdict_sync_reason}")
-    # else: no review-verdict.json to sync a verdict from — the
-    # "review-verdict.json not found" note above already covers this, and
-    # the sync is not attempted at all, matching the pre-existing gate.
-    # This task closes the sync's own silent failure modes, not this
-    # separate, already-surfaced one.
+    # else: no usable verdict to sync from — either review-verdict.json is
+    # missing or it parsed to something the shared parser could not read a
+    # verdict string out of. Both are already recorded above (the "not
+    # found" and "malformed" notes), so this leaves verdict_sync/
+    # verdict_sync_reason at their null default: the sync was honestly
+    # never attempted with a usable verdict, rather than attempted with a
+    # fabricated one ("COMMENT", the same fallback `verdict` itself uses
+    # below) that would misrepresent what review-verdict.json actually
+    # said.
 
     # Computed after the verdict sync: a degradation the sync discovers has
     # to reach the status it is reported beside, or the run publishes

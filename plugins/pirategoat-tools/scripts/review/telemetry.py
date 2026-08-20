@@ -50,7 +50,15 @@ from git_paths import decode_git_c_quoted_path
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
-EVENT_SCHEMA = 1
+# Bumped 1 -> 2 alongside review_metrics/contracts.py's
+# _SUPPORTED_MANIFEST_SCHEMA (same lockstep the _OBSERVED_READS_SCHEMA
+# pair follows) when the manifest's `outcome` block gained `verdict_sync`
+# — see AGENTS.md's Artifact Schemas rule. A manifest written under
+# schema 1 has no `verdict_sync` key at all, and readers route anything
+# but the schema they were written against down their existing
+# unsupported path rather than silently reading a field the producer
+# never vouched for.
+EVENT_SCHEMA = 2
 # Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
 # pipeline's _FULL_SHA_RE contract for durable git identity.
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
@@ -808,6 +816,7 @@ class ReviewTelemetry:
                 "pipeline_status": pipeline_result.get("status"),
                 "verdict": pipeline_result.get("verdict"),
                 "critic_verdict": pipeline_result.get("critic_verdict"),
+                "verdict_sync": pipeline_result.get("verdict_sync"),
             },
             "availability": {
                 "pipeline": True,

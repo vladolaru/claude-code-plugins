@@ -115,7 +115,7 @@ class TestStart:
         assert marker.is_file()
         assert marker.read_text().strip() == path
 
-    def test_start_records_versioned_run_identity(self, telemetry):
+    def test_start_records_versioned_run_identity(self, telemetry, mod):
         path = telemetry.start(
             pr_number="42",
             run_id="run-1",
@@ -129,7 +129,7 @@ class TestStart:
         )
 
         start = _read_events(path)[0]
-        assert start["schema"] == 1
+        assert start["schema"] == mod.EVENT_SCHEMA
         assert "schema_version" not in start
         assert start["run_id"] == "run-1"
         assert start["pipeline"]["session_id"] == "session-123"
@@ -153,7 +153,7 @@ class TestStart:
             (event["schema"], event["run_id"])
             for event in _read_events(telemetry.log_path)
         }
-        assert identities == {(1, "run-1")}
+        assert identities == {(mod.EVENT_SCHEMA, "run-1")}
 
 
 # ── path_to_slug() ─────────────────────────────────────────────────
@@ -543,7 +543,7 @@ class TestNoFabricatedMeasurements:
 class TestRunManifest:
     """A fail-open sidecar materializes the current run state."""
 
-    def test_start_materializes_running_manifest(self, telemetry):
+    def test_start_materializes_running_manifest(self, telemetry, mod):
         log_path = telemetry.start(
             run_id="run-1",
             session_id="session-1",
@@ -556,7 +556,7 @@ class TestRunManifest:
             Path(log_path).with_suffix(".manifest.json")
         )
         manifest = _read_manifest(telemetry)
-        assert manifest["schema"] == 1
+        assert manifest["schema"] == mod.EVENT_SCHEMA
         assert "schema_version" not in manifest
         assert manifest["status"] == "running"
         assert manifest["run"]["id"] == "run-1"
@@ -724,7 +724,7 @@ class TestRunManifest:
             "code-reviewer"
         ]
 
-    def test_repeated_completions_are_latest_save_revisions(self, telemetry):
+    def test_repeated_completions_are_latest_save_revisions(self, telemetry, mod):
         telemetry.start(run_id="run-1")
         telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
         telemetry.log_agent_complete(
@@ -751,7 +751,7 @@ class TestRunManifest:
         ]
         assert _read_manifest(telemetry)["agents"]["completed"] == [
             {
-                "schema": 1,
+                "schema": mod.EVENT_SCHEMA,
                 "run_id": "run-1",
                 "event": "agent_complete",
                 "timestamp": raw_completions[-1]["timestamp"],

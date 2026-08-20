@@ -1,6 +1,7 @@
 """Tests for critic_adjustments — the sole writer that carries decision-critic
 finding-level decisions into review-findings.json."""
 
+import builtins
 import json
 import os
 import re
@@ -27,7 +28,6 @@ from review.critic_adjustments import (
     read_critic_verdict,
 )
 from review import critic_adjustments as critic_adjustments_module
-from review import orchestration as orchestration_module
 from review.orchestration import _orchestrate_step_11
 from review.reconciliation_context import build_critic_context
 
@@ -907,22 +907,31 @@ class TestVerdictSyncHardening:
         )
 
     def test_write_failure_reports_failed_io(self, tmp_path, monkeypatch):
-        """An OSError from the atomic writer used to hit the same bare
-        `except: pass` as a parse failure, on the write side instead of
-        the read side."""
+        """An OSError from `os.replace` — the last step inside the atomic
+        writer, after the new content is already staged in a temp file —
+        used to hit the same bare `except: pass` as a parse failure, on
+        the write side instead of the read side.
+
+        Failing `os.replace` itself, rather than swapping out
+        `atomic_write_json` wholesale, exercises the real staging path
+        (temp file written, flushed, then the failed rename) instead of
+        skipping straight to a raise that could never distinguish an
+        atomic writer from a truncating one — and lets this test assert
+        what a truncating `open()` could not promise: the ledger on disk
+        is untouched by a write that never got to replace it.
+        """
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
         self._write_verdict_and_report(tmp_path)
+        original_bytes = (tmp_path / "review-findings.json").read_bytes()
 
-        real_atomic_write_json = orchestration_module.atomic_write_json
+        real_os_replace = os.replace
 
-        def flaky_write(path, payload):
-            if os.path.basename(path) == "review-findings.json":
+        def flaky_replace(src, dst):
+            if os.path.basename(dst) == "review-findings.json":
                 raise OSError("disk full")
-            return real_atomic_write_json(path, payload)
+            return real_os_replace(src, dst)
 
-        monkeypatch.setattr(
-            orchestration_module, "atomic_write_json", flaky_write
-        )
+        monkeypatch.setattr(os, "replace", flaky_replace)
         _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
 
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
@@ -931,16 +940,76 @@ class TestVerdictSyncHardening:
         assert any("verdict sync failed" in note
                    for note in result["degradation_notes"])
         assert result["status"] == "degraded"
+        # The staged write never replaced the ledger.
+        assert (
+            tmp_path / "review-findings.json"
+        ).read_bytes() == original_bytes
         # Step 11 still completed and published pipeline-result.json —
         # the failure never propagated out of finalize.
         assert (tmp_path / "pipeline-result.json").is_file()
 
+    def test_read_failure_reports_failed_io(self, tmp_path, monkeypatch):
+        """An OSError while opening review-findings.json for read — as
+        opposed to a parse failure once it is open — used to hit the same
+        bare `except: pass`.
+
+        Faked via a monkeypatched `builtins.open` (filtered to this one
+        path; every other open passes through to the real one) rather
+        than `chmod`: an unreadable-by-permissions file is a no-op under
+        root, which most CI containers run as, so a chmod-based version of
+        this test would silently pass without ever exercising the OSError
+        branch.
+        """
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        self._write_verdict_and_report(tmp_path)
+        findings_path = str(tmp_path / "review-findings.json")
+
+        real_open = builtins.open
+
+        def flaky_open(file, *args, **kwargs):
+            if str(file) == findings_path:
+                raise OSError("permission denied")
+            return real_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", flaky_open)
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict_sync"] == "failed_io"
+        assert "could not read review-findings.json" in (
+            result["verdict_sync_reason"]
+        )
+        assert any("verdict sync failed" in note
+                   for note in result["degradation_notes"])
+        assert result["status"] == "degraded"
+
+    def test_verdict_sync_is_null_when_never_attempted(self, tmp_path):
+        """No review-verdict.json at all — the sync has no verdict to
+        write, so it is honestly never attempted rather than run with a
+        fabricated fallback. `verdict_sync`/`verdict_sync_reason` both
+        stay null, matching `worktree_hygiene`/`usage`'s null-when-
+        unmeasured convention rather than reading as a measured "nothing
+        to report".
+        """
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        (tmp_path / "review-report.md").write_text("# report")
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict_sync"] is None
+        assert result["verdict_sync_reason"] is None
+        assert any("review-verdict.json not found" in note
+                   for note in result["degradation_notes"])
+        assert result["status"] == "degraded"
+
     def test_missing_findings_file_reports_skipped_shape_mismatch(
         self, tmp_path
     ):
-        """No review-findings.json at all — step 8's reconciliation is
-        supposed to guarantee it exists by the time step 11 runs, so an
-        absent ledger here is already abnormal. It shares the non-object
+        """No review-findings.json at all — step 8's briefing instructs
+        the orchestrator to dispatch the reconciliator, whose write is
+        this file's first, but that briefing is LLM-followed guidance, not
+        a gate anything in code enforces. An absent ledger by step 11 is
+        already an abnormal run either way. It shares the non-object
         ledger's vocabulary rather than getting its own state, since both
         are "nothing a verdict can be written into", not an I/O fault
         against a file that was there.
@@ -958,6 +1027,98 @@ class TestVerdictSyncHardening:
             "own recording must not both add a note for the same fact"
         )
         assert result["status"] == "degraded"
+
+
+class TestReviewVerdictShapeGuard:
+    """review-verdict.json feeds the Rule 23 sync from the other side —
+    the source, not the ledger `TestVerdictSyncHardening` above hardens.
+    Same bug class, one file over: the caller used to hand
+    `verdict_data.get("verdict")` to the sync with no shape check on
+    `verdict_data` itself, so `{"verdict": null}` / `{"a": 1}` / a bare
+    `42` — all truthy, none of them a usable verdict — were written
+    verbatim (`None`, or the silent "COMMENT" default) into the ledger
+    and published as `verdict_sync: "synced"`, `status: "success"`. A
+    non-object payload was worse: `.get()` on it raised `AttributeError`
+    past the narrower `(json.JSONDecodeError, OSError)` guard around the
+    read, crashing finalize before pipeline-result.json was ever written.
+
+    The fix is the same shared parser `read_critic_verdict()` already
+    used for decision-critic-verdict.json (`read_verdict_file()`, in
+    critic_adjustments.py) — one shape guard behind both verdict-file
+    readers, not two independently patched call sites.
+    """
+
+    def _write_findings_and_report(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        (tmp_path / "review-report.md").write_text("# report")
+
+    @pytest.mark.parametrize("payload", [
+        '{"verdict": null}',
+        '{"verdict": 42}',
+        "42",
+        '{"a": 1}',
+        '"hello"',
+        "[1, 2]",
+        "{}",
+        "{not valid json",
+    ], ids=[
+        "null-verdict-field",
+        "non-string-verdict-field",
+        "bare-int",
+        "object-missing-verdict-key",
+        "bare-string",
+        "list",
+        "empty-object",
+        "unparseable-json",
+    ])
+    def test_malformed_review_verdict_never_writes_a_bad_ledger(
+        self, tmp_path, payload
+    ):
+        """None of these crash finalize, corrupt the ledger with a
+        non-string verdict, or let the sync silently report "synced"."""
+        self._write_findings_and_report(tmp_path)
+        (tmp_path / "review-verdict.json").write_text(payload)
+
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))  # must not raise
+
+        result_path = tmp_path / "pipeline-result.json"
+        assert result_path.is_file(), (
+            "finalize must publish pipeline-result.json even when "
+            "review-verdict.json is malformed"
+        )
+        result = json.loads(result_path.read_text())
+        assert result["verdict_sync"] is None, (
+            "the sync must never be attempted with an unusable verdict"
+        )
+        assert result["verdict_sync_reason"] is None
+        assert result["status"] == "degraded"
+        assert any("malformed" in note
+                   for note in result["degradation_notes"])
+
+        # The ledger is untouched — no null, no stringified garbage, no
+        # silently substituted "COMMENT" default.
+        findings = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        assert findings["verdict"] == "REQUEST_CHANGES"  # _write_findings' own value
+
+    def test_non_object_review_verdict_does_not_crash_finalize(
+        self, tmp_path
+    ):
+        """I2's exact crash: a valid-JSON, non-object review-verdict.json
+        used to escape the narrower `(json.JSONDecodeError, OSError)`
+        guard around the read, and `.get()` on the raw parsed value
+        raised `AttributeError` before pipeline-result.json was ever
+        written — the bot-visible symptom was "Pipeline result file was
+        not written" after a full review had actually run.
+        """
+        self._write_findings_and_report(tmp_path)
+        (tmp_path / "review-verdict.json").write_text("[1, 2]")
+
+        # The call itself must not raise.
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        assert (tmp_path / "pipeline-result.json").is_file()
 
 
 class TestCriticContextRoundTrip:

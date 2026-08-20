@@ -2033,7 +2033,8 @@ class TestDegradedPaths:
         # Schema fields should be referenced or documented
         for field in ("status", "verdict", "report_path", "findings_path",
                       "critic_verdict", "degradation_notes",
-                      "worktree_hygiene", "usage", "verdict_sync"):
+                      "worktree_hygiene", "usage", "verdict_sync",
+                      "verdict_sync_reason"):
             assert field in text, f"Step 11 output missing pipeline-result.json field: {field}"
 
     def test_scenario_a_reconciliation_failed(self, mod, tmp_path):

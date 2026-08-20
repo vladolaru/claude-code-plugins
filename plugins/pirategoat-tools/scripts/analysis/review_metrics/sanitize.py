@@ -955,7 +955,9 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     summary = _sanitize_summary(value.get("summary"))
     result = {"summary": summary}
-    result.update(_safe_scalar_map(value, ("pipeline_status", "verdict")))
+    result.update(
+        _safe_scalar_map(value, ("pipeline_status", "verdict", "verdict_sync"))
+    )
     critic_verdict = value.get("critic_verdict")
     if isinstance(critic_verdict, str) and critic_verdict in _RETAINED_CRITIC_VALUES:
         result["critic_verdict"] = critic_verdict

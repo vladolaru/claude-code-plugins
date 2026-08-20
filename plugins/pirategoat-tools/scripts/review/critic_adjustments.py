@@ -88,21 +88,23 @@ REFUSAL_VERDICT_NOT_REVISE = "verdict_not_revise"
 REFUSAL_EXIT_CODE = 3
 
 
-def read_critic_verdict(output_dir):
-    """Read the critic's raw verdict string from CRITIC_VERDICT_FILENAME.
+def read_verdict_file(path):
+    """Parse a verdict-shaped JSON file (``{"verdict": "<STRING>"}``) to
+    its verdict string, or ``None`` if the file is absent, unreadable, not
+    valid JSON, not a JSON object, or has no string ``verdict`` field.
 
-    Returns the `verdict` field as-is (e.g. "STAND", "REVISE", "SKIPPED",
-    or any other string the critic wrote) or None if the file is absent,
-    unreadable, not valid JSON, not a JSON object, or has no string
-    `verdict` field. This reader is deliberately permissive — it answers
-    "what does the file say", not "is that an acceptable value" — the
-    caller decides what to do with the result. `apply_adjustments()`'s
-    gate below only ever proceeds on the literal "REVISE"; the
-    presentation mapping downstream consumers need instead — "SKIPPED" and
-    a missing/unparseable file both reading as "unavailable" — lives next
-    door in `critic_verdict_for_state()`, not here.
+    This is the shape-parsing core shared by `read_critic_verdict()`
+    (decision-critic-verdict.json, below) and orchestration.py's Rule 23
+    read of review-verdict.json — the same file shape, read by two
+    modules that used to parse it two different ways. The
+    review-verdict.json side reimplemented a narrower guard, only
+    `(json.JSONDecodeError, OSError)`, and then called `.get()`
+    unconditionally: a well-formed-JSON-but-non-object file (`[1, 2]`,
+    `"hello"`, `5`) sailed past that tuple and `.get()` raised
+    `AttributeError` on it, crashing finalize before pipeline-result.json
+    was ever written. Sharing this core closes that gap at the root
+    instead of patching each call site's guard separately.
     """
-    path = os.path.join(output_dir, CRITIC_VERDICT_FILENAME)
     if not os.path.isfile(path):
         return None
     try:
@@ -116,6 +118,24 @@ def read_critic_verdict(output_dir):
     if not isinstance(verdict, str):
         return None
     return verdict
+
+
+def read_critic_verdict(output_dir):
+    """Read the critic's raw verdict string from CRITIC_VERDICT_FILENAME.
+
+    Returns the `verdict` field as-is (e.g. "STAND", "REVISE", "SKIPPED",
+    or any other string the critic wrote) or None if the file is absent,
+    unreadable, not valid JSON, not a JSON object, or has no string
+    `verdict` field — see `read_verdict_file()`, the shared parser this
+    wraps. This reader is deliberately permissive — it answers "what does
+    the file say", not "is that an acceptable value" — the caller decides
+    what to do with the result. `apply_adjustments()`'s gate below only
+    ever proceeds on the literal "REVISE"; the presentation mapping
+    downstream consumers need instead — "SKIPPED" and a missing/
+    unparseable file both reading as "unavailable" — lives next door in
+    `critic_verdict_for_state()`, not here.
+    """
+    return read_verdict_file(os.path.join(output_dir, CRITIC_VERDICT_FILENAME))
 
 
 def critic_verdict_for_state(output_dir):

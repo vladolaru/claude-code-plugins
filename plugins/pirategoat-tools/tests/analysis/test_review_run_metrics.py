@@ -187,7 +187,7 @@ def _manifest(
     session_id: str | None = None,
 ) -> dict:
     return {
-        "schema": 1,
+        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
         "status": "complete",
         "run": {
             "id": run_id,
@@ -277,7 +277,7 @@ def _pipeline_start(
     timestamp: str = "2026-07-19T10:00:00+00:00",
 ) -> dict:
     return {
-        "schema": 1,
+        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
         "run_id": run_id,
         "event": "pipeline_start",
         "timestamp": timestamp,
@@ -291,7 +291,7 @@ def _pipeline_end(
     timestamp: str = "2026-07-19T10:00:30+00:00",
 ) -> dict:
     return {
-        "schema": 1,
+        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
         "run_id": run_id,
         "event": "pipeline_end",
         "timestamp": timestamp,
@@ -304,7 +304,7 @@ def _step(
     timestamp: str = "2026-07-19T10:00:10+00:00",
 ) -> dict:
     return {
-        "schema": 1,
+        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
         "run_id": run_id,
         "event": "step",
         "timestamp": timestamp,
@@ -319,7 +319,7 @@ def _agent_start(
     timestamp: str = "2026-07-19T10:00:10+00:00",
 ) -> dict:
     return {
-        "schema": 1,
+        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
         "run_id": run_id,
         "event": "agent_start",
         "timestamp": timestamp,
@@ -338,7 +338,7 @@ def _agent_complete(
     timestamp: str = "2026-07-19T10:00:20+00:00",
 ) -> dict:
     return {
-        "schema": 1,
+        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA,
         "run_id": run_id,
         "event": "agent_complete",
         "timestamp": timestamp,
@@ -652,6 +652,28 @@ class TestLoadRuns:
 
         assert [run["run"]["id"] for run in runs] == ["manifest-run"]
         assert "legacy_log_no_manifest" not in runs[0].get("warnings", [])
+
+    @pytest.mark.parametrize(
+        "verdict_sync", ["synced", "skipped_shape_mismatch", "failed_io", None],
+        ids=["synced", "skipped_shape_mismatch", "failed_io", "null"],
+    )
+    def test_verdict_sync_is_measurable_across_a_cohort(
+        self, tmp_path, verdict_sync
+    ):
+        """Rule 23's sync outcome used to be a per-run fact only visible
+        by opening one pipeline-result.json at a time. Whitelisting it
+        into the manifest's `outcome` block (telemetry.py) and the
+        cohort loader's sanitizer (review_metrics/sanitize.py) is what
+        makes "how often does the sync fail" answerable across a run
+        directory instead of one run.
+        """
+        manifest = _manifest("verdict-sync-run")
+        manifest["outcome"]["verdict_sync"] = verdict_sync
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["outcome"]["verdict_sync"] == verdict_sync
 
     def test_running_sidecar_overlays_fresh_same_run_lifecycle_without_raw_payloads(
         self, tmp_path
@@ -1191,7 +1213,7 @@ class TestLoadRuns:
                     _pipeline_start("running-run"),
                     {
                         **_agent_start("code-reviewer", run_id="running-run"),
-                        "schema": 2,
+                        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA + 1,
                     },
                 ],
                 id="unsupported-schema-mid-stream",
@@ -1207,7 +1229,7 @@ class TestLoadRuns:
                 [
                     _pipeline_start("running-run"),
                     {
-                        "schema": 2,
+                        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA + 1,
                         "run_id": "running-run",
                         "event": "step",
                         "timestamp": "2026-07-19T10:00:05+00:00",
@@ -1238,7 +1260,10 @@ class TestLoadRuns:
             pytest.param(
                 [
                     _pipeline_start("running-run"),
-                    {**_pipeline_end("running-run"), "schema": 2},
+                    {
+                        **_pipeline_end("running-run"),
+                        "schema": contracts._SUPPORTED_MANIFEST_SCHEMA + 1,
+                    },
                 ],
                 id="unsupported-schema-on-pipeline-end",
             ),
@@ -1613,7 +1638,7 @@ class TestLoadRuns:
             ("schema", None),
             ("schema", True),
             ("schema", 1.0),
-            ("schema", 2),
+            ("schema", contracts._SUPPORTED_MANIFEST_SCHEMA + 1),
             ("status", None),
             ("status", "success"),
         ],
@@ -1634,6 +1659,30 @@ class TestLoadRuns:
             manifest.pop(field)
         else:
             manifest[field] = value
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+        _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "legacy-fallback"
+        assert run["warnings"] == [
+            "legacy_log_no_manifest",
+            "invalid_manifest_fallback",
+        ]
+
+    def test_pre_bump_schema_manifest_routes_to_legacy_fallback_not_an_error(
+        self, tmp_path
+    ):
+        """A manifest actually written under the schema this constant
+        carried before the `verdict_sync` bump (the literal `1` on disk
+        from every run before this change, not a synthetic "future"
+        value) is unsupported now, same as any other mismatched schema —
+        read only through the existing unsupported-envelope path, never a
+        crash and never a silent read of an `outcome` block whose
+        `verdict_sync` key that older producer never wrote.
+        """
+        manifest = _manifest("pre-bump-run")
+        manifest["schema"] = 1
         _write_manifest(tmp_path / "review.manifest.json", manifest)
         _write_jsonl(tmp_path / "review.jsonl", _legacy_events("legacy-fallback"))
 
@@ -7168,6 +7217,16 @@ class TestStructuredSidecarValuesFailClosed:
 
         assert run["run"]["id"] == "critic-run"
         assert "critic_verdict" not in run["outcome"]
+
+    def test_structured_verdict_sync_is_dropped_not_fatal(self, tmp_path):
+        manifest = _manifest("verdict-sync-run")
+        manifest["outcome"]["verdict_sync"] = ["synced"]
+        _write_manifest(tmp_path / "review.manifest.json", manifest)
+
+        [run] = load_runs(tmp_path)
+
+        assert run["run"]["id"] == "verdict-sync-run"
+        assert "verdict_sync" not in run["outcome"]
 
     def test_structured_legacy_event_name_is_skipped_not_fatal(self, tmp_path):
         events = _legacy_events("legacy-structured")
