@@ -1068,6 +1068,53 @@ class TestStep8Reconcile:
         assert "code-review.json" not in text
 
 
+class TestStep8FindingsArtifactOwnership:
+    """The reconciliator publishes JSON; the pipeline renders the Markdown.
+
+    A handoff gate that asks the orchestrator to verify an artifact the
+    reconciliator no longer writes would stall every run — and telling the
+    agent to write it is how the narrative went stale after every REVISE.
+    """
+
+    def _guidance(self, mod, tmp_path):
+        state = {
+            "resolved_params": {"git_range": "abc..HEAD"},
+            "completed_steps": [1, 3, 5, 6, 7],
+            "agents": {
+                "dispatched": ["code-reviewer"],
+                "completed": ["code-reviewer"],
+                "failed": [],
+            },
+        }
+        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
+        return mod.get_step_guidance(
+            8, "pr", state, ctx, output_dir=str(tmp_path)
+        )
+
+    def test_expected_output_names_the_json_as_the_agents_artifact(
+        self, mod, tmp_path
+    ):
+        expected_line = next(
+            line for line in self._guidance(mod, tmp_path)["actions"]
+            if line.startswith("**Expected output:**")
+        )
+        assert "review-findings.json" in expected_line
+        assert "only artifact" in expected_line
+        # The .md may be named here, but only as something the PIPELINE
+        # produces — never as an output the agent is asked to write.
+        assert "writes no Markdown" in expected_line
+
+    def test_handoff_gates_on_the_json_only(self, mod, tmp_path):
+        handoff = "\n".join(self._guidance(mod, tmp_path)["handoff"])
+        assert "review-findings.json" in handoff
+        assert "review-findings.md" not in handoff
+
+    def test_actions_say_the_pipeline_renders_the_markdown(self, mod, tmp_path):
+        text = "\n".join(self._guidance(mod, tmp_path)["actions"])
+        assert "review-findings.md" in text
+        assert "pipeline renders" in text
+
+
 class TestStep8AdditionalInstructions:
     """Step 8: additional_instructions surfaced as Reviewer-Requested Focus."""
 
@@ -1273,6 +1320,19 @@ class TestStep9ReviewReport:
         g = mod.get_step_guidance(9, "full", state, ctx)
         text = "\n".join(g["actions"])
         assert "review-findings" in text
+
+    def test_banner_parenthetical_credits_the_pipeline_not_the_agent(
+        self, mod, tmp_path
+    ):
+        """The reconciliator no longer writes any Markdown, so the step-9
+        banner instruction must not claim it already did."""
+        ctx = {"host_context": {"banner": {
+            "degraded": True, "message": "WooCommerce source unresolved.",
+        }}}
+        g = mod.get_step_guidance(9, "pr", {"completed_steps": []}, ctx)
+        text = "\n".join(g["actions"])
+        assert "Host context banner" in text
+        assert "reconciliator already did the same" not in text
 
     def test_all_modes_have_this_step(self, mod, tmp_path):
         """Review report synthesis runs for ALL modes (fixes branch flow gap)."""

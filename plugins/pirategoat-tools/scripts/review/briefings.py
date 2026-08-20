@@ -1095,7 +1095,11 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         )
 
     actions.append("")
-    actions.append(f"**Expected output:** `{od}/review-findings.json` + `{od}/review-findings.md`")
+    actions.append(
+        f"**Expected output:** `{od}/review-findings.json` — the "
+        "reconciliator's only artifact. The pipeline renders "
+        f"`{od}/review-findings.md` from it; the agent writes no Markdown."
+    )
 
     additional = config.get("additional_instructions") if config else None
     if additional:
@@ -1105,7 +1109,7 @@ def _step_8_reconcile(mode, state, context, config, output_dir):
         actions.append("Give additional weight to findings addressing this guidance.")
 
     handoff = [
-        f"Verify `{od}/review-findings.json` and `{od}/review-findings.md` both exist before proceeding.",
+        f"Verify `{od}/review-findings.json` exists before proceeding.",
     ]
 
     return {
@@ -1211,7 +1215,10 @@ def _step_9_review_report(mode, state, context, config, output_dir):
     actions.append("")
     actions.append(f"Write `{od}/review-report.md` with: findings summary, critical/important "
                    "issues highlighted, and a verdict (APPROVE, REQUEST_CHANGES, or COMMENT).")
-    actions.append(f"Source: `{od}/review-findings.json` and `{od}/review-findings.md`.")
+    actions.append(
+        f"Source: `{od}/review-findings.json` (canonical) and "
+        f"`{od}/review-findings.md`, its pipeline-rendered reading copy."
+    )
 
     # Host context banner passthrough — if degraded, surface message at top
     host_context = context.get("host_context")
@@ -1220,8 +1227,8 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         actions.append("")
         actions.append(
             f"**Host context banner:** prepend this blockquote to the top of "
-            f"`review-report.md` (reconciliator already did the same for "
-            f"`review-findings.md`):"
+            f"`review-report.md` (the pipeline renders the same blockquote "
+            f"onto `review-findings.md` from the findings JSON):"
         )
         actions.append("")
         actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
@@ -1538,7 +1545,10 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         # Non-interactive: list output files
         actions.append("PIPELINE COMPLETE. Output files:")
         actions.append(f"- `{od}/review-report.md`")
-        actions.append(f"- `{od}/review-findings.json` + `review-findings.md`")
+        actions.append(
+            f"- `{od}/review-findings.json` + `review-findings.md` "
+            "(rendered from the JSON by the pipeline)"
+        )
         actions.append(f"- `{od}/pipeline-result.json` — status, verdict, report_path, "
                        "findings_path, critic_verdict, degradation_notes, "
                        "worktree_hygiene (compact hygiene summary; null when "

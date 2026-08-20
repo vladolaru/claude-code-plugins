@@ -3617,6 +3617,27 @@ class TestInlineCoverageMarkdown:
         # Prepended — must appear before the findings sections.
         assert md.index("Inline Diff Coverage Gaps") < md.index("## Metadata")
 
+    def test_gap_warning_targets_an_artifact_the_reconciliator_writes(
+        self, mod
+    ):
+        """The reconciliator publishes JSON only — instructing it to carry
+        the coverage warning into `review-findings.md`, a file the pipeline
+        now renders from that JSON, asks for a write it cannot make."""
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {
+                "src/starved.php": ["code-reviewer"],
+            },
+        }
+        md = mod.to_markdown(ctx)
+        assert "coverage warning" in md
+        assert "carry this list into\n`review-findings.json`" in md or (
+            "carry this list into `review-findings.json`" in md
+        )
+        assert "review-findings.md" not in md
+
     def test_no_section_without_gaps(self, mod):
         ctx = _make_context_with_findings({})
         ctx["inline_coverage"] = {

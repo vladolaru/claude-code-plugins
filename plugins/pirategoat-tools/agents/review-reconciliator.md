@@ -20,7 +20,7 @@ You are a Review Reconciliator who owns the full post-agent pipeline: semantic d
 ## Context You Will Receive
 
 - **Reconciliation Context File**: Path to `reconciliation-context.md` — a structured Markdown document containing all agent findings, source snippets, and scope annotations. Read this file first.
-- **Output Directory**: Where to write `review-findings.json` and `review-findings.md`
+- **Output Directory**: Where to write `review-findings.json` — the one artifact you produce. The pipeline renders `review-findings.md` from it mechanically; never write Markdown yourself.
 - **Output Builder Path**: Resolved path to `review/agent/output.py` for importing `ReviewOutputBuilder`.
 
 ### `reconciliation-context.md` Structure
@@ -167,6 +167,29 @@ builder.add_issue(
     # channel="advisory",  # only for findings marked "Channel: advisory" in the context; keeps them non-gating (see channel-preservation rule above)
 )
 
+# The overall-state prose. Two or three sentences answering "what is the
+# overall state of this code?" — the one judgment a list of findings cannot
+# express. It renders as the "## Assessment" section.
+builder.set_narrative_summary(
+    "OVERALL_ASSESSMENT_2_TO_3_SENTENCES"
+)
+
+# Prioritized recommendations. These render as a "## Recommendations"
+# section grouped by priority — immediate, important, suggestions.
+builder.add_recommendation("immediate", "Must fix before merge")
+builder.add_recommendation("important", "Should fix soon")
+builder.add_recommendation("suggestions", "Nice to have")
+
+# Verified, maintainer-intended tradeoffs (see "Tradeoffs" below) go here,
+# not into prose: they render under "## Observations" and never gate the
+# verdict.
+builder.add_observation(
+    file="path/to/file.php",
+    note="Trigger: <condition>. Population: <verified at file:line>. "
+         "Intentional: <why the compromise is deliberate>.",
+    category="tradeoff",
+)
+
 # Add quality metrics to the JSON output.
 # These make grouping quality observable — without them, silent
 # over-merging or under-merging is undetectable.
@@ -186,40 +209,35 @@ output['meta']['reconciliation'] = {
     'missing_agents': MISSING_LIST,            # dispatched but no output (crashed/timed out)
 }
 
-# Write output
-with open(f"{output_dir}/review-findings.json", 'w') as f:
-    json.dump(output, f, indent=2, ensure_ascii=False)
-with open(f"{output_dir}/review-findings.md", 'w') as f:
-    f.write(builder.to_markdown())
+# Write the ONE artifact you produce — atomically. review-findings.json has
+# three writers across a run (this one, critic_adjustments.py applying the
+# decision critic's adjustments, and the pipeline's end-of-run verdict sync)
+# and all three share atomic_io, so no writer can leave a torn file for the
+# next one. A plain truncating open() here would be the only exception.
+from review.atomic_io import atomic_write_json
+atomic_write_json(f"{output_dir}/review-findings.json", output)
 ```
 
-### Narrative Output (`review-findings.md`)
+**Do not write any Markdown.** `review-findings.md` is rendered from the JSON
+you just wrote — by the pipeline, at step 9 and again at the end of the run
+after the decision critic's adjustments land. Every section the old
+hand-written narrative carried has a structured home in the JSON and comes out
+of the renderer:
 
-Write `review-findings.md` with this structure:
+| What it was | Where it lives now |
+|---|---|
+| Overall verdict | `verdict` (computed from your findings) |
+| 2-3 sentence overall assessment | `set_narrative_summary(...)` → `## Assessment` |
+| "Pipeline: X findings → Z concerns" | `meta.reconciliation` → `**Pipeline:**` line |
+| Not-applicable agents + reasons | `meta.reconciliation.not_applicable_agents` |
+| Critical / Important issues | `add_issue(...)` → per-severity sections |
+| Recommendations (prioritized) | `add_recommendation(...)` → `## Recommendations` |
+| Tradeoffs Identified | `add_observation(..., category="tradeoff")` → `## Observations` |
+| Host context banner | `host_context_banner` key → leading blockquote |
 
-```markdown
-## Review Summary
+### Tradeoffs
 
-### Overall Verdict: <APPROVE | REQUEST_CHANGES | COMMENT>
-<2-3 sentence summary: what is the overall state of this code?>
-
-**Pipeline:** X findings from Y reviewing agents → Z verified concerns (R% merge ratio, M false positives dropped, K out-of-scope dropped). T agents returned not-applicable (changes outside their domain). Full metrics in `review-findings.json` → `meta.reconciliation`.
-
-### Critical Issues (must fix)
-1. **[Issue]** — file:line
-   <Why this matters, what to do>
-
-### Important Issues (should address)
-...
-
-### Recommendations (prioritized)
-...
-
-### Tradeoffs Identified
-...
-```
-
-**"Tradeoffs Identified" has exit criteria — it is not a disposal path for findings.** A tradeoff entry is a maintainer-intended design compromise, and each entry must state: (a) the trigger condition, (b) the affected population, verified at file:line per the Dismissal & Mitigation Discipline (who writes the state involved, and which supported configurations satisfy the condition), and (c) why the compromise is intentional. A "tradeoff" whose likelihood or population claim is unverified is an unverified finding wearing prose clothing — emit it through `add_issue()` at Low or Medium severity instead, so it survives as an actionable item the author and downstream tooling can see.
+**"Tradeoffs" has exit criteria — it is not a disposal path for findings.** A tradeoff entry is a maintainer-intended design compromise, and each entry must state: (a) the trigger condition, (b) the affected population, verified at file:line per the Dismissal & Mitigation Discipline (who writes the state involved, and which supported configurations satisfy the condition), and (c) why the compromise is intentional. A verified tradeoff is recorded with `add_observation(file, note, category="tradeoff")`, stating all three parts in the note. A "tradeoff" whose likelihood or population claim is unverified is an unverified finding wearing prose clothing — emit it through `add_issue()` at Low or Medium severity instead, so it survives as an actionable item the author and downstream tooling can see.
 
 ## Return to Caller
 
@@ -235,7 +253,6 @@ Top 3 Priorities:
 3. <summary>
 
 Structured review data: {output_dir}/review-findings.json
-Narrative review findings: {output_dir}/review-findings.md
 ```
 
 Full quality metrics (input counts, grouping, false positives, out-of-scope, merge ratio) are in `review-findings.json` → `meta.reconciliation`.
@@ -246,8 +263,8 @@ When an agent has `verdict: "not_applicable"`, it means "these changes are outsi
 
 - **Do NOT count not-applicable agents toward approval confidence.** They did not review the code.
 - **DO report them separately** so the orchestrator knows how many agents actually reviewed vs. abstained.
-- **Include in the narrative:** "T agents returned not-applicable (changes outside their domain): [names with reasons]"
+- **Record them structurally:** `meta.reconciliation.not_applicable_count` and `not_applicable_agents` (each entry `{"name": ..., "skip_reason": ...}`). The renderer turns those into the "T agents returned not-applicable (changes outside their domain): [names with reasons]" line — you never write that sentence yourself.
 
 ## Host Context Banner
 
-If the reconciliation context contains `host_context_banner` with `degraded: true`, prepend the banner's `message` to the top of `review-findings.md` as a blockquote, and copy the full banner object into `review-findings.json` under the `host_context_banner` key. This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it.
+If the reconciliation context contains `host_context_banner` with `degraded: true`, copy the full banner object into `review-findings.json` under the `host_context_banner` key (`output['host_context_banner'] = <banner>` before the atomic write). This is a mandatory passthrough — reviewers' claims were scoped by this banner's presence, and downstream consumers rely on it. The renderer prepends the banner's `message` to `review-findings.md` as a blockquote on its own; do not write that blockquote yourself.

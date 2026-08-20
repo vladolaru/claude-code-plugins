@@ -1269,7 +1269,9 @@ def to_markdown(context: Dict[str, Any]) -> str:
             "them from the deferred NOT DIFFED queue.** Findings cannot "
             "exist for code no agent saw — treat agent verdicts as NOT "
             "covering these files, and carry this list into "
-            "`review-findings.md` as a coverage warning.\n"
+            "`review-findings.json` as a coverage warning — one "
+            "`add_observation()` per file — so it survives into every "
+            "artifact rendered from that ledger.\n"
         )
         for f_path, agents in gaps.items():
             # Two annotations, never merged: a reviewer that declared the
