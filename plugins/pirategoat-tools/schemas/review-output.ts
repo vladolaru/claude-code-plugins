@@ -195,8 +195,8 @@ export interface ReviewOutput {
     // adjustment vocabulary addresses issues, not ledger-level prose, so an
     // assessment the applied batch may have contradicted is retracted
     // rather than corrected. The retracted text moves to
-    // withdrawn_narrative_summary below; null + a non-empty
-    // applied_critic_adjustments is what the renderer reads as "withdrawn"
+    // withdrawn_narrative_summary below; a non-empty
+    // withdrawn_narrative_summary is what the renderer reads as "withdrawn"
     // rather than "never written".
     narrative_summary: string | null;
 

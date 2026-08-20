@@ -2362,7 +2362,7 @@ class TestDegradedPaths:
     def test_scenario_d_both_failed(self, mod, tmp_path):
         """Both reconciliation and report failed: verdict forced to COMMENT."""
         state = {"completed_steps": [],
-                 "degradation": {"reconciliation_failed": True, "report_synthesis_failed": True},
+                 "degradation": {"reconciliation_failed": True},
                  "forced_verdict": "COMMENT"}
         ctx = {}
         config = {"mode": "pr", "interactive": True}

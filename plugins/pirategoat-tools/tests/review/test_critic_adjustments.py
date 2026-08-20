@@ -1620,6 +1620,37 @@ class TestNarrativeSummaryInvalidation:
         # touched finding names the action that touched it.
         assert withdrawn[0]["withdrawn_by"] == data[APPLIED_IDS_KEY]
 
+    def test_a_second_withdrawal_names_only_its_own_batch(self, tmp_path):
+        """withdrawn_by is causal attribution, not history: a second
+        reconciliation round's withdrawal must name the batch that caused
+        it, never the cumulative applied-ids list."""
+        self._seed(tmp_path)
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "first round",
+        }])
+        apply_adjustments(tmp_path)
+        findings_path = tmp_path / "review-findings.json"
+        data = json.loads(findings_path.read_text())
+        first_batch = list(data[APPLIED_IDS_KEY])
+        # Simulate a re-reconciliation writing fresh prose.
+        data["narrative_summary"] = "Fresh assessment after round two."
+        findings_path.write_text(json.dumps(data))
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "medium"}, "rationale": "second round",
+        }])
+        apply_adjustments(tmp_path)
+        data = json.loads(findings_path.read_text())
+        withdrawn = data[WITHDRAWN_SUMMARY_KEY]
+        assert len(withdrawn) == 2
+        second_batch = [
+            i for i in data[APPLIED_IDS_KEY] if i not in first_batch
+        ]
+        assert second_batch
+        assert withdrawn[1]["withdrawn_by"] == second_batch
+        assert withdrawn[0]["withdrawn_by"] == first_batch
+
     def test_a_batch_that_applies_nothing_leaves_the_summary_alone(
         self, tmp_path
     ):

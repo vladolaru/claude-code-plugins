@@ -282,7 +282,11 @@ def render_markdown(data: Dict) -> str:
             "*Reconciler-authored assessment, not adjusted by the decision "
             "critic.*\n\n"
         )
-    elif data.get('applied_critic_adjustments'):
+    elif data.get('withdrawn_narrative_summary'):
+        # Keyed on the withdrawal record itself, not on
+        # applied_critic_adjustments: a ledger that never carried a summary
+        # records no withdrawal, and rendering a retraction notice for it
+        # would claim an act that never happened.
         md.append("## Assessment\n\n")
         md.append(
             "The producer's assessment was withdrawn when critic "

@@ -2630,12 +2630,26 @@ class TestAssessmentProvenance:
         data = self._findings(
             narrative_summary=None,
             applied_critic_adjustments=["a1b2c3"],
+            withdrawn_narrative_summary=[
+                {"text": "Old claim.", "withdrawn_by": ["a1b2c3"]}
+            ],
         )
         rendered = render_markdown(data)
         assert "## Assessment" in rendered
         assert "withdrawn" in rendered.lower()
         assert "critic adjustments applied" in rendered.lower()
         assert "see the report" in rendered.lower()
+
+    def test_applied_batch_without_a_withdrawal_claims_no_retraction(self):
+        """A reconciler that never wrote a summary has nothing to retract:
+        the writer side refuses to fabricate an empty withdrawal entry, and
+        the renderer must not assert one either. The withdrawal record —
+        not the applied-ids list — is the signal."""
+        data = self._findings(
+            narrative_summary=None,
+            applied_critic_adjustments=["a1b2c3"],
+        )
+        assert "## Assessment" not in render_markdown(data)
 
     def test_no_summary_and_no_adjustments_renders_no_assessment(self):
         assert "## Assessment" not in render_markdown(self._findings())

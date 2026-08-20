@@ -524,6 +524,7 @@ def apply_adjustments(output_dir):
             newly_allocated = True
 
     applied = 0
+    batch_ids = []
     for entry, action, fields in pending:
         provenance = {
             "action": action,
@@ -554,12 +555,16 @@ def apply_adjustments(output_dir):
                 _apply_scope_pairing(target, fields["line"] is None)
             target["critic_adjustment"] = provenance
         recorded_ids.append(entry["adjustment_id"])
+        batch_ids.append(entry["adjustment_id"])
         applied += 1
 
     if applied:
         _recount_summary(findings, issues)
         findings[APPLIED_IDS_KEY] = recorded_ids
-        _withdraw_narrative_summary(findings, recorded_ids)
+        # Only the ids applied in THIS call: recorded_ids is cumulative
+        # across every batch the ledger ever absorbed, and a second
+        # withdrawal must name the decisions that caused it, not history.
+        _withdraw_narrative_summary(findings, batch_ids)
         if newly_allocated:
             # Ids only — the applied flags belong after the findings write.
             atomic_write_json(adj_path, doc)
