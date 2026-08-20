@@ -33,6 +33,23 @@ export type Verdict = 'block' | 'request_changes' | 'approve' | 'comment' | 'not
 export type ConfidenceScore = number; // 0.0 - 1.0
 
 /**
+ * A decision-critic action, and the provenance it leaves on the finding it
+ * touched. `critic_adjustments.py` writes this directly onto the target
+ * issue object — for `add`, onto the newly created issue; for
+ * `promote`/`demote`/`rescope`/`correct`, onto the finding it patched
+ * in-place (still inside `issues`); for `remove`, onto the finding as it is
+ * moved into `removed_by_critic`. Never written by anything else.
+ */
+export interface CriticAdjustment {
+    action: 'promote' | 'demote' | 'rescope' | 'correct' | 'add' | 'remove';
+    rationale: string; // The critic's stated reason; '' when none was given.
+    // The pre-patch value of just the fields this adjustment changed —
+    // present only for promote/demote/rescope/correct. Absent for `add`
+    // (nothing pre-existed) and `remove` (the whole finding is the change).
+    prior?: Partial<Pick<Issue, 'severity' | 'title' | 'description' | 'recommendation' | 'file' | 'line' | 'category' | 'confidence'>>;
+}
+
+/**
  * Base issue structure common to all review types
  */
 export interface Issue {
@@ -52,69 +69,11 @@ export interface Issue {
     behavior_evidence?: 'cited' | 'inferred';
     source_cited?: string; // "<file>:<line>" pointer to upstream evidence
     channel?: 'blocking' | 'advisory'; // Exact accepted input vocabulary. 'blocking' is the default and is canonicalized to absence; entitled 'advisory' findings remain listed but are excluded from the verdict.
-}
-
-/**
- * Security-specific issue with exploitation details
- */
-export interface SecurityIssue extends Issue {
-    category: 'security';
-    vulnerability_type: 'sql_injection' | 'xss' | 'csrf' | 'broken_access_control' | 'sensitive_data_exposure' | 'other';
-    cvss_score?: number; // 0.0 - 10.0
-    attack_complexity: 'low' | 'medium' | 'high';
-    requires_auth: boolean;
-    exploitation_example?: string; // curl command or attack vector
-    mitigations_present: string[]; // Existing security controls
-    mitigations_missing: string[]; // Missing security controls
-}
-
-/**
- * Performance-specific issue with scale impact
- */
-export interface PerformanceIssue extends Issue {
-    category: 'performance';
-    issue_type: 'n_plus_one' | 'missing_cache' | 'inefficient_query' | 'memory_leak' | 'slow_algorithm' | 'other';
-    current_impact: string; // "2-5 seconds at current scale"
-    scale_10x: string; // "20-50 seconds at 10x scale"
-    scale_100x: string; // "Site crash at 100x scale"
-    optimization_potential: string; // "101 queries → 1 query"
-    caching_applicable: boolean;
-}
-
-/**
- * Architecture-specific issue with pattern recommendations
- */
-export interface ArchitectureIssue extends Issue {
-    category: 'architecture';
-    issue_type: 'solid_violation' | 'tight_coupling' | 'god_object' | 'missing_abstraction' | 'pattern_misuse' | 'other';
-    solid_principles_violated?: ('SRP' | 'OCP' | 'LSP' | 'ISP' | 'DIP')[];
-    pattern_opportunity?: string; // "Strategy pattern recommended"
-    pattern_reference?: string; // "patterns/behavioral/strategy.md"
-    refactoring_effort: 'low' | 'medium' | 'high'; // Hours to fix
-    testability_impact: string; // "0/10 → 9/10 after refactoring"
-}
-
-/**
- * Test quality-specific issue
- */
-export interface TestIssue extends Issue {
-    category: 'test_quality';
-    issue_type: 'false_confidence' | 'flaky' | 'brittle' | 'slow' | 'poor_structure' | 'missing_coverage' | 'other';
-    test_principle_violated?: ('behavior_based' | 'independent' | 'deterministic' | 'fast' | 'readable' | 'single_concern')[];
-    root_cause: 'test_problem' | 'implementation_problem' | 'both';
-    fix_complexity: 'trivial' | 'moderate' | 'complex';
-}
-
-/**
- * Pattern consistency issue
- */
-export interface PatternIssue extends Issue {
-    category: 'pattern_consistency';
-    issue_type: 'duplication' | 'inconsistency' | 'naming_deviation' | 'consolidation_opportunity' | 'other';
-    existing_pattern?: string; // Reference to existing implementation
-    git_history_reference?: string; // Commit hash
-    consistency_score?: number; // 0.0-1.0 (e.g., 0.965 = 96.5% consistent)
-    consolidation_benefit?: string; // "-89 lines of duplicate code"
+    // Present when a decision-critic batch touched this finding: promoted,
+    // demoted, rescoped, corrected, or added it, or (on entries moved into
+    // `removed_by_critic` below) removed it. Absent on every finding no
+    // critic round has adjusted.
+    critic_adjustment?: CriticAdjustment;
 }
 
 /**
@@ -157,7 +116,7 @@ export interface ReviewOutput {
     };
 
     // Issues
-    issues: Issue[]; // Can be SecurityIssue, PerformanceIssue, etc.
+    issues: Issue[]; // Findings recorded by the producer, possibly carrying a critic_adjustment (see Issue above) if a critic round has touched them.
 
     // Declared coverage gap (null when nothing declared) — canonical
     // repo-relative paths of in-scope NOT DIFFED files the reviewer could
@@ -255,9 +214,9 @@ export interface ReviewOutput {
     applied_critic_adjustments?: string[];
 
     // Findings the critic removed. Moved out of `issues` rather than
-    // deleted, each carrying the `critic_adjustment` record that removed
-    // it, so the decision stays auditable. Rendered as the
-    // "## Removed by the Decision Critic" section.
+    // deleted, each carrying the `critic_adjustment` record (see Issue
+    // above) that removed it, so the decision stays auditable. Rendered as
+    // the "## Removed by the Decision Critic" section.
     removed_by_critic?: Issue[];
 
     // Critic decisions the orchestrator's spot-check refuted (`rejected:
@@ -322,52 +281,6 @@ export interface ReviewOutput {
 }
 
 /**
- * Aggregated review output from multiple agents
- */
-export interface AggregatedReview {
-    pr_id: string;
-    timestamp: string;
-    schema: number;
-
-    // Overall verdict (most restrictive wins)
-    overall_verdict: Verdict;
-
-    // Aggregated summary
-    summary: {
-        total_issues: number;
-        by_reviewer: {
-            [reviewer: string]: number;
-        };
-        by_severity: {
-            critical: number;
-            high: number;
-            medium: number;
-            low: number;
-            info: number;
-        };
-    };
-
-    // All issues from all reviewers
-    all_issues: Issue[];
-
-    // Individual reviewer outputs
-    reviewers: {
-        [reviewer: string]: ReviewOutput;
-    };
-
-    // Meta
-    meta: {
-        reviewers_completed: string[];
-        reviewers_failed: string[];
-        total_duration_ms: number;
-        parallel_execution: boolean;
-    };
-
-    // Host context banner — forwarded from reconciliation when upstream discovery was degraded.
-    host_context_banner?: HostContextBanner | null;
-}
-
-/**
  * Host Context Banner — present when upstream discovery was degraded.
  * Reviewers' claims that depend on unresolved hosts must be read in light
  * of this banner.
@@ -377,27 +290,4 @@ export interface HostContextBanner {
     reason: "partial_unresolved" | "fully_unavailable";
     message: string;
     unresolved: Array<{ name: string; reason: string; source?: string }>;
-}
-
-/**
- * Helper type guards for type narrowing
- */
-export function isSecurityIssue(issue: Issue): issue is SecurityIssue {
-    return issue.category === 'security';
-}
-
-export function isPerformanceIssue(issue: Issue): issue is PerformanceIssue {
-    return issue.category === 'performance';
-}
-
-export function isArchitectureIssue(issue: Issue): issue is ArchitectureIssue {
-    return issue.category === 'architecture';
-}
-
-export function isTestIssue(issue: Issue): issue is TestIssue {
-    return issue.category === 'test_quality';
-}
-
-export function isPatternIssue(issue: Issue): issue is PatternIssue {
-    return issue.category === 'pattern_consistency';
 }
