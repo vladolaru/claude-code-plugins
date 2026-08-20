@@ -1429,6 +1429,53 @@ class TestAddDeferredReviewed:
         assert "src/bogus2.py" in message
         assert b.deferred_reviewed == []
 
+    def test_grammar_error_mid_batch_records_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """The all-or-nothing guarantee covers grammar failures too: a
+        malformed path anywhere in the batch leaves zero paths recorded,
+        not the leading valid ones."""
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/a.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="/abs/path.py"):
+            b.add_deferred_reviewed("src/a.py", "/abs/path.py")
+        assert b.deferred_reviewed == []
+
+    def test_mixed_grammar_and_membership_batch_names_both(
+        self, tmp_path, monkeypatch
+    ):
+        """A batch carrying both error classes reports both in one raise:
+        fixing the malformed path must not surface the membership problem
+        as a fresh surprise on the retry."""
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/a.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError) as excinfo:
+            b.add_deferred_reviewed("src/typo.py", "/abs/path.py")
+        message = str(excinfo.value)
+        assert "/abs/path.py" in message
+        assert "src/typo.py" in message
+        assert b.deferred_reviewed == []
+
+    def test_failed_batch_leaves_no_trace_in_saved_artifact(
+        self, tmp_path, monkeypatch
+    ):
+        """The consequence that matters: after a rejected batch, save()'s
+        accounting is exactly as if the call never happened — the
+        unclaimed file lands in the auto-fill gap record, never as a
+        claim."""
+        self._arm_deferred_sidecar(
+            tmp_path, monkeypatch, ["src/a.py", "src/c.py"]
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError):
+            b.add_deferred_reviewed("src/a.py", "src/bogus.py")
+        b.add_deferred_reviewed("src/c.py")
+        b.save(str(tmp_path))
+        with open(tmp_path / "sec-review.json", encoding="utf-8") as f:
+            data = json.load(f)
+        assert data["deferred_reviewed"] == ["src/c.py"]
+        assert data["meta"]["unreviewed_autofilled"] == ["src/a.py"]
+
     def test_duplicate_within_batch_dedupes(self, tmp_path, monkeypatch):
         """Pinning current semantics: a batch repeating one path collapses
         it to a single entry, order preserved."""

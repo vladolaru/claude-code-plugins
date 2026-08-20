@@ -853,23 +853,36 @@ class ReviewOutputBuilder:
             )
         known = self._known_deferred_files()
         # Pass 1 (validate): normalize and membership-check every path in
-        # the batch before mutating anything. Collecting every unknown claim
-        # here — rather than raising on the first — is what lets the shared
-        # rejection helper name every offender in one raise, the same way it
-        # already does for save()'s batch of declarations.
+        # the batch before mutating anything. Both error classes collect
+        # across the whole batch — grammar failures as their own messages,
+        # membership offenders through the shared rejection helper — so one
+        # raise names every problem in the batch instead of surfacing them
+        # one retry at a time.
         normalized: List[str] = []
         unknown_claims: List[str] = []
+        grammar_errors: List[str] = []
         for file in files:
-            path = self._normalize_deferred_path(
-                file, "add_deferred_reviewed"
-            )
+            try:
+                path = self._normalize_deferred_path(
+                    file, "add_deferred_reviewed"
+                )
+            except ValueError as exc:
+                grammar_errors.append(str(exc))
+                continue
             normalized.append(path)
             if known is not None and path not in known:
                 unknown_claims.append(path)
-        if unknown_claims:
-            self._reject_unknown_deferred(
-                unknown_claims, known, "add_deferred_reviewed", "claim"
-            )
+        if grammar_errors or unknown_claims:
+            parts = list(grammar_errors)
+            if unknown_claims:
+                try:
+                    self._reject_unknown_deferred(
+                        unknown_claims, known, "add_deferred_reviewed",
+                        "claim"
+                    )
+                except ValueError as exc:
+                    parts.append(str(exc))
+            raise ValueError("; ".join(parts))
         # Pass 2 (commit): every path in the batch already passed
         # validation, so this loop can only append — it can never fail
         # partway through and leave a partial claim recorded.
