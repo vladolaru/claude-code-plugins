@@ -1065,15 +1065,21 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
 
 
 def _orchestrate_step_10(mode, config, state, context, output_dir):
-    # Read reconciliation verdict for quick-mode critic skip decision
-    findings_path = os.path.join(output_dir, "review-findings.json")
-    if os.path.isfile(findings_path):
-        try:
-            with open(findings_path) as f:
-                findings = json.load(f)
-            state["reconciliation_verdict"] = findings.get("verdict", "")
-        except (json.JSONDecodeError, OSError):
-            state["reconciliation_verdict"] = ""
+    # Read reconciliation verdict for quick-mode critic skip decision,
+    # through the ledger's one shared reader. Inline, this was a fifth
+    # spelling of open/parse/use with the narrower `(JSONDecodeError,
+    # OSError)` guard and an unconditional `.get()` behind it — so a
+    # valid-JSON, non-object ledger (`[1, 2]`, `"hello"`, `5`) escaped the
+    # guard and raised AttributeError out of step 10. Exactly the hole
+    # `read_verdict_file()` closed for the verdict files, one artifact
+    # over. Any state but OK means no usable verdict to read.
+    read = critic_adjustments.read_findings_file(
+        os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
+    )
+    if read.status == critic_adjustments.FINDINGS_READ_OK:
+        state["reconciliation_verdict"] = read.findings.get("verdict", "")
+    elif read.status != critic_adjustments.FINDINGS_READ_ABSENT:
+        state["reconciliation_verdict"] = ""
 
     # Which artifact the decision critic can actually be pointed at.
     # briefings.py is pure, so the filesystem question is answered here and
@@ -1108,7 +1114,7 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     return context
 
 
-def _sync_findings_verdict(findings_path, verdict):
+def _sync_findings_verdict(output_dir, verdict):
     """Rule 23: write ``verdict`` into review-findings.json's ``verdict``
     field, and report exactly what happened instead of swallowing it.
 
@@ -1147,24 +1153,33 @@ def _sync_findings_verdict(findings_path, verdict):
     earlier, before the file can even be opened — so it shares that
     outcome's vocabulary instead of inventing a fourth one.
     """
-    if not os.path.isfile(findings_path):
+    # Read through the ledger's one shared reader (critic_adjustments'
+    # read_findings_file), then map its states onto THIS caller's
+    # vocabulary. The states are shared facts; the mapping is local
+    # policy — a non-object or absent ledger has nowhere to carry a
+    # verdict (skipped), while an unreadable or unparseable one is a
+    # fault that happened (failed_io). A non-object ledger in particular
+    # would make the subscript assignment below raise TypeError past this
+    # function and crash finalize outright.
+    read = critic_adjustments.read_findings_file(
+        os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
+    )
+    if read.status == critic_adjustments.FINDINGS_READ_ABSENT:
         return "skipped_shape_mismatch", "review-findings.json not found"
-
-    try:
-        with open(findings_path) as f:
-            findings = json.load(f)
-    except json.JSONDecodeError as err:
-        return "failed_io", f"could not parse review-findings.json: {err}"
-    except OSError as err:
-        return "failed_io", f"could not read review-findings.json: {err}"
-
-    # A non-object ledger has nowhere to carry a verdict. The subscript
-    # assignment below would raise TypeError past this function and crash
-    # finalize outright — the same shape hole the adjustments apply closed
-    # on its own side.
-    if not isinstance(findings, dict):
+    if read.status == critic_adjustments.FINDINGS_READ_NOT_OBJECT:
         return "skipped_shape_mismatch", "review-findings.json is not an object"
+    if read.status == critic_adjustments.FINDINGS_READ_UNPARSABLE:
+        return (
+            "failed_io",
+            f"could not parse review-findings.json: {read.error}",
+        )
+    if read.status == critic_adjustments.FINDINGS_READ_IO_ERROR:
+        return (
+            "failed_io",
+            f"could not read review-findings.json: {read.error}",
+        )
 
+    findings = read.findings
     findings["verdict"] = verdict
     try:
         # The shared findings writer, not the raw atomic write: this is
@@ -1173,8 +1188,17 @@ def _sync_findings_verdict(findings_path, verdict):
         # LAST write a run performs — would leave the ledger disagreeing
         # with its own stamp, and finalize's integrity check would report
         # every ordinary run as modified out of channel.
-        critic_adjustments.write_findings(findings_path, findings)
-    except OSError as err:
+        critic_adjustments.write_findings(output_dir, findings)
+    except (OSError, UnicodeEncodeError) as err:
+        # UnicodeEncodeError is not hypothetical here and is not an
+        # OSError: the artifact is written as real UTF-8 (atomic_io keeps
+        # `ensure_ascii=False` so the ledger's prose stays readable), and
+        # `json.load` accepts payloads that cannot be encoded back out —
+        # `"\ud800"` parses to a lone surrogate. Only an out-of-channel
+        # edit can put one in this file, and the integrity check above
+        # has already said so; what this catch adds is that finalize
+        # survives to publish that finding instead of dying on the write
+        # with no pipeline-result.json at all.
         return "failed_io", f"could not write review-findings.json: {err}"
 
     return "synced", None
@@ -1403,7 +1427,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     findings_present = os.path.isfile(findings_path)
     if review_verdict_str is not None:
         verdict_sync_state, verdict_sync_reason = _sync_findings_verdict(
-            findings_path, verdict
+            output_dir, verdict
         )
         if verdict_sync_state != "synced" and findings_present:
             # A missing ledger is already recorded by the
@@ -1493,9 +1517,11 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "verdict_sync_reason": verdict_sync_reason,
     }
     # Present only when there was a ledger to check. Absent is a third
-    # answer, not a null-valued one: "no findings file to verify" is a
-    # different statement from "verified, and it was intact", and a
-    # consumer must not be able to read the first as the second.
+    # answer, not a null-valued one: "nothing was verified" is a different
+    # statement from "verified, and it was intact", and a consumer must
+    # not be able to read the first as the second. Absence carries BOTH
+    # unmeasured cases — no findings file, or one that could not be read at all —
+    # since neither licenses a claim about the ledger's content.
     if findings_integrity is not None:
         pipeline_result["post_apply_integrity"] = findings_integrity
     result_path = os.path.join(output_dir, "pipeline-result.json")

@@ -832,10 +832,11 @@ class ReviewTelemetry:
                 "verdict_sync": pipeline_result.get("verdict_sync"),
                 # Null here carries a real meaning, matching the
                 # pipeline result's ABSENT field: there was no findings
-                # ledger to verify. The manifest keeps the key present so
-                # the outcome block's shape stays constant across runs;
-                # a cohort query reads null as "not measured", never as
-                # "measured intact".
+                # ledger to verify — no findings file, or one that could not be read at all.
+                # The manifest keeps the key present so the outcome
+                # block's shape stays constant across runs; a cohort
+                # query reads null as "not measured", never as "measured
+                # intact".
                 "post_apply_integrity": pipeline_result.get(
                     "post_apply_integrity"
                 ),

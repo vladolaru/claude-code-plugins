@@ -366,7 +366,7 @@ def _seed_step_11(out):
     # the reconciliator's own in-channel write, and a raw one would seed
     # the unstamped ledger finalize now reports as an out-of-channel
     # rewrite.
-    write_findings(str(out / "review-findings.json"), {
+    write_findings(str(out), {
         "pr_id": "42",
         "reviewer": "reconciliator",
         "timestamp": "2026-08-13T10:00:00",

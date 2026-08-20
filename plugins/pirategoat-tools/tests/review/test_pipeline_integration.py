@@ -1721,6 +1721,24 @@ class TestStep10Orchestration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state.get("reconciliation_verdict") == ""
 
+    @pytest.mark.parametrize("payload", ["[1, 2]", '"hello"', "5"],
+                             ids=["list", "string", "int"])
+    def test_step_10_tolerates_a_valid_json_non_object_ledger(
+        self, tmp_path, payload
+    ):
+        """Valid JSON that is not an object used to escape this step's
+        `(JSONDecodeError, OSError)` guard and raise AttributeError on the
+        `.get()` behind it — the same hole the shared verdict parser
+        closed for review-verdict.json, one artifact over. The ledger now
+        goes through critic_adjustments.read_findings_file(), so a
+        non-object payload is a shape fact, not a crash."""
+        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
+        (tmp_path / "review-findings.json").write_text(payload)
+        r = run_pipeline("--step", "10", "--mode", "full", "--output-dir", str(tmp_path), cwd=tmp_path)
+        assert r.returncode == 0, r.stderr
+        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert state.get("reconciliation_verdict") == ""
+
 
 class TestStep11Orchestration:
     """Step 11 main() reads review-verdict.json and writes pipeline-result.json."""
@@ -1911,10 +1929,7 @@ class TestFullSequenceIntegration:
         # verifies its content digest, so a stub the renderer cannot read —
         # or a raw write carrying no digest — would degrade the run for a
         # reason no real run has.
-        write_findings(
-            str(Path(od) / "review-findings.json"),
-            _review_json("reconciliator"),
-        )
+        write_findings(od, _review_json("reconciliator"))
 
         # Step 11: present results
         r = run_pipeline("--step", "11", "--mode", "full", "--output-dir", od, cwd=repo)

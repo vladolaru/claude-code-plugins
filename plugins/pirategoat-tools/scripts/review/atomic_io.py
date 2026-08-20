@@ -16,6 +16,13 @@ dispatch-plan baseline, pipeline.py's review-context reset, telemetry.py's
 run manifest, and analysis/usage_snapshot.py's token snapshot. One drifts,
 they all drift eventually — so there is now exactly one.
 
+One artifact may NOT use this function directly: review-findings.json is
+never written with a bare ``atomic_write_json``. It goes through
+``critic_adjustments.write_findings(output_dir, findings)``, which stamps
+the content digest finalize verifies and then calls this — a bare write
+here publishes a ledger the run reports as modified out of channel (see
+the one-write-path rule in the plugin's AGENTS.md).
+
 The one deliberate exception is agent/output.py's staged-nonce two-file
 write for ``<reviewer>-review.json``. That protocol coordinates BETWEEN
 processes — an agent's own write racing the step 8 readiness gate's read —
@@ -40,10 +47,11 @@ def atomic_write_json(path, payload):
     ``\\uXXXX`` runs — lossless, but indistinguishable from corruption to
     whoever reads the artifact next. ``review-findings.json`` alone has
     three writers across a run (the review-reconciliator agent's first
-    write, critic_adjustments.py applying decision-critic adjustments
-    through this function, and orchestration.py's Rule 23 verdict sync,
-    also through this function) and all three now share this encoding, so
-    no writer's turn can make the file's prose unreadable to the others.
+    write, critic_adjustments.py applying decision-critic adjustments,
+    and orchestration.py's Rule 23 verdict sync) and all three reach this
+    function through ``critic_adjustments.write_findings()``, so they
+    share this encoding and no writer's turn can make the file's prose
+    unreadable to the others.
 
     This guarantees the artifact is never TORN — never half-old,
     half-new content — not that it survives a power loss: there is no
