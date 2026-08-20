@@ -173,6 +173,21 @@ attached to a finding to be reachable at all:
 }
 ```
 
+**`rescope` patches `line` — nothing else.** Use it when a finding belongs
+at a different source line than reported, or when it turns out to describe
+the whole file rather than one line (or vice versa):
+
+```json
+{"action": "rescope", "id": "9f3a1c7d", "fields": {"line": 88}, "rationale": "pinned to the actual call site, not the import line the reviewer cited"}
+{"action": "rescope", "id": "9f3a1c7d", "fields": {"line": null}, "rationale": "the concern applies to the whole file, not one line"}
+```
+
+`fields: {"line": N}` (a positive, 1-indexed integer) moves the finding to
+source line `N` and clears any stale `scope: "file"` marker. `fields:
+{"line": null}` marks it file-scoped instead — the ledger records `scope:
+"file"` beside the null line. The pipeline keeps `scope`/`line` paired for
+you; you only ever patch `line`, never `scope` directly.
+
 Allowed `fields` keys: `severity`, `title`, `description`, `recommendation`,
 `file`, `line`, `category`, `confidence`. A `severity` must be one of
 `critical`, `high`, `medium`, `low`, `info` — anything else fails the whole
