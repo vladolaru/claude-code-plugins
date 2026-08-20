@@ -31,6 +31,7 @@ try:
     )
     from .agent.output import _VALID_SEVERITIES, _VERDICT_RANK
     from .atomic_io import atomic_write_json
+    from .critic_adjustments import FINDINGS_READ_OK, read_findings_file
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -43,6 +44,7 @@ except ImportError:
     )
     from review.agent.output import _VALID_SEVERITIES, _VERDICT_RANK
     from review.atomic_io import atomic_write_json
+    from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
 
 from containment import contains_posix_lexically
 from git_paths import decode_git_c_quoted_path
@@ -1245,9 +1247,12 @@ class ReviewTelemetry:
                     continue
                 path = os.path.join(self.output_dir, name)
                 base = name.replace("-review.json", "")
+                read = read_findings_file(path)
+                if read.status != FINDINGS_READ_OK:
+                    results[base] = {"error": "malformed"}
+                    continue
                 try:
-                    with open(path) as f:
-                        data = json.load(f)
+                    data = read.findings
                     issues = data.get("issues", [])
                     severities = dict(Counter(
                         i.get("severity", "medium").lower() for i in issues
@@ -1267,11 +1272,11 @@ class ReviewTelemetry:
     def _extract_findings(self) -> Optional[dict]:
         """Extract reconciled findings summary."""
         path = os.path.join(self.output_dir, "review-findings.json")
-        if not os.path.isfile(path):
+        read = read_findings_file(path)
+        if read.status != FINDINGS_READ_OK:
             return None
         try:
-            with open(path) as f:
-                data = json.load(f)
+            data = read.findings
             issues = data.get("issues", [])
             severities = dict(Counter(
                 i.get("severity", "medium").lower() for i in issues

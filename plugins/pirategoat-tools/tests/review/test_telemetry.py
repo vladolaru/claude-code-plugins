@@ -2875,6 +2875,49 @@ class TestSnapshot:
         events = _read_events(t.log_path)
         assert "context" not in events[-1]["snapshot"]
 
+    def test_list_shaped_findings_file_extracts_empty_and_finalize_completes(
+        self, mod, output_dir, tmp_path
+    ):
+        """A non-object review-findings.json (a list) must not crash finalize.
+
+        Both extractors must route through critic_adjustments.read_findings_file
+        so a non-object payload degrades to the extractor's own empty/default
+        return instead of an uncaught AttributeError escaping finalize() and
+        silently losing the whole pipeline_end event (manifest finalize,
+        summary, durations) into pipeline.py's blanket except.
+        """
+        (output_dir / "review-findings.json").write_text(json.dumps([1, 2, 3]))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+        t.start(pr_number="42")
+
+        t.finalize(step=15, phase="OUTPUT", title="Present Results")
+
+        events = _read_events(t.log_path)
+        assert events[-1]["event"] == "pipeline_end"
+        assert "findings" not in events[-1]["snapshot"]
+        assert t._extract_findings() is None
+
+    def test_string_shaped_agent_review_file_extracts_malformed_and_finalize_completes(
+        self, mod, output_dir, tmp_path
+    ):
+        """A non-object <agent>-review.json (a string) must not crash finalize.
+
+        See test_list_shaped_findings_file_extracts_empty_and_finalize_completes
+        for the shared rationale — this is the sibling extractor.
+        """
+        (output_dir / "security-review.json").write_text(json.dumps("oops"))
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(tmp_path / "logs"))
+        t.start(pr_number="42")
+
+        t.finalize(step=15, phase="OUTPUT", title="Present Results")
+
+        events = _read_events(t.log_path)
+        assert events[-1]["event"] == "pipeline_end"
+        assert events[-1]["snapshot"]["agent_results"]["security"] == {
+            "error": "malformed"
+        }
+        assert t._extract_agent_results()["security"] == {"error": "malformed"}
+
 
 # ── Re-reviews ──────────────────────────────────────────────────────
 
