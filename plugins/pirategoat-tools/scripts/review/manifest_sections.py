@@ -22,6 +22,10 @@ try:
         DISPATCHED_STATUSES,
         validate_dispatch_plan_agents,
     )
+    from .synthesis_lifecycle import (
+        LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
+        LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
+    )
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -35,6 +39,10 @@ except ImportError:
         AGENT_NAME_RE,
         DISPATCHED_STATUSES,
         validate_dispatch_plan_agents,
+    )
+    from review.synthesis_lifecycle import (
+        LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
+        LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
     )
 
 
@@ -617,6 +625,90 @@ def build_worktree_hygiene_manifest(output_dir: str) -> Optional[dict]:
         "baseline_captured_at": (
             captured_at if isinstance(captured_at, str) else None
         ),
+    }
+
+
+def _synthesis_count(value: Any) -> Optional[int]:
+    """One non-negative duration in ms, or None for unusable evidence.
+
+    None is the artifact's own "not measurable" value and must survive as
+    itself: a stalled agent has no duration, and substituting 0 would
+    publish "finished instantly" for a phase that never finished.
+    """
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
+
+
+def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
+    """Project the reconciliator/critic lifecycle into the manifest.
+
+    A DISTINCT family from the reviewer lifecycle in `manifest["agents"]`,
+    deliberately: those two agents are never in `dispatch-plan.json`, never
+    run `agent/bootstrap.py`, and never write a `<agent>-review.json`, so
+    folding them into the reviewer projection would corrupt every count
+    downstream of it (the 19/19 completion ratio, the incomplete multiset,
+    the per-agent dispatch comparison). They are measured beside it.
+
+    None means the run never measured synthesis agents — the artifact is
+    absent, unreadable, or announces a schema this builder cannot vouch
+    for, as on any run predating this feature. That is a different fact
+    from a measured run with an empty `agents` list (finalize looked and
+    found no dispatch markers), and a consumer must never be able to read
+    the first as a zero-duration phase.
+
+    Every field falls back to the artifact's own absent-measurement value.
+    `stalled` in particular is true only when the artifact says exactly
+    True: a stall is an accusation against the run, and an unreadable flag
+    does not license one.
+    """
+    data = read_json_file(output_dir, _SYNTHESIS_LIFECYCLE_FILENAME)
+    if data is None:
+        return None
+    schema = data.get("schema")
+    if (
+        isinstance(schema, bool)
+        or schema != _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA
+    ):
+        return None
+
+    raw_agents = data.get("agents")
+    rows: List[dict] = []
+    if isinstance(raw_agents, list):
+        for row in raw_agents:
+            if not isinstance(row, dict) or not isinstance(
+                row.get("agent"), str
+            ):
+                continue
+            step = row.get("step")
+            rows.append({
+                "agent": row["agent"],
+                "step": (
+                    step
+                    if isinstance(step, int) and not isinstance(step, bool)
+                    else None
+                ),
+                "completion_artifact": safe_dispatch_string(
+                    row.get("completion_artifact")
+                ),
+                "started_at": safe_dispatch_string(row.get("started_at")),
+                # The completion artifact's mtime, not the observation —
+                # see the two-clock note on `observed_at` below.
+                "completed_at": safe_dispatch_string(row.get("completed_at")),
+                # When the pipeline looked, which is strictly later than
+                # the completion it observed. Kept beside `completed_at`
+                # so a reader can tell the measured phase from the moment
+                # it was noticed.
+                "observed_at": safe_dispatch_string(row.get("observed_at")),
+                "duration_ms": _synthesis_count(row.get("duration_ms")),
+                "elapsed_ms": _synthesis_count(row.get("elapsed_ms")),
+                "stalled": row.get("stalled") is True,
+            })
+
+    return {
+        "observed_at": safe_dispatch_string(data.get("observed_at")),
+        "finalized": data.get("finalized") is True,
+        "agents": rows,
     }
 
 

@@ -34,6 +34,40 @@ def _table_cell(value: object) -> str:
     return text
 
 
+def _duration_cell(value: object) -> str:
+    return (
+        f"{value / 1000:.1f}s"
+        if isinstance(value, int) and not isinstance(value, bool)
+        else "—"
+    )
+
+
+def _synthesis_cell(section: object, state: str) -> str:
+    """Render the reconciliator/critic phase durations as `recon/critic`.
+
+    "—" is the never-measured answer and covers every run predating the
+    family; a stalled agent renders "stalled" rather than a duration,
+    because the phase has none. Neither may read as a fast phase.
+    """
+    if state == "missing" or not isinstance(section, dict):
+        return "—"
+    rows = section.get("agents")
+    rows = rows if isinstance(rows, list) else []
+    by_agent = {
+        row.get("agent"): row for row in rows if isinstance(row, dict)
+    }
+
+    def cell(name: str) -> str:
+        row = by_agent.get(name)
+        if row is None:
+            return "—"
+        if row.get("stalled") is True:
+            return "stalled"
+        return _duration_cell(row.get("duration_ms"))
+
+    return f"{cell('review-reconciliator')}/{cell('decision-reviewer')}"
+
+
 def _table_row(run: dict[str, Any]) -> list[str]:
     identity = run.get("run") if isinstance(run.get("run"), dict) else {}
     dispatch = run.get("dispatch") if isinstance(run.get("dispatch"), dict) else None
@@ -87,6 +121,9 @@ def _table_row(run: dict[str, Any]) -> list[str]:
     outcome_text = f"{raw}→{final}/{critic}"
     wall = run.get("wall_time_ms")
     wall_text = f"{wall / 1000:.1f}s" if isinstance(wall, int) else "—"
+    synthesis_text = _synthesis_cell(
+        run.get("synthesis_agents"), metrics.get("synthesis_agents", "missing")
+    )
     usage = transcript.get("usage") if isinstance(transcript, dict) else None
     usage_state = metrics.get("usage", "missing")
     if usage_state in {"complete", "partial"} and isinstance(usage, dict):
@@ -117,6 +154,7 @@ def _table_row(run: dict[str, Any]) -> list[str]:
         coverage_text,
         outcome_text,
         wall_text,
+        synthesis_text,
         tokens,
         transcript_state,
     ]
@@ -134,6 +172,7 @@ def format_table(runs: list[dict[str, Any]], aggregate: dict[str, Any]) -> str:
         "Assigned/Reviewable/Uncovered",
         "Outcome/Critic",
         "Wall",
+        "Recon/Critic",
         "Eff In/Out",
         "Transcript",
     ]

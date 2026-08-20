@@ -31,6 +31,7 @@ try:
     from .atomic_io import atomic_write_json
     from . import critic_adjustments
     from . import manifest_sections
+    from . import synthesis_lifecycle
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -57,6 +58,7 @@ except ImportError:
     from review.atomic_io import atomic_write_json
     from review import critic_adjustments
     from review import manifest_sections
+    from review import synthesis_lifecycle
 
 from git_paths import decode_git_c_quoted_path
 
@@ -1014,10 +1016,33 @@ def _orchestrate_step_8(mode, config, state, context, output_dir):
             f"Check stderr above. Expected: {recon_ctx_path}"
         )
 
+    # Dispatch marker for the reconciliator — the last thing this step does
+    # before its briefing tells the orchestrator to hand off. The LLM
+    # performs the Task call, so the script cannot observe the agent's own
+    # boot the way `agent/bootstrap.py` does for reviewers; this is the
+    # dispatch-adjacent instant the script DOES own. Placed after the
+    # context gate on purpose: a step that raises above never dispatched
+    # anything, and a marker there would make a failed setup read as a
+    # stalled agent. Best-effort — an unwritable marker costs a
+    # measurement, never the review.
+    synthesis_lifecycle.mark_dispatched(
+        output_dir, synthesis_lifecycle.RECONCILIATOR
+    )
+
     return context
 
 
 def _orchestrate_step_9(mode, config, state, context, output_dir):
+    # First thing this step does: observe how the reconciliator's dispatch
+    # ended. Step 9 is the next moment the SCRIPT re-enters after step 8's
+    # briefing handed the agent off, so this is the earliest — and
+    # therefore tightest — observation the run can take. It is an
+    # observation, not a completion: `completed_at` in the artifact is
+    # review-findings.json's mtime, while `observed_at` is now.
+    # `finalize=False` — an agent with no artifact here is one this
+    # observation caught mid-flight, which is not yet a stall.
+    synthesis_lifecycle.observe(output_dir)
+
     # The step-8 completion path: the reconciliator has published
     # review-findings.json and nothing else. review-findings.md is a
     # mechanical render of that ledger, owned by the pipeline — the report
@@ -1110,6 +1135,16 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
             "critic_skipped": True,
             "reason": f"quick mode + reconciliation verdict: {recon_verdict}",
         }
+    else:
+        # Dispatch marker for the critic, written on exactly the branch
+        # whose briefing dispatches one. The skip branch writes no marker
+        # and so earns no lifecycle row: a critic that never ran has no
+        # duration, and a zero-duration row would claim it ran instantly.
+        # Finalize reads the marker's absence the same way — nothing to
+        # stall on.
+        synthesis_lifecycle.mark_dispatched(
+            output_dir, synthesis_lifecycle.DECISION_CRITIC
+        )
 
     return context
 
@@ -1231,6 +1266,24 @@ def _combine_findings_integrity(before, after):
 
 
 def _orchestrate_step_11(mode, config, state, context, output_dir):
+    # Synthesis-agent lifecycle, adjudicated FIRST and for a hard ordering
+    # reason: finalize itself writes review-findings.json (the critic
+    # adjustments apply, then the Rule 23 verdict sync), and that write
+    # moves the mtime this measurement reads as the reconciliator's
+    # completion. Observing after those writes would report the
+    # reconciliator as having finished at finalize time — the run's whole
+    # wall clock instead of its synthesis phase. Step 9 normally recorded
+    # that completion already and it is carried forward verbatim; this
+    # early placement is what keeps the number right on a run where step
+    # 9's observation never landed.
+    #
+    # `finalize=True` is the stall adjudication: both agents run in the
+    # orchestrator's foreground, so nothing here can interrupt one — the
+    # policy is report, never kill. A marker with no completion artifact
+    # at this point records `stalled: true` and how long the stall had
+    # lasted, which is the artifact a hung run previously never produced.
+    synthesis_lifecycle.observe(output_dir, finalize=True)
+
     # Read critic verdict from file (written by LLM at step 10), through
     # critic_adjustments.py's own presentation wrapper — one parser and
     # one SKIPPED/missing → "unavailable" mapping, shared with (and kept

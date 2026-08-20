@@ -926,6 +926,50 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     }
 
 
+def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:
+    """Sanitize the reconciliator/critic lifecycle section, or None.
+
+    None is the "never measured" answer and covers every run older than
+    the feature: no section, no rows, no zeros. A measured run with an
+    empty `agents` list is a different fact — finalize looked and found
+    no dispatch markers — and survives as `{"agents": []}`.
+
+    Durations keep their None: a stalled agent has no duration, and a
+    zero here would read as a phase that finished instantly.
+    """
+    if not isinstance(value, dict):
+        return None
+    raw_agents = value.get("agents")
+    if not isinstance(raw_agents, list):
+        return None
+    rows: list[dict[str, Any]] = []
+    for row in raw_agents:
+        if not isinstance(row, dict):
+            return None
+        agent = _safe_string(row.get("agent"))
+        if agent is None:
+            return None
+        step = row.get("step")
+        rows.append({
+            "agent": agent,
+            "step": _nonnegative_exact_int(step) if step is not None else None,
+            "completion_artifact": _safe_string(
+                row.get("completion_artifact")
+            ),
+            "started_at": _safe_string(row.get("started_at")),
+            "completed_at": _safe_string(row.get("completed_at")),
+            "observed_at": _safe_string(row.get("observed_at")),
+            "duration_ms": _nonnegative_exact_int(row.get("duration_ms")),
+            "elapsed_ms": _nonnegative_exact_int(row.get("elapsed_ms")),
+            "stalled": row.get("stalled") is True,
+        })
+    return {
+        "observed_at": _safe_string(value.get("observed_at")),
+        "finalized": value.get("finalized") is True,
+        "agents": rows,
+    }
+
+
 def _sanitize_summary(value: object) -> dict[str, Any]:
     raw_summary = value if isinstance(value, dict) else {}
     summary = _safe_scalar_map(
@@ -997,6 +1041,17 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         if safe_availability.get("coverage") is False
         else _sanitize_coverage(value.get("coverage"))
     )
+    # The producer's own availability conjunct wins over the payload, the
+    # same way it does for coverage. A run predating the feature carries
+    # neither key: `.get()` is None, not False, so the payload is consulted
+    # and also absent — the section stays None and the family reads
+    # "missing". That None is the whole point; it must never become a
+    # measured zero-duration synthesis phase.
+    synthesis_agents = (
+        None
+        if safe_availability.get("synthesis_agents") is False
+        else _sanitize_synthesis_agents(value.get("synthesis_agents"))
+    )
     raw_dispatch = value.get("dispatch")
     dispatch = _sanitize_dispatch(raw_dispatch)
     warnings = _sanitize_warnings(value.get("warnings"))
@@ -1014,6 +1069,7 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         "agents": agents,
         "dispatch": dispatch,
         "coverage": coverage,
+        "synthesis_agents": synthesis_agents,
         "outcome": _sanitize_outcome(value.get("outcome")),
         "availability": safe_availability,
         "warnings": warnings,

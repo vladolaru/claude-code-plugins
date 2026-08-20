@@ -19,6 +19,7 @@ tests/
 │   ├── test_workspace_setup.py       # Workspace setup tests
 │   ├── test_critic.py                # Decision critic tests
 │   ├── test_telemetry.py             # Telemetry logging tests
+│   ├── test_synthesis_lifecycle.py   # Reconciliator/critic lifecycle measurement
 │   ├── test_agent_registry.py        # Agent registry validation tests
 │   ├── test_registry_docs.py         # AGENTS.md registry reference pinned to the registry
 │   └── agent/                        # Tests for scripts/review/agent/
@@ -104,7 +105,7 @@ Counts below are **collected** tests, not test methods — parameterized classes
 | `TestVerificationMethodContract` | 6 | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
 | `TestDismissalDisciplineContract` | 3 | Dismissal/mitigation verification applies to ALL findings, not a subset. |
 | `TestCanonicalExecutableBuilderSource` | 4 | Bootstrap is the sole executable `ReviewOutputBuilder` command source, and its envelope carries the producing plugin version (read from the run-config stamp, emitted empty when unknown so the envelope's five-assignment shape stays constant for the transcript analyzers). |
-| `TestTestingDocCounts` | 9 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context, pipeline infrastructure, telemetry) are checked in the documented direction only. |
+| `TestTestingDocCounts` | 11 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context, pipeline infrastructure, telemetry) are checked in the documented direction only. |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)
 
@@ -216,12 +217,30 @@ Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequen
 
 ###Telemetry Tests (`review/test_telemetry.py`)
 
-Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag (237 collected tests across 19 classes). The skip-ledger and token-usage projections are documented here because each carries an audit contract from a run artifact into the manifest; the remaining classes follow the same direct-unit-test pattern.
+Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag (257 collected tests across 20 classes). The skip-ledger, token-usage, and synthesis-agent projections are documented here because each carries an audit contract from a run artifact into the manifest; the remaining classes follow the same direct-unit-test pattern.
 
 | Class | Tests | What it verifies |
 |---|---|---|
 | `TestSkippedStepsManifest` | 10 | `build_skipped_steps_manifest()` keeps three outcomes apart: `None` when the run never recorded skips (state absent, key-less, malformed, or a non-list value), `[]` as a measured zero, and the projected records otherwise — entries without a usable integer step are dropped and absent prose defaults to empty, and the manifest carries the section beside `availability.skipped_steps` |
+| `TestSynthesisAgentsManifest` | 20 | `build_synthesis_agents_manifest()` projects the reconciliator/critic lifecycle as its OWN family, never folded into `manifest["agents"]`. Same three outcomes: `None` when the run never measured (artifact absent, or announcing a schema this builder cannot vouch for), a measured empty `agents` list (finalize looked and found no dispatch markers), and the rows otherwise. `stalled` is true only for an explicit `True` — a stall accuses the run, so an unreadable flag falls to the weaker claim, the same rule usage's `window.closed` follows — and an unusable duration stays `None` rather than becoming a zero that would read as "the phase finished instantly". The non-interference pin lives here too: a 19-reviewer cohort's started/completed/incomplete projection is byte-identical whether or not the synthesis section exists beside it |
 | `TestUsageManifest` | 17 | `build_usage_manifest()` keeps the same three outcomes apart for the step-11 token-usage snapshot: `None` when the run never measured usage (artifact absent or malformed), a section carrying its own `missing` availability when the capture ran and found no transcripts, and the projection otherwise. The two availability halves stay separate (subagents complete at finalize, orchestrator partial by construction) beside `window.closed`, which is what tells a reader whether "partial" means a substituted bound or damaged evidence — an unreadable flag falls to the weaker claim. An unrecognized label reads `missing`, a damaged usage map is dropped rather than zeroed, and an unknown snapshot schema reads as unmeasured |
+
+###Synthesis Agent Lifecycle Tests (`review/test_synthesis_lifecycle.py`)
+
+Direct unit tests on `scripts/review/synthesis_lifecycle.py` and its four orchestration seams (28 collected tests across 10 classes). The review-reconciliator (step 8) and the decision critic (step 10) never run `agent/bootstrap.py`, never write a `<agent>-review.json`, and are never in `dispatch-plan.json` — the only list `agents_status.py` iterates — so the reviewer lifecycle machinery structurally cannot see them. This suite pins the measurement that replaces it.
+
+| Class | Tests | What it verifies |
+|---|---|---|
+| `TestDispatchMarker` | 2 | `mark_dispatched()` writes `<agent>.started` in bootstrap's exact format (one aware UTC ISO timestamp), so pipeline.py's `*.started` sweep and any shared reader keep working; an unwritable marker costs a measurement, never the review |
+| `TestAvailability` | 2 | A run with no markers records no rows at all — a pre-feature run and a quick-mode-skipped critic are both ABSENT, never a zero-duration row for a phase nobody measured |
+| `TestCompletionObservation` | 4 | `duration_ms` comes from the completion artifact's mtime, not from observation time (which would inflate the critic's phase by however long finalize took to arrive); the completion artifacts are the handoff-GATED ones, and `decision-critic-findings.md` deliberately is not — it exists only when the critic produced a critique, so keying on it would report a crashed critic as still running |
+| `TestStallDetection` | 5 | Only `finalize=True` adjudicates a stall; a marker with no completion artifact then records `stalled: true` plus the elapsed stall length. An artifact predating its dispatch is not that dispatch's output (no borrowed durations), and an unreadable or naive-timestamp marker still counts as dispatched — reporting "not dispatched" there would hide a stall |
+| `TestIdempotence` | 4 | A completed entry is preserved verbatim across re-observation — step 9's reading is the tightest bound the run will ever have, and finalize must not push its `observed_at` minutes later. An incomplete entry IS re-observed, and a corrupt or foreign-schema prior artifact is re-derived rather than trusted |
+| `TestArtifactEnvelope` | 1 | `synthesis-agents.json` carries `schema: 1` and the observation stamp, and the returned payload is what landed on disk |
+| `TestStepEightDispatchMarker` | 3 | The reconciliator marker is stamped only where step 8 actually hands off: not on the readiness gate's WAITING return, and not when the reconciliation-context gate raises — a marker on either path would make a run that dispatched nothing read as a stalled agent |
+| `TestStepTenDispatchMarker` | 2 | The critic marker is written on exactly the branch whose briefing dispatches one; the quick-mode skip branch writes none, so the skipped critic earns no lifecycle row |
+| `TestStepNineObservation` | 1 | Step 9 records the reconciliator's completion — the earliest moment the script re-enters after step 8's handoff |
+| `TestStepElevenObservation` | 4 | Finalize records the critic's duration and adjudicates stalls, and it observes BEFORE its own writes to `review-findings.json` (the adjustments apply and the Rule 23 verdict sync): observing after them would report the reconciliator as having finished at finalize time — the run's whole wall clock instead of its synthesis phase |
 
 ###Registry Documentation Tests (`review/test_registry_docs.py`)
 

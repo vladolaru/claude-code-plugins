@@ -669,10 +669,32 @@ def _pipeline_metric_availability(
         )
     else:
         lifecycle_state = "missing"
+    # Synthesis-agent lifecycle. "missing" is the pre-feature answer and
+    # the only one that must never be confused with a measured zero: a run
+    # whose manifest carries no `synthesis_agents` section did not measure
+    # a fast reconciliator, it measured nothing. "partial" is the measured
+    # answer with a hole in it — an agent whose completion artifact never
+    # appeared (a stall) or whose marker timestamp was unreadable, so its
+    # phase has no duration even though the run recorded its dispatch.
+    synthesis = manifest.get("synthesis_agents")
+    if not isinstance(synthesis, dict):
+        synthesis_state = "missing"
+    else:
+        rows = synthesis.get("agents")
+        rows = rows if isinstance(rows, list) else []
+        synthesis_state = (
+            "complete"
+            if all(
+                isinstance(row, dict) and row.get("duration_ms") is not None
+                for row in rows
+            )
+            else "partial"
+        )
     return {
         "dispatch": dispatch_state,
         "coverage": coverage_state,
         "lifecycle": lifecycle_state,
+        "synthesis_agents": synthesis_state,
         "outcomes": outcomes_state,
         "raw_findings": raw_state,
         "final_findings": final_state,
@@ -822,6 +844,10 @@ def measure_run(
     if duplicate_conflict:
         measured["wall_time_ms"] = None
         measured["lifecycle"] = None
+        # Same rule as the two above: a run whose id collides with another
+        # cannot vouch for which run these durations belong to, so they
+        # are withdrawn rather than attributed to the wrong one.
+        measured["synthesis_agents"] = None
         measured["transcript"] = _sanitize_transcript(
             _unavailable_transcript("duplicate_run_id_conflict")
         )

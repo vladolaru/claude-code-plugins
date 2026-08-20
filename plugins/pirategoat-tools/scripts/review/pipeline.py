@@ -241,6 +241,11 @@ _STALE_ARTIFACTS = [
     # Same per-run rule: a surviving snapshot would let a rerun in this
     # output dir publish a previous run's token cost as its own.
     "usage-snapshot.json",
+    # And a surviving synthesis-agent lifecycle would let a rerun publish
+    # a previous run's reconciliator/critic durations as its own. Its
+    # dispatch markers are already swept by the `*.started` glob above,
+    # which is the same sweep the reviewer markers rely on.
+    "synthesis-agents.json",
 ]
 
 # Files to preserve across runs

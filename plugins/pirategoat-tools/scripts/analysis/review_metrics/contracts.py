@@ -59,6 +59,11 @@ _PIPELINE_FAMILIES = (
     "dispatch",
     "coverage",
     "lifecycle",
+    # Distinct from "lifecycle": that family is the REVIEWER lifecycle
+    # projected from agent_start/agent_complete events. The reconciliator
+    # and the decision critic produce neither, so they are measured as
+    # their own family and never move a reviewer count.
+    "synthesis_agents",
     "outcomes",
     "raw_findings",
     "final_findings",
@@ -121,12 +126,17 @@ _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
 # Lockstep with review/telemetry.py's EVENT_SCHEMA — this is the
 # consumer's expected value for the producer's constant, same pairing as
 # _OBSERVED_READS_SCHEMA below. Bumped 1 -> 2 when the manifest's
-# `outcome` block gained `verdict_sync`. It stayed 2 when that block
-# also gained `post_apply_integrity`, under the Artifact Schemas rule's
+# `outcome` block gained `verdict_sync`. It stayed 2 when that block also
+# gained `post_apply_integrity`, and again when the manifest gained the
+# `synthesis_agents` section, both under the Artifact Schemas rule's
 # unreleased-version carve-out — see the producer-side comment on
 # EVENT_SCHEMA for the tag evidence.
 _SUPPORTED_MANIFEST_SCHEMA = 2
 _OBSERVED_READS_SCHEMA = 2
+# The `--format json` report's own schema. It stayed 2 when each run row
+# and the cohort aggregate gained `synthesis_agents`, under the same
+# unreleased-version carve-out: 2 was introduced in 1.114.0 and 1.114.0 is
+# not tagged, so no report was ever published claiming 2 without the key.
 _REPORT_SCHEMA = 2
 _SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
 _DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES

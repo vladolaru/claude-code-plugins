@@ -1892,6 +1892,8 @@ class TestTestingDocCounts:
          "review/test_pipeline_infra.py", "partial"),
         ("###Telemetry Tests",
          "review/test_telemetry.py", "partial"),
+        ("###Synthesis Agent Lifecycle Tests",
+         "review/test_synthesis_lifecycle.py", "full"),
     )
     FULL_TABLES = tuple(row for row in TABLES if row[2] == "full")
 

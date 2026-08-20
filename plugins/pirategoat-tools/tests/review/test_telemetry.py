@@ -571,6 +571,7 @@ class TestRunManifest:
             "transcript": False,
             "coverage": False,
             "worktree_hygiene": False,
+            "synthesis_agents": False,
             "usage": False,
             "skipped_steps": False,
         }
@@ -3912,3 +3913,202 @@ class TestSkippedStepsManifest:
 
         assert manifest["skipped_steps"] is None
         assert manifest["availability"]["skipped_steps"] is False
+
+
+class TestSynthesisAgentsManifest:
+    """The manifest records the reconciliator/critic lifecycle.
+
+    A family of its own, never folded into `manifest["agents"]`: those two
+    agents are never in a dispatch plan and produce no reviewer lifecycle
+    events, so mixing them in would corrupt every reviewer count
+    downstream. The three outcomes this projection keeps apart are `None`
+    (never measured — every run predating the feature), a measured empty
+    list (finalize looked and found no dispatch markers), and the rows.
+    """
+
+    RECONCILIATOR = "review-reconciliator"
+    CRITIC = "decision-reviewer"
+
+    def _row(self, agent, **overrides):
+        row = {
+            "agent": agent,
+            "step": 8 if agent == self.RECONCILIATOR else 10,
+            "completion_artifact": (
+                "review-findings.json" if agent == self.RECONCILIATOR
+                else "decision-critic-verdict.json"
+            ),
+            "started_at": "2026-08-19T12:00:00+00:00",
+            "completed_at": "2026-08-19T12:11:05+00:00",
+            "observed_at": "2026-08-19T12:15:00+00:00",
+            "duration_ms": 665_000,
+            "elapsed_ms": 900_000,
+            "stalled": False,
+        }
+        row.update(overrides)
+        return row
+
+    def _write(self, tmp_path, payload):
+        (tmp_path / "synthesis-agents.json").write_text(json.dumps(payload))
+
+    def _artifact(self, *rows, **overrides):
+        payload = {
+            "schema": 1,
+            "observed_at": "2026-08-19T12:15:00+00:00",
+            "finalized": True,
+            "agents": list(rows),
+        }
+        payload.update(overrides)
+        return payload
+
+    def _build(self, mod, tmp_path):
+        return mod.manifest_sections.build_synthesis_agents_manifest(
+            str(tmp_path)
+        )
+
+    def test_absent_artifact_is_unmeasured(self, mod, tmp_path):
+        assert self._build(mod, tmp_path) is None
+
+    def test_unknown_schema_is_unmeasured(self, mod, tmp_path):
+        self._write(tmp_path, self._artifact(
+            self._row(self.CRITIC), schema=2,
+        ))
+        assert self._build(mod, tmp_path) is None
+
+    def test_boolean_schema_is_unmeasured(self, mod, tmp_path):
+        self._write(tmp_path, self._artifact(
+            self._row(self.CRITIC), schema=True,
+        ))
+        assert self._build(mod, tmp_path) is None
+
+    def test_measured_empty_is_not_absent(self, mod, tmp_path):
+        """Finalize ran and found no dispatch markers. That is a measured
+        zero dispatches, not an unmeasured run."""
+        self._write(tmp_path, self._artifact())
+        assert self._build(mod, tmp_path) == {
+            "observed_at": "2026-08-19T12:15:00+00:00",
+            "finalized": True,
+            "agents": [],
+        }
+
+    def test_durations_project_intact(self, mod, tmp_path):
+        self._write(tmp_path, self._artifact(self._row(self.CRITIC)))
+        section = self._build(mod, tmp_path)
+        assert section["agents"] == [self._row(self.CRITIC)]
+
+    def test_stall_projects_as_stalled_without_a_duration(self, mod, tmp_path):
+        self._write(tmp_path, self._artifact(self._row(
+            self.RECONCILIATOR, completed_at=None, duration_ms=None,
+            stalled=True,
+        )))
+        row = self._build(mod, tmp_path)["agents"][0]
+        assert row["stalled"] is True
+        assert row["duration_ms"] is None
+        assert row["elapsed_ms"] == 900_000
+
+    @pytest.mark.parametrize(
+        "value", [None, "yes", 1, 0, "true"],
+        ids=["null", "string", "int", "zero", "truthy-string"],
+    )
+    def test_only_an_explicit_true_reads_as_stalled(self, mod, tmp_path, value):
+        """A stall accuses the run. An unreadable flag does not license
+        that claim — same rule usage's `window.closed` follows."""
+        self._write(tmp_path, self._artifact(
+            self._row(self.CRITIC, stalled=value)
+        ))
+        assert self._build(mod, tmp_path)["agents"][0]["stalled"] is False
+
+    @pytest.mark.parametrize(
+        "value", [-1, "665000", 6.5, True, None],
+        ids=["negative", "string", "float", "bool", "null"],
+    )
+    def test_unusable_duration_is_none_never_zero(self, mod, tmp_path, value):
+        """A duration that cannot be read is absent. Zeroing it would
+        publish "the phase finished instantly"."""
+        self._write(tmp_path, self._artifact(
+            self._row(self.CRITIC, duration_ms=value)
+        ))
+        assert self._build(mod, tmp_path)["agents"][0]["duration_ms"] is None
+
+    def test_rows_without_a_named_agent_are_dropped(self, mod, tmp_path):
+        self._write(tmp_path, self._artifact(
+            {"duration_ms": 5}, "not-a-row", self._row(self.CRITIC),
+        ))
+        section = self._build(mod, tmp_path)
+        assert [row["agent"] for row in section["agents"]] == [self.CRITIC]
+
+    def test_non_list_agents_projects_measured_empty(self, mod, tmp_path):
+        self._write(tmp_path, self._artifact(agents="nope"))
+        assert self._build(mod, tmp_path)["agents"] == []
+
+    def test_manifest_carries_the_section_and_its_availability(
+        self, mod, tmp_path
+    ):
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        t = mod.ReviewTelemetry(str(out_dir), log_dir=str(tmp_path / "logs"))
+        t.start(mode="full", repo_path=str(tmp_path), identifier="branch",
+                run_id="run-1")
+
+        manifest = _read_manifest(t)
+        assert manifest["synthesis_agents"] is None
+        assert manifest["availability"]["synthesis_agents"] is False
+
+        self._write(out_dir, self._artifact(self._row(self.CRITIC)))
+        t.log_step(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(t)
+        assert manifest["availability"]["synthesis_agents"] is True
+        assert manifest["synthesis_agents"]["agents"][0]["duration_ms"] == (
+            665_000
+        )
+
+    def test_reviewer_lifecycle_is_untouched_by_synthesis_rows(
+        self, mod, tmp_path
+    ):
+        """The non-interference pin: a full reviewer cohort's started /
+        completed / incomplete projection must be byte-identical whether
+        or not the synthesis section exists beside it."""
+        def build(out_dir):
+            t = mod.ReviewTelemetry(
+                str(out_dir), log_dir=str(out_dir / "logs")
+            )
+            t.start(mode="full", repo_path=str(tmp_path),
+                    identifier="branch", run_id="run-1")
+            for index in range(19):
+                name = f"agent-{index:02d}-reviewer"
+                t.log_agent_start(name, domain="code", model_tier="sonnet")
+                t.log_agent_complete(name, verdict="approve", issue_count=0)
+            t.finalize(step=11, phase="OUTPUT", title="Present Results")
+            return _read_manifest(t)
+
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        baseline = build(plain)
+
+        beside = tmp_path / "beside"
+        beside.mkdir()
+        self._write(beside, self._artifact(
+            self._row(self.RECONCILIATOR), self._row(self.CRITIC),
+        ))
+        with_synthesis = build(beside)
+
+        assert len(baseline["agents"]["started"]) == 19
+        assert len(baseline["agents"]["completed"]) == 19
+        assert baseline["agents"]["incomplete"] == []
+
+        def scrub(events):
+            return [
+                {k: v for k, v in event.items()
+                 if k not in ("timestamp", "duration_ms")}
+                for event in events
+            ]
+
+        for key in ("started", "completed"):
+            assert scrub(with_synthesis["agents"][key]) == scrub(
+                baseline["agents"][key]
+            )
+        assert with_synthesis["agents"]["incomplete"] == (
+            baseline["agents"]["incomplete"]
+        )
+        assert with_synthesis["synthesis_agents"] is not None
+        assert baseline["synthesis_agents"] is None

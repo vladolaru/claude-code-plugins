@@ -60,13 +60,16 @@ MARKER_FILE = ".telemetry-log-path"
 # never vouched for.
 #
 # The `outcome` block then gained `post_apply_integrity` (finalize's
-# ledger-tamper check) WITHOUT a further bump, under the Artifact Schemas
-# rule's carve-out: schema 2 was introduced in 1.114.0 and 1.114.0 is
-# still unreleased (the plugin's newest tag is pirategoat-tools/v1.108.0),
-# so no artifact was ever published claiming schema 2 without this key.
+# ledger-tamper check), and the manifest gained the top-level
+# `synthesis_agents` section plus its `availability` conjunct
+# (reconciliator/critic lifecycle), both WITHOUT a further bump, under the
+# Artifact Schemas rule's carve-out: schema 2 was introduced in 1.114.0
+# and 1.114.0 is still unreleased (the plugin's newest tag is
+# pirategoat-tools/v1.108.0), so no artifact was ever published claiming
+# schema 2 without these keys.
 # Bumping to 3 here would publish a compatibility boundary between two
 # shapes that never both existed in the wild. Revisit the moment 1.114.0
-# is tagged: the next `outcome` key after that is a real 2 -> 3 bump —
+# is tagged: the next manifest key after that is a real 2 -> 3 bump —
 # and at that same moment the missing-digest-means-tampered adjudication
 # gains a cross-version edge worth re-checking: a run started under a
 # pre-digest build and finalized after an upgrade reads
@@ -874,6 +877,15 @@ class ReviewTelemetry:
         )
         manifest["availability"]["worktree_hygiene"] = (
             manifest["worktree_hygiene"] is not None
+        )
+        # A family of its own, never folded into manifest["agents"]: the
+        # reconciliator and the decision critic are not reviewers, are
+        # never in the dispatch plan, and must not move any reviewer count.
+        manifest["synthesis_agents"] = (
+            manifest_sections.build_synthesis_agents_manifest(self.output_dir)
+        )
+        manifest["availability"]["synthesis_agents"] = (
+            manifest["synthesis_agents"] is not None
         )
         manifest["usage"] = (
             manifest_sections.build_usage_manifest(self.output_dir)

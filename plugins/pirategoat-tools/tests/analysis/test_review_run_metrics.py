@@ -6960,7 +6960,7 @@ class TestFormattingAndCli:
         )
 
         assert measured["metric_availability"]["usage"] == "missing"
-        assert render._table_row(measured)[7] == "—"
+        assert render._table_row(measured)[8] == "—"
         assert payload["runs"][0]["metric_availability"]["usage"] == "missing"
         assert payload["runs"][0]["transcript"]["usage"] == _usage(0)
 
@@ -6970,7 +6970,7 @@ class TestFormattingAndCli:
         )
 
         assert measured["metric_availability"]["usage"] == "disabled"
-        assert render._table_row(measured)[7] == "n/a"
+        assert render._table_row(measured)[8] == "n/a"
 
     def test_table_usage_complete_zero_is_observed_zero(
         self, monkeypatch, tmp_path
@@ -6980,7 +6980,7 @@ class TestFormattingAndCli:
         )
 
         assert measured["metric_availability"]["usage"] == "complete"
-        assert render._table_row(measured)[7] == "0/0"
+        assert render._table_row(measured)[8] == "0/0"
 
     def test_table_usage_partial_observation_is_explicit(
         self, monkeypatch, tmp_path
@@ -6992,7 +6992,7 @@ class TestFormattingAndCli:
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
 
         assert measured["metric_availability"]["usage"] == "partial"
-        assert render._table_row(measured)[7] == "partial 6/4"
+        assert render._table_row(measured)[8] == "partial 6/4"
 
     def test_table_cells_normalize_controls_escape_pipes_and_bound_output(self):
         run = _measured_run("unsafe-table")
@@ -7373,3 +7373,271 @@ class TestDamagedLegacyLogBytes:
 
         assert run["run"]["id"] == "legacy-damaged"
         assert "legacy_log_no_manifest" in run["warnings"]
+
+
+def _synthesis_row(agent: str, **overrides) -> dict:
+    row = {
+        "agent": agent,
+        "step": 8 if agent == "review-reconciliator" else 10,
+        "completion_artifact": (
+            "review-findings.json" if agent == "review-reconciliator"
+            else "decision-critic-verdict.json"
+        ),
+        "started_at": "2026-08-19T12:00:00+00:00",
+        "completed_at": "2026-08-19T12:11:05+00:00",
+        "observed_at": "2026-08-19T12:15:00+00:00",
+        "duration_ms": 665_000,
+        "elapsed_ms": 900_000,
+        "stalled": False,
+    }
+    row.update(overrides)
+    return row
+
+
+def _synthesis_manifest(run_id: str = "run-1", *rows, **overrides) -> dict:
+    manifest = _manifest(run_id)
+    manifest["synthesis_agents"] = {
+        "observed_at": "2026-08-19T12:15:00+00:00",
+        "finalized": True,
+        "agents": list(rows),
+    }
+    manifest["availability"]["synthesis_agents"] = True
+    manifest.update(overrides)
+    return manifest
+
+
+class TestSynthesisAgentsMeasurement:
+    """The reconciliator/critic phase durations, cross-run.
+
+    The critic was the longest single phase of the audited 2026-08-19 run
+    (~11 minutes) and had no number anywhere. This family is where that
+    number lives — and where a run that never measured it must keep
+    saying so rather than contributing a zero.
+    """
+
+    def test_pre_feature_run_is_missing_never_zero(self):
+        """THE availability conjunct. A manifest carrying no
+        `synthesis_agents` section did not measure a fast synthesis
+        phase; it measured nothing."""
+        measured = measure_run(
+            _manifest("run-1"), Path("/nonexistent"),
+            include_transcripts=False,
+        )
+        assert measured["metric_availability"]["synthesis_agents"] == "missing"
+        assert measured["synthesis_agents"] is None
+
+    def test_producer_availability_false_wins_over_a_payload(self):
+        manifest = _synthesis_manifest(
+            "run-1", _synthesis_row("decision-reviewer")
+        )
+        manifest["availability"]["synthesis_agents"] = False
+        measured = measure_run(
+            manifest, Path("/nonexistent"), include_transcripts=False
+        )
+        assert measured["synthesis_agents"] is None
+        assert measured["metric_availability"]["synthesis_agents"] == "missing"
+
+    def test_measured_durations_are_complete(self):
+        measured = measure_run(
+            _synthesis_manifest(
+                "run-1",
+                _synthesis_row("review-reconciliator", duration_ms=41_000),
+                _synthesis_row("decision-reviewer"),
+            ),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert measured["metric_availability"]["synthesis_agents"] == "complete"
+        durations = {
+            row["agent"]: row["duration_ms"]
+            for row in measured["synthesis_agents"]["agents"]
+        }
+        assert durations == {
+            "review-reconciliator": 41_000,
+            "decision-reviewer": 665_000,
+        }
+
+    def test_measured_zero_dispatches_is_complete_not_missing(self):
+        measured = measure_run(
+            _synthesis_manifest("run-1"), Path("/nonexistent"),
+            include_transcripts=False,
+        )
+        assert measured["metric_availability"]["synthesis_agents"] == "complete"
+        assert measured["synthesis_agents"]["agents"] == []
+
+    def test_a_stall_makes_the_family_partial(self):
+        """A dispatched agent with no duration is a measured hole, not a
+        measured phase — and never a silent drop."""
+        measured = measure_run(
+            _synthesis_manifest("run-1", _synthesis_row(
+                "review-reconciliator", completed_at=None,
+                duration_ms=None, stalled=True,
+            )),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert measured["metric_availability"]["synthesis_agents"] == "partial"
+        row = measured["synthesis_agents"]["agents"][0]
+        assert row["stalled"] is True
+        assert row["duration_ms"] is None
+
+    @pytest.mark.parametrize(
+        "value", [-1, "665000", 6.5, True],
+        ids=["negative", "string", "float", "bool"],
+    )
+    def test_unusable_duration_never_becomes_zero(self, value):
+        measured = measure_run(
+            _synthesis_manifest(
+                "run-1", _synthesis_row("decision-reviewer", duration_ms=value)
+            ),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert measured["synthesis_agents"]["agents"][0]["duration_ms"] is None
+        assert measured["metric_availability"]["synthesis_agents"] == "partial"
+
+    def test_a_row_without_an_agent_name_invalidates_the_section(self):
+        manifest = _synthesis_manifest("run-1", {"duration_ms": 5})
+        measured = measure_run(
+            manifest, Path("/nonexistent"), include_transcripts=False
+        )
+        assert measured["synthesis_agents"] is None
+        assert measured["metric_availability"]["synthesis_agents"] == "missing"
+
+    def test_reviewer_lifecycle_family_is_untouched(self):
+        """Non-interference: adding the section must not move the
+        reviewer lifecycle family in either direction."""
+        plain = measure_run(
+            _manifest("run-1"), Path("/nonexistent"),
+            include_transcripts=False,
+        )
+        beside = measure_run(
+            _synthesis_manifest("run-1", _synthesis_row("decision-reviewer")),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert beside["lifecycle"] == plain["lifecycle"]
+        assert beside["agents"] == plain["agents"]
+        assert (
+            beside["metric_availability"]["lifecycle"]
+            == plain["metric_availability"]["lifecycle"]
+        )
+
+
+class TestSynthesisAgentsCohort:
+    def test_durations_aggregate_per_agent(self):
+        runs = [
+            measure_run(
+                _synthesis_manifest(
+                    run_id,
+                    _synthesis_row("review-reconciliator", duration_ms=recon),
+                    _synthesis_row("decision-reviewer", duration_ms=critic),
+                ),
+                Path("/nonexistent"), include_transcripts=False,
+            )
+            for run_id, recon, critic in (
+                ("run-1", 40_000, 600_000),
+                ("run-2", 60_000, 700_000),
+            )
+        ]
+        block = aggregate_cohort(runs)["synthesis_agents"]
+        assert block["by_agent"]["decision-reviewer"] == {
+            "dispatched_runs": 2,
+            "measured_runs": 2,
+            "stalled_runs": 0,
+            "total_ms": 1_300_000,
+            "mean_ms": 650_000,
+            "median_ms": 650_000,
+            "max_ms": 700_000,
+        }
+        assert block["by_agent"]["review-reconciliator"]["mean_ms"] == 50_000
+        assert block["available_runs"] == 2
+
+    def test_unmeasured_runs_contribute_nothing(self):
+        runs = [
+            measure_run(_manifest("run-1"), Path("/nonexistent"),
+                        include_transcripts=False),
+            measure_run(_manifest("run-2"), Path("/nonexistent"),
+                        include_transcripts=False),
+        ]
+        block = aggregate_cohort(runs)["synthesis_agents"]
+        assert block["by_agent"] is None
+        assert block["available_runs"] == 0
+        assert block["availability"]["missing"] == 2
+
+    def test_a_stalled_run_still_reports_its_stall(self):
+        """Dropping partial runs would delete the only cross-run record
+        of a hung synthesis agent."""
+        runs = [
+            measure_run(
+                _synthesis_manifest("run-1", _synthesis_row(
+                    "decision-reviewer", completed_at=None,
+                    duration_ms=None, stalled=True,
+                )),
+                Path("/nonexistent"), include_transcripts=False,
+            ),
+        ]
+        block = aggregate_cohort(runs)["synthesis_agents"]
+        assert block["by_agent"]["decision-reviewer"] == {
+            "dispatched_runs": 1,
+            "measured_runs": 0,
+            "stalled_runs": 1,
+            "total_ms": None,
+            "mean_ms": None,
+            "median_ms": None,
+            "max_ms": None,
+        }
+
+    def test_the_family_is_a_declared_availability_family(self):
+        assert "synthesis_agents" in contracts._AVAILABILITY_FAMILIES
+        assert "synthesis_agents" not in contracts._TRANSCRIPT_FAMILIES
+
+
+class TestSynthesisAgentsRendering:
+    def test_column_position_is_pinned(self):
+        """Other tests index this table positionally; a column inserted
+        without updating them would silently re-point their assertions."""
+        assert render.format_table(
+            [measure_run(_manifest("run-1"), Path("/nonexistent"),
+                         include_transcripts=False)],
+            {},
+        ).splitlines()[0].split("|")[8].strip() == "Recon/Critic"
+
+    def test_unmeasured_run_renders_as_absent(self):
+        measured = measure_run(
+            _manifest("run-1"), Path("/nonexistent"),
+            include_transcripts=False,
+        )
+        assert render._table_row(measured)[7] == "—"
+
+    def test_durations_render_as_seconds(self):
+        measured = measure_run(
+            _synthesis_manifest(
+                "run-1",
+                _synthesis_row("review-reconciliator", duration_ms=41_000),
+                _synthesis_row("decision-reviewer"),
+            ),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert render._table_row(measured)[7] == "41.0s/665.0s"
+
+    def test_a_stall_renders_as_stalled_not_as_a_fast_phase(self):
+        measured = measure_run(
+            _synthesis_manifest("run-1", _synthesis_row(
+                "decision-reviewer", completed_at=None,
+                duration_ms=None, stalled=True,
+            )),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        assert render._table_row(measured)[7] == "—/stalled"
+
+    def test_the_section_reaches_the_json_report(self):
+        measured = measure_run(
+            _synthesis_manifest("run-1", _synthesis_row("decision-reviewer")),
+            Path("/nonexistent"), include_transcripts=False,
+        )
+        report = json.loads(
+            render.format_json([measured], aggregate_cohort([measured]))
+        )
+        assert report["runs"][0]["synthesis_agents"]["agents"][0][
+            "duration_ms"
+        ] == 665_000
+        assert report["aggregate"]["synthesis_agents"]["by_agent"][
+            "decision-reviewer"
+        ]["max_ms"] == 665_000

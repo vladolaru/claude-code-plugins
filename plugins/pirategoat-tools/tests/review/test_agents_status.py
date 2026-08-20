@@ -797,3 +797,58 @@ class TestWaitMode:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         assert r.returncode == 2
         assert "ALL_DONE: false" in r.stdout
+
+
+class TestSynthesisMarkersAreInvisible:
+    """The synthesis agents are measured elsewhere and must not leak here.
+
+    `review-reconciliator.started` and `decision-reviewer.started` share
+    the reviewer marker format on purpose (one `*.started` sweep, one
+    reader), so this pins the structural reason they still cannot move
+    this module's counts: it iterates the dispatch plan, and neither
+    agent is ever in one. A future edit that scanned the directory for
+    `*.started` instead would fail here.
+    """
+
+    SYNTHESIS_MARKERS = ("review-reconciliator", "decision-reviewer")
+
+    def _plant(self, tmp_path):
+        for name in self.SYNTHESIS_MARKERS:
+            _start_agent(tmp_path, name)
+
+    def test_counts_unchanged_with_synthesis_markers_present(
+        self, mod, tmp_path
+    ):
+        _write_plan(tmp_path, [
+            {"name": "code-reviewer", "status": "DISPATCH"},
+            {"name": "security-reviewer", "status": "DISPATCH"},
+        ])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+        _start_agent(tmp_path, "security-reviewer")
+
+        before = mod.check_status(str(tmp_path))
+        self._plant(tmp_path)
+        after = mod.check_status(str(tmp_path))
+
+        assert after == before
+        assert [agent["name"] for agent in after["agents"]] == [
+            "code-reviewer", "security-reviewer",
+        ]
+
+    def test_exit_code_unchanged_with_synthesis_markers_present(
+        self, tmp_path
+    ):
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+        self._plant(tmp_path)
+
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)],
+            capture_output=True, text=True, timeout=15,
+        )
+        assert r.returncode == 0
+        assert "ALL_DONE: true" in r.stdout
+        for name in self.SYNTHESIS_MARKERS:
+            assert name not in r.stdout

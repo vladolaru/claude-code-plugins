@@ -313,6 +313,69 @@ def _aggregate_outcomes(
     return outcomes, critic, wall_time
 
 
+def _aggregate_synthesis_agents(
+    runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
+) -> dict[str, Any]:
+    """Cross-run duration statistics for the two synthesis agents.
+
+    Keyed by agent, because the reconciliator and the critic are different
+    phases with different shapes — the audited 2026-08-19 run spent ~11
+    minutes in the critic alone, and averaging that with a fast
+    reconciliation would hide exactly the number this family exists to
+    surface.
+
+    Runs whose family is "missing" contribute nothing at all: they did not
+    measure a zero, they measured nothing. "partial" runs DO contribute
+    the durations they have, and their stalls are counted separately —
+    dropping them would delete the only record of a hung synthesis agent.
+    """
+    durations: dict[str, list[int]] = {}
+    stalled: Counter = Counter()
+    dispatched: Counter = Counter()
+    measured_runs = 0
+    for run in runs:
+        state = run.get("metric_availability", {}).get("synthesis_agents")
+        if state not in {"complete", "partial"}:
+            continue
+        section = run.get("synthesis_agents")
+        if not isinstance(section, dict):
+            continue
+        measured_runs += 1
+        rows = section.get("agents")
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or not isinstance(row.get("agent"), str):
+                continue
+            name = row["agent"]
+            dispatched[name] += 1
+            if row.get("stalled") is True:
+                stalled[name] += 1
+            duration = _nonnegative_int(row.get("duration_ms"))
+            if duration is not None:
+                durations.setdefault(name, []).append(duration)
+
+    by_agent = {}
+    for name in sorted(dispatched):
+        values = durations.get(name, [])
+        by_agent[name] = {
+            "dispatched_runs": dispatched[name],
+            "measured_runs": len(values),
+            "stalled_runs": stalled[name],
+            "total_ms": sum(values) if values else None,
+            "mean_ms": (
+                _exact_statistic(statistics.mean(values)) if values else None
+            ),
+            "median_ms": (
+                _exact_statistic(statistics.median(values)) if values else None
+            ),
+            "max_ms": max(values) if values else None,
+        }
+    return {
+        "by_agent": by_agent or None,
+        "available_runs": measured_runs,
+        "availability": availability["synthesis_agents"],
+    }
+
+
 def _aggregate_tool_failures(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> dict[str, Any]:
@@ -580,6 +643,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
     dispatch = _aggregate_dispatch(run_list, availability)
     coverage = _aggregate_coverage(run_list, availability)
     outcomes, critic, wall_time = _aggregate_outcomes(run_list, availability)
+    synthesis_agents = _aggregate_synthesis_agents(run_list, availability)
     tool_failures = _aggregate_tool_failures(run_list, availability)
     artifact_writes = _aggregate_artifact_writes(run_list, availability)
     observed_reads = _aggregate_observed_reads(run_list, availability)
@@ -601,6 +665,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "outcomes": outcomes,
         "critic": critic,
         "wall_time": wall_time,
+        "synthesis_agents": synthesis_agents,
         "usage": {
             "complete_totals": complete_usage,
             "partial_observed_totals": partial_usage,
