@@ -5,6 +5,30 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.111.2] - 2026-08-20
+
+Closes a reliability-reviewer blind spot where a callee's changed failure
+behavior left an unchanged, unguarded caller out of scope — a miss a human
+reviewer caught independently on WooCommerce PR woocommerce/woocommerce#67334
+after the agent had already found and then discarded the same call site.
+
+### Fixed
+
+- **Unchanged-caller blast radius, generalized beyond failure paths.** The
+  shared STOP CHECK's "unchanged caller" exception in `reviewer-protocol.md`
+  now fires for any behavior change in a hunk that could strand an unchanged
+  caller — return shape, side effects, ordering, validation — not only
+  failure/error-path changes. Reviewers trace reachable callers of a changed
+  function using symbol-aware search when available and anchor the finding
+  at the changed hunk, never at the unchanged caller.
+- **Under-leveled failure logging is a gap, not a positive.** reliability-reviewer's
+  "Observable" rule now flags a well-built catch block whose only signal is a
+  `debug`-level log call as a resilience gap for a silent, user-facing
+  degradation, unless an equivalent production-visible metric or alert already
+  covers it. Its False Positive Gate cross-references the shared exception
+  before clearing a resilience gap as "existing infrastructure unchanged by
+  this PR."
+
 ## [1.111.1] - 2026-07-29
 
 Closes an API contract review blind spot where a filter invocation could remain
