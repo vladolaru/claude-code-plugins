@@ -5,6 +5,27 @@ All notable changes to the pirategoat-tools plugin will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.111.3] - 2026-08-20
+
+Addresses a CodeRabbit review nit on the unchanged-caller exception added in
+1.111.2: the claim that symbol-aware search / AST analysis / repository
+indexes catch generated or string-built call sites overstated what those
+tools can do, risking a reviewer treating tool silence as proof a dynamic
+call site doesn't exist.
+
+### Fixed
+
+- **Caller-tracing guidance no longer overclaims tool coverage.** The
+  `reviewer-protocol.md` "unchanged caller" exception now states plainly
+  that symbol-aware search, AST analysis, and repository index tooling
+  reliably resolve statically-bound references (aliases, re-exports/imports,
+  overrides) but do not enumerate arbitrary runtime string dispatch or
+  generated code that isn't indexed. Reviewers now supplement with targeted
+  searches for registrations, callback wiring, dispatch strings, and
+  generator templates, and record any call site they can't resolve
+  statically as a verification gap rather than clearing the finding on
+  tool silence.
+
 ## [1.111.2] - 2026-08-20
 
 Closes a reliability-reviewer blind spot where a callee's changed failure
