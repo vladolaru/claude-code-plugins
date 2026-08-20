@@ -103,7 +103,7 @@ Counts below are **collected** tests, not test methods — parameterized classes
 | `TestRepoRuleAndRefModeSelection` | 7 | Repo rules reach the reviewers they target (effective identity, complete scope); adapter instances receive their declared path scope; an explicit isolation request never runs inline. |
 | `TestVerificationMethodContract` | 6 | Verification-method rules ported from ai-regression-review's triage.md — the half the 2026-07-15 dismissal port did not cover. |
 | `TestDismissalDisciplineContract` | 3 | Dismissal/mitigation verification applies to ALL findings, not a subset. |
-| `TestCanonicalExecutableBuilderSource` | 1 | Bootstrap is the sole executable `ReviewOutputBuilder` command source. |
+| `TestCanonicalExecutableBuilderSource` | 4 | Bootstrap is the sole executable `ReviewOutputBuilder` command source, and its envelope carries the producing plugin version (read from the run-config stamp, emitted empty when unknown so the envelope's five-assignment shape stays constant for the transcript analyzers). |
 | `TestTestingDocCounts` | 9 | Every count table in TESTING.md, this one included: documented counts match real collection, and for tables that claim whole-file coverage, every class has a row. Partial tables (reconciliation context, pipeline infrastructure, telemetry) are checked in the documented direction only. |
 
 ###Domain Routing Evals (`review/agent/test_scope_routing.py`)

@@ -55,11 +55,15 @@ _SAFE_TOOL_NAMES = {
 }
 _SHELL_OPERATORS = {";", "&", "&&", "|", "||", "<", ">", "<<", ">>"}
 _UNRESOLVED_PATH = re.compile(r"[$`*?\[\]{}]")
+# Mirrors session_analyzer._BUILDER_ENV_NAMES: bootstrap emits all five
+# assignments on every dispatch, empty-valued when a fact is unknown, so
+# the envelope's shape is a constant both recognizers can pin exactly.
 _BOOTSTRAP_BUILDER_ENV = (
     "PIRATEGOAT_PLUGIN_ROOT",
     "PIRATEGOAT_OUTPUT_DIR",
     "PIRATEGOAT_REVIEWER_NAME",
     "PIRATEGOAT_PR_ID",
+    "PIRATEGOAT_PLUGIN_VERSION",
 )
 # Both current and legacy names of the subagent dispatch tool. Dispatch
 # anomalies (dangling, malformed, duplicated calls) are the correlation
@@ -1238,16 +1242,19 @@ def _is_bootstrap_builder_heredoc(command: object) -> bool:
         tokens = shlex.split(first_line)
     except ValueError:
         return False
-    if len(tokens) != 6 or tokens[-2:] != ["python3", "<<PY"]:
+    expected = len(_BOOTSTRAP_BUILDER_ENV)
+    if len(tokens) != expected + 2 or tokens[-2:] != ["python3", "<<PY"]:
         return False
 
     names: list[str] = []
-    for token in tokens[:4]:
+    for token in tokens[:expected]:
         name, separator, _value = token.partition("=")
         if separator != "=":
             return False
         names.append(name)
-    return len(set(names)) == 4 and set(names) == set(_BOOTSTRAP_BUILDER_ENV)
+    return len(set(names)) == expected and set(names) == set(
+        _BOOTSTRAP_BUILDER_ENV
+    )
 
 
 def _file_target(value: object, repo_root: str | Path) -> str:

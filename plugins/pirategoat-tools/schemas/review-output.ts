@@ -127,6 +127,7 @@ export interface ReviewOutput {
     pr_id: string;
     reviewer: string; // 'architecture' | 'security' | 'performance' | 'tests' | 'patterns'
     timestamp: string; // ISO 8601
+    plugin_version: string | null; // pirategoat-tools version that produced this artifact; null when the producer could not name itself
     version: string; // Schema version for compatibility
 
     // Summary

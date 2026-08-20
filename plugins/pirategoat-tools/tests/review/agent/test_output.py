@@ -437,7 +437,8 @@ class TestToDict:
         b.add_issue("medium", "Title", "f.py", "desc", "rec", line=1)
         d = b.to_dict()
         expected_keys = {
-            "pr_id", "reviewer", "timestamp", "version", "verdict",
+            "pr_id", "reviewer", "timestamp", "plugin_version", "version",
+            "verdict",
             "summary", "issues", "unreviewed", "deferred_reviewed",
             "observations", "recommendations", "positive_observations",
             "clearances", "meta",
@@ -457,6 +458,81 @@ class TestToDict:
         assert counts["medium"] == 1
         assert counts["low"] == 0
         assert counts["info"] == 0
+
+    def test_plugin_version_comes_from_the_dispatch_envelope(self, monkeypatch):
+        """The producing plugin version is a serialized artifact fact.
+
+        bootstrap exports it alongside the other envelope variables, so a
+        review JSON can be attributed to a plugin version on its own.
+        """
+        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        assert b.to_dict()["plugin_version"] == "1.114.0"
+
+    def test_plugin_version_is_null_without_the_envelope(self, monkeypatch):
+        """Honest absence, never a required field.
+
+        Hand-rolled and eval-harness callers bypass the envelope; the
+        artifact must say it does not know rather than fail or guess.
+        """
+        monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        d = b.to_dict()
+        assert "plugin_version" in d
+        assert d["plugin_version"] is None
+
+    def test_blank_envelope_value_reads_as_unknown(self, monkeypatch):
+        """The envelope always carries the assignment, sometimes empty.
+
+        bootstrap emits PIRATEGOAT_PLUGIN_VERSION unconditionally so the
+        envelope shape stays a constant; an empty value means the run
+        could not resolve a version, which is the same as not knowing.
+        """
+        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "   ")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        assert b.to_dict()["plugin_version"] is None
+
+    def test_run_config_supplies_the_version_when_the_envelope_is_bypassed(
+        self, monkeypatch, tmp_path
+    ):
+        """review-reconciliator imports the builder without the envelope.
+
+        It is dispatched by the orchestrator rather than bootstrap, so no
+        PIRATEGOAT_* variables reach it — but it always serializes with an
+        explicit output directory, where step 1's run-config.json already
+        records the same stamp.
+        """
+        monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"mode": "pr", "plugin_version": "1.114.0"})
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        assert b.to_dict(output_dir=str(tmp_path))["plugin_version"] == "1.114.0"
+
+    def test_envelope_wins_over_run_config(self, monkeypatch, tmp_path):
+        """The envelope is the dispatching plugin's own statement."""
+        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "2.0.0")
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"plugin_version": "1.114.0"})
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        assert b.to_dict(output_dir=str(tmp_path))["plugin_version"] == "2.0.0"
+
+    def test_unreadable_run_config_leaves_the_version_unknown(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv("PIRATEGOAT_PLUGIN_VERSION", raising=False)
+        (tmp_path / "run-config.json").write_text("{not json")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        assert b.to_dict(output_dir=str(tmp_path))["plugin_version"] is None
+
+    def test_saved_artifact_carries_the_version(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PIRATEGOAT_PLUGIN_VERSION", "1.114.0")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
+        b.set_files_reviewed(1)
+        b.save(str(tmp_path))
+        saved = json.loads((tmp_path / "pr-review.json").read_text())
+        assert saved["plugin_version"] == "1.114.0"
 
     def test_meta_structure(self):
         b = ReviewOutputBuilder(pr_id="1", reviewer="pr")

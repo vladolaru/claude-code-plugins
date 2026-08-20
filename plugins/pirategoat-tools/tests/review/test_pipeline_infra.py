@@ -516,6 +516,48 @@ class TestCLIIntegration:
         assert config["mode"] == "pr"
         assert config["pr_number"] == "42"
 
+    def test_run_config_carries_the_running_plugin_version(self, mod, tmp_path):
+        """Step 1 stamps the artifact with the plugin that produced it.
+
+        The stamp is the SAME fact telemetry records on the manifest, taken
+        from the one detector (_detect_plugin_version) at the one place it
+        runs. Without it, a durable run directory could not be attributed
+        to a plugin version once its telemetry log is gone.
+        """
+        self._run("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        expected = mod._detect_plugin_version()
+        assert expected  # source checkout must resolve a version
+        assert config["plugin_version"] == expected
+
+    def test_pre_seeded_config_is_stamped_on_the_bot_path(self, mod, tmp_path):
+        """Bot runs pre-write run-config.json, so the seed branch is skipped.
+
+        The stamp must land on the existing-config path too, or every
+        non-interactive run ships an unattributed artifact.
+        """
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr", "pr_number": "42", "interactive": False,
+        }))
+        self._run("--step", "1", "--output-dir", str(tmp_path))
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_version"] == mod._detect_plugin_version()
+
+    def test_stale_stamp_from_an_earlier_plugin_is_refreshed(self, mod, tmp_path):
+        """run-config.json survives cleanup across interactive reruns.
+
+        A rerun under an upgraded plugin must re-stamp, or the artifact
+        would credit the run to the version that ran LAST time.
+        """
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr", "pr_number": "42", "plugin_version": "0.0.1",
+        }))
+        self._run("--step", "1", "--output-dir", str(tmp_path))
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_version"] == mod._detect_plugin_version()
+        assert config["plugin_version"] != "0.0.1"
+
     def test_workspace_params_persisted_to_state(self, tmp_path):
         self._run("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",

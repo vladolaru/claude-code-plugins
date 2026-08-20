@@ -508,7 +508,8 @@ def _builder_heredoc(reviewer="security", body=None):
         "PIRATEGOAT_PLUGIN_ROOT='/plug' "
         "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
         f"PIRATEGOAT_REVIEWER_NAME='{reviewer}' "
-        "PIRATEGOAT_PR_ID='42' python3 <<'PY'\n"
+        "PIRATEGOAT_PR_ID='42' PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
+        "python3 <<'PY'\n"
         f"{body}"
         "PY"
     )

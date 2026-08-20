@@ -786,6 +786,22 @@ def main():
                   "interactive-only; disabled for this non-interactive run.",
                   file=sys.stderr)
 
+        # Stamp the plugin that is producing this run directory. This is the
+        # ONE place the version is detected: the telemetry manifest below and
+        # every reviewer JSON (through bootstrap's builder envelope) carry the
+        # value recorded here rather than re-deriving it, so no two artifacts
+        # of one run can disagree about which plugin produced them.
+        #
+        # Re-stamped on every step 1, not seeded once: run-config.json
+        # survives clean_stale_artifacts() and is reused across interactive
+        # reruns, so a rerun under an upgraded plugin would otherwise credit
+        # its artifacts to the version that ran last time. None (not "") when
+        # detection fails — an artifact that cannot name its producer says so.
+        plugin_version = _detect_plugin_version() or None
+        if config.get("plugin_version") != plugin_version:
+            config["plugin_version"] = plugin_version
+            write_config(output_dir, config)
+
         # Interactive output directories may be reused, so prior-run context
         # cannot remain authoritative until step 3 gathers it afresh. Bot runs
         # are non-interactive and retain their precomputed context contract.
@@ -848,7 +864,7 @@ def main():
                                 identifier=identifier,
                                 run_id=state["run_id"],
                                 session_id=config.get("session_id", ""),
-                                plugin_version=_detect_plugin_version(),
+                                plugin_version=plugin_version or "",
                                 git_range=git_range, base_sha=base_sha,
                                 head_sha=head_sha)
             except Exception:

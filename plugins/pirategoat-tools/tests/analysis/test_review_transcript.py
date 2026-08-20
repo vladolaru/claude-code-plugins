@@ -146,7 +146,8 @@ def _adapter_prompt(
 def _builder_envelope(body: str | None, *, header: str | None = None) -> str:
     header = header or (
         "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
-        "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 python3 <<PY"
+        "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+        "PIRATEGOAT_PLUGIN_VERSION=1.114.0 python3 <<PY"
     )
     return header if body is None else f"{header}\n{body}\nPY"
 
@@ -1095,7 +1096,8 @@ class TestAnalyzeSubagent:
                         "PIRATEGOAT_PLUGIN_ROOT='/plugin root' "
                         '"PIRATEGOAT_OUTPUT_DIR=/review output" '
                         "PIRATEGOAT_REVIEWER_NAME=security "
-                        "PIRATEGOAT_PR_ID='42' python3 <<'PY'"
+                        "PIRATEGOAT_PR_ID='42' "
+                        "PIRATEGOAT_PLUGIN_VERSION='1.114.0' python3 <<'PY'"
                     ),
                 ),
                 id="harmless-quoting",
@@ -1104,6 +1106,7 @@ class TestAnalyzeSubagent:
                 _builder_envelope(
                     "print('safe')",
                     header=(
+                        "PIRATEGOAT_PLUGIN_VERSION=1.114.0 "
                         "PIRATEGOAT_PR_ID=42 PIRATEGOAT_REVIEWER_NAME=security "
                         "PIRATEGOAT_OUTPUT_DIR=/output "
                         "PIRATEGOAT_PLUGIN_ROOT=/plugin python3 <<PY"
@@ -1136,7 +1139,8 @@ class TestAnalyzeSubagent:
                     "print('safe')",
                     header=(
                         "PIRATEGOAT_PLUGIN_ROOT= PIRATEGOAT_OUTPUT_DIR= "
-                        "PIRATEGOAT_REVIEWER_NAME= PIRATEGOAT_PR_ID= python3 <<PY"
+                        "PIRATEGOAT_REVIEWER_NAME= PIRATEGOAT_PR_ID= "
+                        "PIRATEGOAT_PLUGIN_VERSION= python3 <<PY"
                     ),
                 ),
                 id="empty-assignment-values",
@@ -1181,24 +1185,27 @@ class TestAnalyzeSubagent:
         [
             pytest.param(
                 "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
-                "PIRATEGOAT_REVIEWER_NAME=security python3 <<PY\npass\nPY",
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "python3 <<PY\npass\nPY",
                 id="missing-required-assignment",
             ),
             pytest.param(
                 "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
-                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 EXTRA=safe "
+                "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "PIRATEGOAT_PLUGIN_VERSION=1.114.0 EXTRA=safe "
                 "python3 <<PY\npass\nPY",
                 id="extra-assignment",
             ),
             pytest.param(
                 "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_PLUGIN_ROOT=/other "
                 "PIRATEGOAT_OUTPUT_DIR=/output PIRATEGOAT_REVIEWER_NAME=security "
-                "python3 <<PY\npass\nPY",
+                "PIRATEGOAT_PR_ID=42 python3 <<PY\npass\nPY",
                 id="duplicate-assignment",
             ),
             pytest.param(
                 "PIRATEGOAT_PLUGIN_ROOT=/plugin PIRATEGOAT_OUTPUT_DIR=/output "
                 "PIRATEGOAT_REVIEWER_NAME=security PIRATEGOAT_PR_ID=42 "
+                "PIRATEGOAT_PLUGIN_VERSION=1.114.0 "
                 "python <<PY\npass\nPY",
                 id="non-python3-executable",
             ),

@@ -53,14 +53,18 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from review_transcript import _result_state  # noqa: E402
 
-# The canonical one-shot builder envelope mandated by bootstrap: four env
+# The canonical one-shot builder envelope mandated by bootstrap: five env
 # assignments (any order) followed by `python3 <<'PY'` on the first line.
+# bootstrap emits every name on every dispatch, empty-valued when the fact
+# is unknown, so this exact-set recognition never has to admit a variant.
 _BUILDER_ENV_NAMES = {
     "PIRATEGOAT_PLUGIN_ROOT",
     "PIRATEGOAT_OUTPUT_DIR",
     "PIRATEGOAT_REVIEWER_NAME",
     "PIRATEGOAT_PR_ID",
+    "PIRATEGOAT_PLUGIN_VERSION",
 }
+_BUILDER_ENV_COUNT = len(_BUILDER_ENV_NAMES)
 # Must mirror ReviewOutputBuilder.add_issue()'s FULL positional order — a
 # parameter missing here is silently dropped from fully positional calls
 # (a dropped severity_floor records the pre-floor severity). A contract
@@ -109,10 +113,13 @@ def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
         tokens = shlex.split(first_line)
     except ValueError:
         return None
-    if len(tokens) != 6 or tokens[-2:] != ["python3", "<<PY"]:
+    if (
+        len(tokens) != _BUILDER_ENV_COUNT + 2
+        or tokens[-2:] != ["python3", "<<PY"]
+    ):
         return None
     env: dict[str, str] = {}
-    for token in tokens[:4]:
+    for token in tokens[:_BUILDER_ENV_COUNT]:
         name, separator, value = token.partition("=")
         if separator != "=":
             return None

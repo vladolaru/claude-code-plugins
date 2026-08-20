@@ -499,6 +499,42 @@ class ReviewOutputBuilder:
         })
 
     @staticmethod
+    def _resolve_plugin_version(output_dir: Optional[str]) -> Optional[str]:
+        """Name the plugin that produced this artifact, or admit ignorance.
+
+        Two paths to ONE fact, never a second detection of it — the version
+        is detected once, at pipeline step 1, and travels from there:
+
+        1. ``PIRATEGOAT_PLUGIN_VERSION`` in the builder envelope, which
+           bootstrap fills from the run's ``run-config.json`` stamp. Always
+           present in the envelope, sometimes empty (unresolvable run).
+        2. That same stamp read directly, when serialization was given an
+           explicit output directory. This is the reconciliator's path: it
+           is dispatched by the orchestrator rather than bootstrap, so no
+           envelope reaches it, yet ``review-findings.json`` — the artifact
+           a human actually receives — must still name its producer.
+
+        Fails open to None everywhere. An unstamped artifact is honest about
+        not knowing; it is never an error and never a guess.
+        """
+        env_value = os.environ.get("PIRATEGOAT_PLUGIN_VERSION")
+        if isinstance(env_value, str) and env_value.strip():
+            return env_value.strip()
+        if not output_dir:
+            return None
+        try:
+            with open(
+                os.path.join(output_dir, "run-config.json"), "r", encoding="utf-8"
+            ) as f:
+                config = json.load(f)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        stamped = config.get("plugin_version") if isinstance(config, dict) else None
+        if isinstance(stamped, str) and stamped.strip():
+            return stamped.strip()
+        return None
+
+    @staticmethod
     def _load_deferred_files(
         output_dir: Optional[str], reviewer: Optional[str]
     ) -> Optional[frozenset]:
@@ -909,6 +945,7 @@ class ReviewOutputBuilder:
             'pr_id': self.pr_id,
             'reviewer': self.reviewer,
             'timestamp': self.timestamp,
+            'plugin_version': self._resolve_plugin_version(output_dir),
             'version': '1.0.0',
             'verdict': verdict,
             'summary': summary,

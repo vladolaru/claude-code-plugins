@@ -602,6 +602,26 @@ def load_additional_instructions(output_dir: str) -> Optional[str]:
         return None
 
 
+def load_plugin_version(output_dir: str) -> str:
+    """Read the run's plugin stamp from run-config.json, or "" if absent.
+
+    Forwarded into the builder envelope so every reviewer JSON names its
+    producer. Deliberately a READ, never a detection: pipeline step 1 owns
+    the one `_detect_plugin_version()` call, and re-deriving it here would
+    let a reviewer artifact disagree with its own run manifest.
+    """
+    config_path = os.path.join(output_dir, "run-config.json")
+    if not os.path.isfile(config_path):
+        return ""
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return ""
+    version = config.get("plugin_version") if isinstance(config, dict) else None
+    return version.strip() if isinstance(version, str) else ""
+
+
 def load_host_context(output_dir: str) -> Optional[dict]:
     """Load host_context from review-context.json if present.
 
@@ -926,6 +946,7 @@ def build_output(
     coverage_note: Optional[str] = None,
     repo_review_rules: Optional[str] = None,
     repo_reviewer_prompt: Optional[str] = None,
+    plugin_version: str = "",
 ) -> str:
     """Build the structured bootstrap output block.
 
@@ -1166,6 +1187,11 @@ def build_output(
         f"PIRATEGOAT_OUTPUT_DIR={shlex.quote(output_dir)} "
         f"PIRATEGOAT_REVIEWER_NAME={shlex.quote(reviewer_name)} "
         f"PIRATEGOAT_PR_ID={shlex.quote(str(pr_id_str))} "
+        # Emitted unconditionally, empty when the run resolved no version.
+        # The envelope's assignment COUNT and name set are the shape the
+        # transcript analyzers recognize a builder command by, so it must
+        # not vary with whether this fact happens to be known.
+        f"PIRATEGOAT_PLUGIN_VERSION={shlex.quote(plugin_version or '')} "
         "python3 <<'PY'"
     )
     lines.append("import sys, os")
@@ -1867,6 +1893,7 @@ def main():
         coverage_note=coverage_note,
         repo_review_rules=repo_review_rules,
         repo_reviewer_prompt=repo_reviewer_prompt,
+        plugin_version=load_plugin_version(output_dir),
     )
 
     print(output)

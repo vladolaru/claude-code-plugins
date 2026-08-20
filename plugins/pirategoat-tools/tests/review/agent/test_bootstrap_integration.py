@@ -563,6 +563,65 @@ class TestCanonicalExecutableBuilderSource:
         assert f"{tmp_path}/security-review.json" in prompt
         assert f"{tmp_path}/security-review.md" not in prompt
 
+    def test_envelope_carries_the_plugin_version_assignment(self, tmp_path):
+        """The producing plugin version travels in the same envelope.
+
+        Emitted unconditionally, empty when unresolved, so the envelope
+        keeps a constant five-assignment shape — the transcript analyzers
+        recognize the builder command by exactly that shape.
+        """
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"mode": "pr", "plugin_version": "1.114.0"})
+        )
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+            plugin_version="1.114.0",
+        )
+        assert "PIRATEGOAT_PLUGIN_VERSION=1.114.0" in prompt
+
+    def test_envelope_keeps_the_assignment_when_the_version_is_unknown(
+        self, tmp_path
+    ):
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+        assert "PIRATEGOAT_PLUGIN_VERSION=''" in prompt
+
+    def test_main_reads_the_version_from_the_run_config_stamp(self, tmp_path):
+        """One detector: step 1 stamps run-config.json, bootstrap forwards it.
+
+        Re-detecting here would create a second source of the same fact.
+        """
+        (tmp_path / "run-config.json").write_text(
+            json.dumps({"mode": "pr", "plugin_version": "9.9.9"})
+        )
+        result = run_bootstrap(
+            "--agent", "security-reviewer", "--output-dir", str(tmp_path)
+        )
+        assert "PIRATEGOAT_PLUGIN_VERSION=9.9.9" in result.stdout
+
 
 class TestNotApplicableCompletionContract:
     """The shared protocol is the sole executable abstention recipe."""
