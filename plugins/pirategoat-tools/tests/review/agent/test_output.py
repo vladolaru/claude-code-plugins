@@ -1395,6 +1395,62 @@ class TestAddDeferredReviewed:
             b.add_deferred_reviewed("src/a.py")
         assert "no claim may be made" in str(excinfo.value)
 
+    def test_all_or_nothing_on_mid_batch_error(self, tmp_path, monkeypatch):
+        """A batch either fully lands or nothing does — the same doctrine
+        critic_adjustments.py enforces for its own batches. A mid-batch
+        rejection must not leave the leading valid paths recorded: a retry
+        would then double-record them, and a caller who gives up is left
+        with a half-claim no one asked for."""
+        self._arm_deferred_sidecar(
+            tmp_path, monkeypatch, ["src/a.py", "src/c.py"]
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="src/b.py"):
+            b.add_deferred_reviewed("src/a.py", "src/b.py", "src/c.py")
+        assert b.deferred_reviewed == []
+        # A retry with only the valid paths lands fully.
+        b.add_deferred_reviewed("src/a.py", "src/c.py")
+        assert b.deferred_reviewed == ["src/a.py", "src/c.py"]
+
+    def test_multi_error_batch_names_every_offender(
+        self, tmp_path, monkeypatch
+    ):
+        """The existing batch-reporting rejection helper already names
+        every offender in one raise at save() time; add-time claims must
+        get the same treatment instead of stopping at the first bad path."""
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/a.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError) as excinfo:
+            b.add_deferred_reviewed(
+                "src/a.py", "src/bogus1.py", "src/bogus2.py"
+            )
+        message = str(excinfo.value)
+        assert "src/bogus1.py" in message
+        assert "src/bogus2.py" in message
+        assert b.deferred_reviewed == []
+
+    def test_duplicate_within_batch_dedupes(self, tmp_path, monkeypatch):
+        """Pinning current semantics: a batch repeating one path collapses
+        it to a single entry, order preserved."""
+        self._arm_deferred_sidecar(
+            tmp_path, monkeypatch, ["src/a.py", "src/b.py"]
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_deferred_reviewed("src/a.py", "./src/a.py", "src/b.py")
+        assert b.deferred_reviewed == ["src/a.py", "src/b.py"]
+
+    def test_already_recorded_across_calls_dedupes(
+        self, tmp_path, monkeypatch
+    ):
+        """Pinning current semantics: claiming a path already recorded by
+        a previous call is a silent no-op, not an error or a duplicate
+        entry."""
+        self._arm_deferred_sidecar(tmp_path, monkeypatch, ["src/a.py"])
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_deferred_reviewed("src/a.py")
+        b.add_deferred_reviewed("src/a.py")
+        assert b.deferred_reviewed == ["src/a.py"]
+
 
 # =============================================================================
 # TestNotApplicable

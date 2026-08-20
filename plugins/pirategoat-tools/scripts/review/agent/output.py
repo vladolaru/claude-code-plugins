@@ -837,6 +837,14 @@ class ReviewOutputBuilder:
         against the authoritative deferred set with the same membership
         rule — at add time when the env envelope is present, and always at
         save().
+
+        The whole batch is validated before anything is recorded: a call
+        naming several paths either fully lands or leaves no trace, mirroring
+        the no-half-applied-batch doctrine critic_adjustments.py enforces for
+        its own multi-item writes. A mid-batch failure that had already
+        recorded the leading valid paths would leave the builder in a state
+        the caller never asked for — a retry would then double-record them,
+        and a caller who gives up is left with a half-claim no one made.
         """
         if not files:
             raise ValueError(
@@ -844,14 +852,28 @@ class ReviewOutputBuilder:
                 "call claiming nothing is a no-op, not a claim."
             )
         known = self._known_deferred_files()
+        # Pass 1 (validate): normalize and membership-check every path in
+        # the batch before mutating anything. Collecting every unknown claim
+        # here — rather than raising on the first — is what lets the shared
+        # rejection helper name every offender in one raise, the same way it
+        # already does for save()'s batch of declarations.
+        normalized: List[str] = []
+        unknown_claims: List[str] = []
         for file in files:
             path = self._normalize_deferred_path(
                 file, "add_deferred_reviewed"
             )
+            normalized.append(path)
             if known is not None and path not in known:
-                self._reject_unknown_deferred(
-                    [path], known, "add_deferred_reviewed", "claim"
-                )
+                unknown_claims.append(path)
+        if unknown_claims:
+            self._reject_unknown_deferred(
+                unknown_claims, known, "add_deferred_reviewed", "claim"
+            )
+        # Pass 2 (commit): every path in the batch already passed
+        # validation, so this loop can only append — it can never fail
+        # partway through and leave a partial claim recorded.
+        for path in normalized:
             if path not in self.deferred_reviewed:
                 self.deferred_reviewed.append(path)
 
