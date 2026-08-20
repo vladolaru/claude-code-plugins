@@ -217,7 +217,7 @@ Tests on `scripts/review/pipeline.py` and `pipeline_contract.py` — step sequen
 
 ###Telemetry Tests (`review/test_telemetry.py`)
 
-Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag (269 collected tests across 21 classes). The skip-ledger, token-usage, and synthesis-agent projections are documented here because each carries an audit contract from a run artifact into the manifest; the remaining classes follow the same direct-unit-test pattern.
+Direct unit tests on `scripts/review/telemetry.py` and the run-manifest projections in `manifest_sections.py` — start/step/finalize events, structured filenames, snapshots, and each manifest section beside its availability flag (271 collected tests across 22 classes). The skip-ledger, token-usage, and synthesis-agent projections are documented here because each carries an audit contract from a run artifact into the manifest; `TestOptionalSectionAvailabilityKeysContract` pins the producer-declared `OPTIONAL_SECTION_AVAILABILITY_KEYS` tuple against what `_build_manifest` actually assigns, in both directions; the remaining classes follow the same direct-unit-test pattern.
 
 | Class | Tests | What it verifies |
 |---|---|---|

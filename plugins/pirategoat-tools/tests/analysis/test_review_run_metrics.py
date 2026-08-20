@@ -20,6 +20,9 @@ TELEMETRY_SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 DISPATCH_STATUS_SCRIPT_PATH = (
     PLUGIN_ROOT / "scripts" / "review" / "dispatch_status.py"
 )
+MANIFEST_SECTIONS_SCRIPT_PATH = (
+    PLUGIN_ROOT / "scripts" / "review" / "manifest_sections.py"
+)
 
 sys.path.insert(0, str(PLUGIN_ROOT / "scripts" / "analysis"))
 
@@ -46,6 +49,18 @@ def _load_telemetry_module():
 def _load_dispatch_status_module():
     spec = importlib.util.spec_from_file_location(
         "review_dispatch_status_for_metrics", DISPATCH_STATUS_SCRIPT_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_manifest_sections_module():
+    """Load manifest_sections.py independently of contracts.py's own
+    exact-path load, so a vocabulary-parity test that compares the two
+    is checking two separately-obtained values, not a tautology."""
+    spec = importlib.util.spec_from_file_location(
+        "review_manifest_sections_for_metrics", MANIFEST_SECTIONS_SCRIPT_PATH
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -7903,6 +7918,226 @@ class TestOptionalSectionAvailabilityConsistency:
 
         assert name not in sanitized["availability"]
         assert sanitized[name] is None
+
+    @pytest.mark.parametrize(
+        "name", contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS
+    )
+    def test_reborn_lie_flag_true_absent_payload_publishes_false(self, name):
+        """THE consistency pin Task 12 exists to hold, restated for the
+        reborn-lie direction: a producer bug that writes
+        `availability[name]: true` beside a payload that never arrived
+        must publish `false`, not resurrect the raw `true`. The flag is
+        DERIVED from what the sanitizer actually parsed — it is never a
+        verbatim copy of the raw manifest's claim."""
+        manifest = _manifest("run-1")
+        manifest["availability"][name] = True
+        manifest.pop(name, None)
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["availability"][name] is False
+        assert sanitized[name] is None
+
+    @pytest.mark.parametrize(
+        "name", contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS
+    )
+    def test_reborn_lie_flag_true_unparseable_payload_publishes_false(
+        self, name
+    ):
+        """Same reborn-lie direction, with a payload that is PRESENT but
+        the wrong shape (a bare string instead of the section's own
+        dict/list) — every section sanitizer rejects it, so the derived
+        flag must still fall to `false` rather than trusting the raw
+        `true` past a payload that never actually parsed."""
+        manifest = _manifest("run-1")
+        manifest["availability"][name] = True
+        manifest[name] = "not a valid payload for any section"
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["availability"][name] is False
+        assert sanitized[name] is None
+
+
+class TestOptionalSectionSanitizerTableIsStructurallyComplete:
+    """The reviewer's probe: adding a key to the producer's declared
+    tuple with no matching sanitizer must fail loudly, by name, instead
+    of a bare `KeyError` raised from inside the per-manifest loop."""
+
+    def test_production_table_is_complete_both_directions(self):
+        """The real production call already ran at import time (module
+        load would have raised otherwise); re-running it here pins that
+        outcome as a regression guard, not just an import side effect."""
+        sanitize._require_complete_optional_section_sanitizers(
+            contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS,
+            sanitize._OPTIONAL_SECTION_SANITIZERS,
+        )
+
+    def test_a_declared_key_with_no_sanitizer_fails_loudly_by_name(self):
+        with pytest.raises(AssertionError) as excinfo:
+            sanitize._require_complete_optional_section_sanitizers(
+                ("coverage", "dependency_refresh"),
+                {"coverage": sanitize._sanitize_coverage},
+            )
+        message = str(excinfo.value)
+        assert "dependency_refresh" in message
+        assert "_OPTIONAL_SECTION_SANITIZERS" in message
+
+    def test_a_stale_sanitizer_with_no_declared_key_fails_loudly_by_name(
+        self,
+    ):
+        with pytest.raises(AssertionError) as excinfo:
+            sanitize._require_complete_optional_section_sanitizers(
+                ("coverage",),
+                {
+                    "coverage": sanitize._sanitize_coverage,
+                    "retired_section": sanitize._sanitize_skipped_steps,
+                },
+            )
+        message = str(excinfo.value)
+        assert "retired_section" in message
+        assert "OPTIONAL_SECTION_AVAILABILITY_KEYS" in message
+
+
+class TestOptionalSectionVocabulariesAreNotRestated:
+    """I3: the two section-status vocabularies must have exactly one
+    spelling — the producer's own private constants in
+    manifest_sections.py, reached the same way `contracts.py` already
+    reaches `_TELEMETRY_CONTRACT._incomplete_agent_executions` — rather
+    than a separately maintained literal copy that can silently drift
+    wider than what the consumer actually accepts.
+    """
+
+    def test_contracts_reaches_the_producers_own_constants_not_a_copy(self):
+        manifest_sections = _load_manifest_sections_module()
+
+        assert contracts._WORKTREE_HYGIENE_STATUSES == (
+            manifest_sections._WORKTREE_HYGIENE_STATUSES
+        )
+        assert contracts._USAGE_SNAPSHOT_AVAILABILITY_STATES == (
+            manifest_sections._USAGE_AVAILABILITY_STATES
+        )
+
+    @pytest.mark.parametrize(
+        "status",
+        sorted(_load_manifest_sections_module()._WORKTREE_HYGIENE_STATUSES),
+    )
+    def test_every_producer_recognized_worktree_status_survives(self, status):
+        """Parametrized off the PRODUCER's live constant, not a hardcoded
+        copy of today's three values — a status the producer's
+        vocabulary later widens to include joins this test automatically,
+        and would have failed under the old restated-literal design."""
+        manifest = _manifest("run-1")
+        manifest["availability"]["worktree_hygiene"] = True
+        manifest["worktree_hygiene"] = _worktree_hygiene_payload(status=status)
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["worktree_hygiene"]["status"] == status
+
+    @pytest.mark.parametrize(
+        "state",
+        sorted(
+            _load_manifest_sections_module()._USAGE_AVAILABILITY_STATES
+        ),
+    )
+    def test_every_producer_recognized_usage_state_survives(self, state):
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = True
+        manifest["usage"] = _usage_snapshot_payload(
+            availability={"subagents": state, "orchestrator": state}
+        )
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"]["availability"] == {
+            "subagents": state,
+            "orchestrator": state,
+        }
+
+
+class TestUsageSnapshotDivergenceFromProducer:
+    """M3: the sanitizer is at least as strict as its producer, not
+    exactly as strict — pin the one known divergence rather than let the
+    docstring claim more than the code does.
+    """
+
+    def test_an_empty_agent_name_row_is_dropped_though_the_producer_keeps_it(
+        self,
+    ):
+        """`build_usage_manifest` keeps a `by_agent` row whenever `agent`
+        is any string — `isinstance(row.get("agent"), str)` alone, so
+        `""` qualifies. This sanitizer requires `_safe_string`'s
+        non-empty shape, so the same row is dropped here."""
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = True
+        manifest["usage"] = _usage_snapshot_payload(
+            by_agent=[
+                {
+                    "agent": "",
+                    "model": "claude-opus-5[1m]",
+                    "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
+                },
+                {
+                    "agent": "security-reviewer",
+                    "model": "claude-opus-5[1m]",
+                    "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
+                },
+            ]
+        )
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"]["by_agent"] == [
+            {
+                "agent": "security-reviewer",
+                "model": "claude-opus-5[1m]",
+                "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
+            }
+        ]
+
+
+class TestSkippedStepsDivergenceFromProducer:
+    """M3: same floor-not-exact-parity claim, for the title/condition
+    fallback."""
+
+    def test_an_oversized_title_becomes_empty_though_the_producer_keeps_it(
+        self,
+    ):
+        """The producer's bare `item.get("title") or ""` keeps any
+        truthy value verbatim, unbounded. This sanitizer additionally
+        requires `_safe_string`'s <=4096-char bound, so an oversized
+        title survives at the producer but becomes "" here."""
+        manifest = _manifest("run-1")
+        manifest["availability"]["skipped_steps"] = True
+        oversized_title = "x" * 5000
+        manifest["skipped_steps"] = [
+            {"step": 10, "title": oversized_title, "condition": "c"}
+        ]
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["skipped_steps"] == [
+            {"step": 10, "title": "", "condition": "c"}
+        ]
+
+    def test_a_non_string_title_becomes_empty_though_the_producer_keeps_it(
+        self,
+    ):
+        """The producer's bare `or ""` never type-checks its operand: a
+        truthy non-string (an int) survives there verbatim. This
+        sanitizer requires an actual string, so it becomes ""."""
+        manifest = _manifest("run-1")
+        manifest["availability"]["skipped_steps"] = True
+        manifest["skipped_steps"] = [
+            {"step": 10, "title": 12345, "condition": "c"}
+        ]
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["skipped_steps"] == [
+            {"step": 10, "title": "", "condition": "c"}
+        ]
 
 
 class TestWorktreeHygieneSanitize:

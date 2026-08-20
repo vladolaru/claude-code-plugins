@@ -43,6 +43,11 @@ _ATOMIC_IO_CONTRACT = _load_exact_path_module(
     _REVIEW_DIR / "atomic_io.py",
     "review atomic io contract unavailable",
 )
+_MANIFEST_SECTIONS_CONTRACT = _load_exact_path_module(
+    "review_manifest_sections_contract",
+    _REVIEW_DIR / "manifest_sections.py",
+    "review manifest sections contract unavailable",
+)
 DEFAULT_LOG_DIR = Path(_TELEMETRY_CONTRACT.LOG_DIR)
 DEFAULT_SESSIONS_ROOT = Path("~/.claude/projects").expanduser()
 DEFAULT_REGISTRY = _REVIEW_DIR / "agent_registry.json"
@@ -60,15 +65,17 @@ _USAGE_FIELDS = (
     "effective_input_tokens",
     "output_tokens",
 )
-# Mirrors manifest_sections.py's own private `_WORKTREE_HYGIENE_STATUSES`
-# and `_USAGE_AVAILABILITY_STATES` — that module has no importable export
-# for either, so the consumer-side sanitizer restates the same literal
-# vocabulary rather than trusting an unrecognized value through.
-_WORKTREE_HYGIENE_STATUSES = frozenset(
-    {"clean", "changed_during_review", "unknown"}
+# The two section-status vocabularies are the producer's own private
+# constants — manifest_sections.py has no importable export for either —
+# reached via the same exact-path contract `_incomplete_agent_executions`
+# above uses, instead of restated literals. Widening either vocabulary in
+# the producer therefore moves the consumer's fallback set in lockstep;
+# see tests/analysis/test_review_run_metrics.py's drift-detection pin.
+_WORKTREE_HYGIENE_STATUSES = (
+    _MANIFEST_SECTIONS_CONTRACT._WORKTREE_HYGIENE_STATUSES
 )
-_USAGE_SNAPSHOT_AVAILABILITY_STATES = frozenset(
-    {"complete", "partial", "missing"}
+_USAGE_SNAPSHOT_AVAILABILITY_STATES = (
+    _MANIFEST_SECTIONS_CONTRACT._USAGE_AVAILABILITY_STATES
 )
 _PIPELINE_FAMILIES = (
     "dispatch",
@@ -168,13 +175,17 @@ _CRITIC_VERDICTS = frozenset(_CRITIC_CONTRACT.CRITIC_VERDICTS)
 # statistics, and reads the producer's constant rather than respelling the
 # literal.
 _CRITIC_VERDICT_SKIPPED = _CRITIC_CONTRACT.CRITIC_VERDICT_SKIPPED
+# The producer-declared optional-section contract (mirrors the
+# ROW_KEYS pattern just below): the telemetry module names which
+# availability keys it ever assigns, and the sanitize-layer table-driven
+# loop parametrizes over this tuple instead of five bespoke blocks.
+_OPTIONAL_SECTION_AVAILABILITY_KEYS = (
+    _TELEMETRY_CONTRACT.OPTIONAL_SECTION_AVAILABILITY_KEYS
+)
 # The synthesis-agent row shape and identities, owned by the producer. The
 # consumer mirrors them instead of respelling them, so a renamed agent or
 # a new row key breaks this package's tests rather than silently dropping
 # a measurement.
-_OPTIONAL_SECTION_AVAILABILITY_KEYS = (
-    _TELEMETRY_CONTRACT.OPTIONAL_SECTION_AVAILABILITY_KEYS
-)
 _SYNTHESIS_ROW_KEYS = _SYNTHESIS_CONTRACT.ROW_KEYS
 _SYNTHESIS_SEMANTICS = _SYNTHESIS_CONTRACT.LIFECYCLE_SEMANTICS
 _SYNTHESIS_RECONCILIATOR = _SYNTHESIS_CONTRACT.RECONCILIATOR

@@ -12,6 +12,7 @@ from .contracts import (
     _DISPATCHED_STATUSES,
     _FIXED_WARNING_CODES,
     _MAX_WALL_TIME_MS,
+    _OPTIONAL_SECTION_AVAILABILITY_KEYS,
     _PRODUCER_AGENT_NAME_RE,
     _RETAINED_CRITIC_VALUES,
     _SAFE_RUN_ID_RE,
@@ -64,8 +65,11 @@ def _safe_usage_snapshot_map(value: object) -> dict[str, int] | None:
     measurement beside real ones — the same rule the producer applies.
     Deliberately separate from `usage._safe_usage` (the transcript-usage
     family one layer downstream), which accepts integral floats; this
-    sanitizer accepts exactly what its one producer,
-    `manifest_sections.build_usage_manifest`, emits and no more.
+    sanitizer accepts at least as strictly as what its one producer,
+    `manifest_sections.build_usage_manifest`, emits — the two field
+    checks read identically today, but nothing pins them to stay that
+    way if one changes without the other, so this is a floor, not a
+    guarantee of exact parity.
     """
     if not isinstance(value, dict):
         return None
@@ -1076,6 +1080,17 @@ def _sanitize_usage_snapshot(value: object) -> dict[str, Any] | None:
     of invalidating the whole section, because the two halves (subagent
     vs. orchestrator) are independently partial by construction.
 
+    Divergence from the producer: `build_usage_manifest` keeps a
+    `by_agent` row whenever `agent` is any string — including an empty
+    one, since its only check is `isinstance(row.get("agent"), str)`.
+    This sanitizer additionally requires `_safe_string`'s non-empty,
+    bounded, control-character-free shape, so a row the producer wrote
+    with `agent: ""` is silently dropped here instead of kept as an
+    uninformative row. Deliberate and stricter, not a bug: an unnamed
+    agent contributes no attributable signal to a `by_agent` breakdown.
+    Pinned by
+    `test_a_row_with_an_empty_agent_name_is_dropped_even_though_the_producer_would_keep_it`.
+
     PII: `captured_at` and the two window timestamps are ISO instants;
     `window.closed` and the two `availability` states are fixed
     three/two-value enums; `agents_measured` and every usage map are plain
@@ -1126,10 +1141,9 @@ def _sanitize_usage_snapshot(value: object) -> dict[str, Any] | None:
             agent = _safe_string(row.get("agent"))
             if agent is None:
                 continue
-            model = row.get("model")
             rows.append({
                 "agent": agent,
-                "model": _safe_string(model) if isinstance(model, str) else None,
+                "model": _safe_string(row.get("model")),
                 "usage": _safe_usage_snapshot_map(row.get("usage")),
             })
 
@@ -1166,7 +1180,12 @@ def _sanitize_skipped_steps(value: object) -> list[dict[str, Any]] | None:
     carrying a real step number survive, mirroring
     `manifest_sections.build_skipped_steps_manifest`'s own filter: an
     entry without one has no decision to report, and a title/condition
-    falls back to "" exactly as the producer's own `or ""` does.
+    falls back to "" at least as strictly as the producer's own
+    `or ""` does. The producer's bare `or ""` keeps any truthy value
+    verbatim — unbounded length, even a non-string — while this
+    sanitizer additionally requires `_safe_string`'s bounded,
+    control-character-free shape, so a title the producer would have
+    kept as-is can still land here as "".
 
     PII: `step` is an integer, and `title`/`condition` are drawn from the
     pipeline's fixed step-title and skip-condition vocabulary (e.g.
@@ -1176,8 +1195,9 @@ def _sanitize_skipped_steps(value: object) -> list[dict[str, Any]] | None:
         return None
 
     def bounded_or_empty(raw: object) -> str:
-        safe = _safe_string(raw) if isinstance(raw, str) else None
-        return safe if safe is not None else ""
+        # `_safe_string` already returns None for any non-string input,
+        # so no isinstance guard is needed before calling it.
+        return _safe_string(raw) or ""
 
     result: list[dict[str, Any]] = []
     for item in value:
@@ -1240,6 +1260,98 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
     return result
 
 
+# One table-driven map from each producer-declared optional section
+# (`contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS`, telemetry.py's own
+# `OPTIONAL_SECTION_AVAILABILITY_KEYS`) to the sanitizer that projects its
+# payload. Replaces what were five near-identical per-section blocks in
+# `_sanitize_manifest` — including `synthesis_agents`, whose semantics
+# gate lives inside `_sanitize_synthesis_agents` itself and needs no
+# special-casing here.
+_OPTIONAL_SECTION_SANITIZERS: dict[str, Any] = {
+    "coverage": _sanitize_coverage,
+    "worktree_hygiene": _sanitize_worktree_hygiene,
+    "synthesis_agents": _sanitize_synthesis_agents,
+    "usage": _sanitize_usage_snapshot,
+    "skipped_steps": _sanitize_skipped_steps,
+}
+
+
+def _require_complete_optional_section_sanitizers(
+    keys: tuple[str, ...], sanitizers: dict[str, Any]
+) -> None:
+    """Fail loudly, by name, when the two sides of the table disagree.
+
+    Structural, not conventional: a key added to the producer's
+    `OPTIONAL_SECTION_AVAILABILITY_KEYS` with no matching sanitizer here
+    (or the reverse — a sanitizer for a section the producer no longer
+    declares) is a wiring bug. This runs at import time, so the failure
+    names exactly what is missing and where to add it, instead of a bare
+    `KeyError` raised from inside the per-manifest sanitize loop three
+    call frames later.
+    """
+    missing = sorted(set(keys) - set(sanitizers))
+    if missing:
+        raise AssertionError(
+            f"OPTIONAL_SECTION_AVAILABILITY_KEYS declares {missing} with "
+            "no matching sanitizer in review_metrics/sanitize.py's "
+            "_OPTIONAL_SECTION_SANITIZERS — add one before this section "
+            "can be produced."
+        )
+    extra = sorted(set(sanitizers) - set(keys))
+    if extra:
+        raise AssertionError(
+            f"_OPTIONAL_SECTION_SANITIZERS declares {extra}, which "
+            "telemetry.py's OPTIONAL_SECTION_AVAILABILITY_KEYS does not "
+            "list — remove the stale sanitizer or add the section to "
+            "the producer's declared tuple."
+        )
+
+
+_require_complete_optional_section_sanitizers(
+    _OPTIONAL_SECTION_AVAILABILITY_KEYS, _OPTIONAL_SECTION_SANITIZERS
+)
+
+
+def _sanitize_optional_sections(
+    value: dict[str, Any], raw_availability: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, bool]]:
+    """One pass over every producer-declared optional section.
+
+    The published availability flag is DERIVED from what the section's
+    sanitizer actually parsed — never copied from the raw manifest. This
+    is the same "derive from what parsed" rule `_sanitize_manifest`'s
+    `lifecycle` conjunct already applies (`strict_agents is not None`,
+    not a raw-bool copy). A producer bug that writes
+    `availability["<name>"]: true` beside a missing or unparseable
+    payload therefore republishes as `false` with no payload, rather than
+    reviving the exact "measured: true, payload dropped" lie this
+    function exists to close.
+
+    An explicit producer `false` still wins outright — flag-wins, the
+    same precedent `coverage` and `synthesis_agents` established before
+    this consolidation: a producer that measured the section absent is
+    not overruled by a stray leftover payload.
+
+    A section this manifest never declared at all — neither an
+    availability key nor a payload key present — is never added to the
+    output. Pre-feature manifests stay exactly as unmeasured as they
+    always were; they are never promoted to a fabricated `false`.
+    """
+    sections: dict[str, Any] = {}
+    flags: dict[str, bool] = {}
+    for name in _OPTIONAL_SECTION_AVAILABILITY_KEYS:
+        if name not in raw_availability and name not in value:
+            continue
+        if raw_availability.get(name) is False:
+            sections[name] = None
+            flags[name] = False
+            continue
+        payload = _OPTIONAL_SECTION_SANITIZERS[name](value.get(name))
+        sections[name] = payload
+        flags[name] = payload is not None
+    return sections, flags
+
+
 def _sanitize_manifest(value: object) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     run = _sanitize_run(value.get("run"))
@@ -1251,50 +1363,26 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         value.get("agents")
     )
     availability = value.get("availability")
+    raw_availability = availability if isinstance(availability, dict) else {}
     safe_availability = {
         name: item
-        for name, item in availability.items()
+        for name, item in raw_availability.items()
         if isinstance(name, str) and isinstance(item, bool)
-    } if isinstance(availability, dict) else {}
+    }
     safe_availability["lifecycle"] = (
         strict_agents is not None
         and safe_availability.get("lifecycle") is not False
     )
-    coverage = (
-        None
-        if safe_availability.get("coverage") is False
-        else _sanitize_coverage(value.get("coverage"))
+    optional_sections, optional_flags = _sanitize_optional_sections(
+        value, raw_availability
     )
-    # The producer's own availability conjunct wins over the payload, the
-    # same way it does for coverage. A run predating the feature carries
-    # neither key: `.get()` is None, not False, so the payload is consulted
-    # and also absent — the section stays None and the family reads
-    # "missing". That None is the whole point; it must never become a
-    # measured zero-duration synthesis phase.
-    synthesis_agents = (
-        None
-        if safe_availability.get("synthesis_agents") is False
-        else _sanitize_synthesis_agents(value.get("synthesis_agents"))
-    )
-    # Same rule, three more sections: the producer's own availability
-    # conjunct wins over the payload, so a run whose producer explicitly
-    # measured the section absent never gets promoted by a stray payload
-    # left over from a malformed or foreign manifest.
-    worktree_hygiene = (
-        None
-        if safe_availability.get("worktree_hygiene") is False
-        else _sanitize_worktree_hygiene(value.get("worktree_hygiene"))
-    )
-    usage = (
-        None
-        if safe_availability.get("usage") is False
-        else _sanitize_usage_snapshot(value.get("usage"))
-    )
-    skipped_steps = (
-        None
-        if safe_availability.get("skipped_steps") is False
-        else _sanitize_skipped_steps(value.get("skipped_steps"))
-    )
+    # The generic bool-copy above may have carried a raw flag for one of
+    # these sections through verbatim; the derived value below is what
+    # actually reflects the sanitized payload and always wins.
+    for name in _OPTIONAL_SECTION_AVAILABILITY_KEYS:
+        safe_availability.pop(name, None)
+    safe_availability.update(optional_flags)
+
     raw_dispatch = value.get("dispatch")
     dispatch = _sanitize_dispatch(raw_dispatch)
     warnings = _sanitize_warnings(value.get("warnings"))
@@ -1311,11 +1399,11 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         "steps": _sanitize_steps(value.get("steps")),
         "agents": agents,
         "dispatch": dispatch,
-        "coverage": coverage,
-        "synthesis_agents": synthesis_agents,
-        "worktree_hygiene": worktree_hygiene,
-        "usage": usage,
-        "skipped_steps": skipped_steps,
+        "coverage": optional_sections.get("coverage"),
+        "synthesis_agents": optional_sections.get("synthesis_agents"),
+        "worktree_hygiene": optional_sections.get("worktree_hygiene"),
+        "usage": optional_sections.get("usage"),
+        "skipped_steps": optional_sections.get("skipped_steps"),
         "outcome": _sanitize_outcome(value.get("outcome")),
         "availability": safe_availability,
         "warnings": warnings,

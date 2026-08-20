@@ -4199,3 +4199,64 @@ class TestSynthesisAgentsManifestShape:
             mod, tmp_path, self._artifact(self._row(step=value))
         )
         assert section["agents"][0]["step"] is None
+
+
+class TestOptionalSectionAvailabilityKeysContract:
+    """I2: the producer-declared contract, restated at the producer.
+
+    `OPTIONAL_SECTION_AVAILABILITY_KEYS` names every optional section
+    `_build_manifest` ever assigns into `availability`. This pins that
+    claim in both directions against what the method actually produces —
+    minus `pipeline`/`transcript`, the two structurally-always-present
+    keys `_build_manifest` sets before any optional section runs, neither
+    of which is optional or shares a same-named top-level section.
+
+    A future engineer wiring a new section's availability flag directly
+    into `_build_manifest` without adding it to the tuple (the reviewer's
+    exact probe: `dependency_refresh` gaining a flag) fails THIS
+    assertion — not the consumer-side sanitize pin three call frames
+    away in `review_metrics`, and not silently.
+    """
+
+    def test_produced_keys_equal_the_declared_tuple_both_directions(
+        self, mod, telemetry
+    ):
+        telemetry.start(run_id="run-1")
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        produced = set(manifest["availability"]) - {"pipeline", "transcript"}
+        declared = set(mod.OPTIONAL_SECTION_AVAILABILITY_KEYS)
+
+        assert produced == declared, (
+            f"_build_manifest's availability keys {sorted(produced)} != "
+            f"the declared OPTIONAL_SECTION_AVAILABILITY_KEYS "
+            f"{sorted(declared)} — update the tuple in telemetry.py (and "
+            "its sanitizer in review_metrics/sanitize.py's "
+            "_OPTIONAL_SECTION_SANITIZERS) when a section's availability "
+            "wiring changes."
+        )
+
+    def test_the_reviewers_probe_a_flag_added_without_the_tuple_fails_here(
+        self, mod, telemetry, output_dir
+    ):
+        """Simulates the exact gap this contract exists to catch:
+        `_build_manifest` assigning a flag for a section the tuple does
+        not declare. Patches the bound method for one call only."""
+        real_build_manifest = telemetry._build_manifest
+
+        def _build_manifest_with_undeclared_flag(status):
+            manifest = real_build_manifest(status)
+            manifest["availability"]["dependency_refresh"] = True
+            return manifest
+
+        telemetry._build_manifest = _build_manifest_with_undeclared_flag
+        telemetry.start(run_id="run-1")
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        manifest = _read_manifest(telemetry)
+        produced = set(manifest["availability"]) - {"pipeline", "transcript"}
+        declared = set(mod.OPTIONAL_SECTION_AVAILABILITY_KEYS)
+
+        assert produced != declared
+        assert "dependency_refresh" in produced - declared
