@@ -4757,7 +4757,7 @@ class TestReprojectUsage:
 
         result = telemetry.reproject_usage()
 
-        assert result is True
+        assert result == "written"
         after = json.loads(manifest_path.read_text())
         assert self._strip_usage(after) == self._strip_usage(fixture)
         assert after["usage"] is not None
@@ -4781,7 +4781,7 @@ class TestReprojectUsage:
 
         result = telemetry.reproject_usage()
 
-        assert result is False
+        assert result == "not_settled"
         assert manifest_path.read_bytes() == before_bytes
 
     def test_unsupported_schema_manifest_is_left_untouched(
@@ -4800,14 +4800,14 @@ class TestReprojectUsage:
 
         result = telemetry.reproject_usage()
 
-        assert result is False
+        assert result == "unsupported_schema"
         assert manifest_path.read_bytes() == before_bytes
 
     def test_no_manifest_is_a_silent_no_op(self, mod, output_dir, tmp_path):
         log_dir = tmp_path / "logs-none"
         t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
 
-        assert t.reproject_usage() is False
+        assert t.reproject_usage() == "absent"
 
     def test_unreadable_snapshot_still_reprojects_an_honest_absence(
         self, mod, telemetry, output_dir
@@ -4826,6 +4826,20 @@ class TestReprojectUsage:
         result = telemetry.reproject_usage()
 
         after = json.loads(manifest_path.read_text())
-        assert result is True
+        assert result == "written"
         assert after["usage"] is None
         assert after["availability"]["usage"] is False
+
+    def test_a_corrupt_marker_reports_io_failure_never_raises(
+        self, mod, output_dir, tmp_path
+    ):
+        """The marker read behind `manifest_path` raises on invalid bytes;
+        the method must answer, not traceback — the CLI calls it after the
+        snapshot already wrote, and a raise would cost the whole summary
+        (regression: the first cut read the property unguarded)."""
+        log_dir = tmp_path / "logs-corrupt"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+        marker = Path(output_dir) / mod.MARKER_FILE
+        marker.write_bytes(b"\xff\xfe not utf-8")
+
+        assert t.reproject_usage() == "io_failure"

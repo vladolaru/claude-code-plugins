@@ -61,9 +61,12 @@ optimistic:
   has no authority of its own over ``run``/``dispatch``/``coverage``/etc.
 
 Manifest reprojection is best-effort, matching every other manifest write
-telemetry performs: a failure (no manifest yet, wrong schema, still
-running, unwritable) is reported on this CLI's stdout summary as
-``manifest_reprojected: false`` and never turns into a nonzero exit or a
+telemetry performs: the outcome is reported on this CLI's stdout summary
+as ``manifest_reprojection: <reason>`` (``written`` / ``absent`` /
+``not_settled`` / ``unsupported_schema`` / ``io_failure`` — a reason
+string, not a bool, because on a settled current-schema manifest
+``io_failure`` is the one outcome a human re-running by hand needs to be
+able to see) and never turns into a nonzero exit or a
 stderr line, unlike a failure to write ``usage-snapshot.json`` itself —
 that IS this CLI's sole reason for existing, and fails loudly. The
 manifest, by contrast, is a derived surface this CLI can always
@@ -466,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     # the summary line below and never turns into a nonzero exit — unlike
     # a failure to write the snapshot artifact above, which IS this CLI's
     # sole reason for existing.
-    manifest_reprojected = _TELEMETRY_CONTRACT.ReviewTelemetry(
+    manifest_reprojection = _TELEMETRY_CONTRACT.ReviewTelemetry(
         str(output_dir)
     ).reproject_usage()
 
@@ -477,7 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({
         "written": written,
         "downgrade_avoided": downgrade_avoided,
-        "manifest_reprojected": manifest_reprojected,
+        "manifest_reprojection": manifest_reprojection,
         "path": str(output_dir / SNAPSHOT_FILENAME),
         "availability": snapshot["availability"],
         "agents_measured": (

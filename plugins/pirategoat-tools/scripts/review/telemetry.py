@@ -964,7 +964,7 @@ class ReviewTelemetry:
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             pass
 
-    def reproject_usage(self) -> bool:
+    def reproject_usage(self) -> str:
         """Patch a SETTLED manifest's `usage` section out of band.
 
         A normal run projects `usage` wholesale, inside `_build_manifest`,
@@ -997,26 +997,43 @@ class ReviewTelemetry:
 
         Only ``usage`` and its ``availability.usage`` companion flag are
         ever touched — every other field is left exactly as the last full
-        rebuild wrote it. Returns ``True`` only when a write actually
-        happened (including a write that honestly records `usage: None`
-        because the snapshot itself is absent or unreadable); ``False``
-        covers every reason nothing was written, including "no manifest at
-        all" and any I/O failure on the read or the write.
+        rebuild wrote it. Returns a reason string rather than a bool,
+        because "nothing was written" covers four different facts a caller
+        cannot otherwise tell apart — and on a settled, current-schema
+        manifest the io_failure case is the one a human re-running by
+        hand needs to see:
+
+        * ``"written"`` — a write happened (including one that honestly
+          records ``usage: None`` because the snapshot itself is absent
+          or unreadable).
+        * ``"absent"`` — no manifest exists to patch.
+        * ``"not_settled"`` — the manifest still reads running; the
+          normal in-pipeline case.
+        * ``"unsupported_schema"`` — a schema this method does not
+          recognize, or a manifest that is not a JSON object at all.
+        * ``"io_failure"`` — the marker, the manifest read, or the write
+          raised.
         """
-        manifest_path = self.manifest_path
+        # The marker read behind this property raises on a corrupt or
+        # unreadable marker file — the same class _materialize_manifest
+        # guards inside its own try. UnicodeDecodeError is a ValueError.
+        try:
+            manifest_path = self.manifest_path
+        except (OSError, ValueError):
+            return "io_failure"
         if not manifest_path or not os.path.isfile(manifest_path):
-            return False
+            return "absent"
         try:
             with open(manifest_path, encoding="utf-8") as source:
                 manifest = json.load(source)
         except (OSError, ValueError):
-            return False
+            return "io_failure"
         if not isinstance(manifest, dict):
-            return False
+            return "unsupported_schema"
         if manifest.get("schema") != EVENT_SCHEMA:
-            return False
+            return "unsupported_schema"
         if manifest.get("status") != "complete":
-            return False
+            return "not_settled"
         section = manifest_sections.build_usage_manifest(self.output_dir)
         manifest["usage"] = section
         availability = manifest.get("availability")
@@ -1027,8 +1044,8 @@ class ReviewTelemetry:
         try:
             atomic_write_json(manifest_path, manifest)
         except (OSError, TypeError, ValueError):
-            return False
-        return True
+            return "io_failure"
+        return "written"
 
     def _read_first_event(self) -> Optional[dict]:
         """Read the immutable first JSONL event (the pipeline_start line).
