@@ -882,6 +882,16 @@ def _sanitize_dispatch(value: object) -> dict[str, Any] | None:
     return result
 
 
+# The per-agent honesty-split row shape `_sanitize_coverage` requires
+# whenever `deferred_honesty_by_agent` is present — mirrors the three
+# fields `manifest_sections._load_deferred_honesty` derives from a
+# review JSON's own `deferred_reviewed`/`unreviewed`/
+# `meta.unreviewed_autofilled` fields.
+_DEFERRED_HONESTY_FIELDS = frozenset({
+    "deferred_reviewed", "declared_unreviewed", "unreviewed_autofilled",
+})
+
+
 def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -953,7 +963,7 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     if by_agent_union & reviewable != assigned:
         return None
 
-    return {
+    result: dict[str, Any] = {
         "changed": path_lists["changed"],
         "reviewable": path_lists["reviewable"],
         "by_agent": safe_by_agent,
@@ -962,6 +972,77 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
         "uncovered": path_lists["uncovered"],
         "semantics": "generated_scope_not_proof_of_model_read",
     }
+
+    # Agent-vs-system honesty split for NOT DIFFED (budget-deferred)
+    # files — backlog #19. Both keys are OPTIONAL within this section,
+    # unlike everything above: a manifest whose coverage predates this
+    # feature carries neither, and that must read as unmeasured, never
+    # as a measured zero, so an absent key here stays absent in the
+    # sanitized result rather than defaulting to `{}`. When a key IS
+    # present, though, it is held to the same all-or-nothing standard as
+    # `by_agent`/`excluded` above: one malformed entry fails the whole
+    # section, on the theory that a producer whose optional data is
+    # broken cannot be trusted for the required data beside it either.
+    if "deferred_honesty_by_agent" in value:
+        raw_honesty = value.get("deferred_honesty_by_agent")
+        if not isinstance(raw_honesty, dict):
+            return None
+        safe_honesty: dict[str, dict[str, int]] = {}
+        for name, counts in raw_honesty.items():
+            if (
+                type(name) is not str
+                or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+                or not isinstance(counts, dict)
+                or set(counts) != _DEFERRED_HONESTY_FIELDS
+            ):
+                return None
+            safe_counts = {
+                field: _nonnegative_int(counts.get(field))
+                for field in _DEFERRED_HONESTY_FIELDS
+            }
+            if any(count is None for count in safe_counts.values()):
+                return None
+            safe_honesty[name] = safe_counts
+        result["deferred_honesty_by_agent"] = safe_honesty
+
+    if "deferred_total_by_agent" in value:
+        raw_total = value.get("deferred_total_by_agent")
+        if not isinstance(raw_total, dict):
+            return None
+        safe_total: dict[str, int] = {}
+        for name, count in raw_total.items():
+            safe_count = _nonnegative_int(count)
+            if (
+                type(name) is not str
+                or _PRODUCER_AGENT_NAME_RE.fullmatch(name) is None
+                or safe_count is None
+            ):
+                return None
+            safe_total[name] = safe_count
+        result["deferred_total_by_agent"] = safe_total
+
+    # Reconciliation: for every agent present in BOTH populations, the
+    # agent's own three-way accounting must sum exactly to the system's
+    # independently-sourced deferred-file total — the identity
+    # `ReviewOutputBuilder.save()` itself enforces when it derives
+    # `unreviewed_autofilled` against the very same sidecar this total is
+    # read from. A mismatch means the two sources disagree about a fact
+    # `save()` guarantees, so the section fails closed rather than
+    # publish self-contradictory numbers.
+    honesty_by_agent = result.get("deferred_honesty_by_agent")
+    total_by_agent = result.get("deferred_total_by_agent")
+    if isinstance(honesty_by_agent, dict) and isinstance(total_by_agent, dict):
+        for name in set(honesty_by_agent) & set(total_by_agent):
+            counts = honesty_by_agent[name]
+            accounted = (
+                counts["deferred_reviewed"]
+                + counts["declared_unreviewed"]
+                + counts["unreviewed_autofilled"]
+            )
+            if accounted != total_by_agent[name]:
+                return None
+
+    return result
 
 
 def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:

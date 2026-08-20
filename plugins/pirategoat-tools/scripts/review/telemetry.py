@@ -73,6 +73,14 @@ MARKER_FILE = ".telemetry-log-path"
 # only their flags were missing) plus the new top-level
 # `findings_markdown` section and its own flag, again WITHOUT a further
 # bump, under the same still-unreleased carve-out.
+#
+# The `coverage` section then gained `deferred_honesty_by_agent` and
+# `deferred_total_by_agent` (Task 14, backlog #19 — the agent-vs-system
+# NOT DIFFED honesty split), again WITHOUT a further bump under the same
+# carve-out: both keys are optional within `coverage`, so a manifest
+# written before this change simply lacks them (unmeasured), never a
+# manifest claiming schema 2 with a shape schema 2 never had.
+#
 # Bumping to 3 here would publish a compatibility boundary between two
 # shapes that never both existed in the wild. Revisit the moment 1.114.0
 # is tagged: the next manifest key after that is a real 2 -> 3 bump —

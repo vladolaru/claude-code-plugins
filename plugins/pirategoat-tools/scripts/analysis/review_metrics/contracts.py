@@ -186,9 +186,13 @@ _OBSERVED_READS_SCHEMA = 2
 # run row gained `dependency_refresh`/`reviewer_markdown`/
 # `findings_markdown` (Task 13, same run-row source as the manifest
 # fields above — `measure_run()`'s output is dumped wholesale as each
-# row), under the same unreleased-version carve-out: 2 was introduced in
-# 1.114.0 and 1.114.0 is not tagged, so no report was ever published
-# claiming 2 without these keys.
+# row), and again when each run row's `coverage` gained
+# `deferred_honesty_by_agent`/`deferred_total_by_agent` and the cohort
+# aggregate gained `deferred_honesty` (Task 14, backlog #19 — the
+# agent-vs-system NOT DIFFED honesty split), under the same
+# unreleased-version carve-out: 2 was introduced in 1.114.0 and 1.114.0
+# is not tagged, so no report was ever published claiming 2 without
+# these keys.
 _REPORT_SCHEMA = 2
 _SUPPORTED_MANIFEST_STATUSES = {"running", "complete"}
 _DISPATCHED_STATUSES = _DISPATCH_STATUS_CONTRACT.DISPATCHED_STATUSES

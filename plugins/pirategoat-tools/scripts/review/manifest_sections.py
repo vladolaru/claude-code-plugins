@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
+    from .agent.bootstrap import derive_reviewer_name
     from .dependency_refresh import (
         _MAX_DIRTY_FILES,
         DEPENDENCY_REFRESH_SKIP_REASONS,
@@ -32,6 +33,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
+    from review.agent.bootstrap import derive_reviewer_name
     from review.dependency_refresh import (
         _MAX_DIRTY_FILES,
         DEPENDENCY_REFRESH_SKIP_REASONS,
@@ -365,6 +367,72 @@ def build_dispatch_manifest(output_dir: str, final_info: dict) -> dict:
     return result
 
 
+def _load_deferred_honesty(output_dir: str, agent: str) -> Optional[Dict[str, int]]:
+    """Read one agent's own NOT DIFFED accounting from its review JSON.
+
+    Three counts, all derived straight from the fields
+    `scripts/review/agent/output.py`'s `save()` owns:
+    ``deferred_reviewed`` (the agent's claim to have read a deferred
+    file), ``declared_unreviewed`` (files the agent itself declared
+    unreviewed — ``unreviewed`` minus the autofilled subset), and
+    ``unreviewed_autofilled`` (files `save()` backfilled because the
+    agent said nothing). ``unreviewed_autofilled`` is always a SUBSET of
+    the serialized ``unreviewed`` list, never disjoint from it — `save()`
+    extends ``unreviewed`` with the autofilled paths rather than keeping
+    two separate lists — so ``declared_unreviewed`` is computed by
+    subtracting, not by reading a field that does not exist.
+
+    Returns None when the review JSON is unreadable OR predates the
+    ``deferred_reviewed`` key: that key is unconditionally serialized by
+    every current producer (an empty list, never omitted or null), so its
+    absence is the signal of a legacy/hand-rolled producer that had no
+    way to state claims at all — key presence, not a zero count, is what
+    distinguishes "claims-capable and claimed nothing" from "cannot say."
+    """
+    data = read_json_file(output_dir, f"{derive_reviewer_name(agent)}-review.json")
+    if data is None or "deferred_reviewed" not in data:
+        return None
+
+    def _string_list(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
+
+    claimed = _string_list(data.get("deferred_reviewed"))
+    unreviewed = _string_list(data.get("unreviewed"))
+    meta = data.get("meta")
+    autofilled = _string_list(
+        meta.get("unreviewed_autofilled") if isinstance(meta, dict) else None
+    )
+    autofilled_set = set(autofilled)
+    declared = [path for path in unreviewed if path not in autofilled_set]
+    return {
+        "deferred_reviewed": len(claimed),
+        "declared_unreviewed": len(declared),
+        "unreviewed_autofilled": len(autofilled),
+    }
+
+
+def _load_deferred_total(output_dir: str, agent: str) -> Optional[int]:
+    """Read the authoritative deferred-file count `save()` reconciles against.
+
+    `<reviewer>-deferred-files.json` is written by `agent/bootstrap.py`
+    before the agent runs and is the exact set `ReviewOutputBuilder.save()`
+    itself validates ``deferred_reviewed``/``unreviewed`` against — an
+    independent, system-authored source from the agent's own review JSON,
+    fit for pinning the reconciliation between the two. Returns None when
+    the sidecar is absent, unreadable, or malformed: a run predating the
+    sidecar, or one where the reviewer never ran.
+    """
+    data = read_json_file(output_dir, f"{derive_reviewer_name(agent)}-deferred-files.json")
+    if data is None:
+        return None
+    files = data.get("deferred_files")
+    if not isinstance(files, list) or not all(isinstance(p, str) for p in files):
+        return None
+    return len(files)
+
+
 def build_coverage_manifest(
     output_dir: str,
     events: List[dict],
@@ -444,6 +512,26 @@ def build_coverage_manifest(
             path for paths in by_agent_sets.values() for path in paths
         )
 
+        # Agent-vs-system honesty split for NOT DIFFED (budget-deferred)
+        # files, read straight off durable per-reviewer sidecars — never
+        # derived from the events already folded into by_agent above,
+        # which only carry generated SCOPE (assigned files), not the
+        # deferred-review accounting. Both dicts default to {} (measured,
+        # zero reviewers), never omitted, once this builder runs at all;
+        # only a run whose manifest predates this feature lacks the keys
+        # entirely (see `_load_deferred_honesty`'s key-presence contract).
+        deferred_honesty_by_agent: Dict[str, Dict[str, int]] = {}
+        deferred_total_by_agent: Dict[str, int] = {}
+        for name in sorted(final_agents):
+            if not is_dispatched(final_agents[name].get("status")):
+                continue
+            honesty = _load_deferred_honesty(output_dir, name)
+            if honesty is not None:
+                deferred_honesty_by_agent[name] = honesty
+            total = _load_deferred_total(output_dir, name)
+            if total is not None:
+                deferred_total_by_agent[name] = total
+
         return {
             "changed": changed,
             "reviewable": reviewable,
@@ -454,6 +542,8 @@ def build_coverage_manifest(
                 for path in sorted(changed_set - reviewable_set)
             ],
             "uncovered": sorted(reviewable_set - assigned_set),
+            "deferred_honesty_by_agent": deferred_honesty_by_agent,
+            "deferred_total_by_agent": deferred_total_by_agent,
             "semantics": "generated_scope_not_proof_of_model_read",
         }
     except Exception as err:  # noqa: BLE001 — best-effort by design

@@ -1052,6 +1052,8 @@ class TestRunManifest:
                 {"path": "vendor/generated.js", "reason": "noise_filtered"},
             ],
             "uncovered": [],
+            "deferred_honesty_by_agent": {},
+            "deferred_total_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
@@ -1458,6 +1460,8 @@ class TestRunManifest:
             "assigned": [],
             "excluded": [],
             "uncovered": [],
+            "deferred_honesty_by_agent": {},
+            "deferred_total_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
 
@@ -1482,6 +1486,69 @@ class TestRunManifest:
         manifest = _read_manifest(telemetry)
         assert manifest["availability"]["coverage"] is False
         assert manifest["coverage"] is None
+
+    def test_coverage_carries_the_deferred_honesty_split_per_reviewer(
+        self, telemetry, output_dir
+    ):
+        """Producer-side pin: claims/declared/autofilled counts, read
+        straight off a reviewer's own review JSON, plus the independent
+        deferred-file total from bootstrap's sidecar — backlog #19."""
+        _write_coverage_inputs(
+            output_dir,
+            changed=["src/a.py", "src/b.py", "src/c.py"],
+            reviewable=["src/a.py", "src/b.py", "src/c.py"],
+            agents=[
+                {"name": "security-reviewer", "status": "DISPATCH"},
+                {"name": "docs-reviewer", "status": "DISPATCH"},
+            ],
+        )
+        (output_dir / "security-review.json").write_text(json.dumps({
+            "deferred_reviewed": ["src/a.py"],
+            "unreviewed": ["src/b.py", "src/c.py"],
+            "meta": {"unreviewed_autofilled": ["src/c.py"]},
+        }))
+        (output_dir / "security-deferred-files.json").write_text(json.dumps({
+            "schema": 1,
+            "deferred_files": ["src/a.py", "src/b.py", "src/c.py"],
+        }))
+        # docs-reviewer's own review.json predates the claims key — a
+        # legacy producer, unmeasured rather than a measured zero.
+        (output_dir / "docs-review.json").write_text(json.dumps({
+            "unreviewed": ["src/a.py"],
+        }))
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(
+            "security-reviewer", scope_paths=["src/a.py", "src/b.py", "src/c.py"]
+        )
+        telemetry.log_agent_start("docs-reviewer", scope_paths=["src/a.py"])
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        coverage = _read_manifest(telemetry)["coverage"]
+        assert coverage["deferred_honesty_by_agent"] == {
+            "security-reviewer": {
+                "deferred_reviewed": 1,
+                "declared_unreviewed": 1,
+                "unreviewed_autofilled": 1,
+            },
+        }
+        assert coverage["deferred_total_by_agent"] == {
+            "security-reviewer": 3,
+        }
+
+    def test_coverage_deferred_honesty_defaults_to_empty_not_absent(
+        self, telemetry, output_dir
+    ):
+        """No reviewer wrote a review JSON at all: the split is measured
+        and empty (`{}`), never omitted — omission is reserved for
+        manifests predating this feature entirely."""
+        _write_coverage_inputs(
+            output_dir, changed=[], reviewable=[], agents=[]
+        )
+        telemetry.start(run_id="run-1")
+
+        coverage = _read_manifest(telemetry)["coverage"]
+        assert coverage["deferred_honesty_by_agent"] == {}
+        assert coverage["deferred_total_by_agent"] == {}
 
     def test_manifest_path_resolves_from_marker_in_fresh_instance(
         self, telemetry, mod, output_dir, tmp_path

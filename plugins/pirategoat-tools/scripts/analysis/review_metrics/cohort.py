@@ -263,6 +263,48 @@ def _aggregate_coverage(
     }
 
 
+_DEFERRED_HONESTY_FIELDS = ("deferred_reviewed", "declared_unreviewed", "unreviewed_autofilled")
+
+
+def _aggregate_deferred_honesty(
+    runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
+) -> dict[str, Any]:
+    """Sum the agent-vs-system NOT DIFFED honesty split across measured runs.
+
+    Reuses the "coverage" family (the closest existing family, per its own
+    availability gate) but additionally requires the run to actually carry
+    `deferred_honesty_by_agent` — a run with complete coverage but no such
+    key predates this feature and must not count as a measured zero.
+    """
+    counts = Counter()
+    measured_runs = 0
+    for run in runs:
+        if run.get("metric_availability", {}).get("coverage") != "complete":
+            continue
+        coverage = run.get("coverage")
+        if not isinstance(coverage, dict):
+            continue
+        by_agent = coverage.get("deferred_honesty_by_agent")
+        if not isinstance(by_agent, dict):
+            continue
+        for agent_counts in by_agent.values():
+            if not isinstance(agent_counts, dict):
+                continue
+            for name in _DEFERRED_HONESTY_FIELDS:
+                value = agent_counts.get(name)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    counts[name] += value
+        measured_runs += 1
+    return {
+        **{
+            name: counts[name] if measured_runs else None
+            for name in _DEFERRED_HONESTY_FIELDS
+        },
+        "measured_runs": measured_runs,
+        "availability": availability["coverage"],
+    }
+
+
 def _aggregate_outcomes(
     runs: list[dict[str, Any]], availability: dict[str, dict[str, int]]
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -661,6 +703,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
     dispatch = _aggregate_dispatch(run_list, availability)
     coverage = _aggregate_coverage(run_list, availability)
+    deferred_honesty = _aggregate_deferred_honesty(run_list, availability)
     outcomes, critic, wall_time = _aggregate_outcomes(run_list, availability)
     synthesis_agents = _aggregate_synthesis_agents(run_list, availability)
     tool_failures = _aggregate_tool_failures(run_list, availability)
@@ -673,6 +716,7 @@ def aggregate_cohort(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "availability": availability,
         "dispatch": dispatch,
         "coverage": coverage,
+        "deferred_honesty": deferred_honesty,
         "lifecycle": {
             **_lifecycle_block(lifecycle_complete),
             "partial_observed_runs": (
