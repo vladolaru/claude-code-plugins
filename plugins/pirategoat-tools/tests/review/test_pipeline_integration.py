@@ -1842,12 +1842,49 @@ _QUICK_MODE_BLOCKED_AGENTS = frozenset([
 ])
 
 
+def _init_main_repo(path):
+    """A git repo with a `main` branch at HEAD.
+
+    build_dispatch_plan's triage calls plan_dispatch.get_diff_text() /
+    get_repository_identity() via `git diff`/`git rev-parse`, with no cwd
+    override — they always read the ambient process CWD, not a subprocess
+    we control. Left unpatched, `git_range="main..HEAD"` behaves
+    differently depending on which repo pytest happens to be invoked from:
+    inside this repo the pathspec resolves to an empty diff (low-signal,
+    quick mode skips); from a foreign CWD `git diff` fails outright
+    ("not a git repository"), which the triage treats as an unreadable
+    scan and dispatches conservatively instead of skipping. Pointing CWD at
+    a throwaway repo with a `main` branch at HEAD makes `main..HEAD`
+    resolve to an empty diff everywhere, so the test stops depending on
+    which repo happens to be running it.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "checkout", "-q", "-B", "main"], cwd=path, check=True)
+    (path / "README.md").write_text("init")
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        cwd=path, check=True,
+    )
+    return path
+
+
 class TestQuickModeDispatch:
     """Quick mode excludes low-signal agents from dispatch."""
 
     @pytest.fixture(scope="class")
     def registry(self):
         return load_registry()
+
+    @pytest.fixture(autouse=True)
+    def _isolated_cwd(self, tmp_path, monkeypatch):
+        """build_dispatch_plan calls straight into plan_dispatch's git
+        helpers (no subprocess seam to pass cwd through), so isolation here
+        means chdir'ing the test process itself — see _init_main_repo."""
+        _init_main_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
 
     def test_quick_mode_excludes_blocklisted_agents_without_signals(self, registry):
         """quick=True skips blocklisted agents when no triage keywords match."""
