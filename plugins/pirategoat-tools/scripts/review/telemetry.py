@@ -75,6 +75,29 @@ MARKER_FILE = ".telemetry-log-path"
 # pre-digest build and finalized after an upgrade reads
 # modified_out_of_channel (today that window is developer-local only).
 EVENT_SCHEMA = 2
+# Optional manifest sections whose `availability["<name>"]` boolean shares
+# the section's own top-level key. The analysis consumer's flag/payload
+# consistency pin (`review_metrics` tests) parametrizes over this tuple —
+# via `contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS`, the same
+# producer-declared-contract pattern `synthesis_lifecycle.ROW_KEYS` follows
+# — so a section added here joins the pin automatically instead of
+# silently shipping the "measured: true, payload dropped" gap Task 12
+# closed for worktree_hygiene, usage, and skipped_steps.
+#
+# `dispatch` is excluded: its payload is self-describing (no top-level
+# availability boolean of its own). `dependency_refresh` and
+# `reviewer_markdown` are excluded: neither carries a top-level
+# availability flag today. `pipeline`, `transcript`, and `lifecycle` are
+# excluded: each is an availability flag with no same-named top-level
+# section — `lifecycle`'s payload lives under `agents`, and `transcript`'s
+# comes from a measurement source outside the manifest entirely.
+OPTIONAL_SECTION_AVAILABILITY_KEYS = (
+    "coverage",
+    "worktree_hygiene",
+    "synthesis_agents",
+    "usage",
+    "skipped_steps",
+)
 # Full SHA-1 (40 hex) or SHA-256 (64 hex) object name — matches the
 # pipeline's _FULL_SHA_RE contract for durable git identity.
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")

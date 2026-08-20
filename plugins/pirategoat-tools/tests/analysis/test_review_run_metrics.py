@@ -7766,3 +7766,346 @@ class TestSkippedCriticIsNotACritiqueDuration:
         """It records that no critique happened, so a consumer measuring
         critique outcomes must not find it in the verdict vocabulary."""
         assert contracts._CRITIC_VERDICT_SKIPPED not in contracts._CRITIC_VERDICTS
+
+
+# --- Task 12: optional manifest sections carry their payload through ---
+#
+# Recorded defect: the sanitize layer taught four optional manifest
+# sections' *availability flags* to `safe_availability`'s generic
+# bool-copy without ever teaching it their *payloads* — "measured: true"
+# with the section itself dropped. `coverage`, `synthesis_agents`, and the
+# `outcome` block's `verdict_sync`/`post_apply_integrity` had already
+# closed this gap by the time this landed; `worktree_hygiene`, `usage`
+# (the durable per-run token snapshot — distinct from the *transcript*
+# usage family under `measured["transcript"]["usage"]`), and
+# `skipped_steps` had not.
+
+_USAGE_SNAPSHOT_FIELD_MAP = {
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 20,
+    "cache_read_input_tokens": 30,
+    "effective_input_tokens": 40,
+    "output_tokens": 50,
+}
+
+
+def _worktree_hygiene_payload(**overrides) -> dict:
+    payload = {
+        "status": "clean",
+        "new_files": [],
+        "changed_files": ["src/a.py"],
+        "probe_residue_removed": [],
+        "baseline_captured_at": "2026-08-19T12:00:00+00:00",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _usage_snapshot_payload(**overrides) -> dict:
+    payload = {
+        "captured_at": "2026-08-19T12:15:00+00:00",
+        "window": {
+            "started_at": "2026-08-19T12:00:00+00:00",
+            "ended_at": "2026-08-19T12:15:00+00:00",
+            "closed": True,
+        },
+        "availability": {"subagents": "complete", "orchestrator": "complete"},
+        "agents_measured": {"measured": 1, "expected": 1},
+        "subagent_totals": dict(_USAGE_SNAPSHOT_FIELD_MAP),
+        "orchestrator_usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
+        "usage_by_model": {"claude-opus-5[1m]": dict(_USAGE_SNAPSHOT_FIELD_MAP)},
+        "by_agent": [
+            {
+                "agent": "security-reviewer",
+                "model": "claude-opus-5[1m]",
+                "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP),
+            }
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _skipped_steps_payload() -> list:
+    return [
+        {"step": 10, "title": "Decision Critic", "condition": "quick_mode_enabled"}
+    ]
+
+
+def _synthesis_agents_payload() -> dict:
+    return {
+        "semantics": contracts._SYNTHESIS_SEMANTICS,
+        "observed_at": "2026-08-19T12:15:00+00:00",
+        "finalized": True,
+        "agents": [],
+    }
+
+
+def _optional_section_payload(name: str):
+    return {
+        "coverage": _manifest()["coverage"],
+        "worktree_hygiene": _worktree_hygiene_payload(),
+        "synthesis_agents": _synthesis_agents_payload(),
+        "usage": _usage_snapshot_payload(),
+        "skipped_steps": _skipped_steps_payload(),
+    }[name]
+
+
+class TestOptionalSectionAvailabilityConsistency:
+    """The flag/payload consistency pin, over every producer-declared
+    optional section.
+
+    Parametrized on `contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS` — the
+    telemetry producer's own list of optional sections whose
+    `availability["<name>"]` boolean shares the section's top-level key
+    (mirrors the `synthesis_lifecycle.ROW_KEYS` producer-declared-contract
+    pattern) — so a section added to that tuple joins this pin
+    automatically, without a matching test edit.
+    """
+
+    @pytest.mark.parametrize(
+        "name", contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS
+    )
+    def test_a_well_formed_section_survives_with_its_flag(self, name):
+        manifest = _manifest("run-1")
+        manifest["availability"][name] = True
+        manifest[name] = _optional_section_payload(name)
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["availability"][name] is True
+        assert sanitized[name] is not None
+
+    @pytest.mark.parametrize(
+        "name", contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS
+    )
+    def test_an_absent_section_reports_missing_without_a_payload(self, name):
+        manifest = _manifest("run-1")
+        manifest["availability"][name] = False
+        manifest.pop(name, None)
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["availability"][name] is False
+        assert sanitized[name] is None
+
+    @pytest.mark.parametrize(
+        "name", contracts._OPTIONAL_SECTION_AVAILABILITY_KEYS
+    )
+    def test_a_pre_feature_run_carries_neither_flag_nor_payload(self, name):
+        """A run predating the section has no key at all — never a
+        fabricated `False`, and never a fabricated payload."""
+        manifest = _manifest("run-1")
+        manifest["availability"].pop(name, None)
+        manifest.pop(name, None)
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert name not in sanitized["availability"]
+        assert sanitized[name] is None
+
+
+class TestWorktreeHygieneSanitize:
+    """PII: `status` is a three-value enum, `baseline_captured_at` is an
+    ISO timestamp, and the three entry lists are `git status --porcelain`
+    path lines from the reviewed repository's own source tree — never
+    user-authored or personally identifying text.
+    """
+
+    def test_a_well_formed_payload_survives_field_for_field(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["worktree_hygiene"] = True
+        manifest["worktree_hygiene"] = _worktree_hygiene_payload(
+            new_files=["src/new.py"], changed_files=["src/a.py"],
+        )
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["worktree_hygiene"] == {
+            "status": "clean",
+            "new_files": ["src/new.py"],
+            "changed_files": ["src/a.py"],
+            "probe_residue_removed": [],
+            "baseline_captured_at": "2026-08-19T12:00:00+00:00",
+        }
+
+    def test_producer_availability_false_wins_over_a_stray_payload(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["worktree_hygiene"] = False
+        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["worktree_hygiene"] is None
+
+    def test_an_unrecognized_status_reads_as_unknown_never_clean(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["worktree_hygiene"] = True
+        manifest["worktree_hygiene"] = _worktree_hygiene_payload(
+            status="not_a_real_status"
+        )
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["worktree_hygiene"]["status"] == "unknown"
+
+    def test_a_non_dict_payload_is_missing_not_a_crash(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["worktree_hygiene"] = True
+        manifest["worktree_hygiene"] = "not a dict"
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["worktree_hygiene"] is None
+
+
+class TestUsageSnapshotSanitize:
+    """The durable per-run token-usage snapshot section — distinct from
+    the transcript-derived `usage` family under `measured["transcript"]`.
+
+    PII: `captured_at` and the window timestamps are ISO instants;
+    `window.closed` and the two `availability` states are fixed
+    two/three-value enums; `agents_measured` and every usage map are
+    plain non-negative token-count integers; `usage_by_model` keys are
+    dispatched model identifiers; `by_agent` rows carry only a
+    reviewer-agent name, a model identifier, and a usage map. None of
+    this is user-authored or personally identifying text.
+    """
+
+    def test_a_well_formed_payload_survives_field_for_field(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = True
+        manifest["usage"] = _usage_snapshot_payload()
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"] == _usage_snapshot_payload()
+
+    def test_producer_availability_false_wins_over_a_stray_payload(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = False
+        manifest["usage"] = _usage_snapshot_payload()
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"] is None
+
+    def test_an_incomplete_usage_map_reads_as_none_not_a_zero(self):
+        """All-or-nothing: a map missing a field cannot be summed or
+        compared, and a zero would publish a fabricated measurement."""
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = True
+        broken = _usage_snapshot_payload()
+        del broken["subagent_totals"]["output_tokens"]
+        manifest["usage"] = broken
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"]["subagent_totals"] is None
+        # The rest of the section is unaffected by one bad map.
+        assert sanitized["usage"]["orchestrator_usage"] is not None
+
+    def test_an_unrecognized_availability_state_falls_back_to_missing(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = True
+        manifest["usage"] = _usage_snapshot_payload(
+            availability={"subagents": "bogus", "orchestrator": "partial"}
+        )
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"]["availability"] == {
+            "subagents": "missing",
+            "orchestrator": "partial",
+        }
+
+    def test_a_row_without_an_agent_name_is_dropped_not_the_section(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["usage"] = True
+        manifest["usage"] = _usage_snapshot_payload(
+            by_agent=[{"model": "claude-opus-5[1m]", "usage": dict(_USAGE_SNAPSHOT_FIELD_MAP)}]
+        )
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["usage"] is not None
+        assert sanitized["usage"]["by_agent"] == []
+
+
+class TestSkippedStepsSanitize:
+    """PII: `step` is an integer, and `title`/`condition` are drawn from
+    the pipeline's fixed step-title and skip-condition vocabulary — never
+    user-authored text.
+    """
+
+    def test_a_well_formed_payload_survives_field_for_field(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["skipped_steps"] = True
+        manifest["skipped_steps"] = _skipped_steps_payload()
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["skipped_steps"] == _skipped_steps_payload()
+
+    def test_producer_availability_false_wins_over_a_stray_payload(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["skipped_steps"] = False
+        manifest["skipped_steps"] = _skipped_steps_payload()
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["skipped_steps"] is None
+
+    def test_a_measured_zero_skips_is_an_empty_list_not_missing(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["skipped_steps"] = True
+        manifest["skipped_steps"] = []
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["skipped_steps"] == []
+
+    def test_an_entry_without_a_step_number_is_dropped_not_the_section(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["skipped_steps"] = True
+        manifest["skipped_steps"] = [
+            {"title": "no step here", "condition": "x"},
+            {"step": 10, "title": "Decision Critic", "condition": "quick_mode_enabled"},
+        ]
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["skipped_steps"] == [
+            {"step": 10, "title": "Decision Critic", "condition": "quick_mode_enabled"}
+        ]
+
+    def test_a_non_list_payload_is_missing_not_a_crash(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["skipped_steps"] = True
+        manifest["skipped_steps"] = {"step": 2}
+
+        sanitized = sanitize._sanitize_manifest(manifest)
+
+        assert sanitized["skipped_steps"] is None
+
+
+class TestOptionalSectionsReachMeasureRun:
+    """End-to-end: `measure_run` builds on `_sanitize_manifest`, so the
+    fix must be visible at the same surface cohort/render consume."""
+
+    def test_worktree_hygiene_usage_and_skipped_steps_reach_measure_run(self):
+        manifest = _manifest("run-1")
+        manifest["availability"]["worktree_hygiene"] = True
+        manifest["availability"]["usage"] = True
+        manifest["availability"]["skipped_steps"] = True
+        manifest["worktree_hygiene"] = _worktree_hygiene_payload()
+        manifest["usage"] = _usage_snapshot_payload()
+        manifest["skipped_steps"] = _skipped_steps_payload()
+
+        measured = measure_run(
+            manifest, Path("/nonexistent"), include_transcripts=False
+        )
+
+        assert measured["worktree_hygiene"] is not None
+        assert measured["usage"] is not None
+        assert measured["skipped_steps"] == _skipped_steps_payload()

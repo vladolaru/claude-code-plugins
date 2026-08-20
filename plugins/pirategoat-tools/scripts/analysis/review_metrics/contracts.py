@@ -60,6 +60,16 @@ _USAGE_FIELDS = (
     "effective_input_tokens",
     "output_tokens",
 )
+# Mirrors manifest_sections.py's own private `_WORKTREE_HYGIENE_STATUSES`
+# and `_USAGE_AVAILABILITY_STATES` — that module has no importable export
+# for either, so the consumer-side sanitizer restates the same literal
+# vocabulary rather than trusting an unrecognized value through.
+_WORKTREE_HYGIENE_STATUSES = frozenset(
+    {"clean", "changed_during_review", "unknown"}
+)
+_USAGE_SNAPSHOT_AVAILABILITY_STATES = frozenset(
+    {"complete", "partial", "missing"}
+)
 _PIPELINE_FAMILIES = (
     "dispatch",
     "coverage",
@@ -162,6 +172,9 @@ _CRITIC_VERDICT_SKIPPED = _CRITIC_CONTRACT.CRITIC_VERDICT_SKIPPED
 # consumer mirrors them instead of respelling them, so a renamed agent or
 # a new row key breaks this package's tests rather than silently dropping
 # a measurement.
+_OPTIONAL_SECTION_AVAILABILITY_KEYS = (
+    _TELEMETRY_CONTRACT.OPTIONAL_SECTION_AVAILABILITY_KEYS
+)
 _SYNTHESIS_ROW_KEYS = _SYNTHESIS_CONTRACT.ROW_KEYS
 _SYNTHESIS_SEMANTICS = _SYNTHESIS_CONTRACT.LIFECYCLE_SEMANTICS
 _SYNTHESIS_RECONCILIATOR = _SYNTHESIS_CONTRACT.RECONCILIATOR

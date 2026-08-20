@@ -22,7 +22,10 @@ from .contracts import (
     _SUPPORTED_MANIFEST_STATUSES,
     _SYNTHESIS_ROW_KEYS,
     _SYNTHESIS_SEMANTICS,
+    _USAGE_FIELDS,
+    _USAGE_SNAPSHOT_AVAILABILITY_STATES,
     _WINDOWS_DRIVE_RE,
+    _WORKTREE_HYGIENE_STATUSES,
     _parse_time,
 )
 
@@ -49,6 +52,30 @@ def _nonnegative_exact_int(value: object) -> int | None:
 def _safe_wall_time_ms(value: object) -> int | None:
     parsed = _nonnegative_int(value)
     return parsed if parsed is not None and parsed <= _MAX_WALL_TIME_MS else None
+
+
+def _safe_usage_snapshot_map(value: object) -> dict[str, int] | None:
+    """One complete token-usage map from the durable usage-snapshot section.
+
+    Mirrors `manifest_sections._safe_usage_map` field-for-field and
+    strictness-for-strictness: all-or-nothing, because a map missing a
+    field or carrying a non-integer count cannot be summed or compared,
+    and filling the hole with a zero would publish a fabricated
+    measurement beside real ones — the same rule the producer applies.
+    Deliberately separate from `usage._safe_usage` (the transcript-usage
+    family one layer downstream), which accepts integral floats; this
+    sanitizer accepts exactly what its one producer,
+    `manifest_sections.build_usage_manifest`, emits and no more.
+    """
+    if not isinstance(value, dict):
+        return None
+    usage: dict[str, int] = {}
+    for field in _USAGE_FIELDS:
+        count = value.get(field)
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            return None
+        usage[field] = count
+    return usage
 
 
 def _has_unsafe_string_characters(value: str) -> bool:
@@ -995,6 +1022,178 @@ def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:
     }
 
 
+def _sanitize_worktree_hygiene(value: object) -> dict[str, Any] | None:
+    """Sanitize the step-11 worktree-hygiene section, or None.
+
+    None means the run never measured hygiene (payload absent or the
+    wrong shape) — a different fact from a measured "unknown" status,
+    which survives as a section like any other outcome. Every field falls
+    back to the producer's own absent-measurement value rather than a
+    fabricated one, mirroring
+    `manifest_sections.build_worktree_hygiene_manifest`'s own fallback
+    behavior: an unrecognizable status reads as "unknown", never "clean",
+    and a malformed entry list reads as empty rather than invalidating
+    the whole section.
+
+    PII: none of these fields carry user-authored text. `status` is a
+    three-value enum, `baseline_captured_at` is an ISO timestamp, and the
+    three entry lists are `git status --porcelain` path lines from the
+    repository under review — source-tree paths, not personal data.
+    """
+    if not isinstance(value, dict):
+        return None
+
+    def entries(key: str) -> list[str]:
+        return _safe_strings(value.get(key))
+
+    status = value.get("status")
+    captured_at = value.get("baseline_captured_at")
+    return {
+        "status": (
+            status
+            if isinstance(status, str) and status in _WORKTREE_HYGIENE_STATUSES
+            else "unknown"
+        ),
+        "new_files": entries("new_files"),
+        "changed_files": entries("changed_files"),
+        "probe_residue_removed": entries("probe_residue_removed"),
+        "baseline_captured_at": (
+            captured_at if isinstance(captured_at, str) else None
+        ),
+    }
+
+
+def _sanitize_usage_snapshot(value: object) -> dict[str, Any] | None:
+    """Sanitize the step-11 token-usage snapshot section, or None.
+
+    None means the run never captured a snapshot — absent, unreadable, or
+    the wrong shape. That is different from a captured snapshot that found
+    nothing to measure (a Codex host writes no Claude-format transcripts),
+    which carries per-half `availability` of "missing" and survives as a
+    section like any other outcome. Mirrors
+    `manifest_sections.build_usage_manifest`'s own field-by-field
+    fallback: every field reads its own absent-measurement value instead
+    of invalidating the whole section, because the two halves (subagent
+    vs. orchestrator) are independently partial by construction.
+
+    PII: `captured_at` and the two window timestamps are ISO instants;
+    `window.closed` and the two `availability` states are fixed
+    three/two-value enums; `agents_measured` and every usage map are plain
+    non-negative integers (token counts); `usage_by_model` keys are
+    dispatched model identifiers (a fixed, non-personal vocabulary); and
+    `by_agent` rows carry only a reviewer-agent name, a model identifier,
+    and a usage map. None of this is user-authored or personally
+    identifying text.
+    """
+    if not isinstance(value, dict):
+        return None
+
+    window = value.get("window")
+    window = window if isinstance(window, dict) else {}
+    availability = value.get("availability")
+    availability = availability if isinstance(availability, dict) else {}
+    counts = value.get("agents_measured")
+    counts = counts if isinstance(counts, dict) else {}
+
+    def availability_state(name: str) -> str:
+        state = availability.get(name)
+        return (
+            state
+            if isinstance(state, str) and state in _USAGE_SNAPSHOT_AVAILABILITY_STATES
+            else "missing"
+        )
+
+    def window_bound(name: str) -> str | None:
+        bound = window.get(name)
+        return bound if isinstance(bound, str) else None
+
+    by_model_raw = value.get("usage_by_model")
+    by_model: dict[str, dict[str, int]] = {}
+    if isinstance(by_model_raw, dict):
+        for model, usage in by_model_raw.items():
+            if not isinstance(model, str):
+                continue
+            safe = _safe_usage_snapshot_map(usage)
+            if safe is not None:
+                by_model[model] = safe
+
+    rows_raw = value.get("by_agent")
+    rows: list[dict[str, Any]] = []
+    if isinstance(rows_raw, list):
+        for row in rows_raw:
+            if not isinstance(row, dict):
+                continue
+            agent = _safe_string(row.get("agent"))
+            if agent is None:
+                continue
+            model = row.get("model")
+            rows.append({
+                "agent": agent,
+                "model": _safe_string(model) if isinstance(model, str) else None,
+                "usage": _safe_usage_snapshot_map(row.get("usage")),
+            })
+
+    captured_at = value.get("captured_at")
+    return {
+        "captured_at": captured_at if isinstance(captured_at, str) else None,
+        "window": {
+            "started_at": window_bound("started_at"),
+            "ended_at": window_bound("ended_at"),
+            "closed": window.get("closed") is True,
+        },
+        "availability": {
+            "subagents": availability_state("subagents"),
+            "orchestrator": availability_state("orchestrator"),
+        },
+        "agents_measured": {
+            "measured": _nonnegative_exact_int(counts.get("measured")),
+            "expected": _nonnegative_exact_int(counts.get("expected")),
+        },
+        "subagent_totals": _safe_usage_snapshot_map(value.get("subagent_totals")),
+        "orchestrator_usage": _safe_usage_snapshot_map(
+            value.get("orchestrator_usage")
+        ),
+        "usage_by_model": by_model,
+        "by_agent": rows,
+    }
+
+
+def _sanitize_skipped_steps(value: object) -> list[dict[str, Any]] | None:
+    """Sanitize the step-router skip ledger, or None.
+
+    None (payload absent, unreadable, or the wrong shape) is distinct
+    from `[]` — a run whose router measured zero skips. Only entries
+    carrying a real step number survive, mirroring
+    `manifest_sections.build_skipped_steps_manifest`'s own filter: an
+    entry without one has no decision to report, and a title/condition
+    falls back to "" exactly as the producer's own `or ""` does.
+
+    PII: `step` is an integer, and `title`/`condition` are drawn from the
+    pipeline's fixed step-title and skip-condition vocabulary (e.g.
+    "Decision Critic", "quick_mode_enabled") — never user-authored text.
+    """
+    if not isinstance(value, list):
+        return None
+
+    def bounded_or_empty(raw: object) -> str:
+        safe = _safe_string(raw) if isinstance(raw, str) else None
+        return safe if safe is not None else ""
+
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        step = item.get("step")
+        if not isinstance(step, int) or isinstance(step, bool):
+            continue
+        result.append({
+            "step": step,
+            "title": bounded_or_empty(item.get("title")),
+            "condition": bounded_or_empty(item.get("condition")),
+        })
+    return result
+
+
 def _sanitize_summary(value: object) -> dict[str, Any]:
     raw_summary = value if isinstance(value, dict) else {}
     summary = _safe_scalar_map(
@@ -1077,6 +1276,25 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         if safe_availability.get("synthesis_agents") is False
         else _sanitize_synthesis_agents(value.get("synthesis_agents"))
     )
+    # Same rule, three more sections: the producer's own availability
+    # conjunct wins over the payload, so a run whose producer explicitly
+    # measured the section absent never gets promoted by a stray payload
+    # left over from a malformed or foreign manifest.
+    worktree_hygiene = (
+        None
+        if safe_availability.get("worktree_hygiene") is False
+        else _sanitize_worktree_hygiene(value.get("worktree_hygiene"))
+    )
+    usage = (
+        None
+        if safe_availability.get("usage") is False
+        else _sanitize_usage_snapshot(value.get("usage"))
+    )
+    skipped_steps = (
+        None
+        if safe_availability.get("skipped_steps") is False
+        else _sanitize_skipped_steps(value.get("skipped_steps"))
+    )
     raw_dispatch = value.get("dispatch")
     dispatch = _sanitize_dispatch(raw_dispatch)
     warnings = _sanitize_warnings(value.get("warnings"))
@@ -1095,6 +1313,9 @@ def _sanitize_manifest(value: object) -> dict[str, Any]:
         "dispatch": dispatch,
         "coverage": coverage,
         "synthesis_agents": synthesis_agents,
+        "worktree_hygiene": worktree_hygiene,
+        "usage": usage,
+        "skipped_steps": skipped_steps,
         "outcome": _sanitize_outcome(value.get("outcome")),
         "availability": safe_availability,
         "warnings": warnings,
