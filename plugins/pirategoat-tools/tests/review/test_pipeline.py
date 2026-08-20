@@ -2053,9 +2053,16 @@ class TestDegradedPaths:
         assert "review-findings.md" in text
 
     def test_scenario_c_critic_failed(self, mod, tmp_path):
-        """Step 11 should show critic_verdict as unavailable when critic failed."""
-        state = {"completed_steps": [], "degradation": {"critic_failed": True},
-                 "critic_verdict": "unavailable"}
+        """Step 11 should show critic_verdict as unavailable when critic failed.
+
+        `state["critic_verdict"]` is the sole signal for this — there is
+        no separate `degradation["critic_failed"]` flag in production
+        (grep confirms nothing under scripts/ ever sets it); a missing,
+        unparseable, or SKIPPED critic verdict all collapse into
+        "unavailable" via `critic_verdict_for_state()` before step 11
+        even reaches this briefing.
+        """
+        state = {"completed_steps": [], "critic_verdict": "unavailable"}
         ctx = {}
         config = {"mode": "pr", "interactive": True}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)

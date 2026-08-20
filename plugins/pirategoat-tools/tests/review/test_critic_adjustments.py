@@ -25,6 +25,7 @@ from review.critic_adjustments import (
     pending_count,
     read_critic_verdict,
 )
+from review import critic_adjustments as critic_adjustments_module
 from review.orchestration import _orchestrate_step_11
 from review.reconciliation_context import build_critic_context
 
@@ -590,8 +591,10 @@ class TestScopeLinePairing:
 
 
 class TestCLI:
-    """The step-11 wiring calls this as a script, so the process contract
-    (exit status + stdout/stderr channels) is part of the interface."""
+    """Step 10's REVISE briefing shells out to this as a script (step 11
+    imports and calls apply_adjustments() directly instead), so the
+    process contract (exit status + stdout/stderr channels) is part of
+    the interface."""
 
     pytestmark = pytest.mark.usefixtures("revise_verdict")
 
@@ -692,6 +695,37 @@ class TestCriticVerdictGate:
         }
         assert (tmp_path / "review-findings.json").read_bytes() == before
 
+    @pytest.mark.parametrize("near_miss", ["revise", " REVISE ", "REVISE\n"])
+    def test_apply_refuses_on_a_non_exact_revise_spelling(
+        self, tmp_path, near_miss
+    ):
+        """The gate is exact-match, not case-insensitive or whitespace-
+        tolerant. The taught contract (briefings.py, critic.py's
+        CRITIC_VERDICTS) renders the verdict as uppercase "REVISE" with no
+        surrounding whitespace — a critic that emits anything else is
+        deviating from the contract, and that deviation must refuse loudly
+        rather than being silently normalized into an apply.
+        """
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "r",
+        }])
+        _write_critic_verdict(tmp_path, near_miss)
+        before = (tmp_path / "review-findings.json").read_bytes()
+
+        result = apply_adjustments(str(tmp_path))
+
+        assert result["status"] == "refused"
+        assert result["reason"].startswith(REFUSAL_VERDICT_NOT_REVISE), (
+            f"a near-miss spelling must refuse with the "
+            f"{REFUSAL_VERDICT_NOT_REVISE!r} reason, not be silently "
+            f"normalized into REVISE"
+        )
+        assert (tmp_path / "review-findings.json").read_bytes() == before, (
+            "a refusal must write nothing, even for a near-miss spelling"
+        )
+
     def test_apply_refuses_on_unparseable_verdict(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
         _write_adjustments(tmp_path, [{
@@ -742,6 +776,12 @@ class TestCriticVerdictGate:
         )
         assert "REFUSED" in proc.stderr
         assert REFUSAL_VERDICT_NOT_REVISE in proc.stderr
+        # The result JSON reaches stdout on refusal too — one parser for
+        # every status, not a special case that only prints on stderr.
+        assert json.loads(proc.stdout) == {
+            "status": "refused", "applied": 0,
+            "reason": f"{REFUSAL_VERDICT_NOT_REVISE} (STAND)",
+        }
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"
 
@@ -900,10 +940,11 @@ class TestCriticContextRoundTrip:
 
 
 class TestStepElevenAppliesAdjustments:
-    """Step 11 is where pending critic adjustments land, so bot mode (which
-    follows no briefing) and any run whose orchestrator did not apply them
-    still converge on a findings JSON the critic reached — but only under
-    REVISE, the verdict whose briefing spot-checked the entries first."""
+    """Step 11 is where pending critic adjustments land, so any run whose
+    orchestrator stopped short of the step-10 briefing's instructions
+    still converges on a findings JSON the critic reached — but only
+    under REVISE, the verdict whose briefing spot-checked the entries
+    first."""
 
     @pytest.fixture(autouse=True)
     def _isolated_cwd(self, tmp_path, monkeypatch):
@@ -960,6 +1001,47 @@ class TestStepElevenAppliesAdjustments:
         assert result["status"] == "degraded"
         data = json.loads((tmp_path / "review-findings.json").read_text())
         assert data["issues"][0]["severity"] == "low"  # nothing half-applied
+
+    def test_surfaces_an_unexpected_refusal_from_apply_adjustments(
+        self, tmp_path, monkeypatch
+    ):
+        """This branch guards a one-edit-away divergence, not a reachable
+        state under today's code: state["critic_verdict"] and
+        apply_adjustments()'s own gate both derive from
+        critic_verdict_for_state()/read_critic_verdict() reading the same
+        file, so they cannot disagree today. But a future edit to either
+        side's presentation mapping — SKIPPED handling, a new alias verdict
+        — could make them diverge silently. Monkeypatching
+        apply_adjustments() to return a refusal despite an on-disk REVISE
+        verdict simulates exactly that divergence without waiting for it
+        to actually happen, and pins that it degrades loudly instead of
+        silently doing nothing.
+        """
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_critic_verdict(tmp_path, "REVISE")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "REQUEST_CHANGES"})
+        )
+        (tmp_path / "review-report.md").write_text("# report")
+
+        def fake_apply_adjustments(output_dir):
+            return {
+                "status": "refused", "applied": 0,
+                "reason": "verdict_not_revise (STAND)",
+            }
+
+        monkeypatch.setattr(
+            critic_adjustments_module, "apply_adjustments",
+            fake_apply_adjustments,
+        )
+        self._step_11(tmp_path)
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert any(
+            "refused" in note and "verdict_not_revise (STAND)" in note
+            for note in result["degradation_notes"]
+        ), result["degradation_notes"]
+        assert result["status"] == "degraded"
 
     @pytest.mark.parametrize("critic_verdict", ["STAND", "ESCALATE", "SKIPPED"])
     def test_non_revise_verdict_never_applies_pending_adjustments(

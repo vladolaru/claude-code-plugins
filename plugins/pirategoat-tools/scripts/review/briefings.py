@@ -1414,6 +1414,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(f'// Save to: {od}/decision-critic-verdict.json')
     actions.append(f'{{"verdict": "<STAND | REVISE | ESCALATE>"}}')
     actions.append(f"```")
+    actions.append(
+        f"If the critic crashed, timed out, or otherwise produced no "
+        f"usable verdict, write `{{\"verdict\": \"SKIPPED\", \"reason\": "
+        f"\"<why>\"}}` instead — never invent a STAND/REVISE/ESCALATE "
+        f"value on the critic's behalf just to satisfy the handoff gate."
+    )
     actions.append("")
     actions.append("Act on the critic's verdict:")
     actions.append("")
@@ -1505,7 +1511,6 @@ def _step_11_present_results(mode, state, context, config, output_dir):
     """Step 11: Present Results — show review output."""
     od = output_dir or "<OUTPUT_DIR>"
     is_interactive = config.get("interactive", True)
-    degradation = state.get("degradation", {})
     critic_verdict = state.get("critic_verdict")
     forced_verdict = state.get("forced_verdict")
     review_verdict = state.get("review_verdict")
@@ -1517,7 +1522,7 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         actions.append(f"Read `{od}/review-report.md` and present a formatted summary "
                        "with verdict and key findings.")
 
-        if critic_verdict == "unavailable" or degradation.get("critic_failed"):
+        if critic_verdict == "unavailable":
             actions.append("⚠️ Critic verdict unavailable — present review as-is.")
 
         if forced_verdict:

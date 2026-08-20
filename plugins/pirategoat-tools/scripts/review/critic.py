@@ -20,9 +20,13 @@ from typing import Optional
 TOTAL_STEPS = 4
 
 # Canonical critic verdict vocabulary. The Step 4 rubric below and the
-# briefings.py critic guidance presents exactly these verdicts, and the
+# briefings.py critic guidance presents exactly these verdicts, the
 # review_metrics consumer (analysis/review_metrics/contracts.py) classifies
-# manifest critic verdicts against this constant — keep all three aligned.
+# manifest critic verdicts against this constant, and
+# critic_adjustments.REVISE_VERDICT is the same literal spelled out
+# separately (deliberately not imported — see that constant's own
+# comment) as the one verdict apply_adjustments()'s gate accepts — keep
+# all four aligned.
 CRITIC_VERDICTS = ("STAND", "REVISE", "ESCALATE")
 
 

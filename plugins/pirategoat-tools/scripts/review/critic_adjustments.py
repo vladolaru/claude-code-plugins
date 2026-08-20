@@ -68,6 +68,12 @@ APPLIED_IDS_KEY = "applied_critic_adjustments"
 
 # The one verdict that sanctions applying adjustments. Everything else —
 # STAND, ESCALATE, an unrecognized string, a missing file — refuses.
+# Literal, not imported: critic.py's CRITIC_VERDICTS is the canonical
+# vocabulary source and names this constant as one of its aligned sites
+# (see the comment there) — importing critic.py here just to reuse one
+# string would wire this module's gate to critic.py's whole import graph
+# for no benefit, since the value the gate checks against is a single
+# fixed literal, not a set that varies.
 REVISE_VERDICT = "REVISE"
 
 # Refusal reasons returned by apply_adjustments() under the gate. Both
@@ -91,10 +97,10 @@ def read_critic_verdict(output_dir):
     `verdict` field. This reader is deliberately permissive — it answers
     "what does the file say", not "is that an acceptable value" — the
     caller decides what to do with the result. `apply_adjustments()`'s
-    gate below only ever proceeds on the literal "REVISE"; orchestration's
-    own `state["critic_verdict"]` bookkeeping additionally maps "SKIPPED"
-    to "unavailable" for downstream consumers, which is a presentation
-    concern this reader does not make.
+    gate below only ever proceeds on the literal "REVISE"; the
+    presentation mapping downstream consumers need instead — "SKIPPED" and
+    a missing/unparseable file both reading as "unavailable" — lives next
+    door in `critic_verdict_for_state()`, not here.
     """
     path = os.path.join(output_dir, CRITIC_VERDICT_FILENAME)
     if not os.path.isfile(path):
@@ -110,6 +116,21 @@ def read_critic_verdict(output_dir):
     if not isinstance(verdict, str):
         return None
     return verdict
+
+
+def critic_verdict_for_state(output_dir):
+    """Read the critic's verdict the way `state["critic_verdict"]` wants it.
+
+    A thin presentation wrapper around `read_critic_verdict()`: a missing
+    or unparseable verdict file and an explicit "SKIPPED" both collapse to
+    "unavailable" here, so downstream consumers (pirategoat-bot) correctly
+    show "not cross-validated" either way. Named and kept beside the raw
+    reader specifically so a future consumer reaches for this one instead
+    of re-deriving the same two-way mapping inline — the trap step 11 used
+    to fall into before this existed.
+    """
+    verdict = read_critic_verdict(output_dir)
+    return "unavailable" if verdict in (None, "SKIPPED") else verdict
 
 
 def _validate_fields(fields, entry_label):
@@ -504,10 +525,16 @@ def main():
     except (ValueError, OSError, json.JSONDecodeError) as err:
         print(f"ERROR: {err}", file=sys.stderr)
         sys.exit(1)
-    if result.get("status") == "refused":
-        print(f"REFUSED: {result['reason']}", file=sys.stderr)
-        sys.exit(REFUSAL_EXIT_CODE)
+    # One parser handles every status: the result JSON always goes to
+    # stdout, whether applied, nothing pending, or refused. Refused
+    # additionally gets a human-readable stderr line and the distinct
+    # exit code — `.get()`, not a subscript, so a refusal result that
+    # somehow lacks `reason` still reports and exits 3 instead of
+    # crashing on a KeyError on its way out the door.
     print(json.dumps(result))
+    if result.get("status") == "refused":
+        print(f"REFUSED: {result.get('reason', 'unknown')}", file=sys.stderr)
+        sys.exit(REFUSAL_EXIT_CODE)
 
 
 if __name__ == "__main__":

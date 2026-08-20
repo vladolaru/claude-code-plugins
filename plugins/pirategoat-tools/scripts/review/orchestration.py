@@ -998,15 +998,12 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
 
 
 def _orchestrate_step_11(mode, config, state, context, output_dir):
-    # Read critic verdict from file (written by LLM at step 10). The file
-    # read/parse itself is shared with critic_adjustments.py's own gate —
-    # one parser, one home — so this only adds the presentation mapping
-    # that reader deliberately leaves out: SKIPPED → unavailable, so
-    # downstream consumers (pirategoat-bot) correctly show "not
-    # cross-validated", and a missing/unparseable file → unavailable too.
-    raw_verdict = critic_adjustments.read_critic_verdict(output_dir)
-    state["critic_verdict"] = (
-        "unavailable" if raw_verdict in (None, "SKIPPED") else raw_verdict
+    # Read critic verdict from file (written by LLM at step 10), through
+    # critic_adjustments.py's own presentation wrapper — one parser and
+    # one SKIPPED/missing → "unavailable" mapping, shared with (and kept
+    # in sync with) the raw reader apply_adjustments()'s gate uses.
+    state["critic_verdict"] = critic_adjustments.critic_verdict_for_state(
+        output_dir
     )
 
     verdict_path = os.path.join(output_dir, "review-verdict.json")
@@ -1026,10 +1023,12 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # the verdict sync — but only under REVISE, the one verdict that
     # sanctions them. The step-10 REVISE briefing has the orchestrator
     # spot-check each entry and mark the refuted ones `rejected` before
-    # running this same apply, so here it is the defensive re-run: bot
-    # mode follows no briefing at all, and an interactive run can still
-    # stop short of step 10's instructions. Idempotence makes the re-run
-    # free for a run that already applied.
+    # running this same apply, so here it is the defensive re-run: any
+    # orchestrator — bot or interactive — can stop short of the step-10
+    # briefing's instructions (a crash, an early return, a main
+    # orchestrator that skips ahead), and this re-run is what still
+    # converges those runs on a findings JSON the critic actually reached.
+    # Idempotence makes the re-run free for a run that already applied.
     # The verdict gate is what keeps that re-run from becoming a bypass:
     # adjustments are a REVISE-only channel, so a critic that writes them
     # alongside STAND, ESCALATE, or a skipped verdict would otherwise get
@@ -1053,12 +1052,16 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                     f"critic adjustments not applied: {err}"
                 )
             else:
-                # Belt-and-braces: this branch only runs when the state
-                # computed above already says REVISE, so apply_adjustments'
-                # own gate (reading the same file) should never refuse
-                # here. Surfacing it anyway if it somehow does keeps a
-                # future divergence between the two reads from silently
-                # doing nothing instead of degrading loudly.
+                # Belt-and-braces: `critic_verdict` above came from
+                # critic_verdict_for_state()'s presentation mapping, and
+                # this branch only runs when that read already says
+                # REVISE, so apply_adjustments()'s own gate — reading the
+                # same file through read_critic_verdict() — should never
+                # refuse here. It would if a future edit changed one
+                # mapping (e.g. what "SKIPPED" or a new alias verdict
+                # means) without changing the other, so this branch exists
+                # to catch exactly that divergence and degrade loudly
+                # instead of silently doing nothing.
                 if apply_result.get("status") == "refused":
                     degradation_notes.append(
                         f"critic adjustments not applied: refused "
