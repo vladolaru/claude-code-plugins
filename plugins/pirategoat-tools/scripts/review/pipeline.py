@@ -31,7 +31,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -115,6 +114,7 @@ try:
         verify_dependency_refresh,
     )
     from .user_settings import load_user_settings, refresh_dependencies_default
+    from .atomic_io import atomic_write_json
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -200,6 +200,7 @@ except ImportError:
         load_user_settings,
         refresh_dependencies_default,
     )
+    from review.atomic_io import atomic_write_json
 
 # Artifacts to clear at step 1 (stale from previous runs)
 _STALE_ARTIFACTS = [
@@ -390,25 +391,7 @@ def _reset_interactive_review_context(output_dir):
     """Atomically replace prior-run context with the current run seed."""
     context = {"output": {"directory": output_dir}}
     path = os.path.join(output_dir, "review-context.json")
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            delete=False,
-            dir=output_dir,
-            encoding="utf-8",
-        ) as temp_file:
-            temp_path = temp_file.name
-            json.dump(context, temp_file, indent=2)
-            temp_file.flush()
-        os.replace(temp_path, path)
-        temp_path = None
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
+    atomic_write_json(path, context)
     return context
 
 

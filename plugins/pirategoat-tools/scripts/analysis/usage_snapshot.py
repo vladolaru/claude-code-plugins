@@ -38,7 +38,6 @@ import copy
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_metrics.contracts import (  # noqa: E402
     DEFAULT_REGISTRY,
     DEFAULT_SESSIONS_ROOT,
+    _ATOMIC_IO_CONTRACT,
     _TELEMETRY_CONTRACT,
 )
 from review_metrics.measure import measure_run  # noqa: E402
@@ -294,22 +294,12 @@ def _build_snapshot(
 
 def _write_snapshot(output_dir: Path, snapshot: dict) -> bool:
     """Atomically replace the run's snapshot; never raises."""
-    temp_path = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", delete=False, dir=str(output_dir), encoding="utf-8"
-        ) as temp_file:
-            temp_path = temp_file.name
-            json.dump(snapshot, temp_file, indent=2, sort_keys=True)
-            temp_file.flush()
-        os.replace(temp_path, str(output_dir / SNAPSHOT_FILENAME))
+        _ATOMIC_IO_CONTRACT.atomic_write_json(
+            str(output_dir / SNAPSHOT_FILENAME), snapshot
+        )
         return True
     except (OSError, TypeError, ValueError):
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
         return False
 
 

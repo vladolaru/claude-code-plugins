@@ -11,26 +11,33 @@ outcome. Mirrors the dispatch-plan pattern: original decision preserved,
 override recorded beside it.
 
 A half-applied batch must never exist on disk, which takes more than
-validating first. Each file is replaced atomically (temp file in the
-same directory, then os.replace — the convention in telemetry.py and
-orchestration.py), and application is recorded on BOTH sides: every
-pending entry carries a stable `adjustment_id`, and the findings file
-lists the ids it already contains under `applied_critic_adjustments`.
-Ids are allocated and persisted before the findings write, so every
-crash point converges on the next run: if the findings write landed, its
-recorded ids make the entries skip and only their flags catch up; if it
-did not, nothing was recorded and the batch applies normally. Without
-that record, a crash between the two writes would re-apply patches onto
-an already-patched ledger and `prior` would report the critic's own
-output as the reconciled state.
+validating first. Each file is replaced atomically via atomic_io's shared
+`atomic_write_json` (temp file in the same directory, then os.replace),
+and application is recorded on BOTH sides: every pending entry carries a
+stable `adjustment_id`, and the findings file lists the ids it already
+contains under `applied_critic_adjustments`. Ids are allocated and
+persisted before the findings write, so every crash point converges on
+the next run: if the findings write landed, its recorded ids make the
+entries skip and only their flags catch up; if it did not, nothing was
+recorded and the batch applies normally. Without that record, a crash
+between the two writes would re-apply patches onto an already-patched
+ledger and `prior` would report the critic's own output as the
+reconciled state.
 """
 
 import argparse
 import json
 import os
 import sys
-import tempfile
 import uuid
+
+try:
+    from .atomic_io import atomic_write_json
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.atomic_io import atomic_write_json
 
 ACTIONS = ("promote", "demote", "rescope", "correct", "add", "remove")
 # `scope` is deliberately absent: it is derived from `line` to preserve the
@@ -45,47 +52,6 @@ VALID_SEVERITIES = ("critical", "high", "medium", "low", "info")
 ADJUSTMENTS_FILENAME = "decision-critic-adjustments.json"
 FINDINGS_FILENAME = "review-findings.json"
 APPLIED_IDS_KEY = "applied_critic_adjustments"
-
-
-def atomic_write_json(path, payload):
-    """Replace a JSON artifact in one step, or leave the old one intact.
-
-    Same temp-file-then-os.replace convention as telemetry.py's manifest
-    and orchestration.py's dispatch plan. Failures propagate here — a
-    ledger this module could not write must not read as a success.
-
-    Public because this module is not the only writer of
-    review-findings.json: step 11's Rule 23 verdict sync writes the same
-    artifact and shares this primitive, so the crash-safety of the ledger
-    does not depend on which writer touched it last.
-
-    Encoding matches the artifact's author for the same reason: the
-    reconciliator writes review-findings.json with ``ensure_ascii=False``,
-    so escaping here would make every verdict sync rewrite the whole
-    ledger's prose (finding text is full of em dashes) into ``\\uXXXX``
-    escapes — lossless, but indistinguishable from corruption to whoever
-    reads the run's artifacts.
-    """
-    directory = os.path.dirname(path) or "."
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            delete=False,
-            dir=directory,
-            encoding="utf-8",
-        ) as temp_file:
-            temp_path = temp_file.name
-            json.dump(payload, temp_file, indent=2, ensure_ascii=False)
-            temp_file.flush()
-        os.replace(temp_path, path)
-        temp_path = None
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
 
 
 def _validate_fields(fields, entry_label):

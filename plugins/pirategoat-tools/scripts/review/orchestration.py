@@ -5,7 +5,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +28,7 @@ try:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
+    from .atomic_io import atomic_write_json
     from . import critic_adjustments
     from . import manifest_sections
 except ImportError:
@@ -54,6 +54,7 @@ except ImportError:
         detect_dependency_refresh,
         verify_dependency_refresh,
     )
+    from review.atomic_io import atomic_write_json
     from review import critic_adjustments
     from review import manifest_sections
 
@@ -92,34 +93,18 @@ def _preserve_initial_dispatch_plan(output_dir, plan):
     make an older plan look like the current run's deterministic output.
     """
     initial_path = os.path.join(output_dir, "dispatch-plan.initial.json")
-    temp_path = None
     try:
         try:
             os.remove(initial_path)
         except FileNotFoundError:
             pass
 
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            delete=False,
-            dir=output_dir,
-            encoding="utf-8",
-        ) as temp_file:
-            temp_path = temp_file.name
-            json.dump(plan, temp_file, indent=2, sort_keys=True)
-            temp_file.flush()
-        os.replace(temp_path, initial_path)
+        atomic_write_json(initial_path, plan)
     except (OSError, TypeError, ValueError):
         try:
             os.remove(initial_path)
         except OSError:
             pass
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
 
 
 def _load_dispatch_plan(plan_path):
@@ -293,7 +278,7 @@ def _capture_worktree_baseline(output_dir):
         "entries": entries,
     }
     try:
-        critic_adjustments.atomic_write_json(
+        atomic_write_json(
             os.path.join(output_dir, ".worktree-baseline.json"), payload
         )
     except OSError:
@@ -493,7 +478,7 @@ def _check_worktree_hygiene(output_dir):
     # "clean" would publish an absent measurement as a measured zero.
 
     try:
-        critic_adjustments.atomic_write_json(
+        atomic_write_json(
             os.path.join(output_dir, "worktree-hygiene.json"), result
         )
     except OSError:
@@ -1131,12 +1116,13 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
 
     verdict = verdict_data.get("verdict", "COMMENT") if verdict_data else "COMMENT"
 
-    # Rule 23: update review-findings.json verdict to match. This is the
-    # other writer of the ledger critic_adjustments.py keeps crash-safe, so
-    # it shares that module's atomic write: a truncating open here would
-    # leave the artifact destroyable by a crash mid-write no matter how
-    # carefully the adjustments path replaces it, and this write is the
-    # last one the run performs.
+    # Rule 23: update review-findings.json verdict to match. The ledger has
+    # three writers across a run — the review-reconciliator agent's first
+    # write, critic_adjustments.py applying decision-critic adjustments,
+    # and this verdict sync — and all three share atomic_io's atomic write:
+    # a truncating open here would leave the artifact destroyable by a
+    # crash mid-write no matter how carefully the other writers replaced
+    # it, and this write is the last one the run performs.
     if verdict_data and os.path.isfile(findings_path):
         try:
             with open(findings_path) as f:
@@ -1152,7 +1138,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
                 )
             else:
                 findings["verdict"] = verdict
-                critic_adjustments.atomic_write_json(findings_path, findings)
+                atomic_write_json(findings_path, findings)
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -1175,8 +1161,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "usage": usage_summary,
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
-    with open(result_path, "w") as f:
-        json.dump(pipeline_result, f, indent=2)
+    atomic_write_json(result_path, pipeline_result)
 
     state["verdict"] = verdict
     state["review_verdict"] = verdict

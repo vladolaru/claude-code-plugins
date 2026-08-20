@@ -33,6 +33,11 @@ _CRITIC_CONTRACT = _load_exact_path_module(
     _REVIEW_DIR / "critic.py",
     "review critic contract unavailable",
 )
+_ATOMIC_IO_CONTRACT = _load_exact_path_module(
+    "review_atomic_io_contract",
+    _REVIEW_DIR / "atomic_io.py",
+    "review atomic io contract unavailable",
+)
 DEFAULT_LOG_DIR = Path(_TELEMETRY_CONTRACT.LOG_DIR)
 DEFAULT_SESSIONS_ROOT = Path("~/.claude/projects").expanduser()
 DEFAULT_REGISTRY = _REVIEW_DIR / "agent_registry.json"

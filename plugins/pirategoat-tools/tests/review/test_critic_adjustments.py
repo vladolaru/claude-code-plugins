@@ -15,10 +15,10 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SCRIPT_PATH = SCRIPTS_DIR / "review" / "critic_adjustments.py"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
     apply_adjustments,
-    atomic_write_json,
     pending_count,
 )
 from review.orchestration import _orchestrate_step_11

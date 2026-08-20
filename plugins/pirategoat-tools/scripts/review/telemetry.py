@@ -16,7 +16,6 @@ import os
 import posixpath
 import re
 import sys
-import tempfile
 import unicodedata
 import uuid
 from collections import Counter
@@ -31,6 +30,7 @@ try:
         validate_dispatch_plan_agents,
     )
     from .agent.output import _VALID_SEVERITIES, _VERDICT_RANK
+    from .atomic_io import atomic_write_json
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -42,6 +42,7 @@ except ImportError:
         validate_dispatch_plan_agents,
     )
     from review.agent.output import _VALID_SEVERITIES, _VERDICT_RANK
+    from review.atomic_io import atomic_write_json
 
 from containment import contains_posix_lexically
 from git_paths import decode_git_c_quoted_path
@@ -857,31 +858,14 @@ class ReviewTelemetry:
 
     def _materialize_manifest(self, status: str) -> None:
         """Atomically refresh the run manifest without affecting telemetry."""
-        temp_path = None
         try:
             manifest_path = self.manifest_path
             if not manifest_path:
                 return
             manifest = self._build_manifest(status)
-            manifest_dir = os.path.dirname(manifest_path) or "."
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                delete=False,
-                dir=manifest_dir,
-                encoding="utf-8",
-            ) as temp_file:
-                temp_path = temp_file.name
-                json.dump(manifest, temp_file, indent=2, sort_keys=True)
-                temp_file.flush()
-            os.replace(temp_path, manifest_path)
+            atomic_write_json(manifest_path, manifest)
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             pass
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
 
     def _read_first_event(self) -> Optional[dict]:
         """Read the immutable first JSONL event (the pipeline_start line).
