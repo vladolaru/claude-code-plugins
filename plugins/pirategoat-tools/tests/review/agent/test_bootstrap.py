@@ -157,6 +157,29 @@ class TestPersistDeferredSidecar:
             str(output_file), "security-reviewer", ["src/deferred.php"], []
         )
 
+    def test_dedupes_deferred_files_order_preserving(self, tmp_path):
+        """A multi-domain agent's secondary-domain scope render can repeat
+        a file already budget-exceeded in the primary domain's sidecar —
+        load_scope_facts() concatenates every summary's
+        budget_exceeded_files without deduping. persist_deferred_sidecar
+        must not publish that duplicate: it inflates len(deferred_files),
+        the total manifest_sections.build_coverage_manifest reconciles
+        the agent's own claimed+declared+autofilled accounting against."""
+        _mod.persist_deferred_sidecar(
+            str(tmp_path),
+            "security-reviewer",
+            ["src/a.php", "src/b.php", "src/a.php"],
+            [],
+        )
+
+        payload = json.loads(
+            (tmp_path / "security-deferred-files.json").read_text()
+        )
+        assert payload == {
+            "schema": 1,
+            "deferred_files": ["src/a.php", "src/b.php"],
+        }
+
 
 class TestExtractProtocolSections:
     """Skip-list extraction on synthetic markdown."""

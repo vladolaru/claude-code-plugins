@@ -29,6 +29,21 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# reviewer_names.py is a leaf module (stdlib only, no review-internal
+# imports) precisely so this import can never re-enter this file: an
+# earlier version defined derive_reviewer_name() here and one more
+# caller (manifest_sections.py) importing it from bootstrap re-entered
+# bootstrap mid-initialization, silently breaking the telemetry load
+# below (ReviewTelemetry became None). Same _SCRIPTS_DIR resolution
+# scope.py already uses from this same directory depth.
+_SCRIPTS_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from review.reviewer_names import derive_reviewer_name
+
 # Import telemetry (parent directory script, best-effort)
 try:
     _telemetry_spec = importlib.util.spec_from_file_location(
@@ -246,24 +261,6 @@ def run_scope_discovery(
     # Script outputs to stdout for agent consumption
     output = stdout if stdout else stderr
     return rc, output
-
-
-def derive_reviewer_name(agent_name: str) -> str:
-    """Derive the reviewer output name from agent name.
-
-    Removes '-reviewer' suffix for output file naming.
-    e.g. 'security-reviewer' -> 'security', 'code-reviewer' -> 'code'
-
-    Per-agent artifacts in OUTPUT_DIR follow one of two naming conventions;
-    pick the matching one when adding a new per-agent artifact:
-    - Human/deliverable-facing artifacts use this short reviewer_name:
-      '<reviewer_name>-review.json'.
-    - Internal/orchestration-facing artifacts keyed on args.agent use the full
-      agent_name: '<agent_name>.started', '<agent_name>-scoped-diff.patch'.
-    """
-    if agent_name.endswith("-reviewer"):
-        return agent_name[: -len("-reviewer")]
-    return agent_name
 
 
 def extract_pr_number(scope_output: str) -> Optional[str]:
@@ -1336,6 +1333,20 @@ def persist_deferred_sidecar(output_dir, effective_agent_name,
     # (per-instance) identity — and adapter ref-mode instances must not collide
     # on one shared template-named file. List-only files are in scope but are
     # not budget-deferred, so they do not belong in the authoritative set.
+    #
+    # deferred_files is deduped here, order-preserving, the same
+    # dict.fromkeys() shape telemetry_scope_paths already uses next to its
+    # own call site: a multi-domain agent's secondary-domain scope render
+    # can list a file already budget-exceeded in the primary domain's
+    # sidecar, and load_scope_facts() concatenates every summary's
+    # budget_exceeded_files without deduping. An undeduped sidecar makes
+    # this the one place a duplicate reaches a DOWNSTREAM consumer: it
+    # inflates len(deferred_files) — the total build_coverage_manifest's
+    # deferred_total_by_agent reads and reconciles claimed+declared+
+    # autofilled against — while save()'s own known_deferred is a
+    # frozenset and never inflates, so an undeduped total would fail that
+    # reconciliation on a correctly-behaving reviewer.
+    deferred_files = list(dict.fromkeys(deferred_files))
     deferred_sidecar = os.path.join(
         output_dir,
         f"{derive_reviewer_name(effective_agent_name)}-deferred-files.json",

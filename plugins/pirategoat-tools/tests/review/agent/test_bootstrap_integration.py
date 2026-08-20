@@ -1689,6 +1689,49 @@ class TestOutputFilenameConsistency:
         assert f"{tmp_path}/dead-code-review.md" not in output
 
 
+class TestBootstrapImportDoesNotBreakTelemetry:
+    """Importing `review.agent.bootstrap` first must leave a working
+    `ReviewTelemetry` — a real regression, not a hypothetical one.
+
+    `derive_reviewer_name()` used to live in bootstrap.py itself; the day
+    `manifest_sections.py` started importing it FROM bootstrap
+    (`from .agent.bootstrap import derive_reviewer_name`), a
+    package-qualified `import review.agent.bootstrap` re-entered
+    bootstrap mid-initialization: bootstrap's own top-level telemetry
+    load (`spec_from_file_location` + `exec_module` on `telemetry.py`)
+    runs `telemetry.py`'s top level, which falls back to
+    `from review import manifest_sections`, which in turn tried
+    `from .agent.bootstrap import derive_reviewer_name` — but
+    `sys.modules['review.agent.bootstrap']` was still the PARTIAL module
+    from step one, with `derive_reviewer_name` not yet defined (it sat
+    after the telemetry-loading block in file order). That raised
+    ImportError, caught by telemetry's own best-effort try/except, and
+    `ReviewTelemetry` silently became `None`.
+
+    Must run in a fresh subprocess: the in-process `sys.modules` cache
+    from every other test in this file (and pytest's own collection
+    order) would otherwise make this test pass by accident depending on
+    what already imported what.
+    """
+
+    def test_import_bootstrap_first_leaves_telemetry_working(self):
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import review.agent.bootstrap as bootstrap\n"
+                "assert bootstrap.ReviewTelemetry is not None, "
+                "'ReviewTelemetry is None — import cycle regression'\n"
+                "print('OK')",
+            ],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(SCRIPTS_DIR),
+        )
+        assert result.returncode == 0, (
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert result.stdout.strip() == "OK"
+
+
 def test_ecosystem_integration_reviewer_registered():
     """ecosystem-integration-reviewer is in the registry with correct shape."""
     import json

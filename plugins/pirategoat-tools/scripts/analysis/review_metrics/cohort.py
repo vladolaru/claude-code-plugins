@@ -275,9 +275,25 @@ def _aggregate_deferred_honesty(
     availability gate) but additionally requires the run to actually carry
     `deferred_honesty_by_agent` — a run with complete coverage but no such
     key predates this feature and must not count as a measured zero.
+
+    A run whose `deferred_honesty_by_agent` is present but EMPTY (`{}`) is
+    a further distinct case: every dispatched reviewer was a legacy
+    producer (no claims-capable output), so the key exists but nothing
+    about the split was actually measurable. `measured_runs` only counts
+    when at least one agent contributed real counts — an all-legacy run
+    must not read as "measured, zero", the exact confusion this feature
+    exists to eliminate one level up. `measured_agents`/`unmeasured_agents`
+    make that same distinction visible at agent granularity: unmeasured
+    agents are those in `deferred_total_by_agent` (the system saw a
+    deferred-files sidecar for them) but absent from
+    `deferred_honesty_by_agent` (their own review JSON never claimed
+    anything) — derived as a set difference, counted whether or not the
+    run as a whole clears the measured_runs bar.
     """
     counts = Counter()
     measured_runs = 0
+    measured_agents = 0
+    unmeasured_agents = 0
     for run in runs:
         if run.get("metric_availability", {}).get("coverage") != "complete":
             continue
@@ -287,6 +303,13 @@ def _aggregate_deferred_honesty(
         by_agent = coverage.get("deferred_honesty_by_agent")
         if not isinstance(by_agent, dict):
             continue
+        total_by_agent = coverage.get("deferred_total_by_agent")
+        total_by_agent = total_by_agent if isinstance(total_by_agent, dict) else {}
+        unmeasured_agents += len(set(total_by_agent) - set(by_agent))
+        if not by_agent:
+            continue
+        measured_runs += 1
+        measured_agents += len(by_agent)
         for agent_counts in by_agent.values():
             if not isinstance(agent_counts, dict):
                 continue
@@ -294,13 +317,14 @@ def _aggregate_deferred_honesty(
                 value = agent_counts.get(name)
                 if isinstance(value, int) and not isinstance(value, bool):
                     counts[name] += value
-        measured_runs += 1
     return {
         **{
             name: counts[name] if measured_runs else None
             for name in _DEFERRED_HONESTY_FIELDS
         },
         "measured_runs": measured_runs,
+        "measured_agents": measured_agents,
+        "unmeasured_agents": unmeasured_agents,
         "availability": availability["coverage"],
     }
 

@@ -42,6 +42,7 @@ try:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
+    from .reviewer_names import derive_reviewer_name
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
@@ -51,6 +52,7 @@ except ImportError:
         SKIPPED_STATUSES,
         validate_dispatch_plan_agents,
     )
+    from review.reviewer_names import derive_reviewer_name
 
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
@@ -60,15 +62,10 @@ DEFAULT_POLL_INTERVAL_SECONDS = 1.5  # grain at which --wait re-checks status
 def _reviewer_filename(agent_name: str) -> str:
     """Derive the review filename from the agent name.
 
-    Matches bootstrap.py's derive_reviewer_name():
     'security-reviewer' -> 'security-review.json'
     'code-reviewer' -> 'code-review.json'
     """
-    if agent_name.endswith("-reviewer"):
-        base = agent_name[: -len("-reviewer")]
-    else:
-        base = agent_name
-    return f"{base}-review.json"
+    return f"{derive_reviewer_name(agent_name)}-review.json"
 
 
 def check_status(output_dir: str, timeout_seconds: int = None) -> dict:

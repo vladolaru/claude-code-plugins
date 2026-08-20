@@ -28,6 +28,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    from .reviewer_names import derive_reviewer_name
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review.reviewer_names import derive_reviewer_name
+
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 # Files in the output directory that are NOT agent review outputs.
@@ -156,18 +164,8 @@ def extract_host_banner(output_dir: str) -> Optional[Dict[str, Any]]:
 
 
 def _review_stem(agent: str) -> str:
-    """Map an agent name to its review-file stem.
-
-    Review files are named derive_reviewer_name(agent) + "-review.json":
-    only a TRAILING "-reviewer" becomes "-review". A blanket replace()
-    would corrupt names carrying "reviewer" mid-string (adapter instances
-    are "repo-<id>-reviewer", and <id> is repo-authored — e.g.
-    "api-reviewer-v2" yields "repo-api-reviewer-v2-reviewer", whose stem
-    is "repo-api-reviewer-v2-review").
-    """
-    if agent.endswith("-reviewer"):
-        return f"{agent[: -len('-reviewer')]}-review"
-    return agent
+    """Map an agent name to its review-file stem: derive_reviewer_name(agent) + "-review"."""
+    return f"{derive_reviewer_name(agent)}-review"
 
 
 def _load_review_payload(output_dir: str, agent: str) -> Optional[Dict[str, Any]]:

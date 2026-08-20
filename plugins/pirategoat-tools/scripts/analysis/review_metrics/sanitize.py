@@ -1029,6 +1029,13 @@ def _sanitize_coverage(value: object) -> dict[str, Any] | None:
     # read from. A mismatch means the two sources disagree about a fact
     # `save()` guarantees, so the section fails closed rather than
     # publish self-contradictory numbers.
+    #
+    # This is a COUNT checksum, not a set identity: it proves the three
+    # buckets add up to the right total, not that any individual file
+    # landed in the right bucket — a file counted as declared instead of
+    # autofilled (or vice versa) still sums correctly, so this check
+    # alone cannot catch a mis-attribution between the two, only a
+    # mis-count against the total.
     honesty_by_agent = result.get("deferred_honesty_by_agent")
     total_by_agent = result.get("deferred_total_by_agent")
     if isinstance(honesty_by_agent, dict) and isinstance(total_by_agent, dict):

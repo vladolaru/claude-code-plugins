@@ -4249,7 +4249,19 @@ class TestDeferredHonestyCoverage:
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
 
-        assert measured["coverage"] is not None
+        # Exact values, not just "coverage survived" — a sanitizer that
+        # silently dropped the two new keys (while leaving the rest of
+        # `coverage` intact) would still pass an `is not None` check.
+        assert measured["coverage"]["deferred_honesty_by_agent"] == {
+            "code-reviewer": {
+                "deferred_reviewed": 1,
+                "declared_unreviewed": 1,
+                "unreviewed_autofilled": 1,
+            },
+        }
+        assert measured["coverage"]["deferred_total_by_agent"] == {
+            "code-reviewer": 3
+        }
         assert measured["metric_availability"]["coverage"] == "complete"
 
     def test_reconciliation_mismatch_fails_the_whole_coverage_section(
@@ -4312,14 +4324,45 @@ class TestDeferredHonestyCoverage:
         assert measured["metric_availability"]["coverage"] == "missing"
         assert "PRIVATE PROSE" not in json.dumps(measured)
 
-    def test_negative_or_missing_honesty_field_fails_closed(self, tmp_path):
+    @pytest.mark.parametrize(
+        "counts,case_id",
+        [
+            (
+                {
+                    "deferred_reviewed": -1,
+                    "declared_unreviewed": 0,
+                    "unreviewed_autofilled": 0,
+                },
+                "negative-value",
+            ),
+            (
+                # Missing "unreviewed_autofilled" entirely — the row-shape
+                # check is `set(counts) != _DEFERRED_HONESTY_FIELDS`, which
+                # a negative-value test alone never exercises (that case
+                # already has all three keys).
+                {"deferred_reviewed": 1, "declared_unreviewed": 0},
+                "missing-field",
+            ),
+            (
+                # An extra, unexpected field — the same set-equality check
+                # fails this direction too, not just "too few keys".
+                {
+                    "deferred_reviewed": 1,
+                    "declared_unreviewed": 0,
+                    "unreviewed_autofilled": 0,
+                    "unexpected_extra_field": 0,
+                },
+                "extra-field",
+            ),
+        ],
+        ids=["negative-value", "missing-field", "extra-field"],
+    )
+    def test_malformed_honesty_field_fails_closed(
+        self, tmp_path, counts, case_id
+    ):
         manifest = _manifest()
         manifest["coverage"]["deferred_honesty_by_agent"] = {
-            "code-reviewer": {
-                "deferred_reviewed": -1,
-                "declared_unreviewed": 0,
-                "unreviewed_autofilled": 0,
-            },
+            "code-reviewer": counts,
         }
 
         measured = measure_run(manifest, tmp_path, include_transcripts=False)
@@ -4357,6 +4400,8 @@ class TestDeferredHonestyCoverage:
         assert cohort["deferred_honesty"]["declared_unreviewed"] == 1
         assert cohort["deferred_honesty"]["unreviewed_autofilled"] == 1
         assert cohort["deferred_honesty"]["measured_runs"] == 2
+        assert cohort["deferred_honesty"]["measured_agents"] == 2
+        assert cohort["deferred_honesty"]["unmeasured_agents"] == 0
 
     def test_cohort_reports_none_when_no_run_is_measured(self):
         unmeasured = measure_run(
@@ -4369,15 +4414,72 @@ class TestDeferredHonestyCoverage:
         assert cohort["deferred_honesty"]["declared_unreviewed"] is None
         assert cohort["deferred_honesty"]["unreviewed_autofilled"] is None
         assert cohort["deferred_honesty"]["measured_runs"] == 0
+        assert cohort["deferred_honesty"]["measured_agents"] == 0
+        assert cohort["deferred_honesty"]["unmeasured_agents"] == 0
+
+    def test_cohort_all_legacy_run_is_not_a_measured_zero(self):
+        """A run whose coverage is complete but whose `deferred_honesty_by_agent`
+        is present-and-empty — every dispatched reviewer was a legacy
+        producer — must not count toward `measured_runs`. The system still
+        saw a deferred-files sidecar for that reviewer
+        (`deferred_total_by_agent` is non-empty), so it counts as an
+        unmeasured agent, not silence."""
+        all_legacy = _measured_manifest_with_coverage(
+            {}, deferred_total_by_agent={"code-reviewer": 3}
+        )
+
+        cohort = aggregate_cohort([all_legacy])
+
+        assert cohort["deferred_honesty"]["deferred_reviewed"] is None
+        assert cohort["deferred_honesty"]["declared_unreviewed"] is None
+        assert cohort["deferred_honesty"]["unreviewed_autofilled"] is None
+        assert cohort["deferred_honesty"]["measured_runs"] == 0
+        assert cohort["deferred_honesty"]["measured_agents"] == 0
+        assert cohort["deferred_honesty"]["unmeasured_agents"] == 1
+
+    def test_cohort_mixed_run_reports_measured_and_unmeasured_agents(self):
+        """One reviewer measured (claims-capable, in both maps), one
+        reviewer legacy (system saw its deferred sidecar, its own review
+        JSON never claimed anything) — both counts must be visible at
+        agent granularity, and the legacy agent's absence from
+        `deferred_honesty_by_agent` must not suppress the measured one's
+        counts from the run total."""
+        mixed = _measured_manifest_with_coverage(
+            {
+                "code-reviewer": {
+                    "deferred_reviewed": 1,
+                    "declared_unreviewed": 1,
+                    "unreviewed_autofilled": 0,
+                },
+            },
+            deferred_total_by_agent={
+                "code-reviewer": 2,
+                "tests-reviewer": 4,
+            },
+        )
+
+        cohort = aggregate_cohort([mixed])
+
+        assert cohort["deferred_honesty"]["measured_runs"] == 1
+        assert cohort["deferred_honesty"]["deferred_reviewed"] == 1
+        assert cohort["deferred_honesty"]["measured_agents"] == 1
+        assert cohort["deferred_honesty"]["unmeasured_agents"] == 1
 
 
 def _measured_manifest_with_coverage(
-    deferred_honesty_by_agent: dict, *, run_id: str = "run-1"
+    deferred_honesty_by_agent: dict,
+    *,
+    run_id: str = "run-1",
+    deferred_total_by_agent: dict | None = None,
 ) -> dict:
     manifest = _manifest(run_id)
     manifest["coverage"]["deferred_honesty_by_agent"] = (
         deferred_honesty_by_agent
     )
+    if deferred_total_by_agent is not None:
+        manifest["coverage"]["deferred_total_by_agent"] = (
+            deferred_total_by_agent
+        )
     return measure_run(manifest, "/nonexistent", include_transcripts=False)
 
 

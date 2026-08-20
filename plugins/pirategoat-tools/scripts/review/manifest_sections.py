@@ -12,7 +12,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional
 
 try:
-    from .agent.bootstrap import derive_reviewer_name
+    from .reviewer_names import derive_reviewer_name
     from .dependency_refresh import (
         _MAX_DIRTY_FILES,
         DEPENDENCY_REFRESH_SKIP_REASONS,
@@ -33,7 +33,7 @@ except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
-    from review.agent.bootstrap import derive_reviewer_name
+    from review.reviewer_names import derive_reviewer_name
     from review.dependency_refresh import (
         _MAX_DIRTY_FILES,
         DEPENDENCY_REFRESH_SKIP_REASONS,
@@ -382,6 +382,14 @@ def _load_deferred_honesty(output_dir: str, agent: str) -> Optional[Dict[str, in
     two separate lists — so ``declared_unreviewed`` is computed by
     subtracting, not by reading a field that does not exist.
 
+    Every count is a SET size, not a raw `len()` of the serialized list:
+    `add_unreviewed()`/`add_deferred_reviewed()` already de-duplicate on
+    the write path, so a `save()`-produced artifact never carries a
+    duplicate here, but a hand-rolled or malformed producer that bypassed
+    the builder could — and an inflated count from a repeated path is the
+    exact same class of bug `persist_deferred_sidecar`'s own dedupe fixes
+    on the denominator side (`_load_deferred_total`).
+
     Returns None when the review JSON is unreadable OR predates the
     ``deferred_reviewed`` key: that key is unconditionally serialized by
     every current producer (an empty list, never omitted or null), so its
@@ -393,19 +401,18 @@ def _load_deferred_honesty(output_dir: str, agent: str) -> Optional[Dict[str, in
     if data is None or "deferred_reviewed" not in data:
         return None
 
-    def _string_list(value: Any) -> List[str]:
+    def _string_set(value: Any) -> set:
         if not isinstance(value, list):
-            return []
-        return [item for item in value if isinstance(item, str)]
+            return set()
+        return {item for item in value if isinstance(item, str)}
 
-    claimed = _string_list(data.get("deferred_reviewed"))
-    unreviewed = _string_list(data.get("unreviewed"))
+    claimed = _string_set(data.get("deferred_reviewed"))
+    unreviewed = _string_set(data.get("unreviewed"))
     meta = data.get("meta")
-    autofilled = _string_list(
+    autofilled = _string_set(
         meta.get("unreviewed_autofilled") if isinstance(meta, dict) else None
     )
-    autofilled_set = set(autofilled)
-    declared = [path for path in unreviewed if path not in autofilled_set]
+    declared = unreviewed - autofilled
     return {
         "deferred_reviewed": len(claimed),
         "declared_unreviewed": len(declared),
@@ -423,6 +430,14 @@ def _load_deferred_total(output_dir: str, agent: str) -> Optional[int]:
     fit for pinning the reconciliation between the two. Returns None when
     the sidecar is absent, unreadable, or malformed: a run predating the
     sidecar, or one where the reviewer never ran.
+
+    Counted as a SET, mirroring `save()`'s own `frozenset` read of this
+    same sidecar (`_load_deferred_files`) — `persist_deferred_sidecar`
+    dedupes at write time, but this is the second, independent line of
+    defense: a sidecar written before that fix, or by any future producer
+    that forgets it, must still report the same total `save()` itself
+    reconciled against, not an inflated `len()` of a list that may carry
+    duplicates.
     """
     data = read_json_file(output_dir, f"{derive_reviewer_name(agent)}-deferred-files.json")
     if data is None:
@@ -430,7 +445,7 @@ def _load_deferred_total(output_dir: str, agent: str) -> Optional[int]:
     files = data.get("deferred_files")
     if not isinstance(files, list) or not all(isinstance(p, str) for p in files):
         return None
-    return len(files)
+    return len(set(files))
 
 
 def build_coverage_manifest(
