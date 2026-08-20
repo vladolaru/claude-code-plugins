@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -11,7 +10,8 @@ import pytest
 TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 
 sys.path.insert(0, str(TESTS_DIR))
-from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH, PIPELINE_TOTAL_STEPS as TOTAL_STEPS
+from conftest import PIPELINE_TOTAL_STEPS as TOTAL_STEPS
+from helpers.pipeline_process import hermetic_env, init_repo, run_pipeline
 
 
 @pytest.fixture(scope="module")
@@ -477,37 +477,40 @@ class TestFormatOutput:
 class TestCLIIntegration:
     """Subprocess tests for the CLI."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        """run_pipeline's cwd has no default — see its docstring. Isolate
+        every subprocess call in this class to a throwaway repo at
+        tmp_path so none of them can touch the real checkout."""
+        init_repo(tmp_path)
 
     def test_step_1_pr_mode_exits_0(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
 
     def test_step_1_full_mode_exits_0(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
 
     def test_step_1_incremental_mode_exits_0(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "incremental",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--mode", "incremental",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
 
     def test_invalid_step_exits_1(self, tmp_path):
-        r = self._run("--step", "99", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "99", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 1
 
     def test_missing_mode_exits_error(self, tmp_path):
-        r = self._run("--step", "1", "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode != 0
 
     def test_writes_run_config_and_pipeline_state(self, tmp_path):
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         config_path = tmp_path / "run-config.json"
         state_path = tmp_path / "pipeline-state.json"
         assert config_path.is_file()
@@ -524,8 +527,8 @@ class TestCLIIntegration:
         runs. Without it, a durable run directory could not be attributed
         to a plugin version once its telemetry log is gone.
         """
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         expected = mod._detect_plugin_version()
         assert expected  # source checkout must resolve a version
@@ -540,7 +543,7 @@ class TestCLIIntegration:
         (tmp_path / "run-config.json").write_text(json.dumps({
             "mode": "pr", "pr_number": "42", "interactive": False,
         }))
-        self._run("--step", "1", "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["plugin_version"] == mod._detect_plugin_version()
 
@@ -553,22 +556,22 @@ class TestCLIIntegration:
         (tmp_path / "run-config.json").write_text(json.dumps({
             "mode": "pr", "pr_number": "42", "plugin_version": "0.0.1",
         }))
-        self._run("--step", "1", "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["plugin_version"] == mod._detect_plugin_version()
         assert config["plugin_version"] != "0.0.1"
 
     def test_workspace_params_persisted_to_state(self, tmp_path):
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--original-branch", "develop", "--stash-ref", "abc123")
+                   "--original-branch", "develop", "--stash-ref", "abc123", cwd=tmp_path)
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
 
     def test_mode_required_when_no_config(self, tmp_path):
         """First call must provide --mode."""
-        r = self._run("--step", "1", "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode != 0
 
     def test_step_1_clears_stale_artifacts(self, tmp_path):
@@ -588,8 +591,8 @@ class TestCLIIntegration:
         # Seed files that should be PRESERVED
         (tmp_path / "run-config.json").write_text('{"mode": "pr", "pr_number": "42"}')
         (tmp_path / ".branch-review-baseline.json").write_text('{"preserved": true}')
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         # Stale artifacts should be gone
         assert not (tmp_path / "dispatch-plan.json").exists()
         assert not (tmp_path / "review-findings.json").exists()
@@ -614,8 +617,8 @@ class TestCLIIntegration:
             '{"schema": 1, "repo_root": "/stale", "entries": []}'
         )
         (tmp_path / "worktree-hygiene.json").write_text('{"status": "clean"}')
-        self._run("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert not (tmp_path / ".worktree-baseline.json").exists()
         assert not (tmp_path / "worktree-hygiene.json").exists()
 
@@ -629,8 +632,8 @@ class TestCLIIntegration:
         (tmp_path / "usage-snapshot.json").write_text(
             '{"schema": 1, "availability": {"subagents": "complete"}}'
         )
-        self._run("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert not (tmp_path / "usage-snapshot.json").exists()
 
     def test_step_1_clears_per_agent_and_reconciliation_artifacts(self, tmp_path):
@@ -651,8 +654,8 @@ class TestCLIIntegration:
         (tmp_path / "reconciliation-context.json").write_text('{"stale": true}')
         (tmp_path / "reconciliation-context.md").write_text("stale")
         (tmp_path / "critic-context.md").write_text("stale")
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
         assert not (tmp_path / "security-review.md").exists()
         assert not (tmp_path / "security-reviewer-scope-summary.json").exists()
         assert not (tmp_path / "a11y-reviewer-scope-summary-config-ops.json").exists()
@@ -675,8 +678,8 @@ class TestCLIIntegration:
             "output": {"directory": "/stale/output"},
         }))
 
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
 
         assert json.loads((tmp_path / "review-context.json").read_text()) == {
             "output": {"directory": str(tmp_path)},
@@ -700,7 +703,7 @@ class TestCLIIntegration:
         }))
         (tmp_path / "review-context.json").write_text(json.dumps(context))
 
-        result = self._run("--step", "1", "--output-dir", str(tmp_path))
+        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
 
         assert result.returncode == 0
         assert json.loads((tmp_path / "review-context.json").read_text()) == context
@@ -708,14 +711,14 @@ class TestCLIIntegration:
     def test_step_1_clears_change_purpose(self, tmp_path):
         """Step 1 should clear stale change-purpose.md from previous runs."""
         (tmp_path / "change-purpose.md").write_text("Old change purpose from previous review.")
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
         assert not (tmp_path / "change-purpose.md").exists(), "Stale change-purpose.md should be cleared"
 
     def test_step_1_writes_run_id(self, tmp_path):
         """Step 1 should write a run_id to pipeline-state.json."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert "run_id" in state
         assert len(state["run_id"]) > 0
@@ -727,9 +730,10 @@ class TestCLIIntegration:
             "session_id": "session-stale",
         }))
 
-        result = self._run(
+        result = run_pipeline(
             "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
             "--session-id", "session-current",
+            cwd=tmp_path,
         )
 
         assert result.returncode == 0
@@ -749,8 +753,9 @@ class TestCLIIntegration:
             "session_id": "session-stale",
         }))
 
-        result = self._run(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path)
+        result = run_pipeline(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
         )
 
         assert result.returncode == 0
@@ -768,7 +773,7 @@ class TestCLIIntegration:
             "git": {"merge_base": "abc123"},
         }))
 
-        result = self._run("--step", "1", "--output-dir", str(tmp_path))
+        result = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
 
         assert result.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
@@ -778,8 +783,8 @@ class TestCLIIntegration:
         first = tmp_path / "first"
         second = tmp_path / "second"
 
-        self._run("--step", "1", "--mode", "full", "--output-dir", str(first))
-        self._run("--step", "1", "--mode", "full", "--output-dir", str(second))
+        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(first), cwd=tmp_path)
+        run_pipeline("--step", "1", "--mode", "full", "--output-dir", str(second), cwd=tmp_path)
 
         first_state = json.loads((first / "pipeline-state.json").read_text())
         second_state = json.loads((second / "pipeline-state.json").read_text())
@@ -789,14 +794,14 @@ class TestCLIIntegration:
 class TestSkippedStepRecording:
     """Steps the router passes over are recorded in durable pipeline state."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
 
     def test_skipped_steps_recorded_with_condition(self, tmp_path):
         """Branch mode passes over step 2 — needs_workspace_setup is PR-only."""
-        r = self._run("--step", "1", "--mode", "full",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
@@ -806,10 +811,10 @@ class TestSkippedStepRecording:
 
     def test_trailing_skip_recorded_at_last_active_step(self, tmp_path):
         """Step 12 follows the last active step, so step 11 must record it."""
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
-        r = self._run("--step", "11", "--mode", "full",
-                       "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        r = run_pipeline("--step", "11", "--mode", "full",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         skipped = {s["step"]: s for s in state["skipped_steps"]}
@@ -819,12 +824,12 @@ class TestSkippedStepRecording:
 
     def test_skip_records_are_not_duplicated(self, tmp_path):
         """Re-invoking the same step records each passed-over step once."""
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
-        self._run("--step", "11", "--mode", "full",
-                   "--output-dir", str(tmp_path))
-        self._run("--step", "11", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        run_pipeline("--step", "11", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
+        run_pipeline("--step", "11", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         recorded = [entry["step"] for entry in state["skipped_steps"]]
         assert recorded == sorted(set(recorded))
@@ -832,8 +837,8 @@ class TestSkippedStepRecording:
 
     def test_active_steps_are_never_recorded_as_skipped(self, tmp_path):
         """A step the router runs must not appear in the skip ledger."""
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         recorded = {entry["step"] for entry in state["skipped_steps"]}
         assert recorded.isdisjoint({1, 3, 5, 6, 7, 8, 9, 10, 11})
@@ -842,23 +847,23 @@ class TestSkippedStepRecording:
 class TestQuickModeConfig:
     """--quick CLI flag is stored in run-config.json and persists across steps."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
 
     def test_quick_flag_stored_in_config(self, tmp_path):
         """Passing --quick stores quick=true in run-config.json."""
-        r = self._run("--step", "1", "--mode", "pr",
+        r = run_pipeline("--step", "1", "--mode", "pr",
                        "--output-dir", str(tmp_path), "--pr-number", "42",
-                       "--quick")
+                       "--quick", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
 
     def test_no_quick_flag_defaults_false(self, tmp_path):
         """Without --quick, config has quick=false."""
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config.get("quick") is False
@@ -877,28 +882,28 @@ class TestQuickModeConfig:
         """Rerunning step 1 with --quick on a previously non-quick output dir
         should update run-config.json to quick=true."""
         # First run: no --quick
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config.get("quick") is False
         # Second run: with --quick (same output dir)
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
 
     def test_quick_flag_resets_on_rerun_without_flag(self, tmp_path):
         """Rerunning step 1 WITHOUT --quick after a quick run should reset to false."""
         # First run: with --quick
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
         # Second run: without --quick (same output dir)
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is False
 
@@ -907,9 +912,9 @@ class TestQuickModeConfig:
         should NOT reset the pre-written quick=true. The bot writes the correct
         value in run-config.json and may not pass --quick on subsequent calls."""
         # Step 1: with --quick
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         # Simulate bot mode by setting interactive=false and providing
         # the review-context.json that bot mode requires
         config_path = tmp_path / "run-config.json"
@@ -921,8 +926,8 @@ class TestQuickModeConfig:
         }))
         assert config["quick"] is True
         # Step 1 rerun: without --quick (bot mode)
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads(config_path.read_text())
         assert config["quick"] is True, \
@@ -932,15 +937,15 @@ class TestQuickModeConfig:
         """In interactive mode, re-invoking step 1 without --quick should still
         reset quick to false (existing behavior for human-driven reruns)."""
         # Step 1: with --quick
-        self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                   "--quick")
+                   "--quick", cwd=tmp_path)
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is True
         assert config.get("interactive") is True  # default
         # Step 1 rerun: without --quick (interactive rerun)
-        r = self._run("--step", "1", "--mode", "pr",
-                       "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                       "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["quick"] is False, \
@@ -950,22 +955,24 @@ class TestQuickModeConfig:
 class TestHostConfig:
     """The first pipeline call selects a host for all later briefings."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
 
     def test_claude_is_the_backward_compatible_default(self, tmp_path):
-        result = self._run(
-            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path)
+        result = run_pipeline(
+            "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
+            cwd=tmp_path,
         )
         assert result.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["host"] == "claude"
 
     def test_codex_host_is_persisted(self, tmp_path):
-        result = self._run(
+        result = run_pipeline(
             "--step", "1", "--mode", "full", "--output-dir", str(tmp_path),
             "--host", "codex",
+            cwd=tmp_path,
         )
         assert result.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
@@ -975,13 +982,9 @@ class TestHostConfig:
 class TestDependencyRefreshConfig:
     """--refresh-deps is stored in run-config.json; hard-off non-interactive."""
 
-    def _run(self, *args, env=None):
-        # Hermetic by default: never read the developer's real
-        # ~/.config/pirategoat/config.json trust declaration.
-        if env is None:
-            env = {**os.environ, "XDG_CONFIG_HOME": "/nonexistent-xdg"}
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        init_repo(tmp_path)
 
     def _trusting_env(self, tmp_path):
         config_dir = tmp_path / "xdg" / "pirategoat"
@@ -991,24 +994,26 @@ class TestDependencyRefreshConfig:
         return {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
 
     def test_flag_stored_in_config(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "pr",
+        r = run_pipeline("--step", "1", "--mode", "pr",
                       "--output-dir", str(tmp_path), "--pr-number", "42",
-                      "--refresh-deps")
+                      "--refresh-deps", cwd=tmp_path, env=hermetic_env())
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
 
     def test_no_flag_defaults_false(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      cwd=tmp_path, env=hermetic_env())
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config.get("refresh_dependencies") is False
 
     def test_non_interactive_cli_flag_is_forced_off(self, tmp_path):
-        r = self._run("--step", "1", "--mode", "full",
+        r = run_pipeline("--step", "1", "--mode", "full",
                       "--output-dir", str(tmp_path),
-                      "--interactive", "false", "--refresh-deps")
+                      "--interactive", "false", "--refresh-deps",
+                      cwd=tmp_path, env=hermetic_env())
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
@@ -1021,7 +1026,8 @@ class TestDependencyRefreshConfig:
             "mode": "full", "interactive": False,
             "refresh_dependencies": True,
         }))
-        r = self._run("--step", "1", "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path),
+                      cwd=tmp_path, env=hermetic_env())
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
@@ -1029,24 +1035,27 @@ class TestDependencyRefreshConfig:
     def test_interactive_rerun_syncs_flag_from_cli(self, tmp_path):
         # First run without the flag; rerun with it — CLI is authoritative
         # on interactive reruns, matching --quick semantics.
-        self._run("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path), "--pr-number", "42")
-        r = self._run("--step", "1", "--mode", "pr",
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42",
+                  cwd=tmp_path, env=hermetic_env())
+        r = run_pipeline("--step", "1", "--mode", "pr",
                       "--output-dir", str(tmp_path), "--pr-number", "42",
-                      "--refresh-deps")
+                      "--refresh-deps", cwd=tmp_path, env=hermetic_env())
         assert r.returncode == 0
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
         # And back off again
-        self._run("--step", "1", "--mode", "pr",
-                  "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(tmp_path), "--pr-number", "42",
+                  cwd=tmp_path, env=hermetic_env())
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
 
     def test_step_1_clears_stale_dependency_refresh_artifact(self, tmp_path):
         (tmp_path / "dependency-refresh.json").write_text("{}")
-        r = self._run("--step", "1", "--mode", "pr",
-                      "--output-dir", str(tmp_path), "--pr-number", "42")
+        r = run_pipeline("--step", "1", "--mode", "pr",
+                      "--output-dir", str(tmp_path), "--pr-number", "42",
+                      cwd=tmp_path, env=hermetic_env())
         assert r.returncode == 0
         assert not (tmp_path / "dependency-refresh.json").exists()
 
@@ -1054,29 +1063,29 @@ class TestDependencyRefreshConfig:
         # ~/.config/pirategoat/config.json declares interactive runs
         # dependency-trusted: no per-run flag needed.
         out = tmp_path / "out"
-        r = self._run("--step", "1", "--mode", "pr",
+        r = run_pipeline("--step", "1", "--mode", "pr",
                       "--output-dir", str(out), "--pr-number", "42",
-                      env=self._trusting_env(tmp_path))
+                      cwd=tmp_path, env=self._trusting_env(tmp_path))
         assert r.returncode == 0
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
 
     def test_no_refresh_deps_overrides_config_default(self, tmp_path):
         out = tmp_path / "out"
-        r = self._run("--step", "1", "--mode", "pr",
+        r = run_pipeline("--step", "1", "--mode", "pr",
                       "--output-dir", str(out), "--pr-number", "42",
                       "--no-refresh-deps",
-                      env=self._trusting_env(tmp_path))
+                      cwd=tmp_path, env=self._trusting_env(tmp_path))
         assert r.returncode == 0
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
 
     def test_user_config_never_applies_to_non_interactive(self, tmp_path):
         out = tmp_path / "out"
-        r = self._run("--step", "1", "--mode", "full",
+        r = run_pipeline("--step", "1", "--mode", "full",
                       "--output-dir", str(out),
                       "--interactive", "false",
-                      env=self._trusting_env(tmp_path))
+                      cwd=tmp_path, env=self._trusting_env(tmp_path))
         assert r.returncode == 0
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False
@@ -1086,10 +1095,12 @@ class TestDependencyRefreshConfig:
         # config default, not to off.
         out = tmp_path / "out"
         env = self._trusting_env(tmp_path)
-        self._run("--step", "1", "--mode", "pr",
-                  "--output-dir", str(out), "--pr-number", "42", env=env)
-        self._run("--step", "1", "--mode", "pr",
-                  "--output-dir", str(out), "--pr-number", "42", env=env)
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(out), "--pr-number", "42",
+                  cwd=tmp_path, env=env)
+        run_pipeline("--step", "1", "--mode", "pr",
+                  "--output-dir", str(out), "--pr-number", "42",
+                  cwd=tmp_path, env=env)
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is True
 
@@ -1099,9 +1110,9 @@ class TestDependencyRefreshConfig:
         (config_dir / "config.json").write_text("{not json")
         env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
         out = tmp_path / "out"
-        r = self._run("--step", "1", "--mode", "pr",
+        r = run_pipeline("--step", "1", "--mode", "pr",
                       "--output-dir", str(out), "--pr-number", "42",
-                      env=env)
+                      cwd=tmp_path, env=env)
         assert r.returncode == 0
         config = json.loads((out / "run-config.json").read_text())
         assert config["refresh_dependencies"] is False

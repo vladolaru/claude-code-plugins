@@ -2,7 +2,6 @@
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -12,6 +11,7 @@ TESTS_DIR = Path(__file__).resolve().parent.parent  # review/ -> tests/
 
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
+from helpers.pipeline_process import init_repo, run_pipeline
 from conftest import PIPELINE_SCRIPT_PATH as SCRIPT_PATH
 
 
@@ -1768,9 +1768,12 @@ class TestStep10DecisionCritic:
 class TestCriticVerdictPersistence:
     """Critic verdict is persisted to file and read back by step 11."""
 
-    def _run(self, *args):
-        cmd = [sys.executable, str(SCRIPT_PATH)] + list(args)
-        return subprocess.run(cmd, capture_output=True, text=True)
+    @pytest.fixture(autouse=True)
+    def _isolated_repo(self, tmp_path):
+        """run_pipeline's cwd has no default — see its docstring. Isolate
+        every subprocess call in this class to a throwaway repo at
+        tmp_path so none of them can touch the real checkout."""
+        init_repo(tmp_path)
 
     def test_step_10_instructs_writing_critic_verdict_file(self, mod, tmp_path):
         """Step 10 should instruct writing decision-critic-verdict.json."""
@@ -1782,43 +1785,43 @@ class TestCriticVerdictPersistence:
 
     def test_step_11_reads_critic_verdict_from_file(self, tmp_path):
         """Step 11 should read decision-critic-verdict.json into state."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (tmp_path / "review-report.md").write_text("# Review")
         (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
         (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
-        r = self._run("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "STAND"
 
     def test_step_11_critic_verdict_unavailable_when_file_missing(self, tmp_path):
         """Step 11 should report critic_verdict as unavailable when file is missing."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (tmp_path / "review-report.md").write_text("# Review")
         (tmp_path / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
-        r = self._run("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
 
     def test_step_11_maps_skipped_critic_to_unavailable(self, tmp_path):
         """SKIPPED verdict (quick mode) should map to unavailable for downstream consumers."""
-        self._run("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42")
+        run_pipeline("--step", "1", "--mode", "pr",
+                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         (tmp_path / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (tmp_path / "review-report.md").write_text("# Review")
         (tmp_path / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
         (tmp_path / "decision-critic-verdict.json").write_text(
             '{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: approve"}'
         )
-        r = self._run("--step", "11", "--mode", "pr",
-                       "--output-dir", str(tmp_path))
+        r = run_pipeline("--step", "11", "--mode", "pr",
+                       "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
         assert result["critic_verdict"] == "unavailable"
@@ -1826,8 +1829,8 @@ class TestCriticVerdictPersistence:
     def test_step_1_clears_stale_critic_verdict(self, tmp_path):
         """Step 1 should clear decision-critic-verdict.json from previous runs."""
         (tmp_path / "decision-critic-verdict.json").write_text('{"verdict": "REVISE"}')
-        self._run("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path))
+        run_pipeline("--step", "1", "--mode", "full",
+                   "--output-dir", str(tmp_path), cwd=tmp_path)
         assert not (tmp_path / "decision-critic-verdict.json").exists()
 
 
