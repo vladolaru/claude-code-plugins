@@ -1767,6 +1767,8 @@ class TestNotDiffedContractIsDelivered:
             "protocol violation",              # declaring on unspent budget
             "false statement",                 # citing budget you did not spend
             "never count a declared-unreviewed file",
+            "is a contradiction save() rejects",  # declare-vs-claim, moved from
+                                                   # '## ReviewOutputBuilder API'
         ],
     )
     def test_contract_reaches_reviewer(self, tmp_path, phrase):
@@ -1779,6 +1781,7 @@ class TestNotDiffedContractIsDelivered:
         clean_scope = "=== REVIEW SCOPE ===\n=== FILES ===\nsrc/a.py  (+5 -1)\n"
         output = self._build(tmp_path, clean_scope, not_diffed_count=0)
         assert "Not reviewed (budget):" not in output
+        assert "is a contradiction save() rejects" not in output
 
     def test_contract_is_not_sourced_from_stripped_protocol(self):
         """The stripped protocol must not be the contract's only home.
@@ -1793,6 +1796,27 @@ class TestNotDiffedContractIsDelivered:
         assert "Not reviewed (budget):" not in delivered, (
             "Contract text placed in a stripped protocol section never reaches "
             "a reviewer — keep it in build_output()'s REVIEW BUDGET block."
+        )
+        assert "is a contradiction save() rejects" not in delivered, (
+            "The declare-vs-claim contradiction is policy, not mechanics "
+            "bootstrap performs — keep it in build_output()'s REVIEW BUDGET "
+            "block, the same as the rest of this contract."
+        )
+
+    def test_declare_claim_contradiction_was_moved_not_copied(self):
+        """Regression guard: the contradiction rule used to live ONLY in
+        reviewer-protocol.md's '## ReviewOutputBuilder API' section, which
+        bootstrap also strips (see REVIEWER_PROTOCOL_SKIP_SECTIONS) — so it
+        reached zero reviewers despite being taught. The fix moves the
+        teaching into build_output(); the source sentence must not survive
+        in the protocol file as a second, still-inert copy.
+        """
+        protocol = (
+            PLUGIN_ROOT / "agents" / "shared" / "reviewer-protocol.md"
+        ).read_text()
+        assert "declaring and claiming the same path is rejected" not in protocol, (
+            "the old sentence should have moved into build_output(), not "
+            "been left behind as a dead copy in a stripped section"
         )
 
     def test_renamed_scope_header_cannot_suppress_a_real_count(self, tmp_path):

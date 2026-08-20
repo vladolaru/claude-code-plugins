@@ -1068,7 +1068,12 @@ def build_output(
             lines.append("")
             # This contract lives here, not in reviewer-protocol.md: bootstrap
             # strips '## Scope Discovery', so policy placed there never reaches
-            # a reviewer. See REVIEWER_PROTOCOL_SKIP_SECTIONS.
+            # a reviewer. See REVIEWER_PROTOCOL_SKIP_SECTIONS. The
+            # declare-vs-claim contradiction sentence below was moved here
+            # from that same protocol's '## ReviewOutputBuilder API' section
+            # for the identical reason — also skip-listed, also reaching
+            # zero reviewers — rather than copied, so there is exactly one
+            # taught home for it.
             lines.append(
                 "Before writing output, every NOT DIFFED file must be either "
                 "claimed or declared — an APPROVE that silently ignores them is "
@@ -1082,6 +1087,11 @@ def build_output(
                 "Anything you leave in neither list is auto-declared unreviewed "
                 "at save time and marked auto-filled: silence records a "
                 "coverage gap, it never counts as review. "
+                "A file is one or the other: declaring it with "
+                "add_unreviewed() and ALSO claiming it with "
+                "add_deferred_reviewed() is a contradiction save() rejects "
+                "outright, not a way to hedge — call exactly one of the two "
+                "for a given path. "
                 "Declaring is for genuine budget exhaustion only: a declaration "
                 "written with most of your budget unspent is a protocol "
                 "violation, and citing your budget or ceiling as the reason for "
