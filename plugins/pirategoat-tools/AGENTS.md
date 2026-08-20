@@ -144,7 +144,7 @@ module is exempt — do not add inline containment checks or an allowlist.
 
 The key is always the integer `schema` — never `schema_version`, never a `version` string. Both of those existed and were retired in 1.114.0.
 
-Not every JSON file in a run directory carries one, and this rule does not ask you to add it to them. `pipeline-state.json`, `pipeline-result.json`, `run-config.json`, `dispatch-plan.json`, `review-verdict.json`, `reconciliation-context.json`, and the critic / dependency-refresh reports carry no `schema` and are read only by this plugin within a single run. The field earns its place where an artifact **outlives the run that wrote it, or is parsed by a consumer that did not write it** — that is the criterion for deciding whether a new artifact needs one. The families that meet it today:
+Not every JSON file in a run directory carries one, and this rule does not ask you to add it to them. `pipeline-state.json`, `dispatch-plan.json`, `review-verdict.json`, `reconciliation-context.json`, and the critic / dependency-refresh reports carry no `schema` and are read only by this plugin within a single run. `pipeline-result.json` and `run-config.json` also carry no `schema` even though pirategoat-bot parses the former and writes the latter (see Cross-Repo Dependency: pirategoat-bot below) — that cross-repo contract is tracked by reading the bot's source before changing either file, not by the schema mechanism. The field earns its place where an artifact **outlives the run that wrote it, or is parsed by a different consumer within this plugin that did not write it** — that is the criterion for deciding whether a new artifact needs one. The families that meet it today:
 
 | Artifact | Producing constant |
 |---|---|
@@ -153,7 +153,7 @@ Not every JSON file in a run directory carries one, and this rule does not ask y
 | `synthesis-agents.json` | `LIFECYCLE_SCHEMA` — `scripts/review/synthesis_lifecycle.py` |
 | `usage-snapshot.json` | `SNAPSHOT_SCHEMA` — `scripts/analysis/usage_snapshot.py` |
 | `observed_reads` payload in transcript enrichment | `_OBSERVED_READS_SCHEMA` — `scripts/analysis/review_transcript.py`. The same-named constant in `review_metrics/contracts.py` is the *consumer's* expected value, and must be bumped in lockstep |
-| `review_run_metrics.py --format json` report | `_REPORT_SCHEMA` — `scripts/analysis/review_metrics/render.py` |
+| `review_run_metrics.py --format json` report | `_REPORT_SCHEMA` — `scripts/analysis/review_metrics/contracts.py` |
 | Per-agent sidecars: deferred files, advisory entitlement, scope summary, worktree baseline / hygiene | literal `1` at the write site |
 
 **Exception — `review-context.json` and `issue-context.json` carry `version: 1`, and that key is not ours.** pirategoat-bot writes both files and asserts on that field (`src/orchestrator-review.test.js`, `src/orchestrator-linear.test.js`). Renaming it to `schema` would break the bot. Leave it alone.
