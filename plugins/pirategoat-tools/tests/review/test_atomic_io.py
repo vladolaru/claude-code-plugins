@@ -82,23 +82,41 @@ class TestSameDirectoryTempFile:
         assert seen_dirs == [str(tmp_path)]
 
 
+def _calls_os_replace(source_path):
+    """True if the file's AST contains a call-shaped `os.replace` access.
+
+    An AST check (not a text scan) so mentioning `os.replace` in a
+    comment or docstring — like atomic_io.py's own module docstring, or
+    critic_adjustments.py's docstring naming the mechanism it delegates
+    to — is free. Only an actual `os.replace(...)`-shaped attribute
+    access counts as a spelling of the pattern this test guards against.
+    """
+    import ast
+
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    return any(
+        isinstance(node, ast.Attribute)
+        and node.attr == "replace"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+        for node in ast.walk(tree)
+    )
+
+
 class TestNoStrayAtomicSpellings:
     def test_no_stray_atomic_spellings(self):
         """Pins the consolidation against future drift: no file anywhere
         under scripts/ may call os.replace outside atomic_io.py, except
         agent/output.py's deliberately different staged-nonce protocol.
-        Triggers on `os.replace` alone (with or without NamedTemporaryFile
-        alongside it) — a second, differently-shaped atomic-write spelling
-        is still a spelling this consolidation is meant to catch."""
+        AST-matched (not text-matched), so a comment or docstring naming
+        `os.replace` cannot trip this — only an actual call can."""
         allowed = {
             SCRIPTS_DIR / "review" / "atomic_io.py",
             SCRIPTS_DIR / "review" / "agent" / "output.py",
         }
-        hits = set()
-        for path in SCRIPTS_DIR.rglob("*.py"):
-            text = path.read_text(encoding="utf-8")
-            if "os.replace" in text:
-                hits.add(path)
+        hits = {
+            path for path in SCRIPTS_DIR.rglob("*.py") if _calls_os_replace(path)
+        }
 
         stray = hits - allowed
         assert not stray, f"Stray atomic-write spelling(s) found: {sorted(stray)}"

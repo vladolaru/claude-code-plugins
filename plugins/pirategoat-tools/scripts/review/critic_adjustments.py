@@ -12,8 +12,8 @@ override recorded beside it.
 
 A half-applied batch must never exist on disk, which takes more than
 validating first. Each file is replaced atomically via atomic_io's shared
-`atomic_write_json` (see that module for the replace mechanism), and
-application is recorded on BOTH sides: every pending entry carries a
+`atomic_write_json` (temp file in the same directory, then os.replace),
+and application is recorded on BOTH sides: every pending entry carries a
 stable `adjustment_id`, and the findings file lists the ids it already
 contains under `applied_critic_adjustments`. Ids are allocated and
 persisted before the findings write, so every crash point converges on

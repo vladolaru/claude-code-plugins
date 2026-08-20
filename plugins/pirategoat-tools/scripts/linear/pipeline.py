@@ -37,7 +37,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
-def _load_exact_path_module(name: str, path: Path):
+def _load_exact_path_module(name: str, path: Path, unavailable: str):
     """Load a module by exact file path, not package import.
 
     This script runs as a standalone subprocess (bot mode) or is loaded
@@ -45,16 +45,27 @@ def _load_exact_path_module(name: str, path: Path):
     very file, and how `_init_events` below reaches its sibling
     `events.py`) — never as a package import — so a relative import to
     `scripts/review/atomic_io.py` would have no parent package to
-    resolve against.
+    resolve against. Mirrors review_metrics/contracts.py's loader of the
+    same name, including its `spec is None` guard: unlike `_init_events`
+    below, this dependency is NOT fail-soft — pipeline-result.json is
+    this module's bot contract, so a missing atomic_io.py must fail
+    loudly at import time with a named error, not silently produce a
+    module with no `atomic_write_json` attribute that only breaks at
+    first write. scripts/linear/ depending on scripts/review/ this way
+    is deliberate, not an accident of file layout.
     """
     spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(unavailable)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 _ATOMIC_IO_CONTRACT = _load_exact_path_module(
-    "linear_atomic_io_contract", SCRIPTS_DIR.parent / "review" / "atomic_io.py"
+    "linear_atomic_io_contract",
+    SCRIPTS_DIR.parent / "review" / "atomic_io.py",
+    "review atomic io contract unavailable",
 )
 atomic_write_json = _ATOMIC_IO_CONTRACT.atomic_write_json
 
@@ -646,6 +657,15 @@ def _step_3_check_existing(mode, state, context, config, output_dir):
         "A team prefix can map to multiple repos — verify before investing time.",
     ]
 
+    # The wrong-repo STOP path below briefs the agent to write
+    # pipeline-result.json itself — a fourth writer of this filename
+    # across the plugin, beside review/orchestration.py's step 11 and
+    # this module's own _write_failed_result and step 15. Symmetric to
+    # review/orchestration.py's note that the review-reconciliator
+    # agent writes review-findings.json directly: this one is
+    # agent-authored prose, not Python, so it is not (and cannot be)
+    # migrated onto atomic_write_json; briefing text is otherwise
+    # unchanged here.
     actions = [
         "**A. Verify this issue belongs to this repo**",
         "",
