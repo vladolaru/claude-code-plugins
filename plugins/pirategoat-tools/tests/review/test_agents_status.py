@@ -4,6 +4,8 @@ import importlib.util
 import json
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -518,3 +520,101 @@ class TestOverrideStatuses:
         assert result["finished"] == 2
         assert result["skipped"] == 2      # SKIPPED + SKIPPED_OVERRIDE
         assert result["not_dispatched"] == 0
+
+
+class TestWaitMode:
+    """--wait / --max-seconds: script-owned polling. See module docstring for
+    the exit-code contract (0/2/1 unchanged, 3 added for --wait expiry)."""
+
+    def test_wait_returns_zero_immediately_when_all_done(self, mod, tmp_path):
+        """Already-satisfied status must not pay the poll-interval sleep."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        start = time.monotonic()
+        result, expired = mod.wait_for_all_done(str(tmp_path), max_seconds=30)
+        elapsed = time.monotonic() - start
+
+        assert result["all_done"] is True
+        assert expired is False
+        # DEFAULT_POLL_INTERVAL_SECONDS is 1.5s — a real sleep would show up here.
+        assert elapsed < 1.0, f"wait_for_all_done slept when already done ({elapsed}s)"
+
+    def test_wait_exit_3_on_expiry(self, tmp_path):
+        """Unfinished agent + a short --max-seconds must exit 3, not 0/1/2."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        # No review file written — code-reviewer stays RUNNING forever.
+
+        cmd = [
+            sys.executable, str(SCRIPT_PATH),
+            "--output-dir", str(tmp_path),
+            "--wait", "--max-seconds", "1",
+        ]
+        # Generous subprocess-level timeout: if a mutation makes --wait ignore
+        # --max-seconds (never expiring), this call hangs. A bounded
+        # subprocess timeout turns that hang into a clean test failure
+        # (TimeoutExpired) instead of blocking the suite forever.
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 3
+        assert "EXPIRED" in r.stderr
+
+    def test_wait_wakes_on_completion(self, mod, tmp_path):
+        """Completion mid-wait must be observed well before --max-seconds."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+
+        def _finish_late():
+            time.sleep(2)
+            _finish_agent(tmp_path, "code-reviewer")
+
+        thread = threading.Thread(target=_finish_late)
+        thread.start()
+        start = time.monotonic()
+        result, expired = mod.wait_for_all_done(str(tmp_path), max_seconds=30)
+        elapsed = time.monotonic() - start
+        thread.join()
+
+        assert result["all_done"] is True
+        assert expired is False
+        assert elapsed < 10, f"wait_for_all_done did not wake promptly ({elapsed}s)"
+
+    def test_wait_requires_max_seconds(self, tmp_path):
+        """--wait without --max-seconds refuses to block unbounded."""
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path), "--wait"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 1
+        assert "--max-seconds" in r.stderr
+
+    def test_no_wait_paths_unchanged(self, tmp_path):
+        """The no-wait CLI path keeps its pinned 0/2 exit codes.
+
+        Error-path exit 1 is already pinned at the CLI level by
+        TestCheckStatus.test_no_dispatch_plan_exits_1 and
+        test_invalid_status_exits_1_with_actionable_error; check_status()'s
+        all_done computation itself is exercised directly by every test in
+        TestCheckStatus / TestNotDispatchedDoesNotBlockPipeline /
+        TestOverrideStatuses. This closes the one CLI-level gap: no existing
+        test invoked main() end-to-end for the success/still-running cases.
+        """
+        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(tmp_path, "code-reviewer")
+        _finish_agent(tmp_path, "code-reviewer")
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(tmp_path)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 0
+        assert "ALL_DONE: true" in r.stdout
+
+        still_running_dir = tmp_path / "running"
+        still_running_dir.mkdir()
+        _write_plan(still_running_dir, [{"name": "code-reviewer", "status": "DISPATCH"}])
+        _start_agent(still_running_dir, "code-reviewer")
+
+        cmd = [sys.executable, str(SCRIPT_PATH), "--output-dir", str(still_running_dir)]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        assert r.returncode == 2
+        assert "ALL_DONE: false" in r.stdout

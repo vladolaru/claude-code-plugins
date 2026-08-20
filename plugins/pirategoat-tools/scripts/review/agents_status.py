@@ -12,13 +12,24 @@ Four states per dispatched agent:
 Exit codes:
     0  ALL_DONE: true (nothing left to wait for — all finished or timed out)
     2  ALL_DONE: false (some agents still running or not dispatched)
-    1  Error (no dispatch plan, bad JSON)
+    1  Error (no dispatch plan, bad JSON; also: --wait given without --max-seconds)
+    3  --wait only: --max-seconds elapsed before ALL_DONE became true
+
+--wait mode (script-owned polling, no model calls, no subprocesses): blocks
+the calling process, re-running the exact check_status() computation used by
+the no-wait path at a 1-2s grain, and returns the instant nothing is left to
+wait for. --wait REQUIRES --max-seconds — this script refuses to block
+unbounded. On expiry it exits 3, distinct from the no-wait path's 0/1/2, so
+callers can tell "gave up after N seconds" apart from "nothing to wait for"
+or "still running, check again". The no-wait invocation (no --wait flag) is
+byte-identical in behavior to before --wait existed.
 """
 
 import argparse
 import json
 import os
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timezone
 
@@ -40,6 +51,7 @@ except ImportError:
 
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
+DEFAULT_POLL_INTERVAL_SECONDS = 1.5  # grain at which --wait re-checks status
 
 
 def _reviewer_filename(agent_name: str) -> str:
@@ -164,6 +176,39 @@ def check_status(output_dir: str, timeout_seconds: int = None) -> dict:
     }
 
 
+def wait_for_all_done(
+    output_dir: str,
+    max_seconds: float,
+    timeout_seconds: int = None,
+    poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    sleep_fn=time.sleep,
+    now_fn=time.monotonic,
+):
+    """Block until check_status() reports ALL_DONE or max_seconds elapses.
+
+    Re-runs the exact same check_status() computation the no-wait path uses,
+    at `poll_interval` grain (1-2s). No model calls, no subprocesses — this
+    is script-internal polling only.
+
+    Returns (result, expired):
+        result  — the last check_status() dict observed.
+        expired — True if max_seconds elapsed before ALL_DONE became true.
+
+    Callers with an already-satisfied status get back immediately (expired
+    is False, no sleep occurs) — the check happens before the first sleep.
+    """
+    start = now_fn()
+    while True:
+        result = check_status(output_dir, timeout_seconds=timeout_seconds)
+        if result["all_done"]:
+            return result, False
+        elapsed = now_fn() - start
+        remaining = max_seconds - elapsed
+        if remaining <= 0:
+            return result, True
+        sleep_fn(min(poll_interval, remaining))
+
+
 def _fmt_elapsed(seconds: int) -> str:
     m, s = divmod(seconds, 60)
     return f"{m}m {s}s"
@@ -207,14 +252,45 @@ def format_output(result: dict) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Check reviewer agent status")
+    parser = argparse.ArgumentParser(
+        description="Check reviewer agent status. Exit codes: 0 ALL_DONE, "
+        "2 still running, 1 error, 3 (--wait only) --max-seconds expired."
+    )
     parser.add_argument("--output-dir", type=str, required=True)
+    parser.add_argument(
+        "--wait", action="store_true",
+        help="Block until ALL_DONE (exit 0) or --max-seconds elapses (exit 3). "
+        "Requires --max-seconds — unbounded waits are refused.",
+    )
+    parser.add_argument(
+        "--max-seconds", type=float, default=None,
+        help="Required with --wait: maximum seconds to block before exiting 3.",
+    )
     args = parser.parse_args()
 
+    if args.wait and args.max_seconds is None:
+        print(
+            "ERROR: --wait requires --max-seconds (refusing to block unbounded)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     try:
-        result = check_status(args.output_dir)
-        print(format_output(result))
-        sys.exit(0 if result["all_done"] else 2)
+        if args.wait:
+            result, expired = wait_for_all_done(args.output_dir, args.max_seconds)
+            print(format_output(result))
+            if expired:
+                print(
+                    f"EXPIRED: --max-seconds={args.max_seconds} elapsed before "
+                    "ALL_DONE",
+                    file=sys.stderr,
+                )
+                sys.exit(3)
+            sys.exit(0)
+        else:
+            result = check_status(args.output_dir)
+            print(format_output(result))
+            sys.exit(0 if result["all_done"] else 2)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
