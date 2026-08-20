@@ -25,7 +25,31 @@ Two facts shape the output, and both are structural rather than defensive:
 On a host that writes no Claude-format transcripts at all (Codex) there is
 nothing to correlate. That produces ``missing`` with null payloads — a
 RECORDED absence, which is a different fact from an older run that never
-attempted the capture and therefore has no artifact at all.
+attempted the capture and therefore has no artifact at all. This gap is
+KNOWN and UNSOLVED: no re-run of this CLI can measure a host that never
+wrote a Claude-format transcript in the first place, and nothing here
+pretends otherwise.
+
+Re-running over a settled manifest is what upgrades a partial orchestrator
+half — but two more facts make that upgrade honest rather than merely
+optimistic:
+
+* MONOTONIC. A re-run's candidate measurement is compared, half by half,
+  against whatever is already on disk. A candidate that would DOWNGRADE
+  either half (fresher evidence found LESS than a prior run already
+  recorded — e.g. transcripts have since rotated out) is discarded; the
+  existing artifact is left byte-for-byte untouched, because a re-run that
+  could not re-measure must never cost the run its best evidence.
+* The manifest follows. The durable run manifest projects this artifact
+  into its own ``usage`` section at finalize (``ReviewTelemetry``'s own
+  atomic writer), but a manual re-run happens out of band, long after
+  finalize returned — nothing else re-visits that section afterward. This
+  CLI closes that gap itself: after a successful (non-discarded) write, it
+  patches ONLY the manifest's ``usage`` key and its ``availability.usage``
+  companion flag, through the SAME atomic-write primitive telemetry uses,
+  and leaves every other manifest field untouched. It has no authority
+  over ``run``/``dispatch``/``coverage``/etc. — those remain telemetry's,
+  reconstructed only from the pipeline's own JSONL events.
 
 Usage:
     python3 usage_snapshot.py --output-dir <run dir> [--sessions-root <root>]
@@ -47,6 +71,7 @@ from review_metrics.contracts import (  # noqa: E402
     DEFAULT_REGISTRY,
     DEFAULT_SESSIONS_ROOT,
     _ATOMIC_IO_CONTRACT,
+    _MANIFEST_SECTIONS_CONTRACT,
     _TELEMETRY_CONTRACT,
 )
 from review_metrics.measure import measure_run  # noqa: E402
@@ -303,6 +328,79 @@ def _write_snapshot(output_dir: Path, snapshot: dict) -> bool:
         return False
 
 
+# Evidence quality, worst to best. A re-run's candidate is compared against
+# whatever is already on disk per half (subagents, orchestrator) — never as
+# one combined score, because a run can legitimately upgrade one half while
+# the other stays flat, and a combined score would let that legitimate case
+# trip the same guard meant for an actual regression.
+_AVAILABILITY_RANK = {"missing": 0, "partial": 1, "complete": 2}
+
+
+def _availability_rank(value: object) -> int:
+    return _AVAILABILITY_RANK.get(value, 0)
+
+
+def _is_downgrade(existing: object, candidate: object) -> bool:
+    """True when `candidate` measures either half as WORSE than `existing`.
+
+    Only compares when both sides carry a real ``availability`` mapping —
+    a foreign or unreadable existing file has no evidence to protect, so
+    it never blocks the candidate from being written.
+    """
+    if not isinstance(existing, dict) or not isinstance(candidate, dict):
+        return False
+    existing_avail = existing.get("availability")
+    candidate_avail = candidate.get("availability")
+    if not isinstance(existing_avail, dict) or not isinstance(
+        candidate_avail, dict
+    ):
+        return False
+    return any(
+        _availability_rank(candidate_avail.get(half))
+        < _availability_rank(existing_avail.get(half))
+        for half in ("subagents", "orchestrator")
+    )
+
+
+def _reproject_manifest_usage(output_dir: Path) -> bool:
+    """Patch the manifest's `usage` section from the snapshot now on disk.
+
+    The manifest is telemetry's artifact, materialized wholesale by
+    ``ReviewTelemetry._materialize_manifest`` from the pipeline's own
+    JSONL events. A manual re-run of this CLI happens out of band — often
+    long after that flow finished, with no event to append — so it has no
+    license to reconstruct ``run``/``dispatch``/``coverage``/... from
+    scratch; only ``usage`` and its ``availability.usage`` companion are
+    this CLI's own, because both are pure functions of
+    ``usage-snapshot.json``, the artifact this CLI just settled. Patching
+    just those two keys, through the same atomic-write primitive
+    telemetry uses, keeps every other manifest field exactly as telemetry
+    last left it.
+
+    Returns False (no-op) when there is no manifest file to patch — it
+    never fabricates one, which would claim a pipeline run this CLI never
+    observed.
+    """
+    manifest_path = _manifest_path(output_dir)
+    if manifest_path is None or not manifest_path.is_file():
+        return False
+    manifest = _read_json(manifest_path)
+    if not isinstance(manifest, dict):
+        return False
+    section = _MANIFEST_SECTIONS_CONTRACT.build_usage_manifest(str(output_dir))
+    manifest["usage"] = section
+    availability = manifest.get("availability")
+    if not isinstance(availability, dict):
+        availability = {}
+        manifest["availability"] = availability
+    availability["usage"] = section is not None
+    try:
+        _ATOMIC_IO_CONTRACT.atomic_write_json(str(manifest_path), manifest)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _capture(output_dir: Path, sessions_root: Path, registry: Path) -> dict:
     """Measure the run, degrading to a recorded absence rather than raising."""
     captured_at = _now()
@@ -344,32 +442,55 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     output_dir = Path(args.output_dir).expanduser()
     try:
-        snapshot = _capture(
+        candidate = _capture(
             output_dir,
             Path(args.sessions_root).expanduser(),
             Path(args.registry).expanduser(),
         )
     except Exception as error:  # pragma: no cover - defence in depth
-        snapshot = _unmeasured(
+        candidate = _unmeasured(
             _now(),
             f"capture_failed:{type(error).__name__}",
             {"started_at": None, "ended_at": None, "closed": False},
         )
-    if not _write_snapshot(output_dir, snapshot):
-        print(
-            "usage_snapshot: unable to write "
-            f"{SNAPSHOT_FILENAME} into {output_dir}",
-            file=sys.stderr,
-        )
-        return 1
-    agents = snapshot["agents_measured"]
-    expected = agents["expected"]
+
+    # MONOTONIC: never let a re-run's candidate replace better evidence
+    # already on disk. A downgrade is discarded wholesale — the existing
+    # artifact is reported and left byte-for-byte untouched, never merged
+    # with the weaker candidate.
+    existing = _read_json(output_dir / SNAPSHOT_FILENAME)
+    downgrade_avoided = _is_downgrade(existing, candidate)
+    snapshot = existing if downgrade_avoided else candidate
+
+    written = False
+    if not downgrade_avoided:
+        if not _write_snapshot(output_dir, snapshot):
+            print(
+                "usage_snapshot: unable to write "
+                f"{SNAPSHOT_FILENAME} into {output_dir}",
+                file=sys.stderr,
+            )
+            return 1
+        written = True
+
+    # Bring the durable manifest's `usage` section in sync with whatever
+    # is now on disk — whether this call wrote it just now or a downgrade
+    # left an earlier run's snapshot in place.
+    _reproject_manifest_usage(output_dir)
+
+    agents = snapshot.get("agents_measured") if isinstance(snapshot, dict) else None
+    if not isinstance(agents, dict):
+        agents = {"measured": 0, "expected": None}
+    expected = agents.get("expected")
+    availability = snapshot.get("availability") if isinstance(snapshot, dict) else None
     print(json.dumps({
-        "written": True,
+        "written": written,
+        "downgrade_avoided": downgrade_avoided,
         "path": str(output_dir / SNAPSHOT_FILENAME),
-        "availability": snapshot["availability"],
+        "availability": availability,
         "agents_measured": (
-            f"{agents['measured']}/{expected if expected is not None else '?'}"
+            f"{agents.get('measured', 0)}/"
+            f"{expected if expected is not None else '?'}"
         ),
     }))
     return 0
