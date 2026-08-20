@@ -964,6 +964,72 @@ class ReviewTelemetry:
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             pass
 
+    def reproject_usage(self) -> bool:
+        """Patch a SETTLED manifest's `usage` section out of band.
+
+        A normal run projects `usage` wholesale, inside `_build_manifest`,
+        every time an event is appended — the last time being `finalize()`.
+        This exists for the one case that flow never reaches again: a
+        manual re-run of `usage_snapshot.py`'s CLI, long after `finalize()`
+        already returned, over a manifest that already settled. Nothing
+        else revisits `usage` after that point, so a freshly re-measured
+        snapshot would silently diverge from what the manifest still
+        reports without this — the exact gap the CLI's monotonic upgrade
+        exists to close.
+
+        Two gates keep the patch narrow and safe, both fail CLOSED (no
+        write, `False`):
+
+        * ``status == "complete"``. A still-running manifest is
+          `finalize()`'s territory alone — patching `usage` here while a
+          run is still producing steps would risk publishing a manifest
+          with a stale `usage` beside a fresher `run`/`dispatch`/etc., or
+          racing `finalize()`'s own full rebuild. Skipping here costs
+          nothing real: the in-pipeline step-11 call into this method
+          reaches it while the manifest still reads "running" (finalize
+          has not appended `pipeline_end` yet), so it is a no-op every
+          time; `finalize()`'s own full rebuild, moments later in the same
+          run, is what actually settles `usage` for a normal pipeline run.
+        * ``schema == EVENT_SCHEMA``. An unsupported-schema manifest is not
+          this method's to interpret; writing into a shape it does not
+          recognize would be worse than the read-only paths that already
+          refuse the same manifests.
+
+        Only ``usage`` and its ``availability.usage`` companion flag are
+        ever touched — every other field is left exactly as the last full
+        rebuild wrote it. Returns ``True`` only when a write actually
+        happened (including a write that honestly records `usage: None`
+        because the snapshot itself is absent or unreadable); ``False``
+        covers every reason nothing was written, including "no manifest at
+        all" and any I/O failure on the read or the write.
+        """
+        manifest_path = self.manifest_path
+        if not manifest_path or not os.path.isfile(manifest_path):
+            return False
+        try:
+            with open(manifest_path, encoding="utf-8") as source:
+                manifest = json.load(source)
+        except (OSError, ValueError):
+            return False
+        if not isinstance(manifest, dict):
+            return False
+        if manifest.get("schema") != EVENT_SCHEMA:
+            return False
+        if manifest.get("status") != "complete":
+            return False
+        section = manifest_sections.build_usage_manifest(self.output_dir)
+        manifest["usage"] = section
+        availability = manifest.get("availability")
+        if not isinstance(availability, dict):
+            availability = {}
+            manifest["availability"] = availability
+        availability["usage"] = section is not None
+        try:
+            atomic_write_json(manifest_path, manifest)
+        except (OSError, TypeError, ValueError):
+            return False
+        return True
+
     def _read_first_event(self) -> Optional[dict]:
         """Read the immutable first JSONL event (the pipeline_start line).
 

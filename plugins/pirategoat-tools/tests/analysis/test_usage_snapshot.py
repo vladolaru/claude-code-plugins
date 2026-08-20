@@ -29,6 +29,13 @@ _spec.loader.exec_module(_mod)
 
 main = _mod.main
 SNAPSHOT_FILENAME = _mod.SNAPSHOT_FILENAME
+# The MANIFEST's own schema (telemetry's `EVENT_SCHEMA`, currently 2) — a
+# different number from `SNAPSHOT_SCHEMA` above, which stamps
+# usage-snapshot.json instead. Read through the same exact-path contract
+# seam usage_snapshot.py itself uses, so a future EVENT_SCHEMA bump can
+# never leave this fixture silently stale the way a hardcoded literal did
+# before `reproject_usage()`'s schema gate turned that staleness visible.
+_MANIFEST_SCHEMA = _mod._TELEMETRY_CONTRACT.EVENT_SCHEMA
 
 # Deliberately in the past: a capture-time snapshot synthesizes its window
 # end from "now", so fixture entries must fall before it on any clock.
@@ -103,7 +110,7 @@ def _manifest(session_id, output_dir: Path, repo: Path, *,
               started: list[str] | None = None) -> dict:
     """A run manifest in the shape telemetry materializes."""
     return {
-        "schema": 1,
+        "schema": _MANIFEST_SCHEMA,
         "status": status,
         "run": {
             "id": "run-1",
@@ -573,6 +580,7 @@ class TestManifestReprojection:
     def test_reprojection_touches_only_the_usage_section(self, tmp_path):
         """Nothing telemetry owns changes shape or value under this CLI."""
         run = _seed_two_agent_run(tmp_path)
+        _close_manifest(run)  # reprojection is gated on status == "complete"
         before = json.loads(run.manifest_path.read_text())
 
         _run_cli(run)

@@ -35,21 +35,46 @@ half — but two more facts make that upgrade honest rather than merely
 optimistic:
 
 * MONOTONIC. A re-run's candidate measurement is compared, half by half,
-  against whatever is already on disk. A candidate that would DOWNGRADE
-  either half (fresher evidence found LESS than a prior run already
-  recorded — e.g. transcripts have since rotated out) is discarded; the
-  existing artifact is left byte-for-byte untouched, because a re-run that
-  could not re-measure must never cost the run its best evidence.
-* The manifest follows. The durable run manifest projects this artifact
-  into its own ``usage`` section at finalize (``ReviewTelemetry``'s own
-  atomic writer), but a manual re-run happens out of band, long after
-  finalize returned — nothing else re-visits that section afterward. This
-  CLI closes that gap itself: after a successful (non-discarded) write, it
-  patches ONLY the manifest's ``usage`` key and its ``availability.usage``
-  companion flag, through the SAME atomic-write primitive telemetry uses,
-  and leaves every other manifest field untouched. It has no authority
-  over ``run``/``dispatch``/``coverage``/etc. — those remain telemetry's,
-  reconstructed only from the pipeline's own JSONL events.
+  against whatever ``usage-snapshot.json`` is already on disk. A candidate
+  that would DOWNGRADE either half (fresher evidence found LESS than a
+  prior run already recorded — e.g. transcripts have since rotated out)
+  is discarded; the existing artifact is left byte-for-byte untouched,
+  because a re-run that could not re-measure must never cost the run its
+  best evidence. This guarantee is scoped to the artifact, not to the run:
+  deleting ``usage-snapshot.json`` is an explicit act, and the next
+  capture over an empty slate re-measures from scratch and records
+  whatever it finds — including a fresh ``missing`` — per the same
+  recorded-absence doctrine as every other unmeasured state here. There is
+  no prior evidence to protect once the file itself is gone.
+* The manifest follows, through ``ReviewTelemetry.reproject_usage()``. The
+  durable run manifest projects this artifact into its own ``usage``
+  section wholesale at finalize, but a manual re-run happens out of band,
+  long after finalize returned — nothing else re-visits that section
+  afterward. This CLI calls into telemetry's own method after resolving
+  the run's snapshot (freshly written or preserved by the guard above):
+  it patches ONLY the manifest's ``usage`` key and its ``availability.usage``
+  companion flag, through the SAME atomic-write primitive
+  ``_materialize_manifest`` uses, gated on the manifest already reading
+  ``status: "complete"`` under the CURRENT schema — never on a still-running
+  manifest, which is finalize's territory alone. The manifest keeps ONE
+  owning module, telemetry, even with two call sites into it; this CLI
+  has no authority of its own over ``run``/``dispatch``/``coverage``/etc.
+
+Manifest reprojection is best-effort, matching every other manifest write
+telemetry performs: a failure (no manifest yet, wrong schema, still
+running, unwritable) is reported on this CLI's stdout summary as
+``manifest_reprojected: false`` and never turns into a nonzero exit or a
+stderr line, unlike a failure to write ``usage-snapshot.json`` itself —
+that IS this CLI's sole reason for existing, and fails loudly. The
+manifest, by contrast, is a derived surface this CLI can always
+regenerate on the next re-run; losing one write to it is not silent data
+loss in the way losing the snapshot artifact would be.
+
+``pipeline-result.json``'s compact ``usage`` block is a THIRD surface,
+built once at step 11 from the same ``manifest_sections.build_usage_manifest``
+projection — a manual re-run of this CLI does not, and cannot, revisit
+it: it is step 11's own point-in-time record, not a durable artifact this
+CLI update owns.
 
 Usage:
     python3 usage_snapshot.py --output-dir <run dir> [--sessions-root <root>]
@@ -71,7 +96,6 @@ from review_metrics.contracts import (  # noqa: E402
     DEFAULT_REGISTRY,
     DEFAULT_SESSIONS_ROOT,
     _ATOMIC_IO_CONTRACT,
-    _MANIFEST_SECTIONS_CONTRACT,
     _TELEMETRY_CONTRACT,
 )
 from review_metrics.measure import measure_run  # noqa: E402
@@ -362,45 +386,6 @@ def _is_downgrade(existing: object, candidate: object) -> bool:
     )
 
 
-def _reproject_manifest_usage(output_dir: Path) -> bool:
-    """Patch the manifest's `usage` section from the snapshot now on disk.
-
-    The manifest is telemetry's artifact, materialized wholesale by
-    ``ReviewTelemetry._materialize_manifest`` from the pipeline's own
-    JSONL events. A manual re-run of this CLI happens out of band — often
-    long after that flow finished, with no event to append — so it has no
-    license to reconstruct ``run``/``dispatch``/``coverage``/... from
-    scratch; only ``usage`` and its ``availability.usage`` companion are
-    this CLI's own, because both are pure functions of
-    ``usage-snapshot.json``, the artifact this CLI just settled. Patching
-    just those two keys, through the same atomic-write primitive
-    telemetry uses, keeps every other manifest field exactly as telemetry
-    last left it.
-
-    Returns False (no-op) when there is no manifest file to patch — it
-    never fabricates one, which would claim a pipeline run this CLI never
-    observed.
-    """
-    manifest_path = _manifest_path(output_dir)
-    if manifest_path is None or not manifest_path.is_file():
-        return False
-    manifest = _read_json(manifest_path)
-    if not isinstance(manifest, dict):
-        return False
-    section = _MANIFEST_SECTIONS_CONTRACT.build_usage_manifest(str(output_dir))
-    manifest["usage"] = section
-    availability = manifest.get("availability")
-    if not isinstance(availability, dict):
-        availability = {}
-        manifest["availability"] = availability
-    availability["usage"] = section is not None
-    try:
-        _ATOMIC_IO_CONTRACT.atomic_write_json(str(manifest_path), manifest)
-    except (OSError, TypeError, ValueError):
-        return False
-    return True
-
-
 def _capture(output_dir: Path, sessions_root: Path, registry: Path) -> dict:
     """Measure the run, degrading to a recorded absence rather than raising."""
     captured_at = _now()
@@ -475,19 +460,26 @@ def main(argv: list[str] | None = None) -> int:
 
     # Bring the durable manifest's `usage` section in sync with whatever
     # is now on disk — whether this call wrote it just now or a downgrade
-    # left an earlier run's snapshot in place.
-    _reproject_manifest_usage(output_dir)
+    # left an earlier run's snapshot in place. Best-effort, like every
+    # other manifest write telemetry performs: a `False` here (no
+    # settled current-schema manifest, or an I/O failure) is reported on
+    # the summary line below and never turns into a nonzero exit — unlike
+    # a failure to write the snapshot artifact above, which IS this CLI's
+    # sole reason for existing.
+    manifest_reprojected = _TELEMETRY_CONTRACT.ReviewTelemetry(
+        str(output_dir)
+    ).reproject_usage()
 
-    agents = snapshot.get("agents_measured") if isinstance(snapshot, dict) else None
+    agents = snapshot.get("agents_measured")
     if not isinstance(agents, dict):
         agents = {"measured": 0, "expected": None}
     expected = agents.get("expected")
-    availability = snapshot.get("availability") if isinstance(snapshot, dict) else None
     print(json.dumps({
         "written": written,
         "downgrade_avoided": downgrade_avoided,
+        "manifest_reprojected": manifest_reprojected,
         "path": str(output_dir / SNAPSHOT_FILENAME),
-        "availability": availability,
+        "availability": snapshot["availability"],
         "agents_measured": (
             f"{agents.get('measured', 0)}/"
             f"{expected if expected is not None else '?'}"

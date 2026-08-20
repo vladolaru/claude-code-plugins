@@ -4634,3 +4634,198 @@ class TestOptionalSectionAvailabilityKeysContract:
 
         assert produced != declared
         assert "speculative_section" in produced - declared
+
+
+class TestReprojectUsage:
+    """`ReviewTelemetry.reproject_usage()` — the manifest's own patch path
+    for a `usage_snapshot.py` re-run that happens out of band, long after
+    `finalize()` already returned. Telemetry keeps ONE owning module for
+    the manifest even with two call sites into it: the normal event-driven
+    rebuild in `_materialize_manifest`, and this narrow out-of-band patch.
+    """
+
+    def _seed_snapshot(self, output_dir, **overrides):
+        payload = {
+            "schema": 1,
+            "captured_at": "2026-08-19T10:43:00+00:00",
+            "window": {
+                "started_at": "2026-08-19T10:00:00+00:00",
+                "ended_at": "2026-08-19T10:43:00+00:00",
+                "closed": True,
+            },
+            "availability": {
+                "subagents": "complete", "orchestrator": "complete",
+            },
+            "reason": None,
+            "agents_measured": {"measured": 1, "expected": 1},
+            "subagent_usage": [],
+            "subagent_totals": None,
+            "usage_by_model": None,
+            "orchestrator_usage": None,
+        }
+        payload.update(overrides)
+        (Path(output_dir) / "usage-snapshot.json").write_text(
+            json.dumps(payload)
+        )
+
+    @staticmethod
+    def _strip_usage(manifest):
+        """The residual: everything a `usage` patch has no license to touch."""
+        stripped = dict(manifest)
+        stripped.pop("usage", None)
+        availability = dict(stripped.get("availability") or {})
+        availability.pop("usage", None)
+        stripped["availability"] = availability
+        return stripped
+
+    def _fully_populated_manifest(self, mod, output_dir):
+        """Every optional section carries real, distinguishable content —
+        the shape a full `_build_manifest` rebuild from THIS instance's
+        actual (near-empty) JSONL log would NOT reproduce. A
+        `reproject_usage()` that reconstructed the whole manifest instead
+        of surgically patching two keys — the reviewer's mutation (d) —
+        would replace every one of these with the rebuild's own (emptier)
+        values; a correct surgical patch leaves them exactly as written
+        here.
+        """
+        return {
+            "schema": mod.EVENT_SCHEMA,
+            "status": "complete",
+            "run": {
+                "id": "run-1",
+                "session_id": "session-fixture",
+                "plugin_version": "9.9.9",
+                "mode": "pr",
+                "repo_path": "/fixture/repo",
+                "output_dir": str(output_dir),
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "ended_at": "2026-01-01T01:00:00+00:00",
+                "git": {
+                    "requested_range": "base..head",
+                    "base_sha": "a" * 40,
+                    "head_sha": "b" * 40,
+                },
+            },
+            "steps": [
+                {"step": 99, "phase": "FIXTURE", "title": "Vandal Probe"}
+            ],
+            "agents": {
+                "started": [{"agent": "fixture-reviewer"}],
+                "completed": [],
+                "incomplete": [],
+            },
+            "dispatch": {"fixture": "dispatch-payload"},
+            "coverage": {"fixture": "coverage-payload"},
+            "outcome": {"summary": {"fixture": "outcome-payload"}},
+            "availability": {
+                "pipeline": True,
+                "transcript": True,
+                "coverage": True,
+                "worktree_hygiene": True,
+                "synthesis_agents": True,
+                "usage": True,
+                "skipped_steps": True,
+                "dependency_refresh": True,
+                "reviewer_markdown": True,
+                "findings_markdown": True,
+            },
+            "worktree_hygiene": {"fixture": "hygiene-payload"},
+            "synthesis_agents": {"fixture": "synthesis-payload"},
+            "usage": {"fixture": "stale — must be replaced"},
+            "skipped_steps": [{"fixture": "skip-payload"}],
+            "dependency_refresh": {"fixture": "deps-payload"},
+            "reviewer_markdown": {"fixture": "markdown-payload"},
+            "findings_markdown": {"fixture": "findings-payload"},
+        }
+
+    def test_patches_usage_and_leaves_every_other_section_byte_identical(
+        self, mod, telemetry, output_dir
+    ):
+        """I2/M2/M4 residual pin. The reviewer's mutation (d) — a
+        `reproject_usage()` that rebuilds the whole manifest rather than
+        patching two keys — silently vandalized seven other optional
+        sections and still passed the full 5093-test suite, because no
+        existing fixture carried real content in all of them at once.
+        This one does, and asserts the residual (everything but `usage`
+        and `availability.usage`) survives byte-identical.
+        """
+        telemetry.start(run_id="run-1", session_id="session-real")
+        manifest_path = Path(telemetry.manifest_path)
+        fixture = self._fully_populated_manifest(mod, output_dir)
+        manifest_path.write_text(json.dumps(fixture))
+        self._seed_snapshot(output_dir)
+
+        result = telemetry.reproject_usage()
+
+        assert result is True
+        after = json.loads(manifest_path.read_text())
+        assert self._strip_usage(after) == self._strip_usage(fixture)
+        assert after["usage"] is not None
+        assert after["usage"] != fixture["usage"]
+        assert after["availability"]["usage"] is True
+
+    def test_running_manifest_is_left_untouched(
+        self, mod, telemetry, output_dir
+    ):
+        """M2 gate: a still-running manifest is `finalize()`'s territory
+        alone. The in-pipeline step-11 call reaches this method while the
+        manifest still reads "running" (finalize has not appended
+        `pipeline_end` yet), so it is a no-op there every time —
+        `finalize()`'s own full rebuild, moments later in the same run,
+        is what actually settles `usage` for a normal pipeline run.
+        """
+        telemetry.start(run_id="run-1")  # status stays "running"
+        manifest_path = Path(telemetry.manifest_path)
+        before_bytes = manifest_path.read_bytes()
+        self._seed_snapshot(output_dir)
+
+        result = telemetry.reproject_usage()
+
+        assert result is False
+        assert manifest_path.read_bytes() == before_bytes
+
+    def test_unsupported_schema_manifest_is_left_untouched(
+        self, mod, telemetry, output_dir
+    ):
+        """M4 gate: an unsupported-schema manifest is not this method's
+        to interpret."""
+        telemetry.start(run_id="run-1")
+        manifest_path = Path(telemetry.manifest_path)
+        manifest = json.loads(manifest_path.read_text())
+        manifest["status"] = "complete"
+        manifest["schema"] = mod.EVENT_SCHEMA - 1
+        manifest_path.write_text(json.dumps(manifest))
+        before_bytes = manifest_path.read_bytes()
+        self._seed_snapshot(output_dir)
+
+        result = telemetry.reproject_usage()
+
+        assert result is False
+        assert manifest_path.read_bytes() == before_bytes
+
+    def test_no_manifest_is_a_silent_no_op(self, mod, output_dir, tmp_path):
+        log_dir = tmp_path / "logs-none"
+        t = mod.ReviewTelemetry(str(output_dir), log_dir=str(log_dir))
+
+        assert t.reproject_usage() is False
+
+    def test_unreadable_snapshot_still_reprojects_an_honest_absence(
+        self, mod, telemetry, output_dir
+    ):
+        """A settled manifest whose `usage-snapshot.json` cannot be read
+        still gets patched — to `usage: None`, `availability.usage:
+        False` — because that IS the current truth, not a reason to skip
+        the write."""
+        telemetry.start(run_id="run-1")
+        manifest_path = Path(telemetry.manifest_path)
+        manifest = json.loads(manifest_path.read_text())
+        manifest["status"] = "complete"
+        manifest_path.write_text(json.dumps(manifest))
+        # No usage-snapshot.json written at all.
+
+        result = telemetry.reproject_usage()
+
+        after = json.loads(manifest_path.read_text())
+        assert result is True
+        assert after["usage"] is None
+        assert after["availability"]["usage"] is False
