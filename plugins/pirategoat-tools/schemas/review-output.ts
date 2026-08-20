@@ -260,6 +260,22 @@ export interface ReviewOutput {
     // "## Removed by the Decision Critic" section.
     removed_by_critic?: Issue[];
 
+    // Critic decisions the orchestrator's spot-check refuted (`rejected:
+    // true` + `rejection_reason` in decision-critic-adjustments.json).
+    // Present after the first batch that settled at least one rejection.
+    // A rejected entry is never applied to `issues`, so this is the ONLY
+    // place a rejection is auditable — the source file it also lives in
+    // is read only by apply_adjustments() itself, never by a downstream
+    // consumer. Cumulative across every batch the ledger absorbs, the
+    // same way applied_critic_adjustments is; apply_adjustments()
+    // dedupes by adjustment_id so a re-run never appends a duplicate.
+    rejected_critic_adjustments?: Array<{
+        adjustment_id: string;
+        action: string | null;
+        target_id: string | null; // null for a rejected `add` (no target)
+        rejection_reason: string;
+    }>;
+
     // Assessments retracted by an applying batch, oldest first. Each entry
     // keeps the prose and the ids of the decisions that cost it its
     // standing — withdrawn, never silently dropped.

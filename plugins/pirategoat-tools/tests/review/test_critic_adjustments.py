@@ -23,6 +23,7 @@ from review.critic_adjustments import (
     CONTENT_DIGEST_KEY,
     INTEGRITY_INTACT,
     INTEGRITY_MODIFIED,
+    REJECTED_ADJUSTMENTS_KEY,
     WITHDRAWN_SUMMARY_KEY,
     REFUSAL_EXIT_CODE,
     REFUSAL_NO_VERDICT,
@@ -338,6 +339,119 @@ class TestApplyAdjustments:
         assert after_second == after_first
 
 
+class TestRejectionAudit:
+    """A rejected critic decision must leave a trace in the artifact
+    downstream readers actually consult, not only in
+    decision-critic-adjustments.json, which none of them read."""
+
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
+    def test_rejected_entry_lands_in_the_findings_audit_trail(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"},
+            "rationale": "r", "rejected": True,
+            "rejection_reason": "spot-check refuted the claim",
+        }])
+        result = apply_adjustments(str(tmp_path))
+        assert result["applied"] == 0  # a rejected entry is never applied
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low"
+
+        records = data[REJECTED_ADJUSTMENTS_KEY]
+        assert len(records) == 1
+        record = records[0]
+        assert record["action"] == "promote"
+        assert record["target_id"] == "aaaa1111"
+        assert record["rejection_reason"] == "spot-check refuted the claim"
+        assert record["adjustment_id"]  # allocated so a re-run can dedupe
+
+        # The write goes through the sanctioned path — the digest verifies.
+        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_INTACT
+
+    def test_second_run_does_not_duplicate_the_rejection_record(
+        self, tmp_path
+    ):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "info"},
+            "rationale": "r", "rejected": True,
+            "rejection_reason": "spot-check refuted it",
+        }])
+        apply_adjustments(str(tmp_path))
+        first = json.loads((tmp_path / "review-findings.json").read_text())
+        assert len(first[REJECTED_ADJUSTMENTS_KEY]) == 1
+
+        second_result = apply_adjustments(str(tmp_path))
+        assert second_result == {"status": "nothing_pending", "applied": 0}
+        second = json.loads((tmp_path / "review-findings.json").read_text())
+        assert second == first, "an idempotent re-run must not rewrite the ledger"
+        assert len(second[REJECTED_ADJUSTMENTS_KEY]) == 1
+
+    def test_a_second_rejected_entry_in_a_later_batch_appends(
+        self, tmp_path
+    ):
+        _write_findings(
+            tmp_path, [_issue("aaaa1111", "low"), _issue("bbbb2222", "low")]
+        )
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+            "rejected": True, "rejection_reason": "first round refutation",
+        }])
+        apply_adjustments(str(tmp_path))
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "bbbb2222",
+            "fields": {"severity": "info"}, "rationale": "r",
+            "rejected": True, "rejection_reason": "second round refutation",
+        }])
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        records = data[REJECTED_ADJUSTMENTS_KEY]
+        assert len(records) == 2
+        assert {r["target_id"] for r in records} == {"aaaa1111", "bbbb2222"}
+        assert {r["rejection_reason"] for r in records} == {
+            "first round refutation", "second round refutation",
+        }
+
+    def test_a_purely_rejected_batch_is_reported_as_nothing_pending(
+        self, tmp_path
+    ):
+        """The rejection audit write is real, but it is not an 'apply':
+        `result['status']` describes whether findings were mutated, and a
+        rejection never mutates `issues`."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+            "rejected": True, "rejection_reason": "refuted",
+        }])
+        result = apply_adjustments(str(tmp_path))
+        assert result == {"status": "nothing_pending", "applied": 0}
+
+    def test_mixed_batch_applies_one_and_audits_the_other(self, tmp_path):
+        _write_findings(
+            tmp_path, [_issue("aaaa1111", "low"), _issue("bbbb2222", "low")]
+        )
+        _write_adjustments(tmp_path, [
+            {"action": "promote", "id": "aaaa1111",
+             "fields": {"severity": "high"}, "rationale": "r"},
+            {"action": "demote", "id": "bbbb2222",
+             "fields": {"severity": "info"}, "rationale": "r",
+             "rejected": True, "rejection_reason": "refuted"},
+        ])
+        result = apply_adjustments(str(tmp_path))
+        assert result == {"status": "applied", "applied": 1}
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "high"
+        assert data["issues"][1]["severity"] == "low"  # rejected, untouched
+        records = data[REJECTED_ADJUSTMENTS_KEY]
+        assert len(records) == 1
+        assert records[0]["target_id"] == "bbbb2222"
+
+
 class TestCrashSafety:
     """Application is recorded on both sides, so no crash point can either
     lose the batch or apply it twice."""
@@ -542,6 +656,77 @@ class TestBatchCoherence:
             (tmp_path / "decision-critic-adjustments.json").read_text()
         )
         assert "adjustment_id" not in doc["adjustments"][0]  # nothing written
+
+
+class TestAdjustmentsSchemaValidation:
+    """decision-reviewer.md's taught template always writes `"schema": 1`
+    alongside `"adjustments"`; a doc out of that template is refused
+    whole, the same all-or-nothing way an unknown action is."""
+
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
+    def _write_raw_adjustments(self, output_dir, doc):
+        (Path(output_dir) / "decision-critic-adjustments.json").write_text(
+            json.dumps(doc)
+        )
+
+    def test_schema_1_proceeds(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        self._write_raw_adjustments(tmp_path, {
+            "schema": 1,
+            "adjustments": [{
+                "action": "promote", "id": "aaaa1111",
+                "fields": {"severity": "high"}, "rationale": "r",
+            }],
+        })
+        result = apply_adjustments(str(tmp_path))
+        assert result == {"status": "applied", "applied": 1}
+
+    def test_schema_2_refuses_the_whole_batch(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        self._write_raw_adjustments(tmp_path, {
+            "schema": 2,
+            "adjustments": [{
+                "action": "promote", "id": "aaaa1111",
+                "fields": {"severity": "high"}, "rationale": "r",
+            }],
+        })
+        with pytest.raises(ValueError, match="'schema' must be 1"):
+            apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low"  # nothing written
+
+    def test_missing_schema_refuses_with_the_same_message_shape(
+        self, tmp_path
+    ):
+        """The taught template always includes `schema`; a doc missing it
+        entirely is out-of-template the same way a wrong value is, and
+        gets the same refusal rather than being read as version 1 by
+        default."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        self._write_raw_adjustments(tmp_path, {
+            "adjustments": [{
+                "action": "promote", "id": "aaaa1111",
+                "fields": {"severity": "high"}, "rationale": "r",
+            }],
+        })
+        with pytest.raises(ValueError, match="'schema' must be 1"):
+            apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["issues"][0]["severity"] == "low"  # nothing written
+
+    def test_schema_as_a_string_refuses(self, tmp_path):
+        """`"1"` is not `1` — no type coercion for the schema gate."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        self._write_raw_adjustments(tmp_path, {
+            "schema": "1",
+            "adjustments": [{
+                "action": "promote", "id": "aaaa1111",
+                "fields": {"severity": "high"}, "rationale": "r",
+            }],
+        })
+        with pytest.raises(ValueError, match="'schema' must be 1"):
+            apply_adjustments(str(tmp_path))
 
 
 class TestScopeLinePairing:

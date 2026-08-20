@@ -79,6 +79,23 @@ ADJUSTMENTS_FILENAME = "decision-critic-adjustments.json"
 FINDINGS_FILENAME = "review-findings.json"
 CRITIC_VERDICT_FILENAME = "decision-critic-verdict.json"
 APPLIED_IDS_KEY = "applied_critic_adjustments"
+# The rejection half of the same audit trail: entries the orchestrator's
+# spot-check refuted (`rejected: true` + `rejection_reason`) were, before
+# this key existed, visible only in decision-critic-adjustments.json —
+# a file no downstream reader consults — so a rejected decision left no
+# trace in the artifact bot mode, baselines, and metrics actually read.
+# apply_adjustments() writes one record per newly-settled rejection here;
+# see _load_rejected_records() for the read side of the idempotence check.
+REJECTED_ADJUSTMENTS_KEY = "rejected_critic_adjustments"
+
+# The only `schema` value ADJUSTMENTS_FILENAME is accepted under.
+# decision-reviewer.md's taught template always writes `"schema": 1`
+# alongside `"adjustments"`; a doc carrying any other value — or none —
+# is out of that template and refused whole, the same all-or-nothing way
+# an unknown action or an unaddressable id is: a critic decision written
+# against a contract this module does not honor must fail loudly rather
+# than being silently accepted and possibly misread.
+ADJUSTMENTS_SCHEMA = 1
 
 # The stamp every sanctioned write of the findings ledger leaves behind,
 # and the vocabulary finalize reports the check in. See write_findings()
@@ -482,6 +499,28 @@ def _load_recorded_ids(findings):
     return list(recorded)
 
 
+def _load_rejected_records(findings):
+    """Read the rejection audit records the findings file already contains.
+
+    Mirrors `_load_recorded_ids()` for the applied side: `None` (the key
+    has never been written) reads as an empty list, and anything present
+    but not a list of objects is a malformed pre-existing ledger — worth
+    failing on, the same call `_load_recorded_ids()` makes, since this
+    function is about to write against what it reads.
+    """
+    recorded = findings.get(REJECTED_ADJUSTMENTS_KEY)
+    if recorded is None:
+        return []
+    if not isinstance(recorded, list) or not all(
+        isinstance(value, dict) for value in recorded
+    ):
+        raise ValueError(
+            f"{FINDINGS_FILENAME}: {REJECTED_ADJUSTMENTS_KEY!r} must be a "
+            f"list of objects"
+        )
+    return list(recorded)
+
+
 def _index_adjustment_ids(adjustments):
     """Validate id shape and uniqueness across the whole file."""
     seen = {}
@@ -609,11 +648,19 @@ def apply_adjustments(output_dir):
     it was applied or the orchestrator rejected it, and also when the
     findings file already records its `adjustment_id` — the case a crash
     between the two writes leaves behind, where only the flags need to
-    catch up. Unknown ids, unknown actions, invalid patches, duplicate or
-    already-removed targets, and a malformed pre-existing ledger fail the
-    whole call loudly BEFORE anything is written — a critic decision that
-    cannot land must not silently vanish, and a half-applied batch must
-    not exist.
+    catch up. An unrecognized `schema` (see `ADJUSTMENTS_SCHEMA`), unknown
+    ids, unknown actions, invalid patches, duplicate or already-removed
+    targets, and a malformed pre-existing ledger fail the whole call loudly
+    BEFORE anything is written — a critic decision that cannot land must
+    not silently vanish, and a half-applied batch must not exist.
+
+    Rejected entries (`rejected: true` + `rejection_reason`) are never
+    applied, but a newly-settled rejection still costs one findings write:
+    its `adjustment_id`, `action`, target id, and `rejection_reason` land
+    in `REJECTED_ADJUSTMENTS_KEY` so a decision the orchestrator's
+    spot-check refuted has a trace in the artifact bot mode, baselines,
+    and metrics actually read — before this, a rejection was visible only
+    in decision-critic-adjustments.json, which none of them consult.
 
     Gated on the critic's verdict, checked before anything else is read
     or written: adjustments are a REVISE-only channel (see module
@@ -644,6 +691,17 @@ def apply_adjustments(output_dir):
         return {"status": "no_adjustments", "applied": 0}
     with open(adj_path, "r", encoding="utf-8") as f:
         doc = json.load(f)
+    # Doc-level shape check, same tier as the 'adjustments' list check right
+    # below: schema describes the WHOLE document's contract, not one entry,
+    # so it is validated before any entry is even looked at. `doc.get(...)`
+    # is guarded the same way as the 'adjustments' read below — a doc that
+    # is not an object at all reads as a missing schema, not a crash.
+    schema = doc.get("schema") if isinstance(doc, dict) else None
+    if schema != ADJUSTMENTS_SCHEMA:
+        raise ValueError(
+            f"{ADJUSTMENTS_FILENAME}: 'schema' must be {ADJUSTMENTS_SCHEMA}, "
+            f"got {schema!r}"
+        )
     adjustments = doc.get("adjustments") if isinstance(doc, dict) else None
     if not isinstance(adjustments, list):
         raise ValueError(
@@ -682,16 +740,33 @@ def apply_adjustments(output_dir):
     _index_adjustment_ids(adjustments)
     recorded_ids = _load_recorded_ids(findings)
     already_recorded = set(recorded_ids)
+    rejected_records = _load_rejected_records(findings)
+    already_rejected_ids = {
+        record.get("adjustment_id")
+        for record in rejected_records
+        if isinstance(record.get("adjustment_id"), str)
+    }
 
     # Validate every pending entry BEFORE mutating anything. The working
     # view tracks what each later entry in this batch can still address.
     pending = []
     catch_up = []
+    # Rejections a spot-check settled but this findings ledger has not yet
+    # recorded — orthogonal to the applied-ids bookkeeping above, since a
+    # rejected entry never reaches `pending`/`catch_up` at all.
+    newly_rejected = []
     seen_targets = {}
     removed_in_batch = {}
     for idx, entry in enumerate(adjustments):
         entry_state = _entry_state(entry, already_recorded)
         if entry_state == _SETTLED:
+            if entry.get("rejected") is True:
+                existing_id = entry.get("adjustment_id")
+                if not (
+                    isinstance(existing_id, str)
+                    and existing_id in already_rejected_ids
+                ):
+                    newly_rejected.append(entry)
             continue
         if entry_state == _CATCH_UP:
             # The findings write landed; only the flag write was lost.
@@ -745,12 +820,28 @@ def apply_adjustments(output_dir):
         pending.append((entry, action, fields))
 
     # Allocate ids before the findings write, so the record the findings
-    # file keeps stays resolvable against this file after a crash.
+    # file keeps stays resolvable against this file after a crash. Newly
+    # rejected entries need one too — the rejection audit record is keyed
+    # on it the same way an applied record is keyed on `pending`'s.
     newly_allocated = False
     for entry, _action, _fields in pending:
         if not entry.get("adjustment_id"):
             entry["adjustment_id"] = uuid.uuid4().hex
             newly_allocated = True
+    for entry in newly_rejected:
+        if not entry.get("adjustment_id"):
+            entry["adjustment_id"] = uuid.uuid4().hex
+            newly_allocated = True
+
+    rejection_records = [
+        {
+            "adjustment_id": entry["adjustment_id"],
+            "action": entry.get("action"),
+            "target_id": entry.get("id"),
+            "rejection_reason": entry.get("rejection_reason") or "",
+        }
+        for entry in newly_rejected
+    ]
 
     applied = 0
     batch_ids = []
@@ -787,6 +878,13 @@ def apply_adjustments(output_dir):
         batch_ids.append(entry["adjustment_id"])
         applied += 1
 
+    if newly_allocated:
+        # Ids only — the applied flags and this call's other bookkeeping
+        # belong after the findings write, same crash-safety ordering as
+        # the applied-ids record: a crash after this line but before the
+        # findings write below still leaves the id resolvable on retry.
+        atomic_write_json(adj_path, doc)
+
     if applied:
         _recount_summary(findings, issues)
         findings[APPLIED_IDS_KEY] = recorded_ids
@@ -794,9 +892,9 @@ def apply_adjustments(output_dir):
         # across every batch the ledger ever absorbed, and a second
         # withdrawal must name the decisions that caused it, not history.
         _withdraw_narrative_summary(findings, batch_ids)
-        if newly_allocated:
-            # Ids only — the applied flags belong after the findings write.
-            atomic_write_json(adj_path, doc)
+    if rejection_records:
+        findings[REJECTED_ADJUSTMENTS_KEY] = rejected_records + rejection_records
+    if applied or rejection_records:
         # Through the shared findings writer, not the raw atomic write:
         # this is an in-channel write, so it re-stamps the content digest
         # finalize verifies. A patched ledger that kept the pre-patch
