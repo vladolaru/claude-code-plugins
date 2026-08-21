@@ -79,6 +79,12 @@ MARKER_FILE = ".telemetry-log-path"
 # written before this change simply lacks them (unmeasured), never a
 # manifest claiming schema 2 with a shape schema 2 never had.
 #
+# The `agent_complete` EVENT then gained `resave` (whether a review JSON
+# for that reviewer was already published when the save reached
+# publication), again WITHOUT a further bump under the same carve-out.
+# The manifest is unaffected either way: `_AGENT_COMPLETE_MANIFEST_FIELDS`
+# deliberately omits the key, so no manifest shape changed at all.
+#
 # Bumping to 3 here would publish a compatibility boundary between two
 # shapes that never both existed in the wild. Revisit the moment 1.114.0
 # is tagged: the next manifest key after that is a real 2 -> 3 bump.
