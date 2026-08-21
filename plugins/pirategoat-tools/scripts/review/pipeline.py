@@ -569,6 +569,9 @@ _SEMVER_ROOT_RE = re.compile(rf"^{_SEMVER_PATTERN}$")
 _CHANGELOG_VERSION_RE = re.compile(rf"^## \[({_SEMVER_PATTERN})\]", re.MULTILINE)
 # Full SHA-1 (40 hex) or SHA-256 (64 hex) object name.
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+# Abbreviated object name as `git rev-parse --short` prints it. Git widens
+# the abbreviation as a repo grows, so the length is a range, not a value.
+_SHORT_SHA_RE = re.compile(r"[0-9a-f]{4,64}")
 
 
 def _detect_plugin_version(plugin_root=None):
@@ -583,6 +586,55 @@ def _detect_plugin_version(plugin_root=None):
         return match.group(1) if match else ""
     except Exception:
         return ""
+
+
+def _detect_plugin_commit(plugin_root=None):
+    """Return the plugin checkout's short HEAD, or None.
+
+    `plugin_version` comes from marketplace.json and only moves at
+    release, so every dev-mount run between two releases stamps the same
+    number — ~200 commits deep at one point — and a run's artifacts cannot
+    answer "which build produced this". The commit closes that gap for the
+    one host where the question is answerable.
+
+    Strictly best-effort, and silence is the correct answer more often
+    than not: a plugin installed from a marketplace zip has no repository,
+    and neither does a machine without Git. Not a repo, Git absent, a
+    nonzero exit, a timeout, or unparseable output all return None — never
+    a warning, never an exception. None means "not determinable", and the
+    caller writes it as an explicit null.
+    """
+    try:
+        root = Path(plugin_root) if plugin_root is not None else SCRIPTS_DIR.parent.parent
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        commit = result.stdout.strip()
+        return commit if _SHORT_SHA_RE.fullmatch(commit) else None
+    except Exception:
+        return None
+
+
+def _stamp_run_config(output_dir, config, field, value):
+    """Record one detected build-identity field in run-config.json.
+
+    Re-stamped on every step 1, not seeded once: run-config.json survives
+    clean_stale_artifacts() and is reused across interactive reruns, so a
+    rerun under an upgraded plugin would otherwise credit its artifacts to
+    whatever ran last time.
+
+    Writes on absence as well as on change, so the key is ALWAYS present.
+    A `.get() != value` test alone would leave an undetectable field
+    omitted rather than null, making "we could not tell" indistinguishable
+    from "this artifact predates the field" — one shape, always.
+    """
+    if field in config and config[field] == value:
+        return
+    config[field] = value
+    write_config(output_dir, config)
 
 
 def _resolve_git_identity(git_range, base_sha="", head_sha=""):
@@ -788,21 +840,27 @@ def main():
                   "interactive-only; disabled for this non-interactive run.",
                   file=sys.stderr)
 
-        # Stamp the plugin that is producing this run directory. This is the
-        # ONE place the version is detected: the telemetry manifest below and
-        # every reviewer JSON (through bootstrap's builder envelope) carry the
-        # value recorded here rather than re-deriving it, so no two artifacts
-        # of one run can disagree about which plugin produced them.
+        # Stamp the plugin BUILD that is producing this run directory. This
+        # is the ONE place either field is detected: the telemetry manifest
+        # below and every reviewer JSON (through bootstrap's builder
+        # envelope) carry the version recorded here rather than re-deriving
+        # it, so no two artifacts of one run can disagree about what
+        # produced them. None (not "") when detection fails — an artifact
+        # that cannot name its producer says so.
         #
-        # Re-stamped on every step 1, not seeded once: run-config.json
-        # survives clean_stale_artifacts() and is reused across interactive
-        # reruns, so a rerun under an upgraded plugin would otherwise credit
-        # its artifacts to the version that ran last time. None (not "") when
-        # detection fails — an artifact that cannot name its producer says so.
+        # Two fields because one cannot answer both questions.
+        # `plugin_version` is the RELEASE identity, read from the
+        # marketplace/CHANGELOG, and it only moves when a release is cut —
+        # so every dev-mount run between two releases stamps the same
+        # number. `plugin_commit` is the BUILD identity, and it is the only
+        # thing that distinguishes them. It is null wherever there is no
+        # repository to ask (a marketplace zip install), which is the
+        # ordinary case for a released plugin and deliberately silent.
         plugin_version = _detect_plugin_version() or None
-        if config.get("plugin_version") != plugin_version:
-            config["plugin_version"] = plugin_version
-            write_config(output_dir, config)
+        _stamp_run_config(output_dir, config, "plugin_version", plugin_version)
+        _stamp_run_config(
+            output_dir, config, "plugin_commit", _detect_plugin_commit()
+        )
 
         # Interactive output directories may be reused, so prior-run context
         # cannot remain authoritative until step 3 gathers it afresh. Bot runs

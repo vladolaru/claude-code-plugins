@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -259,6 +260,59 @@ class TestTelemetryIdentityHelpers:
 
         assert mod._git_output("rev-parse", "HEAD") == ""
         assert mod._detect_plugin_version(tmp_path / "missing") == ""
+
+    def test_plugin_commit_is_the_checkout_head(self, mod, tmp_path):
+        """`plugin_version` only moves at release, so ~200 dev-mount
+        commits stamp the same number. The commit is what tells two builds
+        of one version apart."""
+        repo = tmp_path / "plugin"
+        repo.mkdir()
+        for args in (
+            ["init", "-b", "main"],
+            ["config", "user.email", "t@t.com"],
+            ["config", "user.name", "T"],
+            ["config", "commit.gpgsign", "false"],
+        ):
+            subprocess.run(["git", *args], cwd=repo, check=True,
+                           capture_output=True)
+        (repo / "CHANGELOG.md").write_text("## [1.0.0] - 2026-01-01\n")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True,
+                       capture_output=True)
+        expected = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=repo,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        assert mod._detect_plugin_commit(repo) == expected
+
+    def test_plugin_commit_is_none_outside_a_repository(self, mod, tmp_path):
+        """A plugin installed from a marketplace zip has no repository, and
+        that must stay silent — not a warning, not an exception."""
+        plugin_root = tmp_path / "1.108.0"
+        plugin_root.mkdir()
+        assert mod._detect_plugin_commit(plugin_root) is None
+
+    def test_plugin_commit_is_none_when_git_is_unusable(self, mod, monkeypatch,
+                                                        tmp_path):
+        def fail(*_args, **_kwargs):
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(mod.subprocess, "run", fail)
+        assert mod._detect_plugin_commit(tmp_path) is None
+
+    def test_plugin_commit_rejects_unparseable_output(self, mod, monkeypatch,
+                                                      tmp_path):
+        """Whatever a future Git prints, only an object name is recorded."""
+        class _Result:
+            returncode = 0
+            stdout = "fatal: not a tree\n"
+
+        monkeypatch.setattr(
+            mod.subprocess, "run", lambda *a, **k: _Result()
+        )
+        assert mod._detect_plugin_commit(tmp_path) is None
 
     def test_explicit_right_endpoint_is_resolved_as_head(self, mod, monkeypatch):
         identities = {
@@ -581,6 +635,44 @@ class TestCLIIntegration:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config["plugin_version"] == mod._detect_plugin_version()
         assert config["plugin_version"] != "0.0.1"
+
+    def test_run_config_carries_the_producing_build_commit(self, mod, tmp_path):
+        """The plugin under test IS a git checkout, so the field resolves."""
+        run_pipeline("--step", "1", "--mode", "pr",
+                     "--output-dir", str(tmp_path), "--pr-number", "42",
+                     cwd=tmp_path)
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_commit"] == mod._detect_plugin_commit()
+        assert config["plugin_commit"]
+
+    def test_undeterminable_commit_is_written_as_an_explicit_null(
+        self, mod, tmp_path, monkeypatch
+    ):
+        """One shape, always. An omitted key would make "we could not tell"
+        indistinguishable from "this artifact predates the field"."""
+        config = {"mode": "pr", "pr_number": "42"}
+        mod._stamp_run_config(str(tmp_path), config, "plugin_commit", None)
+        written = json.loads((tmp_path / "run-config.json").read_text())
+        assert "plugin_commit" in written
+        assert written["plugin_commit"] is None
+
+    def test_unchanged_stamp_does_not_rewrite_the_config(self, mod, tmp_path):
+        config = {"mode": "pr", "plugin_commit": "abc1234"}
+        mod.write_config(str(tmp_path), config)
+        mtime = (tmp_path / "run-config.json").stat().st_mtime_ns
+        mod._stamp_run_config(str(tmp_path), config, "plugin_commit", "abc1234")
+        assert (tmp_path / "run-config.json").stat().st_mtime_ns == mtime
+
+    def test_stale_build_commit_is_refreshed_on_rerun(self, mod, tmp_path):
+        """run-config.json survives cleanup across interactive reruns, so a
+        rerun on a newer build must re-stamp."""
+        (tmp_path / "run-config.json").write_text(json.dumps({
+            "mode": "pr", "pr_number": "42", "plugin_commit": "0000000",
+        }))
+        run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["plugin_commit"] == mod._detect_plugin_commit()
+        assert config["plugin_commit"] != "0000000"
 
     def test_workspace_params_persisted_to_state(self, tmp_path):
         run_pipeline("--step", "1", "--mode", "pr",
