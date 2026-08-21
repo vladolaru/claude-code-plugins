@@ -200,7 +200,7 @@ Direct unit tests on the `ReviewOutputBuilder` class from `scripts/review/agent/
 | `TestFileScopedIssues` | `line=None` records a first-class file-scoped issue (`scope: "file"`) that still counts toward the verdict — no silent demotion |
 | `TestLineRequired` | Invalid line values still raise for point defects — the file-scoped path never becomes a way to skip validation |
 | `TestAddObservation` | `add_observation()` stores file-level notes outside the finding pipeline, in insertion order |
-| `TestAddUnreviewed` | `add_unreviewed()` declares NOT DIFFED coverage gaps through the builder — path grammar, dedup, and sidecar validation |
+| `TestAddUnreviewed` | `add_unreviewed()` declares NOT DIFFED coverage gaps through the builder — path grammar, dedup, sidecar validation, and the variadic signature it shares with `add_deferred_reviewed()` (multi-path calls land every path, reject as a whole batch, and stay per-path enforced) |
 | `TestAddDeferredReviewed` | Explicit claims of NOT DIFFED files actually read: the path grammar shared with `add_unreviewed()`, add-time membership validation against the deferred sidecar, that a claim never moves the verdict, all-or-nothing batch validation (a mid-batch rejection records nothing, and names every offender), and duplicate/already-recorded dedup semantics |
 | `TestNotApplicable` | `mark_not_applicable()` produces a `not_applicable` verdict with `skip_reason`, zero findings |
 | `TestAdvisoryChannel` | Advisory-channel findings are listed but never gate the verdict; entitlement and suppression accounting |

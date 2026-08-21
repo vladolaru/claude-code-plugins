@@ -1077,7 +1077,8 @@ def build_output(
                 "a protocol violation. Claim each deferred file you actually "
                 'read with builder.add_deferred_reviewed("<path>") — one call '
                 "takes several paths. Declare each file you could not reach "
-                'with builder.add_unreviewed("<path>") — it records the gap '
+                'with builder.add_unreviewed("<path>") — same signature, '
+                "several paths per call — which records the gap "
                 "in the JSON output (the pipeline-derived Markdown renders it "
                 "as the `**Not reviewed (budget):**` line) — and never count a "
                 "declared-unreviewed file toward your verdict. "
@@ -1237,7 +1238,7 @@ def build_output(
     lines.append(f'builder.add_clearance(claim="Nothing depends on the removed X",')
     lines.append(f'    method="exact searches run / files read",  # REQUIRED — see Absence Claims rules')
     lines.append(f'    evidence="hit counts, file:line list")     # optional')
-    lines.append(f'builder.add_unreviewed("path/unreached.py")  # ONLY at budget exhaustion — declares a NOT DIFFED coverage gap')
+    lines.append(f'builder.add_unreviewed("path/unreached.py", "path/unreached2.py")  # ONLY at budget exhaustion — declares NOT DIFFED coverage gaps')
     lines.append(f'builder.add_deferred_reviewed("path/read1.py", "path/read2.py")  # claim each NOT DIFFED file you actually read')
     lines.append(
         'builder.set_files_reviewed(N)  # REQUIRED: replace N with the actual number of files you reviewed'

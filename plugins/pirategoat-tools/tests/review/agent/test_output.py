@@ -1128,6 +1128,73 @@ class TestAddUnreviewed:
         b.add_unreviewed("src/a.py")
         assert b.unreviewed == ["src/a.py", "src/b.py"]
 
+    def test_declares_every_path_of_a_multi_path_call(self):
+        """The signature mirrors its sibling because agents assume it does.
+
+        Two reviewers in one field run called add_unreviewed(*paths) on the
+        symmetry with add_deferred_reviewed() and got "takes 2 positional
+        arguments but 126 were given"; one then spent a tool call reading
+        output.py to discover the asymmetry.
+        """
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py", "./src/b.py", "src/a.py")
+        assert b.unreviewed == ["src/a.py", "src/b.py"]
+
+    def test_single_path_calls_still_work(self):
+        """Every taught example and every existing caller passes one path."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("src/a.py")
+        assert b.unreviewed == ["src/a.py"]
+
+    def test_zero_arguments_raises(self):
+        """A declaration of nothing is a silent no-op, not a declaration."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError, match="at least one file path"):
+            b.add_unreviewed()
+
+    def test_one_bad_path_rejects_the_whole_batch(self):
+        """All-or-nothing, the same as the claims API: a partially recorded
+        declaration is a coverage statement the reviewer never made."""
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError):
+            b.add_unreviewed("src/a.py", "/abs/b.py")
+        assert b.unreviewed == []
+
+    def test_multi_path_declaration_still_contradicts_a_claim(
+        self, tmp_path, monkeypatch
+    ):
+        """Per-path enforcement does not loosen when the call is variadic:
+        save() must still reject declaring and claiming the same file."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        (tmp_path / "sec-deferred-files.json").write_text(
+            json.dumps({"schema": 1, "deferred_files": ["a.py", "b.py"]})
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        b.add_unreviewed("a.py", "b.py")
+        b.add_deferred_reviewed("b.py")
+        with pytest.raises(ValueError) as excinfo:
+            b.save(str(tmp_path))
+        assert "b.py" in str(excinfo.value)
+
+    def test_multi_path_membership_is_checked_per_path(
+        self, tmp_path, monkeypatch
+    ):
+        """A batch is not a bypass — every path is membership-checked, and
+        one raise names every offender rather than one per retry."""
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setenv("PIRATEGOAT_REVIEWER_NAME", "sec")
+        (tmp_path / "sec-deferred-files.json").write_text(
+            json.dumps({"schema": 1, "deferred_files": ["a.py"]})
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="sec")
+        with pytest.raises(ValueError) as excinfo:
+            b.add_unreviewed("a.py", "typo.py", "other-typo.py")
+        message = str(excinfo.value)
+        assert "add_unreviewed received 2 declaration(s)" in message
+        assert "typo.py" in message and "other-typo.py" in message
+        assert b.unreviewed == []
+
     def test_normalizes_equivalent_paths_to_canonical_form(self):
         """"./src/a.py" and "src//a.py" declare the same scope path — the
         stored form must match what the scope sidecars emit."""

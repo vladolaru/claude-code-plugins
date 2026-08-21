@@ -837,6 +837,58 @@ class ReviewOutputBuilder:
             f"NOT DIFFED file of this review: {offenders}. {valid}"
         )
 
+    def _validate_deferred_batch(
+        self, files, api_name: str, noun: str
+    ) -> List[str]:
+        """Normalize and membership-check a whole batch, or raise once.
+
+        The one validation body both deferred-set APIs run. They address
+        the same namespace under the same rules, so a second copy is a
+        drift generator, not a convenience — the last time these APIs kept
+        their own loops, one accepted absolute and traversal paths the
+        other rejected.
+
+        Both error classes collect across the whole batch — grammar
+        failures as their own messages, membership offenders through the
+        shared rejection helper — so one raise names every problem instead
+        of surfacing them one retry at a time. Nothing is recorded here:
+        the caller commits only after this returns, which is what makes a
+        multi-path call all-or-nothing. A mid-batch failure that had
+        already recorded the leading paths would leave the builder in a
+        state the caller never asked for — a retry would double-record
+        them, and a caller who gives up is left with a half-statement no
+        one made.
+        """
+        if not files:
+            raise ValueError(
+                f"{api_name} requires at least one file path — a call "
+                f"naming nothing is a no-op, not a {noun}."
+            )
+        known = self._known_deferred_files()
+        normalized: List[str] = []
+        unknown: List[str] = []
+        grammar_errors: List[str] = []
+        for file in files:
+            try:
+                path = self._normalize_deferred_path(file, api_name)
+            except ValueError as exc:
+                grammar_errors.append(str(exc))
+                continue
+            normalized.append(path)
+            if known is not None and path not in known:
+                unknown.append(path)
+        if grammar_errors or unknown:
+            parts = list(grammar_errors)
+            if unknown:
+                try:
+                    self._reject_unknown_deferred(
+                        unknown, known, api_name, noun
+                    )
+                except ValueError as exc:
+                    parts.append(str(exc))
+            raise ValueError("; ".join(parts))
+        return normalized
+
     def _validate_deferred_serialization(
         self, output_dir: str
     ) -> Optional[frozenset]:
@@ -967,14 +1019,19 @@ class ReviewOutputBuilder:
                 "entitled to the advisory channel."
             )
 
-    def add_unreviewed(self, file: str):
-        """Declare an in-scope file left unreviewed after budget exhaustion.
+    def add_unreviewed(self, *files: str):
+        """Declare in-scope files left unreviewed after budget exhaustion.
 
         Use ONLY for NOT DIFFED files genuinely out of reach when the tool
-        budget ran out. Declared files render under the
-        '**Not reviewed (budget):**' line in the Markdown summary and appear
-        as 'unreviewed' in the JSON output, so downstream coverage accounting
-        sees the gap. They never count toward the verdict.
+        budget ran out. Call as you give up on each file, or once with
+        several paths — the signature mirrors add_deferred_reviewed()
+        because the two APIs are opposite statements about one namespace,
+        and reviewers that assumed the symmetry before it existed lost
+        calls to `takes 2 positional arguments but 126 were given`.
+        Declared files render under the '**Not reviewed (budget):**' line
+        in the Markdown summary and appear as 'unreviewed' in the JSON
+        output, so downstream coverage accounting sees the gap. They never
+        count toward the verdict.
 
         Explicit declaration is not the only way into that list: save()
         auto-declares any deferred file left neither declared here nor
@@ -988,30 +1045,24 @@ class ReviewOutputBuilder:
         A path declared here must not also be claimed via
         add_deferred_reviewed(): save() rejects the contradiction rather
         than publishing both statements about one file.
+
+        Validation is the batch validator both APIs share: the whole call
+        either lands or leaves no trace.
         """
-        # Shared grammar: an unmatchable declaration would invert into a
-        # deferred-but-reviewed claim downstream, so malformed forms fail here.
-        path = self._normalize_deferred_path(file, "add_unreviewed")
-        # When bootstrap persisted the authoritative deferred set, a
-        # declaration outside it (typo, wrong repo root) is rejected at
-        # write time — form checks alone cannot catch a path that is merely
-        # wrong rather than malformed, and downstream it would silently
-        # count as a reviewed claim for every genuinely deferred file.
-        known = self._known_deferred_files()
-        if known is not None and path not in known:
-            self._reject_unknown_deferred(
-                [path], known, "add_unreviewed", "declaration"
-            )
-        if path in self.unreviewed_autofilled:
-            # An explicit declaration outranks system backfill: promote the
-            # path out of derived state so the next save records it as the
-            # reviewer's own statement. Without this the call is a silent
-            # no-op — the path is already in self.unreviewed — and the
-            # marker would keep attributing to the system a gap the agent
-            # has just taken ownership of.
-            self.unreviewed_autofilled.remove(path)
-        if path not in self.unreviewed:
-            self.unreviewed.append(path)
+        normalized = self._validate_deferred_batch(
+            files, "add_unreviewed", "declaration"
+        )
+        for path in normalized:
+            if path in self.unreviewed_autofilled:
+                # An explicit declaration outranks system backfill: promote
+                # the path out of derived state so the next save records it
+                # as the reviewer's own statement. Without this the call is
+                # a silent no-op — the path is already in self.unreviewed —
+                # and the marker would keep attributing to the system a gap
+                # the agent has just taken ownership of.
+                self.unreviewed_autofilled.remove(path)
+            if path not in self.unreviewed:
+                self.unreviewed.append(path)
 
     def add_deferred_reviewed(self, *files: str):
         """Claim NOT DIFFED (deferred) files as actually reviewed.
@@ -1032,54 +1083,14 @@ class ReviewOutputBuilder:
         rule — at add time when the env envelope is present, and always at
         save().
 
-        The whole batch is validated before anything is recorded: a call
-        naming several paths either fully lands or leaves no trace, mirroring
-        the no-half-applied-batch doctrine critic_adjustments.py enforces for
-        its own multi-item writes. A mid-batch failure that had already
-        recorded the leading valid paths would leave the builder in a state
-        the caller never asked for — a retry would then double-record them,
-        and a caller who gives up is left with a half-claim no one made.
+        Validation is the batch validator both APIs share, mirroring the
+        no-half-applied-batch doctrine critic_adjustments.py enforces for
+        its own multi-item writes: the whole call either lands or leaves no
+        trace.
         """
-        if not files:
-            raise ValueError(
-                "add_deferred_reviewed requires at least one file path — a "
-                "call claiming nothing is a no-op, not a claim."
-            )
-        known = self._known_deferred_files()
-        # Pass 1 (validate): normalize and membership-check every path in
-        # the batch before mutating anything. Both error classes collect
-        # across the whole batch — grammar failures as their own messages,
-        # membership offenders through the shared rejection helper — so one
-        # raise names every problem in the batch instead of surfacing them
-        # one retry at a time.
-        normalized: List[str] = []
-        unknown_claims: List[str] = []
-        grammar_errors: List[str] = []
-        for file in files:
-            try:
-                path = self._normalize_deferred_path(
-                    file, "add_deferred_reviewed"
-                )
-            except ValueError as exc:
-                grammar_errors.append(str(exc))
-                continue
-            normalized.append(path)
-            if known is not None and path not in known:
-                unknown_claims.append(path)
-        if grammar_errors or unknown_claims:
-            parts = list(grammar_errors)
-            if unknown_claims:
-                try:
-                    self._reject_unknown_deferred(
-                        unknown_claims, known, "add_deferred_reviewed",
-                        "claim"
-                    )
-                except ValueError as exc:
-                    parts.append(str(exc))
-            raise ValueError("; ".join(parts))
-        # Pass 2 (commit): every path in the batch already passed
-        # validation, so this loop can only append — it can never fail
-        # partway through and leave a partial claim recorded.
+        normalized = self._validate_deferred_batch(
+            files, "add_deferred_reviewed", "claim"
+        )
         for path in normalized:
             if path not in self.deferred_reviewed:
                 self.deferred_reviewed.append(path)
