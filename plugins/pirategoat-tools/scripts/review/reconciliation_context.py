@@ -374,8 +374,16 @@ def _unscoped_files(
     safe leaves the whole population unmeasured (``None``) rather than
     quietly shrinking it, because a shrunken set here reads as a cleaner
     review than the run earned.
+
+    An EMPTY changed-file list is unmeasured too, not measured-and-zero.
+    A review of zero changed files does not exist, while a run whose file
+    list never reached the builder very much does: orchestration.py always
+    passes ``--changed-files`` and passes ``""`` when review-context.json
+    carries no CSV. One rule — no list means nothing was measured — is what
+    keeps that failure from publishing ``files_unscoped: []``, a clean
+    coverage bill for a population nothing looked at.
     """
-    if changed_files is None:
+    if not changed_files:
         return None
     normalized = normalize_repo_paths(changed_files, strict=True)
     if normalized is None:
@@ -424,7 +432,8 @@ def aggregate_inline_coverage(
     is ``changed_files`` minus every path any sidecar mentions (see
     ``_SIDECAR_FILE_LISTS`` for the lists and ``_unscoped_files`` for the
     subtraction). It stays None when the caller supplied no changed-file
-    list, because "not measured" and "measured, none" are different facts.
+    list — empty counts as none — because "not measured" and "measured,
+    none found" are different facts and only the second is a clean result.
 
     Returns None when no summaries exist (pre-sidecar runs) so callers can
     distinguish "no data" from "no gaps".
@@ -1952,6 +1961,10 @@ def main() -> int:
             "host_context_banner": extract_host_banner(output_dir),
             # Run-level inline coverage from per-agent scope summaries —
             # None on pre-sidecar runs.
+            #
+            # An empty `changed_files` reaches `_unscoped_files` as the
+            # unmeasured case it is — see its docstring; nothing needs
+            # translating here.
             "inline_coverage": aggregate_inline_coverage(
                 output_dir, changed_files=changed_files
             ),

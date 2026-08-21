@@ -107,6 +107,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **Scope sidecars publish the reviewer's in-scope list in every mode.** The union of a sidecar's file lists is what run-level coverage subtracts from the changed set, but all three lists it had are diff-derived — and a `--base-ref-only` or `--summary` agent never fetches a diff. patterns-reviewer is configured that way by the registry, and the reviewer protocol sends every reviewer there on 100+-file PRs, so on exactly the big runs this measurement targets those agents contributed nothing and every file they owned published as "matched no reviewer's domain". The new `in_scope_files` field carries the whole domain-matched workload in all modes; sidecars written before it contribute nothing through it, which under-reports as before rather than claiming anything new.
 
+- **A coverage population nothing measured stopped reading as a clean one.** `files_unscoped` distinguished unmeasured (`null`) from measured-and-empty (`[]`), but the CLI turned an absent `--changed-files` into `[]` before the builder saw it — and `orchestration.py` always passes the flag, passing `""` when `review-context.json` carries no CSV. The unmeasured branch was therefore unreachable in production, and the one run shape that reaches it (a file list that never arrived) published an empty gap list. An empty changed-file list is now an absent one: a review of zero changed files does not exist, so there is one rule and the failure reports unmeasured.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01

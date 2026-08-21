@@ -1069,7 +1069,8 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     recon_json_path = os.path.join(output_dir, "reconciliation-context.json")
     gaps = {}
     claims = {}
-    unscoped = []
+    # None, not [] — unmeasured until a coverage payload says otherwise.
+    unscoped = None
     if os.path.isfile(recon_json_path):
         try:
             with open(recon_json_path) as f:
@@ -1086,15 +1087,21 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
                 raw_claims = coverage.get("files_deferred_reviewed") or {}
                 if isinstance(raw_claims, dict):
                     claims = raw_claims
-                # None on a run whose builder had no changed-file list —
-                # unmeasured, which must read as "no section", not "none".
-                raw_unscoped = coverage.get("files_unscoped") or []
+                # `files_unscoped: null` is a run whose builder had no
+                # changed-file list to subtract from — unmeasured. It is
+                # carried through as None rather than flattened to [],
+                # because everything downstream that reads this state (and
+                # the JSON artifact it came from) must be able to tell
+                # "nothing was measured" from "measured, nothing found".
+                # Both render no section today; only one of them may ever
+                # be reported as a clean coverage result.
+                raw_unscoped = coverage.get("files_unscoped")
                 if isinstance(raw_unscoped, list):
                     unscoped = [f for f in raw_unscoped if isinstance(f, str)]
         except (json.JSONDecodeError, OSError):
             gaps = {}
             claims = {}
-            unscoped = []
+            unscoped = None
     state["inline_coverage_gaps"] = gaps
     state["inline_coverage_claims"] = claims
     state["inline_coverage_unscoped"] = unscoped

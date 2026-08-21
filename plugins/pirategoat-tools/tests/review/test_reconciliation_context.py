@@ -1385,6 +1385,31 @@ class TestFullScript:
         md = (tmp_path / "reconciliation-context.md").read_text()
         assert "## Changed Files In No Reviewer's Scope" in md
 
+    def test_empty_changed_files_flag_reads_as_unmeasured(self, tmp_path):
+        """orchestration.py always passes `--changed-files`, and passes ""
+        when review-context.json carries no CSV.
+
+        That is the production path on which the unmeasured branch is
+        reached. Before this, it published `files_unscoped: []` — a clean
+        coverage bill for a population nothing had measured.
+        """
+        _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["inline_coverage"]["files_unscoped"] is None
+        md = (tmp_path / "reconciliation-context.md").read_text()
+        assert "No Reviewer's Scope" not in md
+
     def test_empty_output_dir(self, tmp_path):
         """Runs successfully with no review files."""
         result = self._run(
@@ -3269,6 +3294,39 @@ class TestUnscopedFiles:
         )
         cov = mod.aggregate_inline_coverage(str(tmp_path))
         assert cov["files_unscoped"] is None
+
+    @pytest.mark.parametrize(
+        "changed_files", [None, []], ids=["absent", "empty"],
+    )
+    def test_absent_and_empty_changed_lists_are_both_unmeasured(
+        self, mod, tmp_path, changed_files
+    ):
+        """An empty list is an absent list, not "zero changed files".
+
+        A review of zero changed files does not exist; a run whose file
+        list never reached the builder does, and orchestration.py reaches
+        it by passing `--changed-files ""`. Reading that as measured-and-
+        zero publishes a clean coverage bill nothing looked at.
+        """
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=changed_files,
+        )
+        assert cov["files_unscoped"] is None
+
+    def test_a_measured_run_that_finds_nothing_reports_an_empty_list(
+        self, mod, tmp_path
+    ):
+        """The other side of the same distinction: measured and clean."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php"],
+        )
+        assert cov["files_unscoped"] == []
 
     def test_secondary_domain_sidecar_files_count_as_scoped(
         self, mod, tmp_path

@@ -1665,7 +1665,10 @@ class TestStep9ReviewReport:
 
         mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
 
-        assert state["inline_coverage_unscoped"] == []
+        # None, not [] — the state keeps "nothing was measured" distinct
+        # from "measured, nothing found", because only the second may ever
+        # be reported as a clean coverage result.
+        assert state["inline_coverage_unscoped"] is None
         text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
         assert "## Review coverage" not in text
 
