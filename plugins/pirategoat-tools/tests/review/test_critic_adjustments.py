@@ -2040,6 +2040,103 @@ class TestStepElevenWithdrawsContradictedProse:
         assert "withdrawn" in rendered.lower()
 
 
+class TestClearancePassthrough:
+    """The ledger's `clearances` must survive every writer after the
+    reconciliator, or "what held" cannot be reported from the artifact.
+
+    The field run only ever carried `clearances: null`, so a write path
+    that quietly drops unknown-to-it keys would have looked identical.
+    """
+
+    CLEARANCES = [
+        {
+            "claim": "No caller depends on the removed `legacy_hook` filter",
+            "method": "git grep -n legacy_hook across the repo + "
+                      "enumerated every add_filter site",
+            "evidence": "per security-reviewer, wp-architecture-reviewer — "
+                        "0 in-tree consumers",
+        },
+    ]
+
+    def test_apply_adjustments_preserves_clearances(
+        self, tmp_path, revise_verdict
+    ):
+        _write_findings(
+            tmp_path, [_issue("F1")], clearances=self.CLEARANCES
+        )
+        _write_adjustments(tmp_path, [
+            {"adjustment_id": "A1", "action": "promote", "id": "F1",
+             "fields": {"severity": "high"}, "rationale": "r"},
+        ])
+
+        result = apply_adjustments(str(tmp_path))
+
+        assert result["applied"] == 1
+        after = json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        )
+        assert after["clearances"] == self.CLEARANCES
+
+    def test_write_findings_does_not_filter_unknown_keys(self, tmp_path):
+        """`write_findings` is a whole-document replace, not a projection —
+        it has no field vocabulary of its own to fall out of date."""
+        payload = {"issues": [], "clearances": self.CLEARANCES,
+                   "a_future_key": {"kept": True}}
+        write_findings(str(tmp_path), payload)
+        assert json.loads(
+            (tmp_path / "review-findings.json").read_text()
+        ) == payload
+
+    def test_rendered_markdown_carries_the_clearances_section(self, tmp_path):
+        """End of the chain: the renderer the report is told to quote."""
+        _write_findings(tmp_path, [_issue("F1")], clearances=self.CLEARANCES)
+        script = PLUGIN_ROOT / "scripts" / "review" / "agent" / "output.py"
+        result = subprocess.run(
+            [sys.executable, str(script), "render",
+             str(tmp_path / "review-findings.json")],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "## Clearances (verified absences)" in result.stdout
+        assert "legacy_hook" in result.stdout
+        assert "per security-reviewer, wp-architecture-reviewer" in result.stdout
+
+
+class TestReconciliatorClearancePin:
+    """Writer #1 is an agent following a Markdown snippet, so only a test
+    can hold it to teaching `add_clearance`.
+
+    Before this, the taught template never mentioned it: the ledger's
+    `clearances` was always null, and step 9 rebuilt "what was verified and
+    held" from the orchestrator's memory — the exact from-memory reporting
+    the artifact chain exists to prevent.
+    """
+
+    SNIPPET = PLUGIN_ROOT / "agents" / "review-reconciliator.md"
+
+    def _text(self):
+        return self.SNIPPET.read_text(encoding="utf-8")
+
+    def test_the_template_teaches_add_clearance(self):
+        text = self._text()
+        assert "builder.add_clearance(" in text
+        for kwarg in ("claim=", "method=", "evidence="):
+            assert kwarg in text.split("builder.add_clearance(", 1)[1][:400]
+
+    def test_the_template_excludes_void_and_correlated_clearances(self):
+        text = self._text()
+        taught = text.split("builder.add_clearance(", 1)[0]
+        assert "Do NOT record" in taught
+        assert "VOID" in taught
+        assert "method-correlated duplicates" in taught
+
+    def test_the_structured_home_table_lists_clearances(self):
+        assert (
+            "| `add_clearance(...)` → `## Clearances (verified absences)` |"
+            in self._text()
+        )
+
+
 class TestReconciliatorWritePathPin:
     """Writer #1 is an agent following a Markdown snippet, so the only
     thing that can hold it to the sanctioned write path is a test.

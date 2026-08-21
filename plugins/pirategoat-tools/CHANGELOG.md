@@ -95,6 +95,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **Critic adjustments are accounted for per entry, never in aggregate.** A field report said "all four spot-checked" about a five-entry batch, publishing the unverified entry as verified. Step 10 now requires one line per `adjustment_id` with its own outcome (`verified` / `refuted` / `not checked`) and forbids the batch-level phrasing outright.
 
+- **The reconciled ledger carries what held, not only what broke.** Reviewers report clearances with their verification method and the reconciliation context carried them to the reconciliator, but the reconciliator's taught output never mentioned `add_clearance` — so `review-findings.json`'s `clearances` was always null and step 9 rebuilt "what was verified and held" from memory, which is exactly what the artifact chain exists to prevent. The reconciliator now records every clearance that survives its method judgment (void and method-correlated duplicates excluded), and the step-9 briefing sources that section from the rendered ledger instead of recollection.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01

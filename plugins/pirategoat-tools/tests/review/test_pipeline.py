@@ -1669,6 +1669,15 @@ class TestStep9ReviewReport:
         text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
         assert "## Review coverage" not in text
 
+    def test_what_held_is_sourced_from_the_ledger_not_memory(self, mod):
+        """Step 9's "what held" section must derive from the ledger's
+        rendered clearances — the from-memory rebuild is the failure."""
+        g = mod.get_step_guidance(9, "full", {"completed_steps": []}, {})
+        text = "\n".join(g["actions"])
+        assert "## Clearances (verified absences)" in text
+        assert "never from memory" in text
+        assert "write no such section" in text
+
     def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
         state = {"completed_steps": [], "inline_coverage_gaps": {}}
         g = mod.get_step_guidance(9, "full", state, {})

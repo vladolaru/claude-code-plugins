@@ -1392,6 +1392,18 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         f"Source: `{od}/review-findings.json` (canonical) and "
         f"`{od}/review-findings.md`, its pipeline-rendered reading copy."
     )
+    actions.append(
+        f"**What held comes from the ledger, never from memory.** Any "
+        f"\"what we checked and it held\" / \"verified absences\" content "
+        f"in the report is quoted from the `## Clearances (verified "
+        f"absences)` section of `{od}/review-findings.md` — the "
+        f"reconciliator recorded there exactly the clearances that survived "
+        f"its method judgment, with attribution. Do not reconstruct that "
+        f"list from what you recall reviewers saying: a clearance the "
+        f"reconciliator voided as method-inadequate would come back as "
+        f"fact. If that section is absent, nothing was recorded as held — "
+        f"write no such section rather than filling one in."
+    )
 
     # Host context banner passthrough — if degraded, surface message at top
     host_context = context.get("host_context")
