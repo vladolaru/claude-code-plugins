@@ -224,14 +224,6 @@ class TestStateManagement:
         assert loaded["workspace"]["original_branch"] == "main"
         assert loaded["workspace"]["stash_ref"] == "abc123"
 
-    def test_config_is_never_overwritten(self, mod, tmp_path):
-        """run-config.json fields are seeded from CLI on first call and never overwritten."""
-        config = {"mode": "pr", "pr_number": "42", "interactive": True}
-        mod.write_config(str(tmp_path), config)
-        loaded = mod.read_config(str(tmp_path))
-        assert loaded["mode"] == "pr"
-        assert loaded["pr_number"] == "42"
-
     def test_config_is_source_of_truth_over_cli(self, mod, tmp_path):
         """When run-config.json exists, its values take precedence over CLI args."""
         config = {"mode": "pr", "pr_number": "42", "interactive": True}
@@ -519,6 +511,35 @@ class TestCLIIntegration:
         assert config["mode"] == "pr"
         assert config["pr_number"] == "42"
 
+    def test_cli_seeded_config_fields_are_never_overwritten_on_rerun(self, tmp_path):
+        """run-config.json is seeded from the CLI on the FIRST step 1 only.
+
+        Step 1 reruns against the same output dir are routine (interactive
+        resume, bot retry), and they may carry a different command line.
+        The seeded identity of the run — which mode, which PR, which range —
+        must survive that: `pipeline.py:707`'s `if not existing_config.get(
+        "mode")` gate is what keeps a rerun from re-pointing a half-finished
+        review at a different target while its artifacts still describe the
+        old one. Only the fields with explicit rerun-sync semantics (host,
+        quick, refresh_dependencies, session_id) may change.
+        """
+        run_pipeline("--step", "1", "--mode", "pr",
+                     "--output-dir", str(tmp_path), "--pr-number", "42",
+                     "--git-range", "aaa111..bbb222",
+                     "--output-instructions", "original", cwd=tmp_path)
+
+        r = run_pipeline("--step", "1", "--mode", "full",
+                         "--output-dir", str(tmp_path), "--pr-number", "99",
+                         "--git-range", "ccc333..ddd444",
+                         "--output-instructions", "rewritten", cwd=tmp_path)
+        assert r.returncode == 0
+
+        config = json.loads((tmp_path / "run-config.json").read_text())
+        assert config["mode"] == "pr"
+        assert config["pr_number"] == "42"
+        assert config["git_range"] == "aaa111..bbb222"
+        assert config["output_instructions"] == "original"
+
     def test_run_config_carries_the_running_plugin_version(self, mod, tmp_path):
         """Step 1 stamps the artifact with the plugin that produced it.
 
@@ -568,11 +589,6 @@ class TestCLIIntegration:
         state = json.loads((tmp_path / "pipeline-state.json").read_text())
         assert state["workspace"]["original_branch"] == "develop"
         assert state["workspace"]["stash_ref"] == "abc123"
-
-    def test_mode_required_when_no_config(self, tmp_path):
-        """First call must provide --mode."""
-        r = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
-        assert r.returncode != 0
 
     def test_step_1_clears_stale_artifacts(self, tmp_path):
         """Step 1 should clear stale artifacts from previous runs."""
