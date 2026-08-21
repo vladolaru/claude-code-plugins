@@ -341,6 +341,29 @@ class TestAvailabilityLabels:
 
         assert run.snapshot()["availability"]["subagents"] == "partial"
 
+    def test_unresolved_tool_calls_do_not_downgrade_the_subagent_half(self):
+        """Tool evidence and token usage are separate channels.
+
+        `agent_transcript_unresolved_calls` says a tool call's result could
+        not be classified. Token usage comes from the messages' own `usage`
+        records, guarded by `agent_transcript_usage_missing` and by the
+        analyzer's `usage_valid`/`usage_observed`. A reviewer whose usage
+        was fully measured must still read `complete`.
+        """
+        assert "agent_transcript_unresolved_calls" not in (
+            _mod._SUBAGENT_EVIDENCE_WARNINGS
+        )
+        assert _mod._subagent_availability(
+            2, 2, {"agent_transcript_unresolved_calls"}
+        ) == "complete"
+
+    def test_usage_channel_warnings_still_downgrade_the_subagent_half(self):
+        """The decoupling above is scoped: a warning that DOES speak about
+        token usage must keep demoting the label."""
+        assert _mod._subagent_availability(
+            2, 2, {"agent_transcript_usage_missing"}
+        ) == "partial"
+
 
 class TestRecordedAbsence:
     """An absent measurement is never a measured zero."""

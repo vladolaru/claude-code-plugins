@@ -117,9 +117,25 @@ RUN_CONFIG_FILENAME = "run-config.json"
 # Splitting the two halves is the entire point of this artifact, so the
 # subagent half is derived from the facts that are actually about subagents.
 #
-# `agent_scope_evidence_missing` is deliberately absent: it means a reviewer
-# had no authoritative scope mapping to classify its READS against, which
-# says nothing about whether its token usage was measured.
+# Two codes are deliberately absent, both for the same reason: they are
+# about a DIFFERENT evidence channel than token usage, so letting either one
+# speak here would demote a fully measured subagent half on evidence that
+# never concerned it.
+#
+# `agent_scope_evidence_missing` — a reviewer had no authoritative scope
+# mapping to classify its READS against, which says nothing about whether
+# its token usage was measured.
+#
+# `agent_transcript_unresolved_calls` — a reviewer issued a tool call whose
+# paired result could not be classified, which is TOOL evidence. Usage comes
+# from the messages' own `usage` records, a separate channel with its own
+# guards: `agent_transcript_usage_missing` below, plus `usage_valid` /
+# `usage_observed` inside the analyzer. Including it demoted this label to
+# `partial` on effectively every field run, because the analyzer counted any
+# call whose result shape it did not recognize — WebSearch, WebFetch, MCP —
+# as unresolved, and most reviewers use WebSearch. The classifier no longer
+# does that (see `_EVIDENCE_TOOL_NAMES` in `review_transcript.py`), but the
+# coupling was wrong on its own terms and stays removed either way.
 _SUBAGENT_EVIDENCE_WARNINGS = frozenset({
     "expected_agents_unavailable",
     "expected_agent_identity_invalid",
@@ -130,7 +146,6 @@ _SUBAGENT_EVIDENCE_WARNINGS = frozenset({
     "agent_transcript_parse_gap",
     "agent_transcript_time_gap",
     "agent_transcript_usage_missing",
-    "agent_transcript_unresolved_calls",
 })
 
 
