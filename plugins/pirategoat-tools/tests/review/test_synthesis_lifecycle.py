@@ -83,7 +83,7 @@ class TestDispatchMarker:
         its own spelling would read downstream as an agent that never
         started — indistinguishable from a failed dispatch."""
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        payload = lifecycle.observe(str(out), finalize=True, now=T0)
+        payload = lifecycle.observe(str(out), finalize=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC) is not None
 
     def test_marker_matches_bootstrap_format(self, out):
@@ -119,7 +119,7 @@ class TestAvailability:
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         (out / "review-findings.json").write_text("{}")
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=30))
-        payload = lifecycle.observe(str(out), finalize=True, now=T0 + timedelta(minutes=1))
+        payload = lifecycle.observe(str(out), finalize=True)
         assert [entry["agent"] for entry in payload["agents"]] == [
             lifecycle.RECONCILIATOR
         ]
@@ -135,21 +135,16 @@ class TestCompletionObservation:
         verdict = out / "decision-critic-verdict.json"
         verdict.write_text('{"verdict": "STAND"}')
         _set_mtime(verdict, T0 + timedelta(seconds=665))
-        observed = T0 + timedelta(seconds=900)
 
-        payload = lifecycle.observe(str(out), finalize=True, now=observed)
+        payload = lifecycle.observe(str(out), finalize=True)
         entry = _entry(payload, lifecycle.DECISION_CRITIC)
 
         assert entry["duration_ms"] == 665_000
-        assert entry["elapsed_ms"] == 900_000
         assert entry["completed_at"] == (T0 + timedelta(seconds=665)).isoformat()
-        assert entry["observed_at"] == observed.isoformat()
         assert entry["stalled"] is False
 
     def test_completion_artifacts_are_the_gated_ones(self, out):
-        assert dict(
-            (name, artifact) for name, _, artifact in lifecycle.SYNTHESIS_AGENTS
-        ) == {
+        assert dict(lifecycle.SYNTHESIS_AGENTS) == {
             lifecycle.RECONCILIATOR: "review-findings.json",
             lifecycle.DECISION_CRITIC: "decision-critic-verdict.json",
         }
@@ -160,35 +155,24 @@ class TestCompletionObservation:
         crashed critic as still running, so it is not the key."""
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
         (out / "decision-critic-findings.md").write_text("# findings")
-        payload = lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=60)
-        )
+        payload = lifecycle.observe(str(out), finalize=True)
         assert _entry(payload, lifecycle.DECISION_CRITIC)["stalled"] is True
 
-    def test_step_numbers_recorded(self, out):
-        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        payload = lifecycle.observe(str(out), now=T0)
-        assert _entry(payload, lifecycle.RECONCILIATOR)["step"] == 8
-        assert _entry(payload, lifecycle.DECISION_CRITIC)["step"] == 10
 
 
 class TestStallDetection:
     def test_marker_without_artifact_at_finalize_is_stalled(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        payload = lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=1800)
-        )
+        payload = lifecycle.observe(str(out), finalize=True)
         entry = _entry(payload, lifecycle.RECONCILIATOR)
         assert entry["stalled"] is True
         assert entry["duration_ms"] is None
-        assert entry["elapsed_ms"] == 1_800_000
 
     def test_mid_flight_observation_is_not_a_stall(self, out):
         """Step 9 observes the reconciliator; a missing artifact there is
         a run still in progress, not a verdict on it."""
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        payload = lifecycle.observe(str(out), now=T0 + timedelta(seconds=10))
+        payload = lifecycle.observe(str(out))
         assert _entry(payload, lifecycle.RECONCILIATOR)["stalled"] is False
         assert payload["finalized"] is False
 
@@ -199,9 +183,7 @@ class TestStallDetection:
         findings = out / "review-findings.json"
         findings.write_text("{}")
         _set_mtime(findings, T0 - timedelta(minutes=5))
-        payload = lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=60)
-        )
+        payload = lifecycle.observe(str(out), finalize=True)
         entry = _entry(payload, lifecycle.RECONCILIATOR)
         assert entry["completed_at"] is None
         assert entry["duration_ms"] is None
@@ -209,9 +191,7 @@ class TestStallDetection:
 
     def test_unreadable_marker_still_counts_as_dispatched(self, out):
         _marker(out, lifecycle.RECONCILIATOR).write_text("not-a-time")
-        payload = lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=60)
-        )
+        payload = lifecycle.observe(str(out), finalize=True)
         entry = _entry(payload, lifecycle.RECONCILIATOR)
         assert entry["started_at"] is None
         assert entry["duration_ms"] is None
@@ -221,7 +201,7 @@ class TestStallDetection:
         _marker(out, lifecycle.RECONCILIATOR).write_text(
             "2026-08-19T12:00:00"
         )
-        payload = lifecycle.observe(str(out), now=T0)
+        payload = lifecycle.observe(str(out))
         assert _entry(payload, lifecycle.RECONCILIATOR)["started_at"] is None
 
 
@@ -233,15 +213,13 @@ class TestIdempotence:
         findings = out / "review-findings.json"
         findings.write_text("{}")
         _set_mtime(findings, T0 + timedelta(seconds=41))
-        first = lifecycle.observe(str(out), now=T0 + timedelta(seconds=45))
+        first = lifecycle.observe(str(out))
 
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0 + timedelta(seconds=60))
         verdict = out / "decision-critic-verdict.json"
         verdict.write_text('{"verdict": "STAND"}')
         _set_mtime(verdict, T0 + timedelta(seconds=700))
-        second = lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=720)
-        )
+        second = lifecycle.observe(str(out), finalize=True)
 
         assert _entry(second, lifecycle.RECONCILIATOR) == _entry(
             first, lifecycle.RECONCILIATOR
@@ -250,13 +228,11 @@ class TestIdempotence:
 
     def test_incomplete_entry_is_re_observed(self, out):
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        lifecycle.observe(str(out), now=T0 + timedelta(seconds=10))
+        lifecycle.observe(str(out))
         findings = out / "review-findings.json"
         findings.write_text("{}")
         _set_mtime(findings, T0 + timedelta(seconds=30))
-        payload = lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=40)
-        )
+        payload = lifecycle.observe(str(out), finalize=True)
         assert _entry(payload, lifecycle.RECONCILIATOR)["duration_ms"] == 30_000
 
     def test_corrupt_prior_artifact_is_re_derived(self, out):
@@ -265,7 +241,7 @@ class TestIdempotence:
         findings = out / "review-findings.json"
         findings.write_text("{}")
         _set_mtime(findings, T0 + timedelta(seconds=30))
-        payload = lifecycle.observe(str(out), now=T0 + timedelta(seconds=40))
+        payload = lifecycle.observe(str(out))
         assert _entry(payload, lifecycle.RECONCILIATOR)["duration_ms"] == 30_000
 
     def test_prior_artifact_of_another_schema_is_ignored(self, out):
@@ -278,47 +254,34 @@ class TestIdempotence:
                 "duration_ms": 1,
             }],
         }))
-        payload = lifecycle.observe(str(out), finalize=True, now=T0 + timedelta(seconds=5))
+        payload = lifecycle.observe(str(out), finalize=True)
         assert _entry(payload, lifecycle.RECONCILIATOR)["duration_ms"] is None
 
 
 class TestArtifactEnvelope:
-    def test_schema_and_observation_stamp(self, out):
-        payload = lifecycle.observe(str(out), now=T0)
+    def test_schema_and_payload_match_disk(self, out):
+        payload = lifecycle.observe(str(out))
         on_disk = _read(out)
         assert on_disk == payload
         assert on_disk["schema"] == lifecycle.LIFECYCLE_SCHEMA == 1
-        assert on_disk["observed_at"] == T0.isoformat()
 
-    def test_the_artifact_states_what_its_clocks_mean(self, out):
-        """Two clocks per row plus a section stamp is exactly the shape a
-        reader guesses wrong about, and a guess turns an upper bound into
-        a measurement. Same self-description the coverage family's
-        `semantics` key provides."""
-        payload = lifecycle.observe(str(out), now=T0)
-        assert payload["semantics"] == lifecycle.LIFECYCLE_SEMANTICS
-        assert "duration_ms=artifact_mtime_minus_dispatch" in (
-            payload["semantics"]
-        )
-        assert "elapsed_ms=observation_minus_dispatch" in payload["semantics"]
-        assert "observed_at=last_observation" in payload["semantics"]
+    def test_one_clock_only(self, out):
+        """The artifact records when the agent finished, not when the
+        script noticed. An earlier version carried both; the run's own
+        step cadence already bounds the observation lag, so the second
+        number answered a question nobody asked."""
+        lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
+        verdict = out / "decision-critic-verdict.json"
+        verdict.write_text('{"verdict": "STAND"}')
+        _set_mtime(verdict, T0 + timedelta(seconds=665))
 
-    def test_section_observed_at_is_the_last_observation(self, out):
-        """It bounds the section's freshness and is NOT any agent's
-        clock: a carried-forward row keeps its own, older stamp."""
-        lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
-        findings = out / "review-findings.json"
-        findings.write_text("{}")
-        _set_mtime(findings, T0 + timedelta(seconds=41))
-        lifecycle.observe(str(out), now=T0 + timedelta(seconds=45))
+        payload = lifecycle.observe(str(out), finalize=True)
 
-        later = T0 + timedelta(seconds=900)
-        payload = lifecycle.observe(str(out), finalize=True, now=later)
-
-        assert payload["observed_at"] == later.isoformat()
-        assert _entry(payload, lifecycle.RECONCILIATOR)["observed_at"] == (
-            T0 + timedelta(seconds=45)
-        ).isoformat()
+        assert "observed_at" not in payload
+        entry = _entry(payload, lifecycle.DECISION_CRITIC)
+        assert entry["duration_ms"] == 665_000
+        assert "observed_at" not in entry
+        assert "elapsed_ms" not in entry
 
     def test_rows_carry_exactly_the_declared_keys(self, out):
         """Row-shape parity at the source. ROW_KEYS is the single
@@ -326,7 +289,7 @@ class TestArtifactEnvelope:
         assert against."""
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         lifecycle.mark_dispatched(str(out), lifecycle.DECISION_CRITIC, now=T0)
-        payload = lifecycle.observe(str(out), finalize=True, now=T0)
+        payload = lifecycle.observe(str(out), finalize=True)
         assert payload["agents"]
         for row in payload["agents"]:
             assert set(row) == set(lifecycle.ROW_KEYS)
@@ -340,9 +303,7 @@ class TestVerdictCapture:
         verdict = out / "decision-critic-verdict.json"
         verdict.write_text(verdict_payload)
         _set_mtime(verdict, T0 + timedelta(seconds=665))
-        return lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=700)
-        )
+        return lifecycle.observe(str(out), finalize=True)
 
     def test_the_critics_verdict_rides_the_row(self, out):
         payload = self._complete_critic(out, '{"verdict": "REVISE"}')
@@ -371,7 +332,7 @@ class TestVerdictCapture:
         findings = out / "review-findings.json"
         findings.write_text('{"verdict": "request_changes"}')
         _set_mtime(findings, T0 + timedelta(seconds=41))
-        payload = lifecycle.observe(str(out), now=T0 + timedelta(seconds=45))
+        payload = lifecycle.observe(str(out))
         assert _entry(payload, lifecycle.RECONCILIATOR)["verdict"] == (
             "request_changes"
         )
@@ -384,9 +345,7 @@ class TestVerdictCapture:
         verdict = out / "decision-critic-verdict.json"
         verdict.write_text('{"verdict": "STAND"}')
         _set_mtime(verdict, T0 - timedelta(minutes=5))
-        payload = lifecycle.observe(
-            str(out), finalize=True, now=T0 + timedelta(seconds=60)
-        )
+        payload = lifecycle.observe(str(out), finalize=True)
         entry = _entry(payload, lifecycle.DECISION_CRITIC)
         assert entry["verdict"] is None
         assert entry["stalled"] is True
@@ -508,7 +467,7 @@ class TestStepTenReEntryDoesNotManufactureAStall:
     the dispatch marker moved the clock past the critic's already-written
     verdict file; finalize then read that file as predating its dispatch,
     discarded it, and published a finished 11-minute critique as
-    `stalled: true` with `elapsed_ms: 0`.
+    stalled with no duration at all.
     """
 
     def test_a_completed_critic_survives_a_step_10_re_entry(self, out):
@@ -636,7 +595,7 @@ class TestStepElevenObservation:
         )
         entry = _entry(_read(out), lifecycle.RECONCILIATOR)
         assert entry["stalled"] is True
-        assert entry["elapsed_ms"] > 0
+        assert entry["duration_ms"] is None
 
     def test_finalize_observes_before_its_own_ledger_writes(self, out):
         """Finalize writes review-findings.json (adjustments + verdict

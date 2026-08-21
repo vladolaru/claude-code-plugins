@@ -1038,9 +1038,9 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
     # First thing this step does: observe how the reconciliator's dispatch
     # ended. Step 9 is the next moment the SCRIPT re-enters after step 8's
     # briefing handed the agent off, so this is the earliest — and
-    # therefore tightest — observation the run can take. It is an
-    # observation, not a completion: `completed_at` in the artifact is
-    # review-findings.json's mtime, while `observed_at` is now.
+    # therefore tightest — observation the run can take. What it records
+    # is a completion, not this moment: `completed_at` in the artifact is
+    # review-findings.json's mtime.
     # `finalize=False` — an agent with no artifact here is one this
     # observation caught mid-flight, which is not yet a stall.
     synthesis_lifecycle.observe(output_dir)
@@ -1102,7 +1102,7 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     #    marker would move the dispatch clock past the critic's
     #    already-written verdict file; finalize would then read that file
     #    as predating its own dispatch, discard it, and publish an
-    #    11-minute critique as `stalled: true` with `elapsed_ms: 0`.
+    #    11-minute critique as stalled with no duration at all.
     #    Observing first carries the real completion forward, where it is
     #    preserved verbatim.
     #

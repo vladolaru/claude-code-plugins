@@ -449,10 +449,6 @@ def _aggregate_synthesis_agents(
             "mean_ms": (
                 _exact_statistic(statistics.mean(values)) if values else None
             ),
-            "median_ms": (
-                _exact_statistic(statistics.median(values)) if values else None
-            ),
-            "max_ms": max(values) if values else None,
         }
     return {
         "by_agent": by_agent or None,

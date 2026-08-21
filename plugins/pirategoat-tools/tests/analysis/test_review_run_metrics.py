@@ -7655,17 +7655,10 @@ def _synthesis_row(agent: str, **overrides) -> dict:
     reconciliator = agent == contracts._SYNTHESIS_RECONCILIATOR
     row = {
         "agent": agent,
-        "step": 8 if reconciliator else 10,
-        "completion_artifact": (
-            "review-findings.json" if reconciliator
-            else "decision-critic-verdict.json"
-        ),
         "verdict": "request_changes" if reconciliator else "STAND",
         "started_at": "2026-08-19T12:00:00+00:00",
         "completed_at": "2026-08-19T12:11:05+00:00",
-        "observed_at": "2026-08-19T12:15:00+00:00",
         "duration_ms": 665_000,
-        "elapsed_ms": 900_000,
         "stalled": False,
     }
     row.update(overrides)
@@ -7675,8 +7668,6 @@ def _synthesis_row(agent: str, **overrides) -> dict:
 def _synthesis_manifest(run_id: str = "run-1", *rows, **overrides) -> dict:
     manifest = _manifest(run_id)
     manifest["synthesis_agents"] = {
-        "semantics": contracts._SYNTHESIS_SEMANTICS,
-        "observed_at": "2026-08-19T12:15:00+00:00",
         "finalized": True,
         "agents": list(rows),
     }
@@ -7823,8 +7814,6 @@ class TestSynthesisAgentsCohort:
             "skipped_runs": 0,
             "total_ms": 1_300_000,
             "mean_ms": 650_000,
-            "median_ms": 650_000,
-            "max_ms": 700_000,
         }
         assert block["by_agent"][
             contracts._SYNTHESIS_RECONCILIATOR
@@ -7863,8 +7852,6 @@ class TestSynthesisAgentsCohort:
             "skipped_runs": 0,
             "total_ms": None,
             "mean_ms": None,
-            "median_ms": None,
-            "max_ms": None,
         }
 
     def test_the_family_is_a_declared_availability_family(self):
@@ -7923,45 +7910,11 @@ class TestSynthesisAgentsRendering:
         ] == 665_000
         assert report["aggregate"]["synthesis_agents"]["by_agent"][
             contracts._SYNTHESIS_DECISION_CRITIC
-        ]["max_ms"] == 665_000
+        ]["mean_ms"] == 665_000
 
 
-class TestSynthesisAgentsSemanticsAndShape:
-    """The section must self-describe, and its shape is declared once."""
-
-    def test_a_section_without_the_declared_semantics_is_unreadable(self):
-        """The producer states what its two clocks mean ON the artifact.
-        A section carrying different (or no) semantics was written
-        against a contract this consumer cannot vouch for."""
-        manifest = _synthesis_manifest(
-            "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
-        )
-        del manifest["synthesis_agents"]["semantics"]
-        measured = measure_run(
-            manifest, Path("/nonexistent"), include_transcripts=False
-        )
-        assert measured["synthesis_agents"] is None
-        assert measured["metric_availability"]["synthesis_agents"] == "missing"
-
-    def test_semantics_names_both_clocks_and_the_section_stamp(self):
-        assert "duration_ms=artifact_mtime_minus_dispatch" in (
-            contracts._SYNTHESIS_SEMANTICS
-        )
-        assert "elapsed_ms=observation_minus_dispatch" in (
-            contracts._SYNTHESIS_SEMANTICS
-        )
-        assert "observed_at=last_observation" in contracts._SYNTHESIS_SEMANTICS
-
-    def test_semantics_survives_into_the_measured_run(self):
-        measured = measure_run(
-            _synthesis_manifest(
-                "run-1", _synthesis_row(contracts._SYNTHESIS_DECISION_CRITIC)
-            ),
-            Path("/nonexistent"), include_transcripts=False,
-        )
-        assert measured["synthesis_agents"]["semantics"] == (
-            contracts._SYNTHESIS_SEMANTICS
-        )
+class TestSynthesisAgentsShape:
+    """The row shape is declared once and the consumer covers exactly it."""
 
     def test_sanitizer_covers_exactly_the_declared_row_keys(self):
         """Row-shape parity, consumer side. The shape is written by three
@@ -8025,8 +7978,6 @@ class TestSkippedCriticIsNotACritiqueDuration:
             "skipped_runs": 1,
             "total_ms": 600_000,
             "mean_ms": 600_000,
-            "median_ms": 600_000,
-            "max_ms": 600_000,
         }
 
     def test_an_all_skipped_cohort_reports_no_duration_at_all(self):
@@ -8110,8 +8061,6 @@ def _skipped_steps_payload() -> list:
 
 def _synthesis_agents_payload() -> dict:
     return {
-        "semantics": contracts._SYNTHESIS_SEMANTICS,
-        "observed_at": "2026-08-19T12:15:00+00:00",
         "finalized": True,
         "agents": [],
     }

@@ -29,29 +29,18 @@ use, minus the polling:
 2. **Completion.** Observed at the NEXT step the script re-enters —
    step 9 for the reconciliator, step 11 (finalize) for both — by the
    existence of the artifact that agent is contractually required to
-   leave behind. That timing is why every entry carries TWO clocks:
-   `completed_at` is the artifact's mtime, the closest available proxy
-   for when the agent actually finished, and `observed_at` is when this
-   script looked, which is strictly later and is NOT a completion time.
-   `duration_ms` is measured against the first; `elapsed_ms` against the
-   second. No polling daemon, no background process.
+   leave behind. `completed_at` is that artifact's mtime and
+   `duration_ms` is the span from dispatch to it. No polling daemon, no
+   background process.
+
+   One clock, deliberately. An earlier version also recorded when the
+   script looked, so a reader could bound the observation lag; the run's
+   own step cadence already bounds it, and the second number answered a
+   question nobody asked.
 
 **Timeout policy is report, never kill.** Both agents run in the
 orchestrator's foreground, so nothing here can interrupt one. At
-finalize, a marker with no completion artifact records `stalled: true`
-and how long the stall had lasted when finalize looked.
-
-**Three timestamps, three meanings**, stated on the artifact itself in
-`semantics` so no consumer has to infer them:
-
-- `duration_ms` = completion artifact mtime - dispatch. The measured
-  phase.
-- `elapsed_ms` = this observation - dispatch. An upper bound on the
-  phase, and on a stalled agent the length of the stall so far.
-- section-level `observed_at` = when the LAST observation ran. It bounds
-  the whole section's freshness and is not any agent's clock; each row
-  carries its own `observed_at`, which may be older because a completed
-  row is carried forward verbatim rather than re-observed.
+finalize, a marker with no completion artifact records `stalled: true`.
 
 **Availability, not zero.** A run older than this feature writes no
 marker and no `synthesis-agents.json`, so the manifest section is absent
@@ -109,36 +98,20 @@ MARKER_SUFFIX = ".synthesis-started"
 # teaching only one of the three fails loudly instead of green.
 ROW_KEYS = (
     "agent",
-    "step",
-    "completion_artifact",
     "verdict",
     "started_at",
     "completed_at",
-    "observed_at",
     "duration_ms",
-    "elapsed_ms",
     "stalled",
-)
-
-# What the numbers mean, carried ON the artifact and re-asserted by the
-# metrics consumer — the same self-description discipline the coverage
-# family's `semantics` key enforces. Two clocks per row plus a
-# section-level stamp is exactly the kind of shape a reader guesses wrong
-# about, and a guess here silently turns an upper bound into a
-# measurement.
-LIFECYCLE_SEMANTICS = (
-    "duration_ms=artifact_mtime_minus_dispatch; "
-    "elapsed_ms=observation_minus_dispatch; "
-    "section observed_at=last_observation"
 )
 
 RECONCILIATOR = "review-reconciliator"
 DECISION_CRITIC = "decision-reviewer"
 
-# (agent name, dispatching step, completion artifact).
+# (agent name, completion artifact).
 #
-# The completion artifact is the one file the step's handoff gate makes
-# mandatory, NOT the richest thing the agent might write:
+# The completion artifact is the one file the dispatching step's handoff
+# gate makes mandatory, NOT the richest thing the agent might write:
 #
 # - review-findings.json is the reconciliator's ONLY artifact (step 8's
 #   briefing says so in as many words, and its handoff verifies it).
@@ -149,11 +122,9 @@ DECISION_CRITIC = "decision-reviewer"
 #   exists when the critic actually produced a critique, so keying
 #   completion on it would report a crashed critic as still running.
 SYNTHESIS_AGENTS = (
-    (RECONCILIATOR, 8, "review-findings.json"),
-    (DECISION_CRITIC, 10, "decision-critic-verdict.json"),
+    (RECONCILIATOR, "review-findings.json"),
+    (DECISION_CRITIC, "decision-critic-verdict.json"),
 )
-
-_AGENT_STEPS = {name: step for name, step, _ in SYNTHESIS_AGENTS}
 
 
 def marker_path(output_dir, name):
@@ -178,9 +149,9 @@ def mark_dispatched(output_dir, name, *, now=None):
     the reconciled verdict escalates), and a bare re-stamp there moves
     the dispatch clock past an already-written completion artifact. The
     next observation then reads the artifact as predating its dispatch,
-    discards it, and reports a finished 11-minute critique as
-    `stalled: true` with `elapsed_ms: 0`. Observing before re-stamping
-    carries the real completion forward and closes that window.
+    discards it, and reports a finished 11-minute critique as stalled
+    with no duration at all. Observing before re-stamping carries the
+    real completion forward and closes that window.
     """
     stamp = (now or datetime.now(timezone.utc)).isoformat()
     try:
@@ -270,8 +241,8 @@ def _prior_entries(output_dir):
     """Completed entries already recorded, keyed by agent name.
 
     Only completed ones are carried forward. An earlier observation of a
-    still-running agent is stale by definition, and its `observed_at`
-    would understate a stall that finalize is about to adjudicate.
+    still-running agent is stale by definition, and carrying it would
+    hide a stall that finalize is about to adjudicate.
     """
     path = os.path.join(output_dir, LIFECYCLE_FILENAME)
     try:
@@ -295,25 +266,24 @@ def _prior_entries(output_dir):
     return kept
 
 
-def observe(output_dir, *, finalize=False, now=None):
+def observe(output_dir, *, finalize=False):
     """Record what is observable right now about dispatched agents.
 
     `finalize=True` is the only mode that adjudicates a stall: before
     finalize, an agent with no completion artifact is simply one this
     observation caught mid-flight, which says nothing about the run.
 
-    An already-completed entry is preserved verbatim. Its observation was
-    the earliest and therefore the tightest bound the run will ever have;
-    re-deriving it at finalize would push `observed_at` minutes later and
-    describe a phase that had already ended.
+    An already-completed entry is preserved verbatim. Re-deriving it is
+    not merely wasted work: finalize writes review-findings.json, so a
+    later reading of that artifact's mtime would report the
+    reconciliator as having finished at finalize time.
 
     Returns the payload written, or None when nothing could be written.
     """
-    observed_at = now or datetime.now(timezone.utc)
     prior = _prior_entries(output_dir)
 
     entries = []
-    for name, step, artifact_name in SYNTHESIS_AGENTS:
+    for name, artifact_name in SYNTHESIS_AGENTS:
         carried = prior.get(name)
         if carried is not None:
             entries.append(carried)
@@ -338,8 +308,6 @@ def observe(output_dir, *, finalize=False, now=None):
             completed_at = None
         entries.append({
             "agent": name,
-            "step": step,
-            "completion_artifact": artifact_name,
             # What the agent concluded, which is what makes the duration
             # beside it interpretable — see _artifact_verdict(). Read only
             # from an artifact this dispatch can claim; a discarded one
@@ -350,26 +318,17 @@ def observe(output_dir, *, finalize=False, now=None):
             ),
             "started_at": started_at.isoformat() if started_at else None,
             # The completion artifact's mtime — the closest available
-            # proxy for when the agent actually finished.
+            # proxy for when the agent actually finished, and the only
+            # clock recorded.
             "completed_at": (
                 completed_at.isoformat() if completed_at else None
             ),
-            # When this script looked. Strictly later than the real
-            # completion, and never a substitute for it.
-            "observed_at": observed_at.isoformat(),
             "duration_ms": _delta_ms(started_at, completed_at),
-            "elapsed_ms": _delta_ms(started_at, observed_at),
             "stalled": finalize and completed_at is None,
         })
 
     payload = {
         "schema": LIFECYCLE_SCHEMA,
-        "semantics": LIFECYCLE_SEMANTICS,
-        # The LAST observation, bounding the whole section's freshness.
-        # Not any one agent's clock: a carried-forward row keeps its own,
-        # older `observed_at` because re-observing it would replace the
-        # tightest bound the run has with a looser one.
-        "observed_at": observed_at.isoformat(),
         "finalized": bool(finalize),
         "agents": entries,
     }
@@ -381,7 +340,3 @@ def observe(output_dir, *, finalize=False, now=None):
         return None
     return payload
 
-
-def step_for(name):
-    """Dispatching step for a synthesis agent, or None."""
-    return _AGENT_STEPS.get(name)

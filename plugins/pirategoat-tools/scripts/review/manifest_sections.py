@@ -26,7 +26,6 @@ try:
     from .synthesis_lifecycle import (
         LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
         LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
-        LIFECYCLE_SEMANTICS as _SYNTHESIS_LIFECYCLE_SEMANTICS,
         ROW_KEYS as _SYNTHESIS_ROW_KEYS,
     )
 except ImportError:
@@ -47,7 +46,6 @@ except ImportError:
     from review.synthesis_lifecycle import (
         LIFECYCLE_FILENAME as _SYNTHESIS_LIFECYCLE_FILENAME,
         LIFECYCLE_SCHEMA as _SUPPORTED_SYNTHESIS_LIFECYCLE_SCHEMA,
-        LIFECYCLE_SEMANTICS as _SYNTHESIS_LIFECYCLE_SEMANTICS,
         ROW_KEYS as _SYNTHESIS_ROW_KEYS,
     )
 
@@ -820,13 +818,8 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
                 row.get("agent"), str
             ):
                 continue
-            step = row.get("step")
             rows.append({
                 "agent": row["agent"],
-                "step": safe_nonnegative_int(step),
-                "completion_artifact": safe_dispatch_string(
-                    row.get("completion_artifact")
-                ),
                 # What the agent concluded. It is what makes the duration
                 # beside it interpretable — a critic row reading "SKIPPED"
                 # measures dispatch to orchestrator-gave-up, an upper
@@ -835,16 +828,9 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
                 # a critique duration.
                 "verdict": safe_dispatch_string(row.get("verdict")),
                 "started_at": safe_dispatch_string(row.get("started_at")),
-                # The completion artifact's mtime, not the observation —
-                # see the two-clock note on `observed_at` below.
+                # The completion artifact's mtime — the one clock.
                 "completed_at": safe_dispatch_string(row.get("completed_at")),
-                # When the pipeline looked, which is strictly later than
-                # the completion it observed. Kept beside `completed_at`
-                # so a reader can tell the measured phase from the moment
-                # it was noticed.
-                "observed_at": safe_dispatch_string(row.get("observed_at")),
                 "duration_ms": safe_nonnegative_int(row.get("duration_ms")),
-                "elapsed_ms": safe_nonnegative_int(row.get("elapsed_ms")),
                 "stalled": row.get("stalled") is True,
             })
 
@@ -857,17 +843,6 @@ def build_synthesis_agents_manifest(output_dir: str) -> Optional[dict]:
     )
 
     return {
-        # The meaning of the two clocks, carried with the numbers rather
-        # than left to a reader's inference — the same self-description
-        # the coverage family's `semantics` key provides. Restated from
-        # the producer's constant, not the artifact's copy: this projection
-        # is what vouches for the shape above.
-        "semantics": _SYNTHESIS_LIFECYCLE_SEMANTICS,
-        # The LAST observation, bounding the section's freshness. Not any
-        # one agent's clock — a carried-forward row keeps its own, older
-        # `observed_at` because re-observing would loosen the tightest
-        # bound the run has.
-        "observed_at": safe_dispatch_string(data.get("observed_at")),
         "finalized": data.get("finalized") is True,
         "agents": rows,
     }

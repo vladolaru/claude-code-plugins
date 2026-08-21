@@ -27,7 +27,6 @@ from .contracts import (
     _SUPPORTED_MANIFEST_SCHEMA,
     _SUPPORTED_MANIFEST_STATUSES,
     _SYNTHESIS_ROW_KEYS,
-    _SYNTHESIS_SEMANTICS,
     _USAGE_FIELDS,
     _USAGE_SNAPSHOT_AVAILABILITY_STATES,
     _WINDOWS_DRIVE_RE,
@@ -1062,14 +1061,13 @@ def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:
 
     Durations keep their None: a stalled agent has no duration, and a
     zero here would read as a phase that finished instantly.
+
+    Parse success is the honesty mechanism — a section this function
+    cannot read at all returns None and the family reads "missing",
+    which is what keeps an unreadable run from being mistaken for a
+    fast one.
     """
     if not isinstance(value, dict):
-        return None
-    # The producer states what its two clocks mean ON the artifact, and a
-    # section that does not carry the meaning this consumer was written
-    # against is not a section this consumer can read — the same exact
-    # match the coverage family requires of its own `semantics` key.
-    if value.get("semantics") != _SYNTHESIS_SEMANTICS:
         return None
     raw_agents = value.get("agents")
     if not isinstance(raw_agents, list):
@@ -1083,22 +1081,15 @@ def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:
             return None
         rows.append({
             "agent": agent,
-            "step": _nonnegative_exact_int(row.get("step")),
-            "completion_artifact": _safe_string(
-                row.get("completion_artifact")
-            ),
             # Kept because it changes what the duration beside it means:
             # a "SKIPPED" critic row spans dispatch to
             # orchestrator-gave-up, not a critique.
             "verdict": _safe_string(row.get("verdict")),
             "started_at": _safe_string(row.get("started_at")),
             # Artifact mtime — the closest available proxy for when the
-            # agent finished.
+            # agent finished, and the only clock recorded.
             "completed_at": _safe_string(row.get("completed_at")),
-            # When the pipeline looked, strictly later than the above.
-            "observed_at": _safe_string(row.get("observed_at")),
             "duration_ms": _nonnegative_exact_int(row.get("duration_ms")),
-            "elapsed_ms": _nonnegative_exact_int(row.get("elapsed_ms")),
             "stalled": row.get("stalled") is True,
         })
     # This projection is the third writer of the row shape (after the
@@ -1110,10 +1101,6 @@ def _sanitize_synthesis_agents(value: object) -> dict[str, Any] | None:
         "synthesis_lifecycle.ROW_KEYS"
     )
     return {
-        "semantics": _SYNTHESIS_SEMANTICS,
-        # Section-level: the LAST observation, bounding this section's
-        # freshness. Each row carries its own, possibly older stamp.
-        "observed_at": _safe_string(value.get("observed_at")),
         "finalized": value.get("finalized") is True,
         "agents": rows,
     }

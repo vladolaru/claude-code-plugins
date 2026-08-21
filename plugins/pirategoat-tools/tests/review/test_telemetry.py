@@ -4340,19 +4340,12 @@ class TestSynthesisAgentsManifest:
     def _row(self, agent, **overrides):
         row = {
             "agent": agent,
-            "step": 8 if agent == self.RECONCILIATOR else 10,
-            "completion_artifact": (
-                "review-findings.json" if agent == self.RECONCILIATOR
-                else "decision-critic-verdict.json"
-            ),
             "verdict": (
                 "request_changes" if agent == self.RECONCILIATOR else "STAND"
             ),
             "started_at": "2026-08-19T12:00:00+00:00",
             "completed_at": "2026-08-19T12:11:05+00:00",
-            "observed_at": "2026-08-19T12:15:00+00:00",
             "duration_ms": 665_000,
-            "elapsed_ms": 900_000,
             "stalled": False,
         }
         row.update(overrides)
@@ -4364,8 +4357,6 @@ class TestSynthesisAgentsManifest:
     def _artifact(self, *rows, **overrides):
         payload = {
             "schema": 1,
-            "semantics": lifecycle_contract.LIFECYCLE_SEMANTICS,
-            "observed_at": "2026-08-19T12:15:00+00:00",
             "finalized": True,
             "agents": list(rows),
         }
@@ -4397,8 +4388,6 @@ class TestSynthesisAgentsManifest:
         zero dispatches, not an unmeasured run."""
         self._write(tmp_path, self._artifact())
         assert self._build(mod, tmp_path) == {
-            "semantics": lifecycle_contract.LIFECYCLE_SEMANTICS,
-            "observed_at": "2026-08-19T12:15:00+00:00",
             "finalized": True,
             "agents": [],
         }
@@ -4416,7 +4405,6 @@ class TestSynthesisAgentsManifest:
         row = self._build(mod, tmp_path)["agents"][0]
         assert row["stalled"] is True
         assert row["duration_ms"] is None
-        assert row["elapsed_ms"] == 900_000
 
     @pytest.mark.parametrize(
         "value", [None, "yes", 1, 0, "true"],
@@ -4539,8 +4527,6 @@ class TestSynthesisAgentsManifestShape:
     def _artifact(self, *rows):
         return {
             "schema": 1,
-            "semantics": lifecycle_contract.LIFECYCLE_SEMANTICS,
-            "observed_at": "2026-08-19T12:15:00+00:00",
             "finalized": True,
             "agents": list(rows),
         }
@@ -4551,11 +4537,8 @@ class TestSynthesisAgentsManifestShape:
         }
         row.update({
             "agent": lifecycle_contract.DECISION_CRITIC,
-            "step": 10,
-            "completion_artifact": "decision-critic-verdict.json",
             "verdict": "STAND",
             "duration_ms": 665_000,
-            "elapsed_ms": 900_000,
             "stalled": False,
         })
         row.update(overrides)
@@ -4573,14 +4556,6 @@ class TestSynthesisAgentsManifestShape:
         )
         assert "invented_key" not in section["agents"][0]
 
-    def test_the_section_restates_the_declared_semantics(self, mod, tmp_path):
-        """Restated from the producer's constant, not copied from the
-        artifact — this projection is what vouches for the shape."""
-        payload = self._artifact(self._row())
-        payload["semantics"] = "something else entirely"
-        section = self._build(mod, tmp_path, payload)
-        assert section["semantics"] == lifecycle_contract.LIFECYCLE_SEMANTICS
-
     def test_the_verdict_reaches_the_manifest(self, mod, tmp_path):
         section = self._build(
             mod, tmp_path, self._artifact(self._row(verdict="SKIPPED"))
@@ -4597,15 +4572,6 @@ class TestSynthesisAgentsManifestShape:
         )
         assert section["agents"][0]["verdict"] is None
 
-    @pytest.mark.parametrize(
-        "value", [-1, "8", 8.0, True],
-        ids=["negative", "string", "float", "bool"],
-    )
-    def test_an_unusable_step_is_none(self, mod, tmp_path, value):
-        section = self._build(
-            mod, tmp_path, self._artifact(self._row(step=value))
-        )
-        assert section["agents"][0]["step"] is None
 
 
 class TestOptionalSectionAvailabilityKeysContract:
