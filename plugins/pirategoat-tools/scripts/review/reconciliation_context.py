@@ -365,7 +365,11 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
     inline: Dict[str, set] = {}
     skipped: Dict[str, set] = {}
     deferred_by_agent: Dict[str, set] = {}
-    agents_reporting = 0
+    # Distinct agent NAMES, not summary files: three reviewers ship a
+    # second `-config-ops` sidecar, so counting files reported 22 agents
+    # for a 19-agent run. Both of an agent's sidecars derive the same name
+    # through the rsplit below, so the set collapses them.
+    reporting_agents: set = set()
     try:
         entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
     except OSError:
@@ -388,7 +392,7 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
             continue
         if not isinstance(data, dict):
             continue
-        agents_reporting += 1
+        reporting_agents.add(agent)
         for f_path in data.get("files_with_diffs") or []:
             if isinstance(f_path, str):
                 inline.setdefault(f_path, set()).add(agent)
@@ -396,7 +400,7 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
             if isinstance(f_path, str):
                 skipped.setdefault(f_path, set()).add(agent)
                 deferred_by_agent.setdefault(agent, set()).add(f_path)
-    if not agents_reporting:
+    if not reporting_agents:
         return None
 
     never_inline = {f: a for f, a in skipped.items() if f not in inline}
@@ -467,9 +471,10 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
                 claimed.setdefault(f_path, set()).add(agent)
 
     return {
-        # Counts summary FILES aggregated (primary + secondary domains),
-        # not unique agents.
-        "agents_reporting": agents_reporting,
+        # Distinct reviewers that produced at least one scope summary, not
+        # summary files aggregated — an agent with a primary and a
+        # secondary-domain sidecar is one agent.
+        "agents_reporting": len(reporting_agents),
         "files_inline": {f: sorted(a) for f, a in sorted(inline.items())},
         "files_never_inline": {
             f: sorted(a)

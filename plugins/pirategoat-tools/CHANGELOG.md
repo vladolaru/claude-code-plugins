@@ -87,6 +87,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **`schemas/review-output.ts` catches up with everything the pipeline actually serializes** (the critic-adjustment provenance record) and drops five discriminated-union interfaces no reviewer, native or repo-contributed, ever produced.
 
+- **`agents_reporting` counts agents, not sidecar files.** Three reviewers ship a second `-config-ops` scope summary, so a 19-agent field run reported 22.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01

@@ -3093,6 +3093,35 @@ class TestAggregateInlineCoverage:
         assert cov["files_deferred_reviewed"] == {}
 
 
+class TestAgentsReportingCountsAgents:
+    """`agents_reporting` counts distinct agents, not summary files.
+
+    Three reviewers ship a second `-config-ops` sidecar, so the file count
+    reported 22 agents for a 19-agent field run.
+    """
+
+    def test_config_ops_sidecar_does_not_double_count_its_agent(
+        self, mod, tmp_path
+    ):
+        for agent in ("security-reviewer", "code-reviewer", "wp-reviewer"):
+            _write_summary(str(tmp_path), agent, ["src/a.php"], [])
+        for agent in ("security-reviewer", "code-reviewer", "wp-reviewer"):
+            _write_summary(
+                str(tmp_path), agent, ["ci.yml"], [], domain="config-ops",
+            )
+
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+
+        assert len(list(tmp_path.glob("*-scope-summary*.json"))) == 6
+        assert cov["agents_reporting"] == 3
+
+    def test_only_unreadable_summaries_still_reads_as_no_data(
+        self, mod, tmp_path
+    ):
+        (tmp_path / "broken-scope-summary.json").write_text("{not json")
+        assert mod.aggregate_inline_coverage(str(tmp_path)) is None
+
+
 class TestExplicitClaimsCoverage:
     """Outputs carrying `deferred_reviewed` switch the aggregator to stated
     claims — an agent's silence about a deferred file becomes a visible gap
