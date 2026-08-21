@@ -610,6 +610,31 @@ class TestCanonicalExecutableBuilderSource:
         )
         assert "PIRATEGOAT_PLUGIN_VERSION=''" in prompt
 
+    def test_output_dir_is_taught_as_an_artifact_only_namespace(self, tmp_path):
+        """Scratch work has a home, and the briefing has to name it.
+
+        A field run had a reviewer awk-slice its scoped diff into three
+        ad-hoc .patch files inside OUTPUT_DIR. The technique was sound; the
+        location was never taught, and the only $TMPDIR mention reaching a
+        reviewer was buried in a protocol probe example.
+        """
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+        assert "OUTPUT_DIR accepts only your named artifacts" in prompt
+        assert "goes in $TMPDIR" in prompt
+
     def test_envelope_carries_the_budget_target_when_one_is_set(self, tmp_path):
         """save() can only echo the target if the target reaches the builder.
 

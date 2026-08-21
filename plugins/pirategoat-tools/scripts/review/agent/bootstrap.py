@@ -1196,6 +1196,18 @@ def build_output(
     lines.append(f"REVIEWER_NAME: {reviewer_name}")
     lines.append("OUTPUT_FILES:")
     lines.append(f"  - {output_dir}/{reviewer_name}-review.json")
+    # The namespace rule, taught once. A field run had a reviewer awk-slice
+    # its scoped diff into three ad-hoc .patch files inside OUTPUT_DIR — a
+    # sound technique in the wrong place, and nothing had ever told it
+    # otherwise (the only $TMPDIR mention in anything a reviewer receives
+    # was buried in a protocol probe example). OUTPUT_DIR is scanned by
+    # readiness gates, swept for stale artifacts, and mined by the metrics
+    # layer, all of which key on filenames the pipeline expects.
+    lines.append(
+        "OUTPUT_DIR accepts only your named artifacts (the files this "
+        "briefing tells you to write). Scratch work — diff slices, notes, "
+        "intermediate files — goes in $TMPDIR."
+    )
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
     lines.append("ReviewOutputBuilder — MUST use a one-shot quoted heredoc in this form:")
