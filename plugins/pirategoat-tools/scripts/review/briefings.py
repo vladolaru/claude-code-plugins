@@ -1265,6 +1265,21 @@ fact; if the findings don't verify it, don't assert it.
 """
 
 
+def _has_coverage_gap(gaps, unscoped):
+    """True when something is PROVEN uncovered, claims aside.
+
+    Budget-starved files and domain-unmatched files are gaps: no reviewer
+    saw them. A deferred-review claim is not — an agent says it read the
+    file, and the section says in as many words that a claim is not proof.
+    Demanding the verdict acknowledge "this gap" on a claims-only run
+    converts that hedge into the certainty it was written to avoid.
+    """
+    return bool(
+        (gaps if isinstance(gaps, dict) else {})
+        or (unscoped if isinstance(unscoped, list) else [])
+    )
+
+
 def _render_review_coverage_section(gaps, claims, unscoped):
     """Render the report's complete `## Review coverage` section, or "".
 
@@ -1435,6 +1450,19 @@ def _step_9_review_report(mode, state, context, config, output_dir):
     )
     if coverage_section:
         fence = _markdown_fence_for(coverage_section)
+        # The verdict sentence rides on a real gap, not on the section
+        # existing: a run whose only entry is a deferred-review CLAIM has
+        # nothing proven uncovered, and telling the orchestrator to
+        # acknowledge a gap there manufactures one out of a claim the
+        # block itself is careful to hedge.
+        gap_clause = (
+            " The verdict must acknowledge this gap."
+            if _has_coverage_gap(
+                state.get("inline_coverage_gaps"),
+                state.get("inline_coverage_unscoped"),
+            )
+            else ""
+        )
         actions.append("")
         actions.append(
             "**⚠ Review coverage — machine-rendered.** Copy the block below "
@@ -1442,7 +1470,7 @@ def _step_9_review_report(mode, state, context, config, output_dir):
             "commentary AFTER the block; never restate, summarize, "
             "re-count, or edit the machine's sentences — the hedges in them "
             "are the measurement, and a tighter paraphrase is a false "
-            "claim. The verdict must acknowledge this gap."
+            f"claim.{gap_clause}"
         )
         actions.append("")
         actions.append(f"{fence}markdown")
@@ -1712,8 +1740,8 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "   Where the report or your summary reports the critic pass, list "
         "each adjustment id with its own outcome from step 2 — one line "
         "per adjustment, `<adjustment_id>: verified | refuted | not "
-        "checked`. Never an aggregate count: \"all N spot-checked\" over a "
-        "batch where one entry went unprobed publishes that entry as "
+        "checked`. Never an aggregate count — \"all N spot-checked\" over "
+        "a batch where one entry went unprobed publishes that entry as "
         "verified, which is the exact false claim per-entry accounting "
         "exists to prevent. A batch where you checked none of the entries "
         "is reported as N lines of `not checked`."

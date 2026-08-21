@@ -111,6 +111,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **The unscoped-files gap is recorded once, not once per file.** The reconciliation context asked for one `add_observation()` per unscoped file while step 9 pastes the same list into the report verbatim — 46 restatements of one fact on the run that prompted the change. The ledger now carries one aggregate observation naming the list, and the report keeps saying it.
 
+- **The report's verdict is told to acknowledge a coverage gap only when there is one.** The sentence fired whenever the coverage section rendered, including on runs whose only entry is a deferred-review claim — the one population the block deliberately hedges as "not proof of read" rather than calling it a gap.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01

@@ -1598,6 +1598,51 @@ class TestStep9ReviewReport:
         assert "commentary AFTER the block" in text
         assert "verdict must acknowledge this gap" in text
 
+        # ORDER, not just presence: an instruction that arrives after the
+        # block it governs has already been disobeyed. The copy-verbatim
+        # sentence must precede the opening fence, which must precede the
+        # heading, which must precede the closing fence.
+        instruction = text.index("VERBATIM")
+        opening = text.index("```markdown")
+        heading = text.index("## Review coverage")
+        closing = text.index("\n```", opening + len("```markdown"))
+        assert instruction < opening < heading < closing
+
+    def test_verdict_gap_clause_rides_on_a_proven_gap(self, mod):
+        """Claims are hedged as "not proof of read" three lines up.
+
+        Telling the orchestrator that "the verdict must acknowledge this
+        gap" on a claims-only run manufactures a gap out of the one
+        population the block is careful NOT to call one.
+        """
+        claims_only = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
+            "inline_coverage_unscoped": [],
+        }
+        text = "\n".join(
+            mod.get_step_guidance(9, "full", claims_only, {})["actions"]
+        )
+        assert "## Review coverage" in text
+        assert "verdict must acknowledge" not in text
+
+    @pytest.mark.parametrize(
+        "population",
+        ["inline_coverage_gaps", "inline_coverage_unscoped"],
+    )
+    def test_either_proven_gap_population_demands_the_verdict_clause(
+        self, mod, population
+    ):
+        value = (
+            {"src/starved.php": ["code-reviewer"]}
+            if population == "inline_coverage_gaps"
+            else ["package-lock.json"]
+        )
+        state = {"completed_steps": [], population: value}
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "verdict must acknowledge this gap" in text
+
     def test_coverage_section_renders_unscoped_files_alone(self, mod):
         """A run whose only coverage problem is unrouted files still gets
         the section — this population reaches no per-agent bucket."""
@@ -1817,17 +1862,28 @@ class TestStep10DecisionCritic:
 
     def test_spot_check_instruction_carries_no_aggregate_phrasing(self, mod):
         """An "all N spot-checked" phrase may appear in exactly one place:
-        the sentence that forbids it."""
+        the sentence that forbids it.
+
+        Scoped per SENTENCE, not per action string. Filtering by whole
+        action auto-exempted anything appended to the same `actions.append`
+        as the prohibition — which is precisely where a future aggregate
+        phrasing would land, since that is the action about reporting the
+        batch.
+        """
         revise = self._revise_section(
             mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
         )
         aggregate = re.compile(r'all ["\u201c]?(?:N|\d+)["\u201d]? '
                                r'(?:spot-check|verif|check)')
+        sentences = re.split(r'(?<=[.:])\s+', revise)
         offenders = [
-            line for line in revise.split("\n")
-            if aggregate.search(line) and "Never an aggregate count" not in line
+            sentence for sentence in sentences
+            if aggregate.search(sentence)
+            and "Never an aggregate count" not in sentence
         ]
         assert not offenders, offenders
+        # The prohibition itself must still be there to be exempted.
+        assert any(aggregate.search(s) for s in sentences)
 
     def test_codex_critic_uses_canonical_agent_definition(self, mod, tmp_path):
         state = {"completed_steps": []}
