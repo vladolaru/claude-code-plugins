@@ -1992,3 +1992,244 @@ class TestIncludePathRescue:
         })
         scope = self._scope(tmp_path, ["config/**"])
         assert scope["files"] == ["app.php"]
+
+
+class TestA11yUiEvidenceSniff:
+    """The a11y include matches every `.ts`/`.js` file, and the extension
+    says nothing about whether the module renders. A full-stack monorepo
+    field run handed the a11y reviewer large backend-only server files —
+    pure budget waste. Bare script modules now have to SHOW UI evidence,
+    from their own diff hunk or from a bounded read of the file on disk.
+    """
+
+    _BACKEND_TS = (
+        "import { Pool } from 'pg';\n"
+        "export async function loadOrders(pool: Pool, shopId: number) {\n"
+        "  const rows = await pool.query('SELECT * FROM orders WHERE shop=$1',"
+        " [shopId]);\n"
+        "  return rows.rows.map((row) => ({ id: row.id, total: row.total }));\n"
+        "}\n"
+    )
+
+    def _git(self, repo, *args):
+        subprocess.run(
+            ["git"] + list(args),
+            cwd=repo, capture_output=True, text=True, check=True,
+        )
+
+    def _write(self, repo, files):
+        for relpath, content in files.items():
+            target = repo / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+
+    def _make_repo(self, tmp_path, feature_files, base_files=None):
+        self._git(tmp_path, "init", "-b", "main")
+        self._git(tmp_path, "config", "user.email", "t@t.com")
+        self._git(tmp_path, "config", "user.name", "T")
+        self._git(tmp_path, "config", "commit.gpgsign", "false")
+        (tmp_path / "README.txt").write_text("base\n")
+        self._write(tmp_path, base_files or {})
+        self._git(tmp_path, "add", ".")
+        self._git(tmp_path, "commit", "-m", "initial")
+        self._git(tmp_path, "checkout", "-b", "feature")
+        self._write(tmp_path, feature_files)
+        self._git(tmp_path, "add", ".")
+        self._git(tmp_path, "commit", "-m", "feature")
+
+    def _scope_files(self, repo, domain):
+        args = argparse.Namespace(
+            domain=domain,
+            range="main..HEAD",
+            format="json",
+            max_lines=2000,
+            base_ref_only=False,
+            summary=False,
+            output_dir=None,
+            no_merge_base=True,
+            no_semantic_filter=False,
+            include_path=None,
+        )
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(repo)
+            return review_scope.build_scope(args)["files"]
+        finally:
+            os.chdir(saved_cwd)
+
+    def test_backend_only_bare_ts_leaves_a11y_scope(self, tmp_path):
+        self._make_repo(tmp_path, {
+            "server/orders.ts": self._BACKEND_TS,
+            "src/Cart.tsx": "export const Cart = () => <button>Buy</button>;\n",
+        })
+        assert self._scope_files(tmp_path, "a11y") == ["src/Cart.tsx"]
+
+    def test_bare_ts_with_aria_in_the_patch_stays(self, tmp_path):
+        self._make_repo(tmp_path, {
+            "src/announce.ts": (
+                "export function announce(node: HTMLElement, msg: string) {\n"
+                "  node.setAttribute('aria-live', 'polite');\n"
+                "}\n"
+            ),
+        })
+        assert self._scope_files(tmp_path, "a11y") == ["src/announce.ts"]
+
+    def test_bare_ts_with_jsx_in_the_patch_stays(self, tmp_path):
+        self._make_repo(tmp_path, {
+            "src/render.ts": (
+                "export function render() {\n"
+                "  return <button type=\"submit\">Save</button>;\n"
+                "}\n"
+            ),
+        })
+        assert self._scope_files(tmp_path, "a11y") == ["src/render.ts"]
+
+    def test_bare_ts_with_evidence_only_on_disk_stays(self, tmp_path):
+        """A UI module edited only in its data layer shows no marker in the
+        hunk. The bounded on-disk read is what keeps it in scope."""
+        ui_module_v1 = (
+            "import { createElement } from 'react';\n"
+            "const LABEL = 'Total';\n"
+            "export const price = (n: number) => `$${n}`;\n"
+        )
+        ui_module_v2 = ui_module_v1.replace("`$${n}`", "`EUR ${n}`")
+        self._make_repo(
+            tmp_path,
+            {"src/price.ts": ui_module_v2},
+            base_files={"src/price.ts": ui_module_v1},
+        )
+        # The hunk itself carries no UI marker (the import is only
+        # context, and the patch scan reads +/- lines alone)...
+        patch = subprocess.run(
+            ["git", "diff", "main..HEAD", "--", "src/price.ts"],
+            cwd=tmp_path, capture_output=True, text=True, check=True,
+        ).stdout
+        changed = [
+            line for line in patch.splitlines()
+            if line.startswith(("+", "-"))
+            and not review_scope._is_file_marker(line)
+        ]
+        assert changed and not any(
+            review_scope._patch_line_has_ui_evidence(line) for line in changed
+        )
+        # ...but the file on disk does.
+        assert self._scope_files(tmp_path, "a11y") == ["src/price.ts"]
+
+    def test_tsx_and_jsx_never_need_evidence(self, tmp_path):
+        """JSX in the extension IS the evidence — a `.tsx` file with a
+        backend-shaped body stays in scope unconditionally."""
+        self._make_repo(tmp_path, {
+            "src/queries.tsx": self._BACKEND_TS,
+            "src/queries.jsx": self._BACKEND_TS,
+        })
+        assert sorted(self._scope_files(tmp_path, "a11y")) == [
+            "src/queries.jsx", "src/queries.tsx",
+        ]
+
+    @pytest.mark.parametrize(
+        "domain",
+        ["code", "security", "architecture", "patterns", "reliability"],
+    )
+    def test_other_domains_see_the_backend_file_unchanged(
+        self, tmp_path, domain
+    ):
+        """The sniff is a11y-only. On the same fixture, every other domain
+        whose include matches `.ts` still gets the file."""
+        self._make_repo(tmp_path, {
+            "server/orders.ts": self._BACKEND_TS,
+            "src/Cart.tsx": "export const Cart = () => <button>Buy</button>;\n",
+        })
+        # a11y drops it; nothing else does.
+        assert "server/orders.ts" not in self._scope_files(tmp_path, "a11y")
+        assert "server/orders.ts" in self._scope_files(tmp_path, domain)
+
+    def test_deleted_bare_ts_without_patch_evidence_leaves_scope(
+        self, tmp_path
+    ):
+        """No file on disk to read: the patch is the only evidence, and a
+        backend deletion carries none. Best-effort means honest, not
+        conservative-by-crash."""
+        self._make_repo(
+            tmp_path,
+            {"src/Cart.tsx": "export const Cart = () => <button>Buy</button>;\n"},
+            base_files={"server/orders.ts": self._BACKEND_TS},
+        )
+        (tmp_path / "server" / "orders.ts").unlink()
+        self._git(tmp_path, "commit", "-am", "drop backend module")
+        assert "server/orders.ts" not in self._scope_files(tmp_path, "a11y")
+
+
+class TestUiSurfaceTokens:
+    """`_content_has_ui_evidence` is a SUPERSET of the markup vocabulary,
+    kept separate because the two answer different questions: markup gates
+    dispatch (precise), UI-surface gates a11y file scope (file nature)."""
+
+    @pytest.mark.parametrize("line", [
+        "const cls = classNames(a, b);",
+        "$role = $user->role;",
+        "export class OrderRepository {}",
+        "const rows = await pool.query(sql);",
+        "import { Pool } from 'pg';",
+        "// import React from 'react';",
+    ])
+    def test_backend_lines_are_not_ui_evidence(self, line):
+        assert not review_scope._content_has_ui_evidence(line)
+
+    @pytest.mark.parametrize("line", [
+        "<div className=\"wrap\">",
+        "import React from 'react';",
+        "import { render } from 'react-dom/client';",
+        "import 'react';",
+        "const Comp = await import('preact');",
+        "const { useState } = require('react');",
+        "import { Button } from '@wordpress/components';",
+        "import { speak } from '@wordpress/a11y';",
+        "const el = document.querySelector('.cart');",
+        "node.innerHTML = markup;",
+        "el.classList.add('is-open');",
+        "node.setAttribute('aria-expanded', 'true');",
+        "wp.a11y.speak( message );",
+    ])
+    def test_ui_surface_lines_are_evidence(self, line):
+        assert review_scope._content_has_ui_evidence(line)
+
+    def test_markup_vocabulary_is_fully_inherited(self):
+        assert review_scope._content_has_ui_evidence('<button type="submit">')
+        assert review_scope._content_has_ui_evidence('aria-live="polite"')
+
+    def test_presentational_containers_stay_out_of_the_markup_gate(self):
+        """The shared vocabulary keeps its precision: adding className
+        there would have retuned has_markup_changes dispatch for every
+        presentational tweak. The sniff's extra tokens live beside it."""
+        assert not review_scope.patch_has_markup_tokens(
+            '+ <div className="wrap">'
+        )
+        assert review_scope._patch_line_has_ui_evidence(
+            '+ <div className="wrap">'
+        )
+
+
+class TestBoundedUiSniffRead:
+    def test_read_is_bounded(self, tmp_path):
+        """A generated bundle must not be read whole. Evidence past the
+        limit is deliberately not found."""
+        target = tmp_path / "bundle.js"
+        target.write_text("var pad = 0;\n" * 6000 + "import 'react';\n")
+        assert target.stat().st_size > review_scope._UI_SNIFF_READ_BYTES
+        assert not review_scope._file_has_ui_evidence(str(target))
+        assert review_scope._file_has_ui_evidence(
+            str(target), limit=target.stat().st_size
+        )
+
+    def test_unreadable_file_is_not_evidence(self, tmp_path):
+        assert not review_scope._file_has_ui_evidence(
+            str(tmp_path / "gone.ts")
+        )
+
+    def test_truncated_trailing_line_never_matches_a_fragment(self, tmp_path):
+        """Reading exactly `limit` bytes can cut a line in half; a half
+        token is not evidence."""
+        target = tmp_path / "cut.ts"
+        target.write_text("const a = 1;\nimport 'react-dom';\n")
+        cut = len("const a = 1;\nimport 'react-do")
+        assert not review_scope._file_has_ui_evidence(str(target), limit=cut)

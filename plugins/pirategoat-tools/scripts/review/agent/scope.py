@@ -262,16 +262,104 @@ def _line_has_markup_token(patch_line: str) -> bool:
     (patch_has_markup_tokens) and the a11y budget-priority evidence scan
     (classify_markup_evidence) call this function, so they cannot drift.
     """
-    lowered = patch_line[1:].strip().lower()
+    return _content_has_markup_token(patch_line[1:])
+
+
+def _normalize_scan_line(text: str) -> str:
+    """Lowercase, de-comment, and trim one line for token scanning.
+
+    Returns "" for a line that is entirely comment or whitespace — the
+    caller treats that as no evidence.
+    """
+    lowered = text.strip().lower()
     if lowered.startswith(("//", "#", "/*", "*", "<!--")):
-        return False
-    uncommented = _strip_inline_comment(lowered).strip()
+        return ""
+    return _strip_inline_comment(lowered).strip()
+
+
+def _content_has_markup_token(text: str) -> bool:
+    """True when one line of SOURCE (no diff marker) emits or touches markup.
+
+    The vocabulary half of _line_has_markup_token, split out so evidence
+    can be looked for in a file on disk and not only in a patch. Same two
+    vocabularies, same masking rule, one implementation.
+    """
+    uncommented = _normalize_scan_line(text)
     if not uncommented:
         return False
     if any(pattern.search(uncommented) for pattern in MARKUP_CONTENT_TOKEN_PATTERNS):
         return True
     code_only = _mask_quoted_content(uncommented)
     return any(pattern.search(code_only) for pattern in MARKUP_CODE_TOKEN_PATTERNS)
+
+
+# =============================================================================
+# UI-SURFACE tokens — a DIFFERENT question from the markup vocabulary above,
+# and deliberately a separate (small) set.
+#
+# The markup vocabulary answers "does this CHANGE touch UI markup?" It gates
+# has_markup_changes dispatch, so it is tuned to be precise, and that tuning
+# is load-bearing: `<div className="wrap">` is pinned as NOT markup
+# (`test_presentational_containers_and_generics_are_not_markup`) precisely so
+# a presentational container tweak cannot gate-lift every diff.
+#
+# The a11y scope sniff below asks a different question — "is this FILE a UI
+# surface at all?" — where a presentational container IS the answer. Folding
+# className into the shared set to serve it would silently retune triage;
+# these patterns therefore extend the markup vocabulary rather than join it,
+# and nothing but the sniff reads them.
+#
+# Applied to the same normalized, comment-stripped, lowercased line, so
+# patterns are written lowercase.
+# =============================================================================
+
+_UI_SURFACE_TOKEN_PATTERNS = (
+    # JSX/React presentational attributes. `class=` is deliberately absent —
+    # in a bare .ts/.js file it is far more often `class Foo` or a CSS
+    # selector string than emitted markup.
+    re.compile(r"(?<![\w$])classname\s*=\s*[\"'{]"),
+    # React / DOM-component ecosystem imports. A module that pulls these in
+    # renders something, whatever its extension claims.
+    # Covers `from 'react'`, bare side-effect `import 'react'`, dynamic
+    # `import('react')`, and `require('react')` in one shape.
+    re.compile(
+        r"\b(?:from|import|require)\s*\(?\s*[\"']"
+        r"(?:react(?:-dom)?(?:/[\w./-]*)?|preact(?:/[\w./-]*)?|"
+        r"@wordpress/(?:element|components|block-editor|blocks|primitives|"
+        r"icons|a11y)|@testing-library/[\w-]+)[\"']"
+    ),
+    # Direct DOM construction/queries — the non-JSX way to emit UI.
+    re.compile(
+        r"\bdocument\s*\.\s*(?:queryselector(?:all)?|getelementby\w+|"
+        r"getelementsby\w+|createelement|createtextnode|body|activeelement)\b"
+    ),
+    re.compile(r"\.(?:innerhtml|outerhtml|textcontent|classlist)\b"),
+    re.compile(r"\.setattribute\s*\(\s*[\"'](?:aria-|role|tabindex|alt)"),
+    # WordPress's screen-reader announcement channel, imported or namespaced.
+    re.compile(r"\bwp\s*\.\s*a11y\b"),
+)
+
+
+def _content_has_ui_evidence(text: str) -> bool:
+    """True when one line of SOURCE shows this file is a UI surface.
+
+    A SUPERSET of the markup vocabulary: everything markup evidence
+    recognizes, plus the UI-surface tokens above. See that block for why
+    the extra tokens are not merged into the shared set.
+    """
+    if _content_has_markup_token(text):
+        return True
+    uncommented = _normalize_scan_line(text)
+    if not uncommented:
+        return False
+    return any(
+        pattern.search(uncommented) for pattern in _UI_SURFACE_TOKEN_PATTERNS
+    )
+
+
+def _patch_line_has_ui_evidence(patch_line: str) -> bool:
+    """_content_has_ui_evidence for a patch line (drops the +/- marker)."""
+    return _content_has_ui_evidence(patch_line[1:])
 
 
 def patch_has_markup_tokens(diff_text: str) -> bool:
@@ -312,7 +400,11 @@ def _parse_marker_path(line: str) -> Optional[str]:
     return None
 
 
-def classify_markup_evidence(range_spec: str, filepaths: List[str]) -> set:
+def classify_markup_evidence(
+    range_spec: str,
+    filepaths: List[str],
+    line_predicate=_line_has_markup_token,
+) -> set:
     """Return the subset of `filepaths` whose changed lines carry markup tokens.
 
     ONE combined `git diff` for all files, scanned line-by-line while
@@ -321,6 +413,11 @@ def classify_markup_evidence(range_spec: str, filepaths: List[str]) -> set:
     calls and every full diff held in memory before budgeting). The scan
     runs on the raw (unfiltered) diff; that's a superset of the semantically
     filtered text, which is fine for ORDERING evidence.
+
+    `line_predicate` swaps the vocabulary without re-implementing the scan:
+    budget priority asks the markup question, the a11y scope sniff asks the
+    wider UI-surface one (_patch_line_has_ui_evidence). One walker, so a
+    hunk-tracking fix can never land in only one of them.
     """
     if not filepaths:
         return set()
@@ -362,9 +459,98 @@ def classify_markup_evidence(range_spec: str, filepaths: List[str]) -> set:
             continue
         if not line.startswith(("+", "-")):
             continue
-        if _line_has_markup_token(line):
+        if line_predicate(line):
             evidence.add(current)
     return evidence
+
+
+# =============================================================================
+# a11y scope sniff — content evidence, not extension guilt.
+#
+# The a11y include matches every _FRONTEND_LANGS extension, and `.ts`/`.js`
+# say nothing about whether a file renders anything. In a full-stack monorepo
+# that handed the a11y reviewer large backend-only server modules: pure
+# budget waste, caught only by the reviewer's own relevance backstop after
+# the tokens were already spent.
+#
+# So bare script modules must SHOW they are UI before entering a11y scope.
+# `.tsx`/`.jsx` never do — JSX in the extension is the evidence — and
+# neither do `.vue`/`.svelte` (single-file components), stylesheets, or
+# templates, all of which are inherent UI surfaces.
+#
+# Deliberately NOT a configurable per-domain predicate. One domain has this
+# problem, because one domain's include spans "anything that might render";
+# a config key no second domain sets is surface an agent has to read and
+# rule out. If a second domain ever needs it, generalize then, with two real
+# call sites to generalize from.
+#
+# Scope only. Triage is untouched: dispatch still decides from the registry's
+# own signals, so an a11y-relevant run is never skipped by this — at worst
+# the reviewer is dispatched and reports NO_DOMAIN_FILES honestly, which is
+# the pre-existing behavior for a diff with no a11y surface at all.
+# =============================================================================
+
+# Bare script modules: no JSX in the extension, so extension proves nothing.
+_AMBIGUOUS_SCRIPT_RE = re.compile(r"\.(js|mjs|cjs|ts)$", re.IGNORECASE)
+
+# How much of a file to read when the patch showed no marker. A UI module
+# declares itself in its imports and its render body; 64KB reaches well past
+# both, and the bound is what keeps a generated bundle from being read whole.
+_UI_SNIFF_READ_BYTES = 64 * 1024
+
+
+def _file_has_ui_evidence(path: str, limit: int = _UI_SNIFF_READ_BYTES) -> bool:
+    """True when the first `limit` bytes of `path` show UI evidence.
+
+    Best-effort by construction: a deleted, unreadable, or binary file
+    yields False, so the patch scan is the only evidence for it. That is
+    the honest answer — nothing showed the file is a UI surface.
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(limit)
+    except OSError:
+        return False
+    text = head.decode("utf-8", errors="replace")
+    # A read that stopped mid-line may have cut a token in half; drop that
+    # fragment rather than match on it. A read that stopped ON a line
+    # boundary cut nothing, whether or not it hit the limit.
+    lines = text.splitlines()
+    if len(head) == limit and lines and not text.endswith(("\n", "\r")):
+        lines = lines[:-1]
+    return any(_content_has_ui_evidence(line) for line in lines)
+
+
+def filter_a11y_ui_evidence(
+    range_spec: str, files: List[str]
+) -> Tuple[List[str], List[str]]:
+    """Drop bare script modules that show no UI evidence from a11y scope.
+
+    Two evidence sources, cheapest first: the file's own diff hunk (one
+    combined `git diff` for every candidate, via classify_markup_evidence),
+    then a bounded read of the file on disk for the candidates the patch
+    left silent — a UI module edited only in its data layer still belongs
+    to a11y.
+
+    Returns (kept, dropped) preserving input order in both.
+    """
+    candidates = [f for f in files if _AMBIGUOUS_SCRIPT_RE.search(f)]
+    if not candidates:
+        return list(files), []
+
+    with_patch_evidence = classify_markup_evidence(
+        range_spec, candidates, line_predicate=_patch_line_has_ui_evidence
+    )
+    dropped = {
+        f for f in candidates
+        if f not in with_patch_evidence and not _file_has_ui_evidence(f)
+    }
+    if not dropped:
+        return list(files), []
+    return (
+        [f for f in files if f not in dropped],
+        [f for f in files if f in dropped],
+    )
 
 
 # =============================================================================
@@ -566,7 +752,11 @@ DOMAIN_CATALOG = {
         "budget_priority": "production_first",
     },
     "a11y": {
-        "description": "UI-emitting files for accessibility review (JS/TS/JSX/TSX/CSS + server-rendered markup: PHP/HTML/templates)",
+        "description": (
+            "UI-emitting files for accessibility review (JSX/TSX/Vue/Svelte/CSS "
+            "+ server-rendered markup: PHP/HTML/templates; bare JS/TS only when "
+            "the change or the file shows UI evidence)"
+        ),
         "include": _ext_re(_FRONTEND_LANGS, _STYLE_LANGS, _MARKUP_LANGS),
         "exclude": None,
         # Budget markup-evidence-bearing files FIRST: the broad markup-language
@@ -1102,6 +1292,18 @@ def build_scope(args: argparse.Namespace) -> dict:
 
     # Step 4: Apply domain filter
     domain_matched, domain_excluded = filter_domain(after_noise, args.domain)
+
+    # Step 4.4: a11y UI-evidence sniff. `.ts`/`.js` are in the a11y include
+    # because they MIGHT render; a backend-only server module in a
+    # full-stack monorepo is the case where they don't. See
+    # filter_a11y_ui_evidence for the full rationale. Runs BEFORE the path
+    # rescue below so an explicit --include-path can still bring a file
+    # back: a reviewer dispatched FOR a path outranks a content sniff.
+    if args.domain == "a11y" and domain_matched:
+        domain_matched, no_ui_evidence = filter_a11y_ui_evidence(
+            range_spec, domain_matched
+        )
+        domain_excluded.extend(no_ui_evidence)
 
     # Step 4.5: Path-scope rescue. Repo-contributed reviewers may declare
     # applicability by path glob (applies_to.paths); those files are the
