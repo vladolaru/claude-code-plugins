@@ -660,7 +660,7 @@ claude --plugin-dir <worktree>/plugins/pirategoat-tools \
 python3 scripts/analysis/review_run_metrics.py --last 1 --format json | grep plugin_version
 ```
 
-**Which BUILD ran** is a different question, and the one that matters under the wrapper: `plugin_version` only moves when a release is cut, so every dev-mount commit between two releases stamps the same number. `_detect_plugin_commit()` records the checkout's short HEAD as `plugin_commit` in `run-config.json` — deliberately there and nowhere else, since run-config is the artifact that could not answer it. It resolves for ordinary installs too — Claude Code installs a marketplace by cloning it, so an installed plugin usually sits in a repository — and is `null` only where there is no repository to ask (no Git binary, a distribution that arrived some other way). Read it straight from the run directory:
+**Which BUILD ran** is a different question, and the one that matters under the wrapper: `plugin_version` only moves when a release is cut, so every dev-mount commit between two releases stamps the same number. `_detect_plugin_commit()` records the checkout's short HEAD as `plugin_commit` in `run-config.json` — deliberately there and nowhere else, since run-config is the artifact that could not answer it. It is `null` wherever there is no repository to ask (a marketplace zip install), which is the ordinary case for a released plugin. Read it straight from the run directory:
 
 ```bash
 python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["plugin_commit"])' <run dir>/run-config.json

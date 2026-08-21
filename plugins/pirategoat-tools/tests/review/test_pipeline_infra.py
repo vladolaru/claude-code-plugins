@@ -288,10 +288,8 @@ class TestTelemetryIdentityHelpers:
         assert mod._detect_plugin_commit(repo) == expected
 
     def test_plugin_commit_is_none_outside_a_repository(self, mod, tmp_path):
-        """Marketplace installs are usually git clones, so this is the
-        exception rather than the norm — but a plugin directory that is
-        no repository must stay silent: not a warning, not an
-        exception."""
+        """A plugin installed from a marketplace zip has no repository, and
+        that must stay silent — not a warning, not an exception."""
         plugin_root = tmp_path / "1.108.0"
         plugin_root.mkdir()
         assert mod._detect_plugin_commit(plugin_root) is None

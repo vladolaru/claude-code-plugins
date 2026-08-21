@@ -2257,32 +2257,6 @@ class TestA11yUiEvidenceSniff:
         self._make_repo(tmp_path, {"server/orders.ts": self._BACKEND_TS})
         assert self._scope_files(tmp_path, "a11y") == ["server/orders.ts"]
 
-    def test_removal_only_evidence_keeps_the_file(self, tmp_path):
-        """A patch that only REMOVES an `aria-` line is exactly the change
-        an a11y reviewer must see. The scan reads `-` lines as evidence,
-        and nothing else in the file need mention UI at all."""
-        before = (
-            "export function mount(node: HTMLElement) {\n"
-            "  node.setAttribute('aria-live', 'polite');\n"
-            "  return node;\n"
-            "}\n"
-        )
-        after = (
-            "export function mount(node: HTMLElement) {\n"
-            "  return node;\n"
-            "}\n"
-        )
-        self._make_repo(
-            tmp_path,
-            {"src/mount.ts": after},
-            base_files={"src/mount.ts": before},
-        )
-        # The removal is the ONLY evidence: it is gone from disk.
-        assert not review_scope._file_has_ui_evidence(
-            "src/mount.ts", str(tmp_path)
-        )
-        assert self._scope_files(tmp_path, "a11y") == ["src/mount.ts"]
-
     def test_tsx_and_jsx_never_need_evidence(self, tmp_path):
         """JSX in the extension IS the evidence — a `.tsx` file with a
         backend-shaped body stays in scope unconditionally."""

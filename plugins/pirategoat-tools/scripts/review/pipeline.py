@@ -597,15 +597,11 @@ def _detect_plugin_commit(plugin_root=None):
     answer "which build produced this". The commit closes that gap for the
     one host where the question is answerable.
 
-    Resolves for ordinary installs too, not just dev mounts: Claude Code
-    installs a marketplace by cloning it, so an installed plugin usually
-    DOES sit in a repository. None is the exception, not the norm — no Git
-    binary, or a distribution that arrived some other way (verified: one
-    of five marketplaces on a working machine was not a repo).
-
-    Strictly best-effort regardless. Not a repo, Git absent, a nonzero
-    exit, a timeout, or unparseable output all return None — never a
-    warning, never an exception. None means "not determinable", and the
+    Strictly best-effort, and silence is the correct answer more often
+    than not: a plugin installed from a marketplace zip has no repository,
+    and neither does a machine without Git. Not a repo, Git absent, a
+    nonzero exit, a timeout, or unparseable output all return None — never
+    a warning, never an exception. None means "not determinable", and the
     caller writes it as an explicit null.
     """
     try:
@@ -631,7 +627,7 @@ def _stamp_run_config(output_dir, config, field, value):
     whatever ran last time.
 
     Writes on absence as well as on change, so the key is ALWAYS present.
-    A `.get() != value` test alone would leave an undeterminable field
+    A `.get() != value` test alone would leave an undetectable field
     omitted rather than null, making "we could not tell" indistinguishable
     from "this artifact predates the field" — one shape, always.
     """
@@ -857,11 +853,9 @@ def main():
         # marketplace/CHANGELOG, and it only moves when a release is cut —
         # so every dev-mount run between two releases stamps the same
         # number. `plugin_commit` is the BUILD identity, and it is the only
-        # thing that distinguishes them. It resolves for ordinary
-        # installs too — Claude Code installs a marketplace by cloning
-        # it — and is null only where there is no repository to ask (no
-        # Git binary, a distribution that arrived some other way), which
-        # is deliberately silent rather than a warning.
+        # thing that distinguishes them. It is null wherever there is no
+        # repository to ask (a marketplace zip install), which is the
+        # ordinary case for a released plugin and deliberately silent.
         plugin_version = _detect_plugin_version() or None
         _stamp_run_config(output_dir, config, "plugin_version", plugin_version)
         _stamp_run_config(
