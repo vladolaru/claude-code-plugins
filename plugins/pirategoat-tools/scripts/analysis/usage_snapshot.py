@@ -134,8 +134,19 @@ RUN_CONFIG_FILENAME = "run-config.json"
 # `partial` on effectively every field run, because the analyzer counted any
 # call whose result shape it did not recognize — WebSearch, WebFetch, MCP —
 # as unresolved, and most reviewers use WebSearch. The classifier no longer
-# does that (see `_EVIDENCE_TOOL_NAMES` in `review_transcript.py`), but the
-# coupling was wrong on its own terms and stays removed either way.
+# does that (see `_CLASSIFIED_TOOL_NAMES` in `review_transcript.py`), but
+# the coupling was wrong on its own terms and stays removed either way.
+#
+# The ORCHESTRATOR half is deliberately NOT decoupled the same way: its own
+# unresolved calls still feed the enrichment's `main_data_complete`, and
+# through it `completeness.orchestrator_data`, which
+# `_orchestrator_availability` below reads. The asymmetry is intended.
+# After the classifier fix, what still counts as unresolved in the main
+# session is only a genuine transcript anomaly — an unpaired call, a
+# duplicated call id, a malformed block — and each of those says the main
+# session's RECORD is damaged, which is exactly the kind of doubt that
+# should reach a number measured from that same record. A reviewer's
+# foreign-shaped tool result never carried that implication.
 _SUBAGENT_EVIDENCE_WARNINGS = frozenset({
     "expected_agents_unavailable",
     "expected_agent_identity_invalid",
