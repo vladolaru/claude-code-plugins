@@ -1001,9 +1001,20 @@ class TestVerificationMethodContract:
         assert "More agents = higher confidence" not in text
 
     def test_reconciliator_treats_clearance_conflicts_as_verification_targets(self):
+        """A clearance that contradicts a finding is resolved by verifying
+        the finding, not by counting sides.
+
+        Pinned on the rule's meaning rather than its old heading text
+        ("Clearance vs. finding"), which moved when the method-adequacy
+        judgment was lifted out to apply to EVERY clearance — the wording
+        can change, this contract cannot.
+        """
         text = (PLUGIN_ROOT / "agents/review-reconciliator.md").read_text()
-        assert "Clearance vs. finding" in text
+        assert "contradicts a finding" in text
         assert "never a vote" in text
+        # And the judgment that voids a bad-method clearance is not gated
+        # on some finding having disagreed with it first.
+        assert "Judge EVERY clearance by its method" in text
 
     def test_protocol_requires_add_clearance_for_absence_claims(self):
         text = (PLUGIN_ROOT / "agents/shared/reviewer-protocol.md").read_text()
