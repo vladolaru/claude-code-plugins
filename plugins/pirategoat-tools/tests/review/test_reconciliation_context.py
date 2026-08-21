@@ -3155,6 +3155,52 @@ class TestUnscopedFiles:
         )
         assert cov["files_unscoped"] == ["yarn.lock"]
 
+    def test_git_quoted_changed_path_matches_the_unquoted_sidecar(
+        self, mod, tmp_path
+    ):
+        """The two producers quote differently and the set difference is
+        arithmetic on their paths.
+
+        `context.py` runs a plain `git diff --name-only`, so a non-ASCII
+        path arrives C-quoted and octal-escaped; scope sidecars run
+        `-c core.quotepath=false` and emit real UTF-8. Subtracting one
+        alphabet from the other published a fully reviewed file as
+        "reviewed by no one" — inside the block step 9 now forbids the
+        orchestrator to correct.
+        """
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/café.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=[r'"src/caf\303\251.php"'],
+        )
+        assert cov["files_unscoped"] == []
+
+    def test_unnormalizable_changed_path_leaves_the_population_unmeasured(
+        self, mod, tmp_path
+    ):
+        """A shrunken population reads as a cleaner review than the run
+        earned, so the strict side fails to unmeasured instead."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=["src/a.php", r'"src/broken\3"'],
+        )
+        assert cov["files_unscoped"] is None
+
+    def test_equivalent_spellings_of_one_path_are_one_file(
+        self, mod, tmp_path
+    ):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["./src//a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php"],
+        )
+        assert cov["files_unscoped"] == []
+
     def test_all_files_scoped_is_measured_empty(self, mod, tmp_path):
         _write_summary(
             str(tmp_path), "security-reviewer", ["src/a.php"], [],

@@ -1,11 +1,22 @@
-"""Shared Git path decoding primitives.
+"""Shared Git path decoding and repository-relative normalization.
 
 Git's ``core.quotePath`` output uses the C-style grammar from ``quote.c``.
-This module owns that grammar once; callers decide how malformed or
-non-Unicode paths affect their own trust and availability contracts.
+This module owns that grammar once, and — on top of it — the single
+definition of "one safe POSIX repository-relative path". Every measurement
+that compares two path sets has to agree on both, because a set difference
+between a `core.quotepath=false` producer and a default-quoting one is
+arithmetic on two different alphabets: it silently reports fully-covered
+non-ASCII files as never covered. Callers decide how malformed or
+non-Unicode paths affect their own trust and availability contracts, via
+``strict``.
 """
 
-from typing import Optional, Tuple
+import posixpath
+import re
+import unicodedata
+from typing import Any, List, Optional, Tuple
+
+from containment import contains_posix_lexically
 
 
 _GIT_QUOTE_ESCAPES = {
@@ -78,3 +89,93 @@ def decode_git_c_quoted_path(
         return decoded.decode("utf-8", errors=errors), True
     except UnicodeDecodeError:
         return None, True
+
+
+def normalize_repo_path(
+    value: Any,
+    repo_path: str = "",
+    *,
+    normalize_backslash_separators: bool = True,
+    decode_git_quoted: bool = True,
+) -> Optional[str]:
+    """Return one safe POSIX repository-relative path, if possible.
+
+    ``decode_git_quoted`` runs the whole value through this module's own
+    quote.c grammar under STRICT UTF-8, so an escape-bearing partial or
+    malformed wrapper becomes unavailable rather than an invented path.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+
+    if decode_git_quoted:
+        decoded, was_git_quoted = decode_git_c_quoted_path(value)
+    else:
+        decoded, was_git_quoted = value, False
+    if decoded is None or not decoded:
+        return None
+    if any(
+        unicodedata.category(char) in {"Cc", "Cf"}
+        for char in decoded
+    ):
+        return None
+
+    candidate = decoded
+    if not was_git_quoted and normalize_backslash_separators:
+        candidate = candidate.replace("\\", "/")
+
+    if ".." in candidate.split("/"):
+        return None
+    if not was_git_quoted and re.match(r"^[a-zA-Z]:", decoded):
+        return None
+
+    if posixpath.isabs(candidate):
+        root = repo_path.replace("\\", "/") if repo_path else ""
+        if not posixpath.isabs(root):
+            return None
+        normalized_root = posixpath.normpath(root)
+        normalized_absolute = posixpath.normpath(candidate)
+        if not contains_posix_lexically(
+            normalized_root, normalized_absolute
+        ):
+            return None
+        candidate = posixpath.relpath(normalized_absolute, normalized_root)
+
+    normalized = posixpath.normpath(candidate)
+    if normalized in ("", ".") or posixpath.isabs(normalized):
+        return None
+    if normalized == ".." or normalized.startswith("../"):
+        return None
+    return normalized
+
+
+def normalize_repo_paths(
+    value: Any,
+    repo_path: str = "",
+    *,
+    strict: bool = False,
+    normalize_backslash_separators: bool = True,
+    decode_git_quoted: bool = True,
+) -> Optional[List[str]]:
+    """Normalize, sort, and deduplicate an allowlisted path list.
+
+    Scope events filter unsafe entries so arbitrary values never persist.
+    Authoritative context and plan sets use ``strict=True`` so partial data
+    becomes unavailable instead of silently shrinking the measured set.
+    """
+    if not isinstance(value, list):
+        return None if strict else []
+
+    normalized = []
+    for item in value:
+        path = normalize_repo_path(
+            item,
+            repo_path=repo_path,
+            normalize_backslash_separators=normalize_backslash_separators,
+            decode_git_quoted=decode_git_quoted,
+        )
+        if path is None:
+            if strict:
+                return None
+            continue
+        normalized.append(path)
+    return sorted(set(normalized))

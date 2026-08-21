@@ -13,10 +13,8 @@ import glob as glob_mod
 import hashlib
 import json
 import os
-import posixpath
 import re
 import sys
-import unicodedata
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -46,8 +44,7 @@ except ImportError:
     from review.atomic_io import atomic_write_json
     from review.critic_adjustments import FINDINGS_READ_OK, read_findings_file
 
-from containment import contains_posix_lexically
-from git_paths import decode_git_c_quoted_path
+from git_paths import normalize_repo_paths
 
 
 LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
@@ -377,7 +374,7 @@ class ReviewTelemetry:
             },
         }
         if scope_paths is not None:
-            event["scope"]["paths"] = self._normalize_repo_paths(
+            event["scope"]["paths"] = normalize_repo_paths(
                 scope_paths,
                 repo_path=self._pipeline_repo_path(),
             )
@@ -619,110 +616,6 @@ class ReviewTelemetry:
             )
         }
 
-    @classmethod
-    def _decode_git_c_quoted_path(
-        cls, value: str
-    ) -> tuple[Optional[str], bool]:
-        """Decode one whole Git C-quoted path into Unicode.
-
-        Returns ``(value, False)`` for ordinary input, including raw legal
-        filenames delimited by quote characters but containing no C escapes.
-        Escape-bearing partial or malformed wrappers return ``(None, True)``
-        so authoritative sets become unavailable instead of inventing a path.
-
-        The shared decoder owns Git's quote.c grammar. This telemetry wrapper
-        keeps strict UTF-8 semantics so malformed authoritative sets become
-        unavailable rather than inventing a path.
-        """
-        return decode_git_c_quoted_path(value)
-
-    @classmethod
-    def _normalize_repo_path(
-        cls,
-        value: Any,
-        repo_path: str = "",
-        *,
-        normalize_backslash_separators: bool = True,
-        decode_git_quoted: bool = True,
-    ) -> Optional[str]:
-        """Return one safe POSIX repository-relative path, if possible."""
-        if not isinstance(value, str) or not value:
-            return None
-
-        if decode_git_quoted:
-            decoded, was_git_quoted = cls._decode_git_c_quoted_path(value)
-        else:
-            decoded, was_git_quoted = value, False
-        if decoded is None or not decoded:
-            return None
-        if any(
-            unicodedata.category(char) in {"Cc", "Cf"}
-            for char in decoded
-        ):
-            return None
-
-        candidate = decoded
-        if not was_git_quoted and normalize_backslash_separators:
-            candidate = candidate.replace("\\", "/")
-
-        if ".." in candidate.split("/"):
-            return None
-        if not was_git_quoted and re.match(r"^[a-zA-Z]:", decoded):
-            return None
-
-        if posixpath.isabs(candidate):
-            root = repo_path.replace("\\", "/") if repo_path else ""
-            if not posixpath.isabs(root):
-                return None
-            normalized_root = posixpath.normpath(root)
-            normalized_absolute = posixpath.normpath(candidate)
-            if not contains_posix_lexically(
-                normalized_root, normalized_absolute
-            ):
-                return None
-            candidate = posixpath.relpath(normalized_absolute, normalized_root)
-
-        normalized = posixpath.normpath(candidate)
-        if normalized in ("", ".") or posixpath.isabs(normalized):
-            return None
-        if normalized == ".." or normalized.startswith("../"):
-            return None
-        return normalized
-
-    @classmethod
-    def _normalize_repo_paths(
-        cls,
-        value: Any,
-        repo_path: str = "",
-        *,
-        strict: bool = False,
-        normalize_backslash_separators: bool = True,
-        decode_git_quoted: bool = True,
-    ) -> Optional[List[str]]:
-        """Normalize, sort, and deduplicate an allowlisted path list.
-
-        Scope events filter unsafe entries so arbitrary values never persist.
-        Authoritative context and plan sets use ``strict=True`` so partial data
-        becomes unavailable instead of silently shrinking the measured set.
-        """
-        if not isinstance(value, list):
-            return None if strict else []
-
-        normalized = []
-        for item in value:
-            path = cls._normalize_repo_path(
-                item,
-                repo_path=repo_path,
-                normalize_backslash_separators=normalize_backslash_separators,
-                decode_git_quoted=decode_git_quoted,
-            )
-            if path is None:
-                if strict:
-                    return None
-                continue
-            normalized.append(path)
-        return sorted(set(normalized))
-
     def _pipeline_repo_path(self) -> str:
         """Read the repository root recorded by the pipeline start event."""
         start = self._read_first_event()
@@ -767,7 +660,7 @@ class ReviewTelemetry:
         if isinstance(scope, dict):
             safe_scope = self._select_scalar_fields(scope, ("files", "lines"))
             if isinstance(scope.get("paths"), list):
-                safe_scope["paths"] = self._normalize_repo_paths(
+                safe_scope["paths"] = normalize_repo_paths(
                     scope["paths"],
                     repo_path=repo_path,
                     normalize_backslash_separators=False,
@@ -930,7 +823,7 @@ class ReviewTelemetry:
             context,
             repo_path,
             final_info,
-            normalize_paths=self._normalize_repo_paths,
+            normalize_paths=normalize_repo_paths,
         )
         manifest["coverage"] = coverage
         manifest["availability"]["coverage"] = coverage is not None
@@ -1207,7 +1100,7 @@ class ReviewTelemetry:
             pr = ctx.get("pr", {})
             git = ctx.get("git", {})
             size = ctx.get("pr_size", {})
-            changed_files = self._normalize_repo_paths(
+            changed_files = normalize_repo_paths(
                 git.get("changed_files"), strict=True
             )
             return {

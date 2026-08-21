@@ -36,6 +36,8 @@ except ImportError:
         sys.path.insert(0, _scripts_parent)
     from review.reviewer_names import derive_reviewer_name
 
+from git_paths import normalize_repo_paths
+
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 # Files in the output directory that are NOT agent review outputs.
@@ -343,6 +345,35 @@ _SIDECAR_FILE_LISTS = (
 )
 
 
+def _unscoped_files(
+    changed_files: Optional[List[str]],
+    scoped_anywhere: set,
+) -> Optional[List[str]]:
+    """Changed files no reviewer's scope contained, or None if unmeasured.
+
+    Both sides of the subtraction go through
+    ``git_paths.normalize_repo_paths`` — the one repo-path grammar the run
+    manifest's coverage builder already uses — because the two producers
+    quote differently: scope sidecars run ``-c core.quotepath=false`` and
+    emit ``src/café.php``, while ``context.py``'s plain
+    ``git diff --name-only`` emits ``"src/caf\303\251.php"``. Subtracting
+    one alphabet from the other publishes fully reviewed non-ASCII files as
+    reviewed by no one, inside a report block the orchestrator is now
+    forbidden to correct.
+
+    ``strict=True`` on the changed side: a path this grammar cannot make
+    safe leaves the whole population unmeasured (``None``) rather than
+    quietly shrinking it, because a shrunken set here reads as a cleaner
+    review than the run earned.
+    """
+    if changed_files is None:
+        return None
+    normalized = normalize_repo_paths(changed_files, strict=True)
+    if normalized is None:
+        return None
+    return sorted(set(normalized) - scoped_anywhere)
+
+
 def aggregate_inline_coverage(
     output_dir: str,
     changed_files: Optional[List[str]] = None,
@@ -382,9 +413,9 @@ def aggregate_inline_coverage(
     appear in no bucket — invisible rather than uncovered. When
     ``changed_files`` is supplied, ``files_unscoped`` closes that hole: it
     is ``changed_files`` minus every path any sidecar mentions (see
-    ``_SIDECAR_FILE_LISTS``). It stays None when the caller supplied no
-    changed-file list, because "not measured" and "measured, none" are
-    different facts.
+    ``_SIDECAR_FILE_LISTS`` for the lists and ``_unscoped_files`` for the
+    subtraction). It stays None when the caller supplied no changed-file
+    list, because "not measured" and "measured, none" are different facts.
 
     Returns None when no summaries exist (pre-sidecar runs) so callers can
     distinguish "no data" from "no gaps".
@@ -397,6 +428,16 @@ def aggregate_inline_coverage(
     # for a 19-agent run. Both of an agent's sidecars derive the same name
     # through the rsplit below, so the set collapses them.
     reporting_agents: set = set()
+    # Sidecar paths, normalized through the ONE shared repo-path grammar
+    # (`git_paths.normalize_repo_paths`) rather than compared raw. The
+    # `files_unscoped` set difference below is subtraction between two
+    # producers with different quoting settings — the sidecars run
+    # `-c core.quotepath=false`, `context.py` does not — so raw arithmetic
+    # reports `"src/caf\303\251.php"` and `src/café.php` as different
+    # files and publishes a fully reviewed non-ASCII file as reviewed by
+    # nobody. Non-strict here: one junk sidecar entry must not void an
+    # agent's whole contribution, and dropping it can only over-report a
+    # gap, never hide one.
     scoped_anywhere: set = set()
     try:
         entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
@@ -422,9 +463,9 @@ def aggregate_inline_coverage(
             continue
         reporting_agents.add(agent)
         for key in _SIDECAR_FILE_LISTS:
-            for f_path in data.get(key) or []:
-                if isinstance(f_path, str):
-                    scoped_anywhere.add(f_path)
+            scoped_anywhere.update(
+                normalize_repo_paths(data.get(key)) or []
+            )
         for f_path in data.get("files_with_diffs") or []:
             if isinstance(f_path, str):
                 inline.setdefault(f_path, set()).add(agent)
@@ -507,20 +548,16 @@ def aggregate_inline_coverage(
         # summary files aggregated — an agent with a primary and a
         # secondary-domain sidecar is one agent.
         "agents_reporting": len(reporting_agents),
-        # Changed files no reviewer's scope contained in any form:
-        # `changed_files` minus every path any sidecar mentions. NOT the
-        # same measurement as the run manifest's `coverage.uncovered` —
+        # Changed files no reviewer's scope contained in any form — see
+        # `_unscoped_files` for the subtraction and its path grammar. NOT
+        # the same measurement as the run manifest's `coverage.uncovered`:
         # different population (full changed set vs. noise-filtered
         # `reviewable`) over different evidence (runtime sidecars vs.
         # dispatch-time SCOPE events), so the two numbers legitimately
         # differ. The full divergence note lives at the one other site,
         # manifest_sections.py's `"uncovered"` key; read it before
         # "reconciling" the two.
-        "files_unscoped": (
-            sorted(set(changed_files) - scoped_anywhere)
-            if changed_files is not None
-            else None
-        ),
+        "files_unscoped": _unscoped_files(changed_files, scoped_anywhere),
         "files_inline": {f: sorted(a) for f, a in sorted(inline.items())},
         "files_never_inline": {
             f: sorted(a)

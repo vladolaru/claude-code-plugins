@@ -1065,24 +1065,35 @@ class TestRunManifest:
         its reciprocal at `reconciliation_context.py`'s `"files_unscoped"`
         before changing either.
         """
-        changed = ["src/a.py", "src/orphan.py", "vendor/generated.js"]
+        # Non-ASCII on purpose: the changed set arrives Git-C-quoted (a
+        # plain `git diff --name-only`) while every scope producer emits
+        # real UTF-8, so both measurements have to decode through the one
+        # shared grammar before they can be compared at all. An ASCII-only
+        # fixture would pass with either side skipping normalization.
+        changed = [
+            r'"src/caf\303\251.py"', "src/orphan.py", "vendor/generated.js",
+        ]
         _write_coverage_inputs(
             output_dir,
             changed=changed,
             # vendor/generated.js is noise-filtered out of `reviewable`.
-            reviewable=["src/a.py", "src/orphan.py"],
+            reviewable=[r'"src/caf\303\251.py"', "src/orphan.py"],
             agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
         )
         telemetry.start(run_id="run-1", repo_path="/repo")
-        telemetry.log_agent_start("security-reviewer", scope_paths=["src/a.py"])
+        telemetry.log_agent_start(
+            "security-reviewer", scope_paths=["src/café.py"]
+        )
         telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
-        # The runtime sidecar the reviewer actually wrote.
+        # The runtime sidecar the reviewer actually wrote, unquoted because
+        # scope.py runs `-c core.quotepath=false`.
         (output_dir / "security-reviewer-scope-summary.json").write_text(
             json.dumps({
                 "schema": 1,
-                "files_with_diffs": ["src/a.py"],
+                "files_with_diffs": ["src/café.py"],
                 "budget_exceeded_files": [],
                 "list_only_files": [],
+                "in_scope_files": ["src/café.py"],
             })
         )
 
@@ -1098,6 +1109,9 @@ class TestRunManifest:
         assert manifest_uncovered == ["src/orphan.py"]
         assert recon_unscoped == ["src/orphan.py", "vendor/generated.js"]
         assert manifest_uncovered != recon_unscoped
+        # And neither reports the covered non-ASCII file as uncovered.
+        assert "src/café.py" not in manifest_uncovered
+        assert "src/café.py" not in recon_unscoped
 
     def test_git_c_quoted_unicode_paths_match_real_unicode_scope(
         self, telemetry, output_dir
@@ -1437,8 +1451,10 @@ class TestRunManifest:
         # normalize_paths is the sole collaborator build_coverage_manifest
         # takes as an injected dependency; breaking it simulates a real
         # defect in the builder without touching its explicit absence
-        # branches (those `return None` directly, never raising).
-        monkeypatch.setattr(mod.ReviewTelemetry, "_normalize_repo_paths", _boom)
+        # branches (those `return None` directly, never raising). Patched
+        # in telemetry's namespace, which is where the injection site reads
+        # the shared `git_paths` normalizer from.
+        monkeypatch.setattr(mod, "normalize_repo_paths", _boom)
 
         # Must not raise: a builder bug must never fail the review run.
         telemetry.start(run_id="run-1")
