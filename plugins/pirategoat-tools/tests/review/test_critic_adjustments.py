@@ -2136,6 +2136,61 @@ class TestReconciliatorClearancePin:
             in self._text()
         )
 
+    @staticmethod
+    def _weighting_rules(text):
+        """The numbered rules under Verification-Method Weighting."""
+        section = text.split("## Verification-Method Weighting & Conflicts", 1)
+        assert len(section) == 2, "weighting section missing"
+        body = section[1].split("\n## ", 1)[0]
+        rules = {}
+        current = None
+        for line in body.split("\n"):
+            match = re.match(r"^(\d+)\. ", line)
+            if match:
+                current = int(match.group(1))
+                rules[current] = line
+            elif current is not None and line.strip():
+                rules[current] += " " + line.strip()
+        return rules
+
+    def test_the_method_judgment_is_not_scoped_to_conflicts(self):
+        """The defect this pins: the judgment that decides which
+        clearances get recorded used to be defined only for clearances
+        that CONTRADICT a finding.
+
+        Read literally, that made the common case — a clearance nothing
+        argues with — ineligible for recording, silently reverting the
+        whole feature, and left a bad-method clearance that contradicts
+        nothing with no void path at all.
+        """
+        rules = self._weighting_rules(self._text())
+        judgment = rules[4]
+
+        # The judgment rule is stated for every clearance...
+        assert "EVERY clearance" in judgment
+        assert "conflict or no conflict" in judgment
+        # ...and says so where a reader would otherwise assume otherwise.
+        assert "even when no finding contradicts it" in judgment
+        # ...and the conflict case is explicitly the special case on top.
+        assert "special case on top of rule 4" in rules[5]
+
+    def test_recording_does_not_live_only_inside_the_conflict_rule(self):
+        """`add_clearance` must be reachable from the universal judgment,
+        not only from the rule about contested clearances."""
+        rules = self._weighting_rules(self._text())
+        assert "add_clearance()" in rules[4]
+        assert "RECORDED" in rules[4]
+        # The conflict rule may reference the judgment, but must not be
+        # the only place recording is authorized.
+        assert "add_clearance()" not in rules[5]
+
+    def test_the_template_agrees_that_uncontested_clearances_are_recorded(
+        self,
+    ):
+        taught = self._text().split("builder.add_clearance(", 1)[0]
+        assert "not only to the ones some finding argued with" in taught
+        assert "nothing contradicted is the ordinary case" in taught
+
 
 class TestReconciliatorWritePathPin:
     """Writer #1 is an agent following a Markdown snippet, so the only

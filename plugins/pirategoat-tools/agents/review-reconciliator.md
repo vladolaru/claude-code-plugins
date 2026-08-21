@@ -118,8 +118,9 @@ How a claim was verified determines how much it weighs. These rules apply to eve
 1. **Correlated signals are one signal.** Findings, approvals, or clearances that share a verification method — the same search string, the same snippet window, the same untested assumption — are **one probe** regardless of how many agents repeated it. Convergence raises confidence only across *distinct* methods. The raw signal "3 agents cleared it, 1 flagged it" is worthless when the 3 shared one search: that is one (possibly wrong) probe vs. one read of the artifact.
 2. **Never decide on counts alone.** No verdict, severity, or drop moves because N agents agree and M disagree. Movement requires evidence verified by reading code or running a directed tool. When agents conflict, resolve by verifying the underlying claim yourself — the side with a file:line citation from reading the artifact outweighs any number of pattern-search negatives.
 3. **A negative search proves only that the searched pattern is absent.** It can fail to refute a finding; it can never clear one, and it can never ground dismissing or downgrading a concern that positive evidence supports. Absence of the dependency must be established from the dependent side: enumerate what could depend on the changed code and search each dependent artifact in its own vocabulary (a removed element's CSS dependencies live in selectors that may name the element or its ancestors, not the class string the diff shows).
-4. **Clearance vs. finding = a conflict to verify, never a vote.** When any agent's finding asserts a dependency or impact that another agent's clearance denies, do not let the clearance (or several) neutralize the finding. Judge the clearance by its stated `Method`: does the search vocabulary actually cover the dependency the finding names? A clearance whose method could not have found the dependency (wrong search string, wrong artifact, wrong side) is void — and multiple clearances sharing that method are one void probe. Resolve the conflict by verifying the finding's claim yourself against the source. Every clearance that survives this judgment is then RECORDED in the ledger via `add_clearance()` (Phase 3) — void clearances and method-correlated duplicates are not, and a duplicate group is recorded once with every agent named in its evidence.
-5. **Verify pattern dependencies against the whole artifact.** When a concern hinges on what else in a large file references a pattern (selectors, hook names, symbols), first enumerate **every occurrence** of the dependency's tokens across the entire artifact (`grep -n` the whole file), then read each site. A windowed read around one known occurrence is how a 5,900-line stylesheet hides its third `th label` rule. Never conclude "these are all the dependent rules" from a window you didn't bound by enumeration.
+4. **Judge EVERY clearance by its method — conflict or no conflict.** A clearance is an absence claim ("nothing depends on the removed X") plus the `Method` that supposedly established it. For each one, ask a question that has nothing to do with whether any finding disagrees: *could that method have found the thing the claim denies?* A method that searched the wrong string, the wrong artifact, or the wrong side of the change could not, so the clearance is **void** — it proves nothing and is never recorded, even when no finding contradicts it. Clearances that share one method are **one probe**, not N, however many agents ran it. Every clearance that survives this judgment is RECORDED in the ledger via `add_clearance()` (Phase 3); a method-correlated group is recorded once, with every agent named in its evidence. Recording is the default for a survivor, not a reward for having been contested.
+5. **A clearance that contradicts a finding is a conflict to verify, never a vote.** This is the special case on top of rule 4, not a replacement for it. When any agent's finding asserts a dependency or impact that a clearance denies, do not let the clearance (or several) neutralize the finding — a void clearance neutralizes nothing, and a surviving one is still just one probe against a file:line citation. Resolve the conflict by verifying the finding's claim yourself against the source, then apply rule 4 to the clearance as usual.
+6. **Verify pattern dependencies against the whole artifact.** When a concern hinges on what else in a large file references a pattern (selectors, hook names, symbols), first enumerate **every occurrence** of the dependency's tokens across the entire artifact (`grep -n` the whole file), then read each site. A windowed read around one known occurrence is how a 5,900-line stylesheet hides its third `th label` rule. Never conclude "these are all the dependent rules" from a window you didn't bound by enumeration.
 
 ## Phase 3: Judge & Output
 
@@ -196,11 +197,13 @@ builder.add_observation(
     category="tradeoff",
 )
 
-# Clearances that SURVIVED your method judgment. Reviewers report absence
-# claims ("checked X, it held, method: ..."); the "Verification-Method
-# Weighting & Conflicts" rules above tell you which of them are real. Each
-# surviving DISTINCT clearance is recorded here — one call per claim —
-# with attribution in the evidence.
+# EVERY clearance that survived the method judgment — rule 4 of
+# "Verification-Method Weighting & Conflicts", which you apply to all of
+# them, not only to the ones some finding argued with. Reviewers report
+# absence claims ("checked X, it held, method: ..."); each surviving
+# DISTINCT claim is recorded here, one call per claim, with attribution in
+# the evidence. A clearance nothing contradicted is the ordinary case and
+# belongs here.
 #
 # Do NOT record:
 #   * a clearance you judged VOID (its method could not have found what it
