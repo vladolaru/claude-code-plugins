@@ -134,8 +134,8 @@ RUN_CONFIG_FILENAME = "run-config.json"
 # `partial` on effectively every field run, because the analyzer counted any
 # call whose result shape it did not recognize — WebSearch, WebFetch, MCP —
 # as unresolved, and most reviewers use WebSearch. The classifier no longer
-# does that (see `_CLASSIFIED_TOOL_NAMES` in `review_transcript.py`), but
-# the coupling was wrong on its own terms and stays removed either way.
+# does that (see `_EVIDENCE_TOOL_NAMES` in `review_transcript.py`), but the
+# coupling was wrong on its own terms and stays removed either way.
 #
 # The ORCHESTRATOR half is deliberately NOT decoupled the same way: its own
 # unresolved calls still feed the enrichment's `main_data_complete`, and

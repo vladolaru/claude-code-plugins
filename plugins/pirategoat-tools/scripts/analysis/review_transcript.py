@@ -97,20 +97,11 @@ _DISPATCH_TOOL_NAMES = frozenset({"Agent", "Task"})
 # `_operation` gives Read/Write/Edit/Bash a typed operation and target that
 # the failure/recovery taxonomy keys on, `observed_reads` is built from
 # successful Read and Bash calls, and `artifact_writes` counts Bash builder
-# heredocs.
+# heredocs. Every other tool — WebSearch, WebFetch, MCP tools, Agent/Task —
+# contributes nothing to any of those measurements.
 _EVIDENCE_TOOL_NAMES = frozenset(
     {"Read", "Write", "Edit", "Grep", "Glob", "Bash"}
 )
-# Every tool whose result `_result_state` must actually UNDERSTAND rather
-# than merely pair: the evidence tools above, plus the dispatch tools.
-# A dispatch result is read by the correlation machinery (`agentId`,
-# `resolvedModel`) and carries the one failure the text-signature scan is
-# the sole detector for — the harness writes "Agent terminated early due
-# to an API error: You've hit your session limit" into a dispatch result
-# with `is_error` ABSENT, and only the `api error` signature turns that
-# into an `api_error` failure the cohort can count. Everything outside
-# this set — WebSearch, WebFetch, MCP tools — feeds no measurement here.
-_CLASSIFIED_TOOL_NAMES = _EVIDENCE_TOOL_NAMES | _DISPATCH_TOOL_NAMES
 _NON_SCOPE_COMPARABLE_AGENTS = frozenset(
     {"review-reconciliator", "decision-reviewer", "critic"}
 )
@@ -813,12 +804,11 @@ def _result_state(
     if block.get("is_error") is False or _structured_success(structured):
         return "success", None, None
 
-    if tool_name not in _CLASSIFIED_TOOL_NAMES:
+    if tool_name not in _EVIDENCE_TOOL_NAMES:
         # Nothing downstream mines this call: it yields no read, no builder
-        # attempt, no correlation identity, and no shape this module
-        # validates. The only question ever asked of its result is "did it
-        # fail?", and the explicit signals above answered no — so a PAIRED
-        # result fully resolves it.
+        # attempt, and no shape this module validates. The only question
+        # ever asked of its result is "did it fail?", and the explicit
+        # signals above answered no — so a PAIRED result fully resolves it.
         # Deciding otherwise on the strength of an unfamiliar payload shape
         # reported 15 of 19 reviewers as carrying incomplete evidence on
         # every run that used WebSearch, and made the orchestrator's own

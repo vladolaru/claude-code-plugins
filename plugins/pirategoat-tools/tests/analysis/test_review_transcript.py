@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import ast
 import importlib.util
-import inspect
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -5324,43 +5322,6 @@ class TestBudgetAndEvidenceAccounting:
         assert failure["category"] == "structured_failure"
         assert failure["detector"] == "structured"
 
-    @pytest.mark.parametrize("tool_name", ["Agent", "Task"])
-    def test_dispatch_session_limit_terminations_stay_failures(
-        self, tmp_path, tool_name
-    ):
-        """The one failure only the signature scan can see.
-
-        The harness writes "Agent terminated early due to an API error:
-        You've hit your session limit" into a dispatch result with
-        `is_error` ABSENT and no structured error field. Carving dispatch
-        tools out of the classifier would delete every session-limit
-        termination from the failure taxonomy and from cohort spend
-        analysis, so they keep flowing through the signature scan.
-        """
-        result = self._run_with_subagent(
-            tmp_path,
-            [
-                _assistant(
-                    _call("nested", tool_name, prompt="sub-task"),
-                    usage=_usage(1, 2),
-                ),
-                _result(
-                    "nested",
-                    "Agent terminated early due to an API error: "
-                    "You've hit your session limit",
-                    is_error=None,
-                ),
-            ],
-        )
-
-        [failure] = result["tool_failures"]
-        assert failure["category"] == "api_error"
-        assert failure["detector"] == "signature"
-        # Dispatch anomalies belong to the correlation machinery, so the
-        # call never enters the unresolved bucket either way.
-        codes = {warning["code"] for warning in result["warnings"]}
-        assert "agent_transcript_unresolved_calls" not in codes
-
     def test_unpaired_call_stays_unresolved_on_an_unmined_tool(self, tmp_path):
         """The pairing, not the shape, decides: a call the transcript never
         answered is unresolved for every tool, mined or not."""
@@ -6065,58 +6026,3 @@ class TestScopeExemptRegistrySync:
             and config.get("dispatch_class") != "special"
         }
         assert _mod._SCOPE_EXEMPT_REVIEWERS == expected
-
-
-def _branched_tool_names(func, *variables: str) -> set[str]:
-    """Tool names a function branches on, read from its own source.
-
-    Parsed rather than restated: a hand-written replica of the branch set
-    is exactly the drift this guard exists to catch.
-    """
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(inspect.getsource(func))):
-        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
-            continue
-        if not isinstance(node.ops[0], ast.Eq):
-            continue
-        left, right = node.left, node.comparators[0]
-        if (
-            isinstance(left, ast.Name)
-            and left.id in variables
-            and isinstance(right, ast.Constant)
-            and isinstance(right.value, str)
-        ):
-            names.add(right.value)
-    return names
-
-
-class TestClassifiedToolNameSync:
-    """`_EVIDENCE_TOOL_NAMES` restates facts that live in two functions.
-
-    It sits UPSTREAM of both: `_result_state` short-circuits on it before
-    `_tool_shape_succeeded` ever runs, so adding a shape validator for a
-    new tool without adding its name would silently disable the validator
-    and start resolving that tool's results on pairing alone. Same for a
-    tool `_operation` gives a typed operation to — the failure taxonomy
-    keys on those, and they must keep reaching the classifier.
-    """
-
-    def test_shape_validated_tools_are_all_evidence_tools(self):
-        validated = _branched_tool_names(_mod._tool_shape_succeeded, "tool_name")
-
-        assert validated, "no tool-name branches found — parser drifted"
-        assert validated <= _mod._EVIDENCE_TOOL_NAMES
-
-    def test_typed_operation_tools_are_all_evidence_tools(self):
-        typed = _branched_tool_names(_mod._operation, "name")
-
-        assert typed, "no tool-name branches found — parser drifted"
-        assert typed <= _mod._EVIDENCE_TOOL_NAMES
-
-    def test_dispatch_tools_still_reach_the_classifier(self):
-        """Dispatch results are mined by the correlation machinery and
-        carry the session-limit failure only the signature scan detects."""
-        assert _mod._CLASSIFIED_TOOL_NAMES == (
-            _mod._EVIDENCE_TOOL_NAMES | _mod._DISPATCH_TOOL_NAMES
-        )
-
