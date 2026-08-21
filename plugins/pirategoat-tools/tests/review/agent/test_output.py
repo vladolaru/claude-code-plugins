@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -781,8 +782,14 @@ class TestSave:
             # artifact-pair consistency problem this contract removed.
             assert not os.path.exists(os.path.join(d, "security-review.md"))
 
-    def test_json_content_matches_to_dict(self):
+    def test_json_content_matches_to_dict(self, monkeypatch):
         with tempfile.TemporaryDirectory() as d:
+            # The dispatch marker bootstrap writes — without it there is no
+            # honest clock and the duration is null, which would make this
+            # comparison pass for the wrong reason.
+            monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", d)
+            with open(os.path.join(d, "security-reviewer.started"), "w") as f:
+                f.write(datetime.now(timezone.utc).isoformat())
             b = ReviewOutputBuilder(pr_id="1", reviewer="security")
             b.add_issue("high", "Title", "f.py", "desc", "rec", line=1)
             b.save(d)
@@ -2402,6 +2409,146 @@ class TestBudgetTargetEcho:
         builder.save(str(tmp_path))
         out = capsys.readouterr().out
         assert "TARGET: ~40 tool calls" in out
+
+
+# =============================================================================
+# TestMetaIsNeverFakeZero
+# =============================================================================
+
+
+class TestMetaIsNeverFakeZero:
+    """meta must report facts or absence — never a default dressed as one.
+
+    A field run's review-findings.json carried files_reviewed: 0 and
+    review_duration_ms: 0 for an actor that ran 211 seconds. Both numbers
+    were builder defaults, indistinguishable downstream from measurements.
+    """
+
+    @staticmethod
+    def _stamp(path, moment=None):
+        path.write_text((moment or datetime.now(timezone.utc)).isoformat())
+
+    def test_files_reviewed_is_null_until_reported(self, monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        meta = ReviewOutputBuilder(pr_id="1", reviewer="security").to_dict()["meta"]
+        assert meta["files_reviewed"] is None
+
+    def test_explicit_zero_is_distinguishable_from_unset(
+        self, tmp_path, monkeypatch
+    ):
+        """The whole point: 0 means "I read nothing", null means silence."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        silent = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        stated = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        stated.set_files_reviewed(0)
+        silent.save(str(tmp_path))
+        silent_json = json.loads(
+            (tmp_path / "security-review.json").read_text()
+        )
+        stated.save(str(tmp_path))
+        stated_json = json.loads(
+            (tmp_path / "security-review.json").read_text()
+        )
+        assert silent_json["meta"]["files_reviewed"] is None
+        assert stated_json["meta"]["files_reviewed"] == 0
+
+    @pytest.mark.parametrize("bad", [None, "3", 2.0, True, -1])
+    def test_set_files_reviewed_rejects_non_counts(self, bad):
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        with pytest.raises(ValueError):
+            b.set_files_reviewed(bad)
+        assert b.to_dict()["meta"]["files_reviewed"] is None
+
+    def test_duration_is_null_without_a_marker(self, tmp_path, monkeypatch):
+        """No marker, no clock. The builder is constructed inside the final
+        heredoc, so its own __init__ times the write, not the review."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        assert b.to_dict(output_dir=str(tmp_path))["meta"][
+            "review_duration_ms"
+        ] is None
+
+    def test_duration_comes_from_a_reviewer_marker(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        self._stamp(
+            tmp_path / "security-reviewer.started",
+            datetime.now(timezone.utc) - timedelta(seconds=30),
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        duration = b.to_dict(output_dir=str(tmp_path))["meta"][
+            "review_duration_ms"
+        ]
+        assert 29_000 <= duration <= 40_000
+
+    def test_duration_comes_from_the_reconciliators_marker(
+        self, tmp_path, monkeypatch
+    ):
+        """The synthesis marker is deliberately NOT named `.started`, and
+        the reconciliator's builder name is not its agent name — the field
+        artifact's 0ms duration was that pair of mismatches, not a missing
+        marker."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        self._stamp(
+            tmp_path / "review-reconciliator.synthesis-started",
+            datetime.now(timezone.utc) - timedelta(seconds=211),
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="reconciliator")
+        duration = b.to_dict(output_dir=str(tmp_path))["meta"][
+            "review_duration_ms"
+        ]
+        assert 211_000 <= duration <= 225_000
+
+    def test_marker_is_found_through_the_env_envelope(
+        self, tmp_path, monkeypatch
+    ):
+        """to_dict() with no explicit directory is the reviewer's own path
+        into the manifest; the envelope is what tells it where to look."""
+        monkeypatch.setenv("PIRATEGOAT_OUTPUT_DIR", str(tmp_path))
+        self._stamp(tmp_path / "security-reviewer.started")
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        assert isinstance(b.to_dict()["meta"]["review_duration_ms"], int)
+
+    @pytest.mark.parametrize("stamp", ["", "not-a-timestamp", "   "])
+    def test_unparsable_marker_yields_null_not_zero(
+        self, tmp_path, monkeypatch, stamp
+    ):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        (tmp_path / "security-reviewer.started").write_text(stamp)
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        assert b.to_dict(output_dir=str(tmp_path))["meta"][
+            "review_duration_ms"
+        ] is None
+
+    def test_marker_stamped_in_the_future_yields_null(
+        self, tmp_path, monkeypatch
+    ):
+        """A negative interval is impossible under any real ordering; a
+        wrong number is worse than a missing one."""
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        self._stamp(
+            tmp_path / "security-reviewer.started",
+            datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        b = ReviewOutputBuilder(pr_id="1", reviewer="security")
+        assert b.to_dict(output_dir=str(tmp_path))["meta"][
+            "review_duration_ms"
+        ] is None
+
+    def test_marker_suffixes_match_their_writers(self):
+        """The suffixes are spelled in output.py so the module stays
+        importable stand-alone. Parity with the writers is what keeps that
+        copy from silently unmeasuring an entire class of actor."""
+        import review.synthesis_lifecycle as _lifecycle
+        import review.agent.output as _output
+
+        bootstrap_src = (
+            PLUGIN_ROOT / "scripts" / "review" / "agent" / "bootstrap.py"
+        ).read_text()
+        assert _output._SYNTHESIS_START_SUFFIX == _lifecycle.MARKER_SUFFIX
+        assert (
+            f'f"{{effective_agent_name}}{_output._REVIEWER_START_SUFFIX}"'
+            in bootstrap_src
+        )
 
 
 # =============================================================================

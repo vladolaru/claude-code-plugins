@@ -37,7 +37,7 @@ try:
     import fcntl
 except ImportError:  # non-POSIX host — publish without the completion-publication lock
     fcntl = None
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 
@@ -123,6 +123,71 @@ def _coerce_text(value: Any, single_line: bool = False) -> str:
     if single_line:
         result = " ".join(result.split())
     return result
+
+
+# Dispatch-marker suffixes. Spelled here rather than imported so this module
+# stays importable stand-alone (`python3 output.py render <file>` runs with no
+# `review` package on sys.path — the same constraint that makes telemetry
+# below load by file location). Parity with the bootstrap-written
+# `<agent>.started` contract and review/synthesis_lifecycle.MARKER_SUFFIX is
+# pinned by tests, so a rename fails loudly instead of silently unmeasuring a
+# whole class of actor.
+_REVIEWER_START_SUFFIX = ".started"
+_SYNTHESIS_START_SUFFIX = ".synthesis-started"
+
+# Builder `reviewer` name -> the agent name its dispatch marker is keyed on,
+# for the one actor where the two differ. The reconciliator is dispatched as
+# `review-reconciliator` but constructs its builder as `reconciliator`
+# (agents/review-reconciliator.md), and `reviewer` is a published field of
+# review-findings.json — so this maps the lookup rather than renaming an
+# artifact field to suit it.
+_MARKER_AGENT_BY_REVIEWER = {"reconciliator": "review-reconciliator"}
+
+
+def _actor_start_time(
+    output_dir: Optional[str], reviewer: Optional[str]
+) -> Optional[datetime]:
+    """When this actor was dispatched, per the marker the pipeline wrote.
+
+    The only honest clock the builder has. A builder is constructed inside
+    the final heredoc, seconds before serialization, so measuring from its
+    own __init__ times the write and calls it the review — which is how
+    every artifact of a 19-agent run came to carry a duration of ~0ms,
+    including a reconciliator that ran for 211 seconds.
+
+    Two marker families exist because two kinds of actor do: reviewers get
+    `<agent>.started` from bootstrap, synthesis agents get
+    `<agent>.synthesis-started` from synthesis_lifecycle (deliberately NOT
+    `.started`, so tools scanning for reviewers do not seed them as one).
+    Both hold a tz-aware ISO timestamp.
+
+    None everywhere the answer is not known: no output directory, no
+    marker (hand-rolled builder, standalone use), unreadable or unparsable
+    stamp. Absence is reported as absence — never as zero.
+    """
+    directory = output_dir or os.environ.get("PIRATEGOAT_OUTPUT_DIR")
+    if not directory or not reviewer:
+        return None
+    agent = _MARKER_AGENT_BY_REVIEWER.get(reviewer, reviewer)
+    # `reviewer` is derive_reviewer_name(agent_name), which strips a
+    # trailing "-reviewer"; the inverse is ambiguous, so try both spellings
+    # against both marker families.
+    for name in (
+        f"{agent}-reviewer{_REVIEWER_START_SUFFIX}",
+        f"{agent}{_REVIEWER_START_SUFFIX}",
+        f"{agent}{_SYNTHESIS_START_SUFFIX}",
+        f"{agent}-reviewer{_SYNTHESIS_START_SUFFIX}",
+    ):
+        path = os.path.join(directory, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                stamp = datetime.fromisoformat(handle.read().strip())
+        except (OSError, UnicodeDecodeError, ValueError):
+            return None
+        return stamp
+    return None
 
 
 def _review_budget_target() -> Optional[int]:
@@ -483,8 +548,10 @@ class ReviewOutputBuilder:
         # Derived at save(): the subset of self.unreviewed the builder
         # auto-declared because the reviewer stated nothing about it.
         self.unreviewed_autofilled = []
-        self.files_reviewed = 0
-        self.review_start = datetime.now()
+        # None, never 0: an unset count and a reviewer that genuinely
+        # reviewed nothing are different facts, and only the reviewer can
+        # state the second one. See set_files_reviewed().
+        self.files_reviewed = None
         self.tool_results_used = []
         self.overall_confidence = 0.95
         self._not_applicable = False
@@ -1096,7 +1163,21 @@ class ReviewOutputBuilder:
                 self.deferred_reviewed.append(path)
 
     def set_files_reviewed(self, count: int):
-        """Set number of files reviewed."""
+        """Report how many files this review actually read.
+
+        The only way meta.files_reviewed becomes a number. Left uncalled it
+        serializes as null — "the producer said nothing" — so a recorded 0
+        is always the reviewer's own statement that it read nothing, never
+        a default wearing a measurement's clothes.
+        """
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise ValueError(
+                f"set_files_reviewed requires an integer count, got {count!r}."
+            )
+        if count < 0:
+            raise ValueError(
+                f"set_files_reviewed requires a non-negative count, got {count}."
+            )
         self.files_reviewed = count
 
     def set_confidence(self, score: float):
@@ -1175,7 +1256,7 @@ class ReviewOutputBuilder:
         """
         if output_dir is not None:
             self._validate_advisory_serialization(output_dir)
-        review_duration = int((datetime.now() - self.review_start).total_seconds() * 1000)
+        review_duration = self._review_duration_ms(output_dir)
 
         severity_counts = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0}
         for issue in self.issues:
@@ -1212,6 +1293,12 @@ class ReviewOutputBuilder:
             # never off the key.
             'narrative_summary': self.narrative_summary,
             'meta': {
+                # Both of these are null until something honest fills them:
+                # files_reviewed until the reviewer states a count,
+                # review_duration_ms until a dispatch marker is found. The
+                # builder never contributes a zero of its own — a default
+                # that serializes as a measurement is indistinguishable
+                # from a real one downstream.
                 'files_reviewed': self.files_reviewed,
                 'unreviewed_autofilled': (
                     self.unreviewed_autofilled
@@ -1225,6 +1312,24 @@ class ReviewOutputBuilder:
         if self._skip_reason:
             result['skip_reason'] = self._skip_reason
         return result
+
+    def _review_duration_ms(self, output_dir: Optional[str]) -> Optional[int]:
+        """Milliseconds from this actor's dispatch to now, or None.
+
+        Derived from the dispatch marker the pipeline wrote — the one clock
+        that spans the actual review. A negative interval (marker stamped
+        after this serialization, which no ordering produces) is discarded
+        rather than published: a wrong number is worse than a missing one.
+        """
+        started = _actor_start_time(output_dir, self.reviewer)
+        if started is None:
+            return None
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        if elapsed < 0:
+            return None
+        return int(elapsed * 1000)
 
     def to_json(
         self, indent: int = 2, *, output_dir: Optional[str] = None

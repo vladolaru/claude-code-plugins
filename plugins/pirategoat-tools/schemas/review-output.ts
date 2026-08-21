@@ -10,6 +10,10 @@
  * commit as the change, update the interface below to match, and note the
  * bump in the changelog. A schema number that lags the shape is worse than
  * none: it states a compatibility guarantee the producer is not honoring.
+ * One carve-out, spelled out beside REVIEW_OUTPUT_SCHEMA and in AGENTS.md: a
+ * shape change made inside the SAME unreleased version that introduced the
+ * current number updates this file without moving the number, because the
+ * number only guarantees anything once released.
  * Other artifact families carry their own `schema` constants; see the
  * Artifact Schemas section of the plugin's AGENTS.md for the full list and
  * for which artifacts deliberately carry no schema at all.
@@ -167,7 +171,10 @@ export interface ReviewOutput {
 
     // Metadata
     meta: {
-        files_reviewed: number;
+        // Null until the reviewer states a count via set_files_reviewed().
+        // A recorded 0 is therefore always an explicit "I read nothing",
+        // never an unset default — consumers must keep the two apart.
+        files_reviewed: number | null;
         // Subset of `unreviewed` the builder auto-declared at save time
         // because the reviewer neither claimed nor declared those deferred
         // files (null when nothing was auto-filled). Marked so metrics can
@@ -175,7 +182,11 @@ export interface ReviewOutput {
         // forward; artifacts produced before save-time auto-fill carry no
         // such key, so consumers must tolerate its absence.
         unreviewed_autofilled: string[] | null;
-        review_duration_ms?: number;
+        // Milliseconds from this actor's dispatch marker to serialization.
+        // Null when no marker was found (hand-rolled builder, standalone
+        // use, unreadable stamp) — the builder has no clock of its own that
+        // spans the review, so absence is reported as absence.
+        review_duration_ms: number | null;
         confidence_score: ConfidenceScore; // Overall confidence
         tool_results_used?: string[]; // e.g., ['test-results', 'semgrep']
 
