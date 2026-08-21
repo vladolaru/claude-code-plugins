@@ -2550,6 +2550,32 @@ class TestMetaIsNeverFakeZero:
             in bootstrap_src
         )
 
+    def test_reconciliator_alias_matches_both_ends_it_bridges(self):
+        """The one hand-copied name pair in the marker lookup, pinned.
+
+        _MARKER_AGENT_BY_REVIEWER exists because the reconciliator is
+        dispatched as `review-reconciliator` but constructs its builder as
+        `reconciliator`. Both ends live in other files, and a rename at
+        either one would send the reconciliator's duration back to null
+        with the whole suite still green — the exact failure this map was
+        added to fix.
+        """
+        import review.synthesis_lifecycle as _lifecycle
+        import review.agent.output as _output
+
+        alias = _output._MARKER_AGENT_BY_REVIEWER
+        # Marker end: the name synthesis_lifecycle stamps the marker with.
+        assert alias["reconciliator"] == _lifecycle.RECONCILIATOR
+        # Builder end: the reviewer name the reconciliator is taught to
+        # construct itself with.
+        agent_md = (
+            PLUGIN_ROOT / "agents" / "review-reconciliator.md"
+        ).read_text()
+        assert 'reviewer="reconciliator"' in agent_md, (
+            "the taught builder name moved — update the alias key in "
+            "output.py's _MARKER_AGENT_BY_REVIEWER with it"
+        )
+
 
 # =============================================================================
 # TestTypeScriptContractLockstep
