@@ -630,6 +630,14 @@ Claude Code stores session transcripts at:
 
 Each subagent JSONL file contains one JSON object per line, with the first line being the dispatch message (containing the prompt). Subsequent lines alternate between assistant tool calls and tool results.
 
+## Backlog
+
+Deferred-but-valid work lives in [`BACKLOG.md`](BACKLOG.md) — the committed,
+canonical home. When an audit, review, or field run defers a real finding
+instead of fixing it, record it there with evidence and a do-when condition;
+session analysis docs under `.claude/docs/` are gitignored and do not survive
+as a place of record. Remove entries when done or dead.
+
 ## Development Workflows
 
 ### Running the Dev Version (`scripts/claude-pirategoat-tools-dev`)

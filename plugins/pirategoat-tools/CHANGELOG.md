@@ -11,6 +11,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 ### Added
 
+- **`BACKLOG.md` — a committed home for deferred work.** Follow-ups from audits and reviews used to live only in gitignored session analysis docs, where no future agent reads them cold; deferred-but-valid findings now land in the plugin's `BACKLOG.md` with evidence and a do-when condition, seeded with the three items still open after the 2026-08-21 field-audit fix batch.
+
 - **`--refresh-deps` trusted-branch dependency refresh.** Opt-in per run, or standing on via a machine-local trust declaration (`~/.config/pirategoat/config.json`), lets the requester allow the pipeline to install stale or missing dependencies in the worktree before reviewers dispatch. Interactive-only — bots never execute reviewed-branch code — and defaults off, so uninstalled repos keep reporting honest degraded host context.
 
 - **Explicit deferred-review claims.** `ReviewOutputBuilder.add_deferred_reviewed()` lets a reviewer state it actually read a NOT DIFFED file, alongside the existing `add_unreviewed()` "I couldn't reach this" declaration. `save()` validates both against the reviewer's own deferred-files sidecar, rejects a file claimed and declared at once, and auto-declares any deferred file the reviewer said nothing about.
