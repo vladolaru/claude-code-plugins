@@ -333,15 +333,24 @@ def _attribute_gap(
 
 # Every file-carrying list a scope summary sidecar can hold
 # (`agent/scope.py::write_scope_summary`). Their union is "every changed
-# file that reached at least one reviewer's scope in any form" — inline
-# diff, deferred NOT DIFFED queue, or name-only listing — which is what
-# `files_unscoped` is the complement of. Adding a list to the sidecar
+# file that reached at least one reviewer's scope in any form", which is
+# what `files_unscoped` is the complement of. Adding a list to the sidecar
 # without adding it here would silently reclassify covered files as
 # never-scoped.
+#
+# `in_scope_files` is the only one of these written in EVERY scope mode,
+# and it is why the union is trustworthy at all: a `--base-ref-only` or
+# `--summary` agent (patterns-reviewer by registry config; any reviewer on
+# a 100+-file PR by protocol) never fetches a diff, so its other three
+# lists are legitimately empty and every file it owned used to look
+# unowned. A sidecar written before this field existed simply contributes
+# nothing through it — the same under-reporting as before, never a new
+# false claim, and never a crash.
 _SIDECAR_FILE_LISTS = (
     "files_with_diffs",
     "budget_exceeded_files",
     "list_only_files",
+    "in_scope_files",
 )
 
 

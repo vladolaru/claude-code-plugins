@@ -1508,6 +1508,15 @@ def build_scope(args: argparse.Namespace) -> dict:
         "budget_max": max_lines,
         "budget_exceeded_files": budget_exceeded_files,
         "files": domain_matched_sorted if (args.base_ref_only or args.summary) else list(diffs.keys()),
+        # The reviewer's whole in-scope workload, in EVERY mode — unlike
+        # "files" above, whose meaning flips with the mode. Run-level
+        # coverage aggregation subtracts the union of the sidecar's file
+        # lists from the changed set to find files no reviewer's domain
+        # matched, and under --base-ref-only/--summary the three lists it
+        # had (diffed, budget-deferred, list-only) are all empty because no
+        # diff was ever fetched: every file such an agent owned looked
+        # unowned. This field is what those agents contribute.
+        "in_scope_files": sorted(domain_matched),
         "diffs": diffs,
         "diffstat": diffstat,
         "skipped_files": {
@@ -1721,6 +1730,10 @@ def write_scope_summary(scope: dict, path: str) -> None:
         "files_with_diffs": sorted(scope.get("diffs", {}) or {}),
         "budget_exceeded_files": list(scope.get("budget_exceeded_files", []) or []),
         "list_only_files": list(scope.get("list_only_files", []) or []),
+        # Written in every mode, so run-level coverage can treat the union
+        # of these lists as one uniform "reached some reviewer's scope"
+        # population — see reconciliation_context._SIDECAR_FILE_LISTS.
+        "in_scope_files": list(scope.get("in_scope_files", []) or []),
         "total_diff_lines": scope.get("total_diff_lines", 0),
         "in_scope_stat_lines": in_scope_stat_lines,
         "budget_max": scope.get("budget_max"),

@@ -752,6 +752,81 @@ class TestSemanticFiltering:
         assert filtered_count == 1
 
 
+class TestInScopeFilesAcrossModes:
+    """`in_scope_files` carries the reviewer's whole domain-matched
+    workload in EVERY mode.
+
+    `scope["files"]` cannot: it means "diffed files" in the ordinary mode
+    and "everything matched" under --base-ref-only/--summary. Run-level
+    coverage needs one meaning, or an agent that never fetched a diff
+    contributes nothing and every file it owned reads as owned by nobody.
+    """
+
+    @staticmethod
+    def _mock_git(cmd, check=True, capture_stderr=True):
+        cmd_str = " ".join(cmd)
+        if "rev-parse --git-dir" in cmd_str:
+            return ".git"
+        if "rev-parse" in cmd_str:
+            return "abc123"
+        if "--name-only" in cmd_str:
+            return "src/Foo.php\nsrc/Bar.php"
+        if "--numstat" in cmd_str:
+            return "10\t2\tsrc/Foo.php\n3\t1\tsrc/Bar.php"
+        if "merge-base" in cmd_str:
+            return "abc123"
+        if "rev-list --count" in cmd_str:
+            return "0"
+        if "diff" in cmd_str and "--" in cmd_str:
+            return (
+                "--- a/src/Foo.php\n+++ b/src/Foo.php\n"
+                "@@ -1,3 +1,4 @@\n+code();\n"
+            )
+        return ""
+
+    @pytest.mark.parametrize(
+        "base_ref_only,summary",
+        [(False, False), (True, False), (False, True)],
+        ids=["ordinary", "base-ref-only", "summary"],
+    )
+    def test_every_mode_publishes_the_same_in_scope_list(
+        self, tmp_path, base_ref_only, summary
+    ):
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref",
+                          side_effect=lambda x: x):
+            mock_run.side_effect = self._mock_git
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=base_ref_only, summary=summary,
+                output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+
+        assert scope["in_scope_files"] == ["src/Bar.php", "src/Foo.php"]
+
+    def test_base_ref_only_diffs_nothing_yet_still_reports_its_scope(
+        self, tmp_path
+    ):
+        """The exact field failure: three empty lists, a full workload."""
+        with patch.object(review_scope, "run_cmd") as mock_run, \
+             patch.object(review_scope, "freshen_base_ref",
+                          side_effect=lambda x: x):
+            mock_run.side_effect = self._mock_git
+            args = argparse.Namespace(
+                domain="code", range="abc123..HEAD", max_lines=2000,
+                base_ref_only=True, summary=False, output_dir=str(tmp_path),
+                no_merge_base=True, no_semantic_filter=True,
+            )
+            scope = review_scope.build_scope(args)
+
+        assert scope["diffs"] == {}
+        assert scope["budget_exceeded_files"] == []
+        assert scope["list_only_files"] == []
+        assert scope["in_scope_files"] == ["src/Bar.php", "src/Foo.php"]
+
+
 class TestSemanticFilterIntegration:
     """Semantic filtering integrated into build_scope diff pipeline."""
 
@@ -1191,6 +1266,27 @@ class TestScopeSummaryJson:
         assert data["in_scope_stat_lines"] == 820
         assert data["budget_max"] == 2000
 
+    def test_write_scope_summary_publishes_the_in_scope_list(self, tmp_path):
+        """The union run-level coverage subtracts from the changed set has
+        to be uniform across scope modes, and only this field is."""
+        scope = {
+            "status": "OK",
+            "domain": "patterns",
+            "diffs": {},
+            "budget_exceeded_files": [],
+            "list_only_files": [],
+            "in_scope_files": ["src/a.php", "src/b.php"],
+        }
+        path = tmp_path / "patterns-reviewer-scope-summary.json"
+        review_scope.write_scope_summary(scope, str(path))
+
+        data = json.loads(path.read_text())
+        # The base-ref-only shape: nothing diffed, everything owned.
+        assert data["files_with_diffs"] == []
+        assert data["budget_exceeded_files"] == []
+        assert data["list_only_files"] == []
+        assert data["in_scope_files"] == ["src/a.php", "src/b.php"]
+
     def test_write_scope_summary_tolerates_minimal_scope(self, tmp_path):
         # NO_DOMAIN_FILES scopes lack diffs/budget keys — must not raise.
         path = tmp_path / "sub" / "summary.json"
@@ -1198,6 +1294,7 @@ class TestScopeSummaryJson:
         data = json.loads(path.read_text())
         assert data["files_with_diffs"] == []
         assert data["budget_exceeded_files"] == []
+        assert data["in_scope_files"] == []
         assert data["in_scope_stat_lines"] == 0
 
     def test_write_scope_summary_fails_open(self, tmp_path, capsys):

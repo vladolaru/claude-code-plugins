@@ -81,7 +81,7 @@ def _make_issue(
 
 def _write_summary(
     output_dir, agent, files_with_diffs, budget_exceeded, *, domain=None,
-    list_only=None,
+    list_only=None, in_scope=None,
 ):
     """Write one agent's scope-summary sidecar under its real filename.
 
@@ -100,6 +100,17 @@ def _write_summary(
             "files_with_diffs": files_with_diffs,
             "budget_exceeded_files": budget_exceeded,
             "list_only_files": list(list_only or []),
+            # Real sidecars publish this in every mode; the helper defaults
+            # it to the union of what was passed so ordinary-mode fixtures
+            # stay honest without every caller restating their scope.
+            "in_scope_files": (
+                list(in_scope) if in_scope is not None
+                else sorted(
+                    set(files_with_diffs)
+                    | set(budget_exceeded)
+                    | set(list_only or [])
+                )
+            ),
         }, f)
 
 
@@ -3200,6 +3211,47 @@ class TestUnscopedFiles:
             str(tmp_path), changed_files=["src/a.php"],
         )
         assert cov["files_unscoped"] == []
+
+    def test_base_ref_only_agent_contributes_its_whole_scope(
+        self, mod, tmp_path
+    ):
+        """A `--base-ref-only`/`--summary` agent never fetches a diff, so
+        its three diff-derived lists are legitimately empty.
+
+        patterns-reviewer is configured that way in the registry, and the
+        reviewer protocol sends every reviewer there on 100+-file PRs — the
+        exact runs this measurement exists for. Before `in_scope_files`,
+        every file such an agent owned published as matched by no one.
+        """
+        _write_summary(
+            str(tmp_path), "patterns-reviewer", [], [],
+            in_scope=["src/a.php", "src/b.php"],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=["src/a.php", "src/b.php", "yarn.lock"],
+        )
+        assert cov["files_unscoped"] == ["yarn.lock"]
+
+    def test_sidecar_without_the_field_degrades_to_contributing_nothing(
+        self, mod, tmp_path
+    ):
+        """A run whose sidecars predate `in_scope_files` under-reports
+        exactly as it did before — never a new false claim, never a
+        crash."""
+        path = tmp_path / "legacy-reviewer-scope-summary.json"
+        path.write_text(json.dumps({
+            "schema": 1,
+            "domain": "x",
+            "status": "OK",
+            "files_with_diffs": ["src/a.php"],
+            "budget_exceeded_files": [],
+            "list_only_files": [],
+        }))
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php", "src/b.php"],
+        )
+        assert cov["files_unscoped"] == ["src/b.php"]
 
     def test_all_files_scoped_is_measured_empty(self, mod, tmp_path):
         _write_summary(
