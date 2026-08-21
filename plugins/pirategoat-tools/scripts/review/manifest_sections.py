@@ -554,6 +554,28 @@ def build_coverage_manifest(
                 {"path": path, "reason": "noise_filtered"}
                 for path in sorted(changed_set - reviewable_set)
             ],
+            # DIVERGENCE NOTE — this is NOT the same measurement as
+            # reconciliation_context.py's `inline_coverage.files_unscoped`,
+            # and the two legitimately disagree (a field run read 2 here
+            # and 5 there). Both answer "which changed files did no agent's
+            # scope contain", from different evidence over different
+            # populations:
+            #   * here — population `reviewable` (changed MINUS
+            #     noise-filtered), evidence the dispatch-time `agent_start`
+            #     SCOPE events of agents whose final status is dispatched.
+            #     It must exactly partition `reviewable` with `assigned`
+            #     (`sanitize.py` enforces `assigned | uncovered ==
+            #     reviewable`), so noise-filtered files can never appear
+            #     here — they are reported under `excluded` instead.
+            #   * there — population the full `changed_files` list,
+            #     evidence the runtime `*-scope-summary*.json` sidecars an
+            #     agent writes when it actually runs. Noise-filtered and
+            #     domain-unmatched files DO appear there, and an agent that
+            #     was dispatched but died before writing a sidecar leaves
+            #     its files unscoped there while they stay `assigned` here.
+            # Keep both. This one is the plan-vs-changed accounting the
+            # metrics partition depends on; that one is the did-anyone-
+            # actually-see-it accounting the review report must confess.
             "uncovered": sorted(reviewable_set - assigned_set),
             "deferred_honesty_by_agent": deferred_honesty_by_agent,
             "deferred_total_by_agent": deferred_total_by_agent,

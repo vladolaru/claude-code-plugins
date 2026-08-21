@@ -80,7 +80,8 @@ def _make_issue(
 
 
 def _write_summary(
-    output_dir, agent, files_with_diffs, budget_exceeded, *, domain=None
+    output_dir, agent, files_with_diffs, budget_exceeded, *, domain=None,
+    list_only=None,
 ):
     """Write one agent's scope-summary sidecar under its real filename.
 
@@ -98,7 +99,7 @@ def _write_summary(
             "status": "OK",
             "files_with_diffs": files_with_diffs,
             "budget_exceeded_files": budget_exceeded,
-            "list_only_files": [],
+            "list_only_files": list(list_only or []),
         }, f)
 
 
@@ -1349,6 +1350,29 @@ class TestFullScript:
         assert ctx["change_purpose"] == "Fix auth bug"
         assert ctx["pr_id"] == "42"
         assert ctx["output_builder_path"].endswith("output.py")
+
+    def test_changed_files_reach_the_unscoped_computation(self, tmp_path):
+        """The seam R3 depends on: `build_context` must hand the CLI's
+        changed-file list to the coverage aggregator, or `files_unscoped`
+        is unmeasurable in production."""
+        _write_summary(str(tmp_path), "security-reviewer", ["src/auth.py"], [])
+
+        result = self._run(
+            "--output-dir", str(tmp_path),
+            "--git-range", "abc123..HEAD",
+            "--changed-files", "src/auth.py,package-lock.json",
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        ctx = json.loads(
+            (tmp_path / "reconciliation-context.json").read_text()
+        )
+        assert ctx["inline_coverage"]["files_unscoped"] == [
+            "package-lock.json"
+        ]
+        md = (tmp_path / "reconciliation-context.md").read_text()
+        assert "## Changed Files In No Reviewer's Scope" in md
 
     def test_empty_output_dir(self, tmp_path):
         """Runs successfully with no review files."""
@@ -3093,6 +3117,77 @@ class TestAggregateInlineCoverage:
         assert cov["files_deferred_reviewed"] == {}
 
 
+class TestUnscopedFiles:
+    """`files_unscoped` — changed files no reviewer's scope contained.
+
+    The population that used to vanish: every other bucket is keyed on a
+    file some agent's sidecar mentions, so a lockfile, binary, or dotfile
+    matching no domain landed in none of them. A field run's true
+    never-covered population was ~46 while the report said 41.
+    """
+
+    def test_changed_files_matching_no_domain_are_reported(self, mod, tmp_path):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=[
+                "src/a.php", "package-lock.json", ".editorconfig",
+            ],
+        )
+        assert cov["files_unscoped"] == [".editorconfig", "package-lock.json"]
+
+    def test_union_covers_every_sidecar_file_list(self, mod, tmp_path):
+        """Inline, deferred, AND name-only listing all count as scoped —
+        a file the agent was told about is not "matched no domain"."""
+        _write_summary(
+            str(tmp_path), "security-reviewer",
+            ["src/inline.php"], ["src/deferred.php"],
+            list_only=["src/listed.php"],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path),
+            changed_files=[
+                "src/inline.php", "src/deferred.php", "src/listed.php",
+                "yarn.lock",
+            ],
+        )
+        assert cov["files_unscoped"] == ["yarn.lock"]
+
+    def test_all_files_scoped_is_measured_empty(self, mod, tmp_path):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php"],
+        )
+        assert cov["files_unscoped"] == []
+
+    def test_no_changed_file_list_is_unmeasured_not_empty(self, mod, tmp_path):
+        """None, not [] — a caller must not read "not measured" as "none"."""
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        cov = mod.aggregate_inline_coverage(str(tmp_path))
+        assert cov["files_unscoped"] is None
+
+    def test_secondary_domain_sidecar_files_count_as_scoped(
+        self, mod, tmp_path
+    ):
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["src/a.php"], [],
+        )
+        _write_summary(
+            str(tmp_path), "security-reviewer", ["ci.yml"], [],
+            domain="config-ops",
+        )
+        cov = mod.aggregate_inline_coverage(
+            str(tmp_path), changed_files=["src/a.php", "ci.yml"],
+        )
+        assert cov["files_unscoped"] == []
+
+
 class TestAgentsReportingCountsAgents:
     """`agents_reporting` counts distinct agents, not summary files.
 
@@ -3523,6 +3618,35 @@ class TestInlineCoverageMarkdown:
             "carry this list into `review-findings.json`" in md
         )
         assert "review-findings.md" not in md
+
+    def test_unscoped_files_render_as_their_own_section(self, mod):
+        """Never merged into the gaps list: starved-by-budget and
+        routed-to-nobody are different failures."""
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {},
+            "files_unscoped": ["package-lock.json", ".editorconfig"],
+        }
+        md = mod.to_markdown(ctx)
+        assert "## Changed Files In No Reviewer's Scope" in md
+        assert (
+            "2 changed file(s) matched no reviewer's domain and were "
+            "reviewed by no one" in md
+        )
+        assert "- `package-lock.json`" in md
+        assert md.index("No Reviewer's Scope") < md.index("## Metadata")
+
+    def test_no_unscoped_section_when_everything_is_scoped(self, mod):
+        ctx = _make_context_with_findings({})
+        ctx["inline_coverage"] = {
+            "agents_reporting": 2,
+            "files_inline": {},
+            "files_never_inline": {},
+            "files_unscoped": [],
+        }
+        assert "No Reviewer's Scope" not in mod.to_markdown(ctx)
 
     def test_no_section_without_gaps(self, mod):
         ctx = _make_context_with_findings({})

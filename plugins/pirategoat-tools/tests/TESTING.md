@@ -223,6 +223,7 @@ Direct unit tests on `scripts/review/reconciliation_context.py` — agent-findin
 |---|---|
 | `TestExplicitClaimsCoverage` | `aggregate_inline_coverage()` reads a reviewer's explicit `deferred_reviewed` claims instead of inferring review from silence; unreliable claims fail closed to claiming nothing, while key-less legacy output keeps complement semantics |
 | `TestAutofilledUnreviewedAttribution` | `meta.unreviewed_autofilled` paths surface as `files_autofilled_unreviewed`, separate from the reviewer's own `files_declared_unreviewed` — the system's backfill is never published as the reviewer's judgment |
+| `TestUnscopedFiles` | `files_unscoped` — the changed files no reviewer's scope contained in ANY form (inline, deferred, or name-only), the population every other bucket structurally cannot see because each is keyed on a file some sidecar mentions. Pins the union across all three sidecar file lists, the measured-empty case, and `None` (not `[]`) when no changed-file list was supplied, so "not measured" can never read as "none found" |
 | `TestAgentsReportingCountsAgents` | `agents_reporting` counts DISTINCT agent names, not scope-summary files — three reviewers ship a second `-config-ops` sidecar, which made a 19-agent field run report 22 |
 
 ###Critic Adjustments Tests (`review/test_critic_adjustments.py`)

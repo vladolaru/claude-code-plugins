@@ -89,6 +89,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **`agents_reporting` counts agents, not sidecar files.** Three reviewers ship a second `-config-ops` scope summary, so a 19-agent field run reported 22.
 
+- **Changed files matching no reviewer's domain stopped vanishing from coverage.** Every inline-coverage bucket was keyed on a file some agent's scope summary mentions, so lockfiles, binaries, and dotfiles that matched no domain landed in no bucket at all — invisible rather than uncovered (a field run's true never-covered population was ~46 while the report said 41). `inline_coverage.files_unscoped` now reports them, in the reconciliation context and in the report's coverage section. It stays `null` when nothing supplied a changed-file list, so "not measured" never reads as "none". It is deliberately NOT the same measurement as the run manifest's `coverage.uncovered` — different population over different evidence — and both sites now carry the divergence note.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01

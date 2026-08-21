@@ -1060,12 +1060,16 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
         )
     _record_findings_markdown(state, findings_markdown)
 
-    # Load inline coverage gaps and deferred-review claims computed at
-    # reconciliation so the report briefing preserves the distinction
-    # between proof gaps and unverified claims.
+    # Load the three inline-coverage populations computed at reconciliation
+    # so the report briefing can render them into one paste-ready section:
+    # proof gaps, unverified claims, and files no reviewer's scope ever
+    # contained. The third is why a file matching no domain (lockfile,
+    # binary, dotfile) stops being invisible — it appears in none of the
+    # per-agent buckets by construction.
     recon_json_path = os.path.join(output_dir, "reconciliation-context.json")
     gaps = {}
     claims = {}
+    unscoped = []
     if os.path.isfile(recon_json_path):
         try:
             with open(recon_json_path) as f:
@@ -1082,11 +1086,18 @@ def _orchestrate_step_9(mode, config, state, context, output_dir):
                 raw_claims = coverage.get("files_deferred_reviewed") or {}
                 if isinstance(raw_claims, dict):
                     claims = raw_claims
+                # None on a run whose builder had no changed-file list —
+                # unmeasured, which must read as "no section", not "none".
+                raw_unscoped = coverage.get("files_unscoped") or []
+                if isinstance(raw_unscoped, list):
+                    unscoped = [f for f in raw_unscoped if isinstance(f, str)]
         except (json.JSONDecodeError, OSError):
             gaps = {}
             claims = {}
+            unscoped = []
     state["inline_coverage_gaps"] = gaps
     state["inline_coverage_claims"] = claims
+    state["inline_coverage_unscoped"] = unscoped
 
     return context
 

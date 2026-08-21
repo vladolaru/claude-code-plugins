@@ -329,7 +329,24 @@ def _attribute_gap(
     target.setdefault(f_path, set()).add(agent)
 
 
-def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
+# Every file-carrying list a scope summary sidecar can hold
+# (`agent/scope.py::write_scope_summary`). Their union is "every changed
+# file that reached at least one reviewer's scope in any form" — inline
+# diff, deferred NOT DIFFED queue, or name-only listing — which is what
+# `files_unscoped` is the complement of. Adding a list to the sidecar
+# without adding it here would silently reclassify covered files as
+# never-scoped.
+_SIDECAR_FILE_LISTS = (
+    "files_with_diffs",
+    "budget_exceeded_files",
+    "list_only_files",
+)
+
+
+def aggregate_inline_coverage(
+    output_dir: str,
+    changed_files: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]]:
     """Aggregate per-agent scope summaries into run-level inline coverage.
 
     Reads ``*-scope-summary*.json`` sidecars written by bootstrap/scope.py,
@@ -359,6 +376,16 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
     it neither way. Attributing that backfill to the reviewer's budget
     judgment is the exact confusion the builder's Markdown split prevents.
 
+    Every bucket above answers a question about a file some agent's scope
+    contained. A changed file matching NO reviewer domain (lockfiles,
+    binaries, dotfiles) reaches no sidecar at all and would therefore
+    appear in no bucket — invisible rather than uncovered. When
+    ``changed_files`` is supplied, ``files_unscoped`` closes that hole: it
+    is ``changed_files`` minus every path any sidecar mentions (see
+    ``_SIDECAR_FILE_LISTS``). It stays None when the caller supplied no
+    changed-file list, because "not measured" and "measured, none" are
+    different facts.
+
     Returns None when no summaries exist (pre-sidecar runs) so callers can
     distinguish "no data" from "no gaps".
     """
@@ -370,6 +397,7 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
     # for a 19-agent run. Both of an agent's sidecars derive the same name
     # through the rsplit below, so the set collapses them.
     reporting_agents: set = set()
+    scoped_anywhere: set = set()
     try:
         entries = sorted(os.scandir(output_dir), key=lambda e: e.name)
     except OSError:
@@ -393,6 +421,10 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
         if not isinstance(data, dict):
             continue
         reporting_agents.add(agent)
+        for key in _SIDECAR_FILE_LISTS:
+            for f_path in data.get(key) or []:
+                if isinstance(f_path, str):
+                    scoped_anywhere.add(f_path)
         for f_path in data.get("files_with_diffs") or []:
             if isinstance(f_path, str):
                 inline.setdefault(f_path, set()).add(agent)
@@ -475,6 +507,20 @@ def aggregate_inline_coverage(output_dir: str) -> Optional[Dict[str, Any]]:
         # summary files aggregated — an agent with a primary and a
         # secondary-domain sidecar is one agent.
         "agents_reporting": len(reporting_agents),
+        # Changed files no reviewer's scope contained in any form:
+        # `changed_files` minus every path any sidecar mentions. NOT the
+        # same measurement as the run manifest's `coverage.uncovered` —
+        # different population (full changed set vs. noise-filtered
+        # `reviewable`) over different evidence (runtime sidecars vs.
+        # dispatch-time SCOPE events), so the two numbers legitimately
+        # differ. The full divergence note lives at the one other site,
+        # manifest_sections.py's `"uncovered"` key; read it before
+        # "reconciling" the two.
+        "files_unscoped": (
+            sorted(set(changed_files) - scoped_anywhere)
+            if changed_files is not None
+            else None
+        ),
         "files_inline": {f: sorted(a) for f, a in sorted(inline.items())},
         "files_never_inline": {
             f: sorted(a)
@@ -1298,6 +1344,29 @@ def to_markdown(context: Dict[str, Any]) -> str:
             note = "".join(f"; {n}" for n in notes)
             parts.append(f"- `{f_path}` (skipped by: {', '.join(agents)}{note})")
         parts.append("")
+    # Files that reached no reviewer's scope at all. Kept as its own
+    # section rather than merged into the gaps list above: those files were
+    # matched to a domain and then starved by a budget, these were never
+    # matched to anyone, and a reader who cannot tell the two apart cannot
+    # tell a capacity problem from a routing problem.
+    if isinstance(inline_coverage, dict) and inline_coverage.get(
+        "files_unscoped"
+    ):
+        unscoped = inline_coverage["files_unscoped"]
+        parts.append("## Changed Files In No Reviewer's Scope\n")
+        parts.append(
+            f"**⚠ {len(unscoped)} changed file(s) matched no reviewer's "
+            "domain and were reviewed by no one.** No agent's scope "
+            "contained them — not inline, not deferred, not even as a "
+            "name-only listing. No agent verdict covers them, and no "
+            "finding can exist for them. Carry this list into "
+            "`review-findings.json` as a coverage warning — one "
+            "`add_observation()` per file — so it survives into every "
+            "artifact rendered from that ledger.\n"
+        )
+        for f_path in unscoped:
+            parts.append(f"- `{f_path}`")
+        parts.append("")
     if isinstance(inline_coverage, dict) and inline_coverage.get(
         "files_deferred_reviewed"
     ):
@@ -1837,7 +1906,9 @@ def main() -> int:
             "host_context_banner": extract_host_banner(output_dir),
             # Run-level inline coverage from per-agent scope summaries —
             # None on pre-sidecar runs.
-            "inline_coverage": aggregate_inline_coverage(output_dir),
+            "inline_coverage": aggregate_inline_coverage(
+                output_dir, changed_files=changed_files
+            ),
         }
         # Include dispatched agents, normalized to match agent_findings keys
         # (e.g., "security-reviewer" → "security-review") so the

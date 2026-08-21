@@ -21,6 +21,7 @@ SCRIPT_PATH = PLUGIN_ROOT / "scripts" / "review" / "telemetry.py"
 sys.path.insert(0, str(TESTS_DIR))
 from helpers.context_fixtures import COMPLETE_CONTEXT
 from review import synthesis_lifecycle as lifecycle_contract
+from review.reconciliation_context import aggregate_inline_coverage
 
 
 def _load_module():
@@ -1049,6 +1050,54 @@ class TestRunManifest:
             "deferred_total_by_agent": {},
             "semantics": "generated_scope_not_proof_of_model_read",
         }
+
+    def test_manifest_uncovered_and_recon_files_unscoped_diverge_by_design(
+        self, telemetry, output_dir
+    ):
+        """The one-definition guarantee, in the shape this repo chose:
+        these two measurements are NOT unified, and this pins exactly how
+        they differ so a future "reconcile the numbers" edit has to argue
+        with a test instead of guessing.
+
+        Both answer "which changed files did no agent's scope contain",
+        from different evidence over different populations. Read the
+        DIVERGENCE NOTE at `manifest_sections.py`'s `"uncovered"` key and
+        its reciprocal at `reconciliation_context.py`'s `"files_unscoped"`
+        before changing either.
+        """
+        changed = ["src/a.py", "src/orphan.py", "vendor/generated.js"]
+        _write_coverage_inputs(
+            output_dir,
+            changed=changed,
+            # vendor/generated.js is noise-filtered out of `reviewable`.
+            reviewable=["src/a.py", "src/orphan.py"],
+            agents=[{"name": "security-reviewer", "status": "DISPATCH"}],
+        )
+        telemetry.start(run_id="run-1", repo_path="/repo")
+        telemetry.log_agent_start("security-reviewer", scope_paths=["src/a.py"])
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+        # The runtime sidecar the reviewer actually wrote.
+        (output_dir / "security-reviewer-scope-summary.json").write_text(
+            json.dumps({
+                "schema": 1,
+                "files_with_diffs": ["src/a.py"],
+                "budget_exceeded_files": [],
+                "list_only_files": [],
+            })
+        )
+
+        manifest_uncovered = _read_manifest(telemetry)["coverage"]["uncovered"]
+        recon_unscoped = aggregate_inline_coverage(
+            str(output_dir), changed_files=changed
+        )["files_unscoped"]
+
+        # Population: the manifest works over `reviewable`, so the
+        # noise-filtered file can never appear there — it is reported under
+        # `excluded` instead. The reconciliation context works over the
+        # full changed set, so it does.
+        assert manifest_uncovered == ["src/orphan.py"]
+        assert recon_unscoped == ["src/orphan.py", "vendor/generated.js"]
+        assert manifest_uncovered != recon_unscoped
 
     def test_git_c_quoted_unicode_paths_match_real_unicode_scope(
         self, telemetry, output_dir
