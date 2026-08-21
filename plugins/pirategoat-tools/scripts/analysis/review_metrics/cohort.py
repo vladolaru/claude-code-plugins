@@ -91,14 +91,27 @@ def _group_usage(
                     target = grouped.setdefault(name, _empty_usage())
                     _add_usage(target, entry.get("usage"))
                 elif source == "model":
-                    by_model = entry.get("usage_by_model")
-                    if not isinstance(by_model, dict):
-                        continue
-                    for name, usage in by_model.items():
-                        if not isinstance(name, str):
-                            continue
-                        target = grouped.setdefault(name, _empty_usage())
-                        _add_usage(target, usage)
+                    # Bucket on the DISPATCHED model — `entry["model"]` is
+                    # the dispatch result envelope's `resolvedModel`
+                    # (`review_transcript.py` sets it there and nowhere
+                    # else). That is the one canonical spelling for spend
+                    # math: it keeps the priced context-window variant tag
+                    # (`claude-opus-5[1m]`), where the per-message
+                    # `usage_by_model` keys carry the bare API spelling
+                    # (`claude-opus-5`) the tag was stripped from. Two
+                    # spellings of one bucketing meant a cohort could blend
+                    # differently-priced variants into one row. See
+                    # `usage_snapshot.py::_build_snapshot` for the full
+                    # rationale, including what this costs (a mid-run model
+                    # fallback books entirely to the dispatched model).
+                    # `usage_by_model` stays where it is — `measure.py`'s
+                    # `_model_usage_availability` uses it as a conservation
+                    # check that the accepted buckets total the measured
+                    # agent usage.
+                    model = entry.get("model")
+                    name = model if isinstance(model, str) and model else "unknown"
+                    target = grouped.setdefault(name, _empty_usage())
+                    _add_usage(target, entry.get("usage"))
     return dict(sorted(grouped.items())) if grouped else None
 
 

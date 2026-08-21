@@ -7008,6 +7008,11 @@ class TestAggregateCohort:
                 {
                     "agent": "code-reviewer",
                     "available": True,
+                    # The DISPATCHED spelling (resolvedModel) is the model
+                    # bucket key; `usage_by_model` carries the bare
+                    # per-message spelling the priced tag was stripped from
+                    # and must not be what the cohort groups on.
+                    "model": "claude-sonnet-4-5[1m]",
                     "usage": _usage(20),
                     "usage_by_model": {"claude-sonnet-4-5": _usage(20)},
                 }
@@ -7019,7 +7024,50 @@ class TestAggregateCohort:
         assert cohort["usage"]["complete_totals"]["effective_input_tokens"] == 600
         assert cohort["orchestrator_usage"]["by_step"]["5"]["effective_input_tokens"] == 60
         assert cohort["agent_usage"]["by_agent"]["code-reviewer"]["effective_input_tokens"] == 120
-        assert cohort["model_usage"]["by_model"]["claude-sonnet-4-5"]["effective_input_tokens"] == 120
+        assert cohort["model_usage"]["by_model"] == {
+            "claude-sonnet-4-5[1m]": cohort["agent_usage"]["by_agent"]["code-reviewer"],
+        }
+
+    def test_model_grouping_merges_agents_sharing_one_dispatched_spelling(self):
+        """One priced spelling is one bucket, however many agents ran on it.
+
+        And an entry with no dispatched model falls into an explicit
+        "unknown" bucket rather than silently vanishing from spend math —
+        the same convention `usage_snapshot.py` uses.
+        """
+        run = _measured_run(
+            "model-buckets",
+            usage=_usage(100),
+            agent_usage=[
+                {
+                    "agent": "code-reviewer",
+                    "available": True,
+                    "model": "claude-opus-5[1m]",
+                    "usage": _usage(10),
+                    "usage_by_model": {"claude-opus-5": _usage(10)},
+                },
+                {
+                    "agent": "security-reviewer",
+                    "available": True,
+                    "model": "claude-opus-5[1m]",
+                    "usage": _usage(20),
+                    "usage_by_model": {"claude-opus-5": _usage(20)},
+                },
+                {
+                    "agent": "performance-reviewer",
+                    "available": True,
+                    "model": None,
+                    "usage": _usage(5),
+                    "usage_by_model": {},
+                },
+            ],
+        )
+
+        by_model = aggregate_cohort([run])["model_usage"]["by_model"]
+
+        assert set(by_model) == {"claude-opus-5[1m]", "unknown"}
+        assert by_model["claude-opus-5[1m]"]["effective_input_tokens"] == 180
+        assert by_model["unknown"]["effective_input_tokens"] == 30
 
     def test_builder_first_attempt_denominator_excludes_incomplete_and_keeps_no_attempt(self):
         complete = _measured_run(
