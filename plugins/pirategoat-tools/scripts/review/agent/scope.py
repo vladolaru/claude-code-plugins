@@ -421,13 +421,12 @@ def classify_markup_evidence(
     """
     if not filepaths:
         return set()
-    git = ["git", "-c", "core.quotepath=false"]
     if range_spec == "--cached":
-        cmd = [*git, "diff", "--cached", "--", *filepaths]
+        cmd = git_path_cmd("diff", "--cached", "--", *filepaths)
     elif range_spec == "":
-        cmd = [*git, "diff", "--", *filepaths]
+        cmd = git_path_cmd("diff", "--", *filepaths)
     else:
-        cmd = [*git, "diff", range_spec, "--", *filepaths]
+        cmd = git_path_cmd("diff", range_spec, "--", *filepaths)
     try:
         output = run_cmd(cmd, check=True)
     except RuntimeError:
@@ -561,7 +560,9 @@ def filter_a11y_ui_evidence(
         return list(files), []
 
     try:
-        repo_root = run_cmd(["git", "rev-parse", "--show-toplevel"], check=True)
+        repo_root = run_cmd(
+            git_path_cmd("rev-parse", "--show-toplevel"), check=True
+        )
     except RuntimeError:
         repo_root = ""
     if not repo_root:
@@ -891,6 +892,27 @@ NOISE_PATTERNS = [
 STALE_BRANCH_THRESHOLD = 10
 
 
+# Every Git invocation whose OUTPUT carries a path must disable
+# core.quotePath, or Git C-quotes any non-ASCII path
+# ("src/caf\303\251.php") and every consumer downstream compares the
+# wrong string. In scope.py that meant `.php"` never matching the `\.php$`
+# domain filter, so a changed file with a non-ASCII name was silently
+# excluded from EVERY domain and reviewed by nobody.
+#
+# ONE prefix rather than the flag repeated per call site, because the flag
+# repeated per call site is exactly how this drifted: the evidence scan
+# had it and the changed-file enumeration next to it did not. Commands
+# whose path output is never CONSUMED keep plain ["git", ...] — the
+# counts and ref resolutions, and the `rev-parse --git-dir` probe whose
+# output is discarded in favour of its exit code.
+GIT_PATH_SAFE = ["git", "-c", "core.quotepath=false"]
+
+
+def git_path_cmd(*args: str) -> List[str]:
+    """Build a Git command whose output paths are never C-quoted."""
+    return [*GIT_PATH_SAFE, *args]
+
+
 def run_cmd(cmd: List[str], check: bool = True, capture_stderr: bool = True) -> str:
     """Run a command and return stdout. Raises on failure if check=True."""
     try:
@@ -1059,12 +1081,12 @@ def detect_range() -> Tuple[str, str]:
         pass
 
     # Check for staged changes
-    staged = run_cmd(["git", "diff", "--cached", "--name-only"], check=True)
+    staged = run_cmd(git_path_cmd("diff", "--cached", "--name-only"), check=True)
     if staged:
         return "--cached", "HEAD"
 
     # Check for unstaged changes
-    unstaged = run_cmd(["git", "diff", "--name-only"], check=True)
+    unstaged = run_cmd(git_path_cmd("diff", "--name-only"), check=True)
     if unstaged:
         return "", "HEAD"  # empty range = unstaged working tree diff
 
@@ -1074,11 +1096,11 @@ def detect_range() -> Tuple[str, str]:
 def get_changed_files(range_spec: str) -> List[str]:
     """Get list of changed files for the given range."""
     if range_spec == "--cached":
-        cmd = ["git", "diff", "--cached", "--name-only"]
+        cmd = git_path_cmd("diff", "--cached", "--name-only")
     elif range_spec == "":
-        cmd = ["git", "diff", "--name-only"]
+        cmd = git_path_cmd("diff", "--name-only")
     else:
-        cmd = ["git", "diff", "--name-only", range_spec]
+        cmd = git_path_cmd("diff", "--name-only", range_spec)
 
     output = run_cmd(cmd, check=True)
     if not output:
@@ -1145,11 +1167,11 @@ def filter_domain(files: List[str], domain: str) -> Tuple[List[str], List[str]]:
 def get_diff_for_file(range_spec: str, filepath: str) -> str:
     """Get the diff for a single file."""
     if range_spec == "--cached":
-        cmd = ["git", "diff", "--cached", "--", filepath]
+        cmd = git_path_cmd("diff", "--cached", "--", filepath)
     elif range_spec == "":
-        cmd = ["git", "diff", "--", filepath]
+        cmd = git_path_cmd("diff", "--", filepath)
     else:
-        cmd = ["git", "diff", range_spec, "--", filepath]
+        cmd = git_path_cmd("diff", range_spec, "--", filepath)
 
     return run_cmd(cmd, check=True)
 
@@ -1174,11 +1196,11 @@ def get_diffstat(range_spec: str, files: List[str]) -> Dict[str, Tuple[int, int]
         Binary files get (0, 0). Files not in the numstat output get (0, 0).
     """
     if range_spec == "--cached":
-        cmd = ["git", "diff", "--cached", "--numstat"]
+        cmd = git_path_cmd("diff", "--cached", "--numstat")
     elif range_spec == "":
-        cmd = ["git", "diff", "--numstat"]
+        cmd = git_path_cmd("diff", "--numstat")
     else:
-        cmd = ["git", "diff", "--numstat", range_spec]
+        cmd = git_path_cmd("diff", "--numstat", range_spec)
 
     output = run_cmd(cmd, check=True)
     if not output:

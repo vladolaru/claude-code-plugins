@@ -2249,7 +2249,9 @@ class TestA11yUiEvidenceSniff:
         real_run_cmd = review_scope.run_cmd
 
         def _no_toplevel(cmd, *args, **kwargs):
-            if cmd[:3] == ["git", "rev-parse", "--show-toplevel"]:
+            # Match on the subcommand, not a fixed prefix: path-yielding
+            # invocations carry the shared `-c core.quotepath=false` flags.
+            if "--show-toplevel" in cmd:
                 raise RuntimeError("no toplevel")
             return real_run_cmd(cmd, *args, **kwargs)
 
@@ -2325,6 +2327,76 @@ class TestA11yUiEvidenceSniff:
         (tmp_path / "server" / "orders.ts").unlink()
         self._git(tmp_path, "commit", "-am", "drop backend module")
         assert "server/orders.ts" not in self._scope_files(tmp_path, "a11y")
+
+
+class TestNonAsciiPathsReachTheirDomain:
+    """Git C-quotes non-ASCII paths unless core.quotePath is off. Every
+    path-yielding invocation in scope.py goes through `git_path_cmd`, so
+    a changed file named `café.php` is enumerated as `café.php` — not as
+    `"caf\\303\\251.php"`, whose trailing quote makes the `\\.php$` domain
+    filter miss it and drops the file out of EVERY domain, reviewed by
+    nobody.
+    """
+
+    def _repo_with(self, tmp_path, filename):
+        def _git(*args):
+            subprocess.run(["git", *args], cwd=tmp_path, check=True,
+                           capture_output=True)
+        _git("init", "-b", "main")
+        _git("config", "user.email", "t@t.com")
+        _git("config", "user.name", "T")
+        _git("config", "commit.gpgsign", "false")
+        (tmp_path / "README.txt").write_text("base\n")
+        _git("add", ".")
+        _git("commit", "-m", "initial")
+        _git("checkout", "-b", "feature")
+        (tmp_path / filename).write_text("<?php echo 1;\n")
+        _git("add", ".")
+        _git("commit", "-m", "feature")
+
+    def _scope(self, repo, domain):
+        args = argparse.Namespace(
+            domain=domain, range="main..HEAD", format="json", max_lines=2000,
+            base_ref_only=False, summary=False, output_dir=None,
+            no_merge_base=True, no_semantic_filter=False, include_path=None,
+        )
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(repo)
+            return review_scope.build_scope(args)
+        finally:
+            os.chdir(saved_cwd)
+
+    @pytest.mark.parametrize("filename", ["café.php", "naïve-ünïcode.php"])
+    def test_non_ascii_file_lands_in_its_domain(self, tmp_path, filename):
+        self._repo_with(tmp_path, filename)
+        scope = self._scope(tmp_path, "code")
+        assert scope["files"] == [filename]
+        assert scope["skipped_files"]["domain"] == []
+
+    def test_enumeration_returns_decoded_paths(self, tmp_path):
+        """The failure mode is upstream of any filter: a quoted name never
+        equals the real one, so pin the enumeration itself."""
+        self._repo_with(tmp_path, "café.php")
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            assert review_scope.get_changed_files("main..HEAD") == ["café.php"]
+        finally:
+            os.chdir(saved_cwd)
+
+    def test_diffstat_keys_match_the_enumerated_names(self, tmp_path):
+        """numstat rows are keyed on the path too — a quoted key matches no
+        enumerated file and silently reports a 0-line change, which is what
+        orders the diff budget."""
+        self._repo_with(tmp_path, "café.php")
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            stats = review_scope.get_diffstat("main..HEAD", ["café.php"])
+        finally:
+            os.chdir(saved_cwd)
+        assert stats["café.php"] == (1, 0)
 
 
 class TestUiSurfaceTokens:
