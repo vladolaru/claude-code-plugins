@@ -1420,7 +1420,11 @@ def to_markdown(context: Dict[str, Any]) -> str:
             "artifact rendered from that ledger.\n"
         )
         for f_path in unscoped:
-            parts.append(f"- `{f_path}`")
+            # Same neutralization every other rendered path gets: a path
+            # is producer data, and a raw one carrying a backtick run or a
+            # line ending can forge structure in the document the
+            # reconciliator reads.
+            parts.append(f"- `{_escape_inline(f_path)}`")
         parts.append("")
     if isinstance(inline_coverage, dict) and inline_coverage.get(
         "files_deferred_reviewed"
