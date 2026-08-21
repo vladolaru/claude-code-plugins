@@ -1075,12 +1075,12 @@ def build_output(
                 "Before writing output, every NOT DIFFED file must be either "
                 "claimed or declared — an APPROVE that silently ignores them is "
                 "a protocol violation. Claim each deferred file you actually "
-                'read with builder.add_deferred_reviewed("<path>") — one call '
-                "takes several paths. Declare each file you could not reach "
-                'with builder.add_unreviewed("<path>") — same signature, '
-                "several paths per call — which records the gap "
-                "in the JSON output (the pipeline-derived Markdown renders it "
-                "as the `**Not reviewed (budget):**` line) — and never count a "
+                'read with builder.add_deferred_reviewed("<path>"). Declare '
+                "each file you could not reach with "
+                'builder.add_unreviewed("<path>"). Both take several paths '
+                "per call. A declaration records the gap in the JSON output, "
+                "which the pipeline-derived Markdown renders as the "
+                "`**Not reviewed (budget):**` line; never count a "
                 "declared-unreviewed file toward your verdict. "
                 "Anything you leave in neither list is auto-declared unreviewed "
                 "at save time and marked auto-filled: silence records a "
