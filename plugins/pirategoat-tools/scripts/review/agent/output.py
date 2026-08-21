@@ -210,8 +210,16 @@ def _review_budget_target() -> Optional[int]:
     return value if value > 0 else None
 
 
-def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, severities):
-    """Best-effort telemetry logging on agent completion. Never raises."""
+def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count,
+                                  severities, resave):
+    """Best-effort telemetry logging on agent completion. Never raises.
+
+    `resave` is this save's own observation of whether the reviewer's
+    review JSON already existed — see save() for why it is taken under the
+    publication lock. It is a required argument, not a defaulted one: the
+    only caller is the save path, which always knows the answer, and a
+    default would let a future caller publish an unobserved `false`.
+    """
     try:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -226,6 +234,7 @@ def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, se
             verdict=verdict,
             issue_count=issue_count,
             severities=severities,
+            resave=resave,
         )
     except Exception:
         pass
@@ -1483,12 +1492,25 @@ class ReviewOutputBuilder:
                     lock_fd = os.open(output_dir, os.O_RDONLY)
                     stack.callback(os.close, lock_fd)
                     fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                # Is this a correction of an already-published review? The
+                # echo above deliberately invites one, so multiple
+                # successful saves are sanctioned and each logs its own
+                # completion — the raw event stream holds one event per
+                # SAVE, not one per AGENT. Recording the observation makes
+                # that legible without replaying the projection.
+                # Observed HERE, under the same lock that serializes
+                # {log, publish}: outside it, an overlapping execution's
+                # os.replace() could land between the test and this save's
+                # own publication and make the answer describe a race
+                # rather than this save.
+                resave = os.path.exists(json_path)
                 _log_agent_complete_telemetry(
                     output_dir,
                     f"{self.reviewer}-reviewer",
                     output['verdict'],
                     output['summary']['total_issues'],
                     output['summary']['by_severity'],
+                    resave,
                 )
                 os.replace(staged_json_path, json_path)
         finally:

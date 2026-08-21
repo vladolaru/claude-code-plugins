@@ -566,6 +566,15 @@ def _lifecycle_summary(manifest: dict[str, Any]) -> dict[str, Any] | None:
     incomplete = agents.get("incomplete")
     if not all(isinstance(items, list) for items in (started, completed, incomplete)):
         return None
+    # `started`/`completed` are the manifest's PROJECTED lifecycle arrays,
+    # never the raw JSONL. `project_agent_lifecycle` has already collapsed
+    # the sanctioned re-saves — a reviewer that published twice logged two
+    # `agent_complete` events and appears here once — so every count below
+    # is an EXECUTION count, and for the ordinary one-execution-per-agent
+    # run that is also the agent count. The `*_events` names are historical
+    # and deliberately conservative (they never overstate); do not "fix"
+    # them by counting raw log lines, which is what a 19-reviewer field run
+    # would have reported as 21 completions.
     starts_by_agent = Counter(event["agent"] for event in started)
     incomplete_by_agent = Counter(incomplete)
     extra_starts_by_agent = {

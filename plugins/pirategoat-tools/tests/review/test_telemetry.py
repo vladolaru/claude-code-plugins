@@ -3215,6 +3215,85 @@ class TestLogAgentComplete:
         t.log_agent_complete(agent_name="security-reviewer", verdict="approve")
         assert t.log_path is None
 
+    def test_resave_flag_is_always_present_and_defaults_false(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_complete(
+            agent_name="security-reviewer", verdict="approve"
+        )
+        assert _read_events(telemetry.log_path)[-1]["resave"] is False
+
+    def test_resave_flag_records_a_correction(self, telemetry):
+        telemetry.start(pr_number="42")
+        telemetry.log_agent_complete(
+            agent_name="security-reviewer", verdict="approve", resave=True
+        )
+        assert _read_events(telemetry.log_path)[-1]["resave"] is True
+
+
+class TestCompletionEventsAreNotAgentCounts:
+    """Field shape: 19 reviewers, 2 sanctioned re-saves, 21 raw events.
+
+    The event stream is one record per SAVE; the manifest projection is
+    last-wins per agent identity. A consumer reading the projection sees
+    19 agents, and the later save is the one that survives.
+    """
+
+    def test_twentyone_events_project_to_nineteen_completions(self, telemetry):
+        telemetry.start(run_id="run-1")
+        names = [f"agent-{index:02d}-reviewer" for index in range(19)]
+        for name in names:
+            telemetry.log_agent_start(agent_name=name, domain="code")
+            telemetry.log_agent_complete(
+                agent_name=name, verdict="approve", resave=False
+            )
+        # Two reviewers correct themselves — the save echo invites exactly
+        # this, so both re-saves are sanctioned behavior.
+        for name in names[:2]:
+            telemetry.log_agent_complete(
+                agent_name=name, verdict="comment",
+                issue_count=1, severities={"medium": 1}, resave=True,
+            )
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        raw = [
+            event for event in _read_events(telemetry.log_path)
+            if event["event"] == "agent_complete"
+        ]
+        assert len(raw) == 21
+        assert sum(1 for event in raw if event["resave"]) == 2
+
+        agents = _read_manifest(telemetry)["agents"]
+        assert len(agents["completed"]) == 19
+        assert len({event["agent"] for event in agents["completed"]}) == 19
+        assert agents["incomplete"] == []
+
+        # Last wins: the corrected verdict is what the manifest carries.
+        by_agent = {
+            event["agent"]: event["verdict"]
+            for event in agents["completed"]
+        }
+        assert by_agent[names[0]] == "comment"
+        assert by_agent[names[2]] == "approve"
+
+    def test_manifest_rows_never_carry_the_raw_resave_flag(self, telemetry):
+        """The projection collapsed the revisions, so no manifest row is a
+        superseded save to flag — leaking `resave` there would invite
+        reading a projected row as a raw event."""
+        telemetry.start(run_id="run-1")
+        telemetry.log_agent_start(agent_name="code-reviewer", domain="code")
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer", verdict="approve", resave=False
+        )
+        telemetry.log_agent_complete(
+            agent_name="code-reviewer", verdict="comment",
+            issue_count=1, severities={"medium": 1}, resave=True,
+        )
+        telemetry.finalize(step=11, phase="OUTPUT", title="Present Results")
+
+        completed = _read_manifest(telemetry)["agents"]["completed"]
+        assert len(completed) == 1
+        assert "resave" not in completed[0]
+
 
 # ── _build_summary override counting ────────────────────────────
 

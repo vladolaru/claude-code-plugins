@@ -849,7 +849,8 @@ class TestSave:
 
         seen = {}
 
-        def _record(output_dir, reviewer, verdict, issue_count, severities):
+        def _record(output_dir, reviewer, verdict, issue_count, severities,
+                    resave):
             seen["json_visible_at_telemetry"] = os.path.isfile(
                 os.path.join(output_dir, "security-review.json")
             )
@@ -939,7 +940,8 @@ class TestSave:
 
         completions = []
 
-        def _record(output_dir, reviewer, verdict, issue_count, severities):
+        def _record(output_dir, reviewer, verdict, issue_count, severities,
+                    resave):
             completions.append(issue_count)
 
         monkeypatch.setattr(
@@ -959,6 +961,41 @@ class TestSave:
             with open(os.path.join(d, "security-review.json")) as f:
                 published_count = len(json.load(f)["issues"])
             assert completions[-1] == published_count
+
+    def test_resave_flag_distinguishes_correction_from_first_save(
+        self, tmp_path
+    ):
+        """Through the REAL save path and the REAL telemetry backend: the
+        save echo invites a correction re-save, so multiple successful
+        saves are sanctioned and each logs its own completion. The raw
+        event stream must say which is which, or an event tally reads as
+        an agent tally (a 19-reviewer field run logged 21 completions)."""
+        from review.telemetry import ReviewTelemetry
+
+        output_dir = tmp_path / "pr-review-42"
+        output_dir.mkdir()
+        telemetry = ReviewTelemetry(
+            str(output_dir), log_dir=str(tmp_path / "logs")
+        )
+        log_path = telemetry.start(run_id="run-1")
+
+        ReviewOutputBuilder(pr_id="1", reviewer="security").save(
+            str(output_dir)
+        )
+        ReviewOutputBuilder(pr_id="1", reviewer="security").save(
+            str(output_dir)
+        )
+
+        completions = [
+            json.loads(line)
+            for line in Path(log_path).read_text().splitlines()
+            if line.strip() and json.loads(line)["event"] == "agent_complete"
+        ]
+        assert [event["agent"] for event in completions] == [
+            "security-reviewer",
+            "security-reviewer",
+        ]
+        assert [event["resave"] for event in completions] == [False, True]
 
     def test_failed_save_removes_its_staged_file(self, monkeypatch):
         """Unique staging names never self-overwrite the way the old fixed
