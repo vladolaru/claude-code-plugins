@@ -108,6 +108,21 @@ def _sanitize_usage_map(value: object) -> dict[str, dict[str, int]] | None:
 
 
 def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
+    """Sanitize the per-agent usage rows the report and cohort read.
+
+    The enrichment's own `usage_by_model` (per-MESSAGE model spellings,
+    one map per agent) is deliberately not carried through. Nothing in
+    this layer reads it: the cohort groups on `model`, the dispatched
+    spelling, and so does `_model_usage_availability`. It stays in
+    `review_transcript.py`'s output, where it has forensic value — it is
+    the only surface that can show an agent switching models mid-run,
+    which the dispatch envelope's single `resolvedModel` cannot express.
+
+    Dropping it from the sanitized rows is a `_REPORT_SCHEMA` change made
+    under the Artifact Schemas rule's unreleased-version carve-out:
+    schema 2 was introduced in 1.114.0 and 1.114.0 is not tagged, so no
+    published report ever claimed 2 with this key.
+    """
     if not isinstance(value, list):
         return None
     result: list[dict[str, Any]] = []
@@ -131,16 +146,13 @@ def _sanitize_agent_usage(value: object) -> list[dict[str, Any]] | None:
                 return None
         if item["available"]:
             usage = _safe_usage(item.get("usage"))
-            usage_by_model = _sanitize_usage_map(item.get("usage_by_model"))
             tool_calls = _nonnegative_exact_int(item.get("tool_calls"))
-            if usage is None or usage_by_model is None or tool_calls is None:
+            if usage is None or tool_calls is None:
                 return None
             safe["usage"] = usage
-            safe["usage_by_model"] = usage_by_model
             safe["tool_calls"] = tool_calls
         else:
             safe["usage"] = None
-            safe["usage_by_model"] = None
             safe["tool_calls"] = None
         result.append(safe)
     return result
@@ -706,31 +718,37 @@ def _pipeline_metric_availability(
 def _model_usage_availability(
     completeness: dict[str, Any], agent_usage: object
 ) -> str:
-    """Classify whether accepted model buckets conserve measured agent usage."""
-    total = _empty_usage()
-    attributed = _empty_usage()
-    payload_valid = isinstance(agent_usage, list)
-    if payload_valid:
-        for item in agent_usage:
-            if not isinstance(item, dict) or item.get("available") is not True:
-                continue
-            if not _add_usage(total, item.get("usage")):
-                payload_valid = False
-                break
-            by_model = item.get("usage_by_model")
-            if not isinstance(by_model, dict) or any(
-                not _add_usage(attributed, usage)
-                for usage in by_model.values()
-            ):
-                payload_valid = False
-                break
+    """Classify how much of the model-grouped view is actually attributable.
 
-    conserved = payload_valid and all(
-        total[field] == attributed[field] for field in _USAGE_FIELDS
-    )
-    if completeness.get("agent_data") is True and conserved:
+    The cohort's `by_model` grouping buckets each available agent entry's
+    `usage` under that entry's `model` — the dispatch envelope's
+    `resolvedModel`, the one spelling that keeps the priced
+    context-window variant tag (see `cohort._group_usage`). So this gate
+    must certify THAT field: an entry without a model lands in the
+    grouping's explicit "unknown" bucket, contributing spend with no
+    model to attribute it to.
+
+    It previously certified a conservation identity over the per-agent
+    `usage_by_model` map instead — a different field, on the bare
+    per-message spelling the grouping no longer reads. That let a run
+    with no `resolvedModel` anywhere read `complete` while the grouping
+    it vouched for emitted `{"unknown": everything}`.
+
+    Empty-and-complete stays complete, matching `family_state`'s rule for
+    every sibling family: a run with no available agents has nothing to
+    attribute, which is an authoritative zero rather than an absence.
+    """
+    if not isinstance(agent_usage, list):
+        return "missing"
+    entries = [
+        item
+        for item in agent_usage
+        if isinstance(item, dict) and item.get("available") is True
+    ]
+    unattributed = [item for item in entries if item.get("model") is None]
+    if completeness.get("agent_data") is True and not unattributed:
         return "complete"
-    if any(attributed.values()):
+    if len(unattributed) < len(entries):
         return "partial"
     return "missing"
 

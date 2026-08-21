@@ -4996,62 +4996,51 @@ class TestTranscriptFamilyAvailability:
         ] is None
 
     @pytest.mark.parametrize(
-        "usage,usage_by_model,expected_state",
+        "models,expected_state",
         [
             pytest.param(
-                _usage(2),
-                {
-                    "claude-sonnet-4-5": _usage(1),
-                    "claude-opus-4-1": _usage(1),
-                },
+                ["claude-opus-5[1m]", "claude-opus-5[1m]"],
                 "complete",
-                id="fully-attributed",
+                id="every-entry-attributed",
             ),
             pytest.param(
-                _usage(2),
-                {
-                    "claude-sonnet-4-5": {
-                        **_usage(2),
-                        "output_tokens": _usage(2)["output_tokens"] - 1,
-                    }
-                },
+                ["claude-opus-5[1m]", None],
                 "partial",
-                id="one-field-unattributed",
+                id="some-entries-attributed",
             ),
-            pytest.param(
-                _usage(2),
-                {},
-                "missing",
-                id="no-model-attribution",
-            ),
-            pytest.param(
-                _usage(0),
-                {},
-                "complete",
-                id="zero-usage",
-            ),
+            pytest.param([None, None], "missing", id="no-entry-attributed"),
         ],
     )
-    def test_model_availability_requires_exact_usage_conservation(
+    def test_model_availability_tracks_dispatched_model_attribution(
         self,
         monkeypatch,
         tmp_path,
-        usage,
-        usage_by_model,
+        models,
         expected_state,
     ):
+        """The gate must certify the field the grouping actually reads.
+
+        `cohort._group_usage` buckets each available agent entry's usage
+        under `entry["model"]` — the dispatch envelope's `resolvedModel` —
+        so an entry without one lands in the "unknown" bucket and carries
+        spend nothing can attribute. This used to certify a conservation
+        identity over `usage_by_model` instead, a field the grouping no
+        longer reads: a run with no `resolvedModel` anywhere could read
+        `complete` while the grouping it vouched for held one "unknown"
+        bucket and nothing else.
+        """
         transcript = _complete_empty_transcript()
         transcript["usage"] = _usage(7)
         transcript["agent_usage"] = [
             {
-                "agent": "code-reviewer",
-                "agent_id": "agent-1",
-                "model": "claude-sonnet-4-5",
+                "agent": f"reviewer-{index}",
+                "agent_id": f"agent-{index}",
+                "model": model,
                 "available": True,
-                "usage": usage,
-                "usage_by_model": usage_by_model,
+                "usage": _usage(2),
                 "tool_calls": 3,
             }
+            for index, model in enumerate(models)
         ]
 
         measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
@@ -5059,6 +5048,51 @@ class TestTranscriptFamilyAvailability:
         assert measured["metric_availability"]["model_usage"] == expected_state
         assert measured["metric_availability"]["usage"] == "complete"
         assert measured["metric_availability"]["agent_usage"] == "complete"
+
+    def test_model_availability_stays_complete_on_an_empty_agent_payload(
+        self, monkeypatch, tmp_path
+    ):
+        """No available agents is an authoritative zero, not an absence.
+
+        Same rule every sibling family follows (`family_state`): a
+        complete payload with nothing in it has nothing to attribute, so
+        it must not be downgraded for carrying no model.
+        """
+        measured = _measure_fake_transcript(
+            monkeypatch, tmp_path, _complete_empty_transcript()
+        )
+
+        assert measured["metric_availability"]["model_usage"] == "complete"
+
+    def test_unavailable_agent_entries_do_not_demand_a_model(
+        self, monkeypatch, tmp_path
+    ):
+        """A correlated agent whose transcript is missing contributes no
+        usage to the grouping, so it cannot be asked for a model."""
+        transcript = _complete_empty_transcript()
+        transcript["usage"] = _usage(7)
+        transcript["agent_usage"] = [
+            {
+                "agent": "code-reviewer",
+                "agent_id": "agent-1",
+                "model": "claude-opus-5[1m]",
+                "available": True,
+                "usage": _usage(2),
+                "tool_calls": 3,
+            },
+            {
+                "agent": "security-reviewer",
+                "agent_id": "agent-2",
+                "model": None,
+                "available": False,
+                "usage": None,
+                "tool_calls": None,
+            },
+        ]
+
+        measured = _measure_fake_transcript(monkeypatch, tmp_path, transcript)
+
+        assert measured["metric_availability"]["model_usage"] == "complete"
 
     @pytest.mark.parametrize(
         "incomplete_family",
@@ -6038,7 +6072,6 @@ class TestTranscriptFamilyAvailability:
                         "model": "claude-sonnet-4-5",
                         "available": True,
                         "usage": _usage(1),
-                        "usage_by_model": {"claude-sonnet-4-5": _usage(1)},
                         "tool_calls": 1,
                     }
                 ],
@@ -6054,7 +6087,6 @@ class TestTranscriptFamilyAvailability:
                         "model": "claude-sonnet-4-5",
                         "available": True,
                         "usage": _usage(1),
-                        "usage_by_model": {"claude-sonnet-4-5": _usage(1)},
                         "tool_calls": 1,
                     }
                 ],
@@ -6533,12 +6565,6 @@ class TestTranscriptFamilyAvailability:
                 "model": "claude-sonnet-4-5",
                 "available": True,
                 "usage": {**_usage(1), "cache_read_input_tokens": invalid},
-                "usage_by_model": {
-                    "claude-sonnet-4-5": {
-                        **_usage(1),
-                        "cache_creation_input_tokens": invalid,
-                    }
-                },
             }
         ]
         transcript["artifact_writes"]["builder_attempts"] = invalid
@@ -7008,13 +7034,11 @@ class TestAggregateCohort:
                 {
                     "agent": "code-reviewer",
                     "available": True,
-                    # The DISPATCHED spelling (resolvedModel) is the model
-                    # bucket key; `usage_by_model` carries the bare
-                    # per-message spelling the priced tag was stripped from
-                    # and must not be what the cohort groups on.
+                    # The DISPATCHED spelling (`resolvedModel`) is the model
+                    # bucket key — it keeps the priced context-window
+                    # variant tag the per-message spelling strips.
                     "model": "claude-sonnet-4-5[1m]",
                     "usage": _usage(20),
-                    "usage_by_model": {"claude-sonnet-4-5": _usage(20)},
                 }
             ],
         )
@@ -7029,12 +7053,7 @@ class TestAggregateCohort:
         }
 
     def test_model_grouping_merges_agents_sharing_one_dispatched_spelling(self):
-        """One priced spelling is one bucket, however many agents ran on it.
-
-        And an entry with no dispatched model falls into an explicit
-        "unknown" bucket rather than silently vanishing from spend math —
-        the same convention `usage_snapshot.py` uses.
-        """
+        """One priced spelling is one bucket, however many agents ran on it."""
         run = _measured_run(
             "model-buckets",
             usage=_usage(100),
@@ -7044,29 +7063,55 @@ class TestAggregateCohort:
                     "available": True,
                     "model": "claude-opus-5[1m]",
                     "usage": _usage(10),
-                    "usage_by_model": {"claude-opus-5": _usage(10)},
                 },
                 {
                     "agent": "security-reviewer",
                     "available": True,
                     "model": "claude-opus-5[1m]",
                     "usage": _usage(20),
-                    "usage_by_model": {"claude-opus-5": _usage(20)},
-                },
-                {
-                    "agent": "performance-reviewer",
-                    "available": True,
-                    "model": None,
-                    "usage": _usage(5),
-                    "usage_by_model": {},
                 },
             ],
         )
 
         by_model = aggregate_cohort([run])["model_usage"]["by_model"]
 
-        assert set(by_model) == {"claude-opus-5[1m]", "unknown"}
+        assert set(by_model) == {"claude-opus-5[1m]"}
         assert by_model["claude-opus-5[1m]"]["effective_input_tokens"] == 180
+
+    def test_model_grouping_keeps_unattributed_spend_in_an_unknown_bucket(self):
+        """An entry with no dispatched model must not vanish from spend math.
+
+        Reachable only in the PARTIAL grouping: `_model_usage_availability`
+        refuses `complete` for a run any of whose available entries lacks a
+        model, precisely so the "complete" totals never carry a bucket
+        nothing can attribute.
+        """
+        run = _measured_run(
+            "model-buckets-partial",
+            completeness={"agent_data": False},
+            usage=_usage(100),
+            agent_usage=[
+                {
+                    "agent": "code-reviewer",
+                    "available": True,
+                    "model": "claude-opus-5[1m]",
+                    "usage": _usage(10),
+                },
+                {
+                    "agent": "performance-reviewer",
+                    "available": True,
+                    "model": None,
+                    "usage": _usage(5),
+                },
+            ],
+        )
+
+        model_usage = aggregate_cohort([run])["model_usage"]
+
+        assert model_usage["by_model"] is None
+        by_model = model_usage["partial_observed_by_model"]
+        assert set(by_model) == {"claude-opus-5[1m]", "unknown"}
+        assert by_model["claude-opus-5[1m]"]["effective_input_tokens"] == 60
         assert by_model["unknown"]["effective_input_tokens"] == 30
 
     def test_builder_first_attempt_denominator_excludes_incomplete_and_keeps_no_attempt(self):

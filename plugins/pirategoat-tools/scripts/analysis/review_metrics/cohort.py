@@ -103,11 +103,13 @@ def _group_usage(
                     # differently-priced variants into one row. See
                     # `usage_snapshot.py::_build_snapshot` for the full
                     # rationale, including what this costs (a mid-run model
-                    # fallback books entirely to the dispatched model).
-                    # `usage_by_model` stays where it is — `measure.py`'s
-                    # `_model_usage_availability` uses it as a conservation
-                    # check that the accepted buckets total the measured
-                    # agent usage.
+                    # fallback books entirely to the dispatched model; the
+                    # enrichment's per-message `usage_by_model` is the
+                    # forensic surface that can still show one).
+                    # `measure._model_usage_availability` gates this same
+                    # field, so a "complete" bucket set is one where every
+                    # available entry carried a dispatched model; "unknown"
+                    # therefore only ever appears in the partial view.
                     model = entry.get("model")
                     name = model if isinstance(model, str) and model else "unknown"
                     target = grouped.setdefault(name, _empty_usage())
