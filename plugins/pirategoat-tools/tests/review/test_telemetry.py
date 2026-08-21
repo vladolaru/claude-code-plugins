@@ -3249,9 +3249,15 @@ class TestLogAgentComplete:
 class TestCompletionEventsAreNotAgentCounts:
     """Field shape: 19 reviewers, 2 sanctioned re-saves, 21 raw events.
 
-    The event stream is one record per SAVE; the manifest projection is
-    last-wins per agent identity. A consumer reading the projection sees
-    19 agents, and the later save is the one that survives.
+    The event stream is one record per SAVE; the projection is last-wins
+    per outstanding EXECUTION SLOT. Every reviewer here started exactly
+    once, which is the case where executions and identities coincide — so
+    a consumer reading the projection sees 19, and the later save wins.
+    The retry case where they DIVERGE (two starts keep two completions) is
+    pinned by TestRunManifest above
+    (test_overlapping_executions_each_keep_their_completion,
+    test_completion_beyond_outstanding_starts_is_a_corrected_save);
+    this class must not be read as claiming identities always collapse.
     """
 
     def test_twentyone_events_project_to_nineteen_completions(self, telemetry):

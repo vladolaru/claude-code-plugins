@@ -214,11 +214,13 @@ def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count,
                                   severities, resave):
     """Best-effort telemetry logging on agent completion. Never raises.
 
-    `resave` is this save's own observation of whether the reviewer's
-    review JSON already existed — see save() for why it is taken under the
-    publication lock. It is a required argument, not a defaulted one: the
-    only caller is the save path, which always knows the answer, and a
-    default would let a future caller publish an unobserved `false`.
+    `resave` is this save's own observation of whether a review JSON for
+    this reviewer was already published when it reached publication — see
+    save() for why it is taken under the publication lock, and for why
+    that is narrower than "this is a correction". It is a required
+    argument, not a defaulted one: the only caller is the save path, which
+    always knows the answer, and a default would let a future caller
+    publish an unobserved `false`.
     """
     try:
         import importlib.util
@@ -1502,12 +1504,20 @@ class ReviewOutputBuilder:
                     lock_fd = os.open(output_dir, os.O_RDONLY)
                     stack.callback(os.close, lock_fd)
                     fcntl.flock(lock_fd, fcntl.LOCK_EX)
-                # Is this a correction of an already-published review? The
-                # echo above deliberately invites one, so multiple
-                # successful saves are sanctioned and each logs its own
-                # completion — the raw event stream holds one event per
-                # SAVE, not one per AGENT. Recording the observation makes
+                # Was a review JSON for this reviewer already published
+                # when this save reached publication? That is the whole
+                # claim — not "this is a correction". The echo above
+                # invites a correction re-save, so multiple successful
+                # saves are sanctioned and each logs its own completion,
+                # and the raw event stream therefore holds one event per
+                # SAVE, not one per AGENT. This observation is what makes
                 # that legible without replaying the projection.
+                #
+                # It is NOT a correction count and NOT an agent-count
+                # discriminator: a second execution's first save reports
+                # True (a prior execution published), and a save following
+                # a failed os.replace() reports False (nothing is there).
+                #
                 # Observed HERE, under the same lock that serializes
                 # {log, publish}: outside it, an overlapping execution's
                 # os.replace() could land between the test and this save's
