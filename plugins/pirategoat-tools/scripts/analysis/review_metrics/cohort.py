@@ -13,7 +13,7 @@ from .contracts import (
     _CRITIC_VERDICTS,
 )
 from .sanitize import _nonnegative_int, _safe_wall_time_ms
-from .usage import _add_usage, _empty_usage
+from .usage import _add_usage, _dispatched_model, _empty_usage
 from .load import _is_duplicate_conflict
 
 
@@ -106,12 +106,12 @@ def _group_usage(
                     # fallback books entirely to the dispatched model; the
                     # enrichment's per-message `usage_by_model` is the
                     # forensic surface that can still show one).
-                    # `measure._model_usage_availability` gates this same
-                    # field, so a "complete" bucket set is one where every
-                    # available entry carried a dispatched model; "unknown"
-                    # therefore only ever appears in the partial view.
-                    model = entry.get("model")
-                    name = model if isinstance(model, str) and model else "unknown"
+                    # `measure._model_usage_availability` certifies this
+                    # same field through the same `_dispatched_model`
+                    # predicate, so a "complete" bucket set is one where
+                    # every available entry carried a dispatched model;
+                    # "unknown" only ever appears in the partial view.
+                    name = _dispatched_model(entry) or "unknown"
                     target = grouped.setdefault(name, _empty_usage())
                     _add_usage(target, entry.get("usage"))
     return dict(sorted(grouped.items())) if grouped else None

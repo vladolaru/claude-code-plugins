@@ -29,3 +29,20 @@ def _add_usage(target: dict[str, int], value: object) -> bool:
     for field in _USAGE_FIELDS:
         target[field] += usage[field]
     return True
+
+
+def _dispatched_model(entry: object) -> str | None:
+    """The model an agent-usage entry attributes its usage to, or None.
+
+    ONE spelling, deliberately shared. `cohort._group_usage` keys its
+    by-model buckets on this and `measure._model_usage_availability`
+    certifies it; an entry the gate counted as attributed while the
+    grouping dropped it into "unknown" is exactly the divergence that
+    consolidating here prevents. Strict on purpose — an empty string
+    names no model, so it attributes nothing.
+    """
+    if not isinstance(entry, dict):
+        return None
+    model = entry.get("model")
+    return model if isinstance(model, str) and model else None
+

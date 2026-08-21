@@ -5064,6 +5064,35 @@ class TestTranscriptFamilyAvailability:
 
         assert measured["metric_availability"]["model_usage"] == "complete"
 
+    def test_gate_and_grouping_agree_on_what_counts_as_a_model(self):
+        """One predicate, both sides. An entry the gate calls attributed
+        while the grouping buckets it as "unknown" is the split that
+        `_dispatched_model` exists to make unrepresentable — so the edge
+        the two used to spell differently (an empty model string) has to
+        land on the same side of both."""
+        run = _measured_run(
+            "empty-model",
+            usage=_usage(100),
+            agent_usage=[
+                {
+                    "agent": "code-reviewer",
+                    "available": True,
+                    "model": "",
+                    "usage": _usage(10),
+                }
+            ],
+        )
+        transcript = run["transcript"]
+
+        assert measure._model_usage_availability(
+            transcript["completeness"], transcript["agent_usage"]
+        ) == "missing"
+        run["metric_availability"]["model_usage"] = "partial"
+        by_model = aggregate_cohort([run])["model_usage"][
+            "partial_observed_by_model"
+        ]
+        assert set(by_model) == {"unknown"}
+
     def test_unavailable_agent_entries_do_not_demand_a_model(
         self, monkeypatch, tmp_path
     ):

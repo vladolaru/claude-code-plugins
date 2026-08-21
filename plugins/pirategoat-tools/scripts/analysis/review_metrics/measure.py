@@ -14,7 +14,6 @@ from .contracts import (
     _CRITIC_VERDICTS,
     _TRANSCRIPT_FAMILIES,
     _OBSERVED_READS_SCHEMA,
-    _USAGE_FIELDS,
     _load_exact_path_module,
     _parse_time,
 )
@@ -29,7 +28,7 @@ from .sanitize import (
     _strict_repo_read_paths,
     _strict_safe_strings,
 )
-from .usage import _add_usage, _empty_usage, _safe_usage
+from .usage import _dispatched_model, _safe_usage
 from .load import _is_duplicate_conflict, _read_json
 
 
@@ -745,7 +744,9 @@ def _model_usage_availability(
         for item in agent_usage
         if isinstance(item, dict) and item.get("available") is True
     ]
-    unattributed = [item for item in entries if item.get("model") is None]
+    unattributed = [
+        item for item in entries if _dispatched_model(item) is None
+    ]
     if completeness.get("agent_data") is True and not unattributed:
         return "complete"
     if len(unattributed) < len(entries):
