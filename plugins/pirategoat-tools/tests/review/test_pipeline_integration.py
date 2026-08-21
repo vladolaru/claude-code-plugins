@@ -1848,14 +1848,6 @@ class TestStep8AgentPrompt:
 class TestStep10AgentPrompt:
     """Step 10 should emit a complete decision critic Agent tool prompt (rule 15)."""
 
-    def test_critic_prompt_has_concrete_path(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert str(tmp_path) in text or "review-report.md" in text
-
-
 class TestFullSequenceIntegration:
     """Full multi-step sequence produces pipeline-result.json."""
 

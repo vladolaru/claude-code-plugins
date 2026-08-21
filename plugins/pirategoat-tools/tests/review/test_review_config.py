@@ -286,16 +286,6 @@ class TestSecurityHardening:
         assert result["rules"] == []
         assert result["reviewers"] == []
 
-    def test_glob_complexity_cap_fails_closed_fast(self, mod):
-        import time
-        # A pathological chained-** pattern must not stall (ReDoS guard).
-        evil = "**/" * 40 + "Z"
-        t0 = time.perf_counter()
-        matched = mod.glob_match(evil, "a/" * 40 + "x")
-        elapsed = time.perf_counter() - t0
-        assert matched is False
-        assert elapsed < 0.5  # capped, not backtracking
-
     def test_glob_star_count_cap(self, mod):
         assert mod.glob_match("*" * 100, "anything") is False
 

@@ -199,12 +199,6 @@ class TestTimeoutBriefing:
         assert "timed out" in text.lower()
         assert "user" in text.lower() or "ask" in text.lower()
 
-    def test_interactive_offers_options(self):
-        text = format_timeout_briefing(round_num=1, timeout_seconds=1800, autonomous=False)
-        assert "retry" in text.lower()
-        assert "skip" in text.lower()
-        assert "stop" in text.lower()
-
     def test_autonomous_skips_round(self):
         text = format_timeout_briefing(round_num=2, timeout_seconds=1800, autonomous=True)
         assert "timed out" in text.lower()

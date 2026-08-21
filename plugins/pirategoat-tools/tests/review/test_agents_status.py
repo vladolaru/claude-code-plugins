@@ -4,7 +4,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -567,10 +566,16 @@ class TestWaitMode:
     Timing-sensitive properties (expiry-before-sleep, the final-sleep
     clamp, waking on the very next poll) are pinned deterministically via
     `_FakeClock`/injected `sleep_fn` — no real wall-clock elapsed-time
-    thresholds, so no flakiness. Each of those deterministic tests is
-    paired with one cheap subprocess smoke test that only proves the CLI
-    actually wires `--wait`/`--max-seconds` through to the real function;
-    the smoke tests carry no timing assertions of their own.
+    thresholds, so no flakiness.
+
+    The subprocess tests are NOT restatements of those: the exit codes
+    are the contract the step-7/8 briefings teach the orchestrator by
+    number, so the CLI is their unit level. One cheap ALL_DONE smoke
+    covers exit 0 and the `--wait` wiring; `test_wait_exit_3_on_expiry`
+    covers expiry; `test_no_wait_paths_unchanged` covers 0/2. A real
+    threaded completion is not spawned a second time here — the
+    "observed on the very next poll" property is what mattered, and
+    `test_wait_wakes_on_completion` pins it deterministically.
     """
 
     def test_wait_returns_zero_immediately_when_all_done(self, mod, tmp_path):
@@ -709,30 +714,6 @@ class TestWaitMode:
         # The check_status() call right after the 2nd sleep is the one
         # that observes the finish — proves every iteration re-checks.
         assert calls["n"] == 2
-
-    def test_wait_wakes_on_completion_cli_smoke(self, tmp_path):
-        """Cheap end-to-end smoke: a real background completion is
-        observed well inside --max-seconds. Timing precision belongs to
-        the deterministic test above; this only proves the CLI wiring
-        holds for a real, threaded completion."""
-        _write_plan(tmp_path, [{"name": "code-reviewer", "status": "DISPATCH"}])
-        _start_agent(tmp_path, "code-reviewer")
-
-        def _finish_late():
-            time.sleep(2)
-            _finish_agent(tmp_path, "code-reviewer")
-
-        thread = threading.Thread(target=_finish_late)
-        thread.start()
-        cmd = [
-            sys.executable, str(SCRIPT_PATH),
-            "--output-dir", str(tmp_path), "--wait", "--max-seconds", "30",
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=25)
-        thread.join()
-
-        assert r.returncode == 0
-        assert "ALL_DONE: true" in r.stdout
 
     def test_wait_requires_max_seconds(self, tmp_path):
         """--wait without --max-seconds refuses to block unbounded."""

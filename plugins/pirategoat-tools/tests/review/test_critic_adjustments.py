@@ -577,24 +577,6 @@ class TestCrashSafety:
             apply_adjustments(str(tmp_path))
 
 
-class TestArtifactEncoding:
-    """The shared writer must not re-encode an artifact it did not author."""
-
-    def test_non_ascii_prose_survives_as_utf8_not_escapes(self, tmp_path):
-        path = tmp_path / "review-findings.json"
-        atomic_write_json(str(path), {"description": "a bug \u2014 and a fix"})
-
-        raw = path.read_bytes()
-        # The reconciliator writes this artifact with ensure_ascii=False, so
-        # every verdict sync through this writer would otherwise rewrite all
-        # of its em-dashed prose into \uXXXX escapes and read as corruption.
-        assert "a bug \u2014 and a fix".encode("utf-8") in raw
-        assert b"\\u2014" not in raw
-        assert json.loads(path.read_text(encoding="utf-8"))["description"] == (
-            "a bug \u2014 and a fix"
-        )
-
-
 class TestBatchCoherence:
     pytestmark = pytest.mark.usefixtures("revise_verdict")
 
@@ -1620,11 +1602,16 @@ class TestStepElevenAppliesAdjustments:
         ), result["degradation_notes"]
         assert result["status"] == "degraded"
 
-    @pytest.mark.parametrize("critic_verdict", ["STAND", "ESCALATE", "SKIPPED"])
     def test_non_revise_verdict_never_applies_pending_adjustments(
-        self, tmp_path, critic_verdict
+        self, tmp_path
     ):
         """Adjustments are a REVISE-only channel.
+
+        One representative non-REVISE verdict: the gate's own refusal for
+        every value in the vocabulary is pinned at the unit level by
+        `TestCriticVerdictGate`, so what step 11 adds here — and what this
+        test is for — is the orchestration half: the "REVISE-only channel"
+        degradation note and the degraded status.
 
         Only the REVISE briefing has the orchestrator spot-check each
         entry and mark the refuted ones rejected. A critic that writes
@@ -1637,7 +1624,7 @@ class TestStepElevenAppliesAdjustments:
             "action": "promote", "id": "aaaa1111",
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
-        _write_critic_verdict(tmp_path, critic_verdict)
+        _write_critic_verdict(tmp_path, "STAND")
         (tmp_path / "review-verdict.json").write_text(
             json.dumps({"verdict": "APPROVE"})
         )

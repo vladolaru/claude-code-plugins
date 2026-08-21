@@ -477,19 +477,13 @@ class TestTotals:
 class TestCliContract:
     """The seam the pipeline depends on."""
 
-    def test_prints_one_line_of_json(self, tmp_path, capsys):
-        run = _seed_two_agent_run(tmp_path)
-
-        _run_cli(run)
-        out = capsys.readouterr().out
-
-        assert out.count("\n") == 1
-        result = json.loads(out)
-        assert result["written"] is True
-        assert result["availability"]["subagents"] == "complete"
-        assert result["agents_measured"] == "2/2"
-
-    def test_subprocess_invocation_writes_the_artifact(self, tmp_path):
+    def test_subprocess_invocation_prints_one_line_and_writes_the_artifact(
+        self, tmp_path
+    ):
+        """Step 11 invokes this as a subprocess and parses one line of
+        stdout, so the stdout shape and the artifact are pinned together
+        at the level the pipeline actually uses — not once in-process and
+        again through a second spawn."""
         run = _seed_two_agent_run(tmp_path)
 
         completed = subprocess.run(
@@ -500,7 +494,11 @@ class TestCliContract:
         )
 
         assert completed.returncode == 0, completed.stderr
-        assert json.loads(completed.stdout)["written"] is True
+        assert completed.stdout.count("\n") == 1
+        result = json.loads(completed.stdout)
+        assert result["written"] is True
+        assert result["availability"]["subagents"] == "complete"
+        assert result["agents_measured"] == "2/2"
         assert run.snapshot()["schema"] == 1
 
     def test_unwritable_output_dir_fails_without_raising(self, tmp_path):

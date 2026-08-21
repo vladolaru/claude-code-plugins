@@ -69,6 +69,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **The step-11 probe-residue sweep decodes Git C-quoted paths**, so a probe file with a non-ASCII name is actually swept instead of misreported as a foreign new file.
 
+- **Redundant test pins removed without losing a contract.** Per-section restatements of one table-driven sanitize loop, contracts pinned again at a heavier level than the one that owns them, extra prose assertions on briefings already pinned once, and four round-extension tests that asserted on their own locals — 84 collected tests, each cut proven by a mutation a surviving test still catches.
+
 - **`schemas/review-output.ts` catches up with everything the pipeline actually serializes** (the critic-adjustment provenance record) and drops five discriminated-union interfaces no reviewer, native or repo-contributed, ever produced.
 
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*

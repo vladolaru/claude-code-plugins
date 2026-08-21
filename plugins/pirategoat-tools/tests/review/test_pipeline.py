@@ -75,37 +75,6 @@ class TestStep1ParseInput:
 class TestStructuredDataDiscipline:
     """Artifact discipline: verification checkpoints, handoff gates, schema-not-placeholders."""
 
-    def test_step_3_handoff_has_verification(self, mod, tmp_path):
-        """Step 3 handoff should instruct verifying change-purpose.md exists."""
-        state = {"completed_steps": [], "resolved_params": {"has_unfetched_issues": False}}
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(3, "pr", state, ctx, output_dir=str(tmp_path))
-        assert g.get("handoff") is not None
-        handoff_text = "\n".join(g["handoff"])
-        assert "verify" in handoff_text.lower() or "confirm" in handoff_text.lower() or "exists" in handoff_text.lower()
-
-    def test_step_4_handoff_has_verification(self, mod, tmp_path):
-        """Step 4 handoff should instruct verifying change-purpose.md exists."""
-        state = {"resolved_params": {"has_unfetched_issues": True}, "completed_steps": [1, 2, 3]}
-        ctx = COMPLETE_CONTEXT
-        g = mod.get_step_guidance(4, "pr", state, ctx, output_dir=str(tmp_path))
-        assert g.get("handoff") is not None
-        handoff_text = "\n".join(g["handoff"])
-        assert "verify" in handoff_text.lower() or "confirm" in handoff_text.lower() or "exists" in handoff_text.lower()
-
-    def test_step_8_has_handoff(self, mod, tmp_path):
-        """Step 8 should gate on reconciliation output files."""
-        state = {
-            "completed_steps": [1, 3, 5, 6, 7],
-            "resolved_params": {"git_range": "abc..HEAD"},
-            "agents": {"dispatched": ["code-reviewer"], "completed": ["code-reviewer"], "failed": []},
-        }
-        ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-        g = mod.get_step_guidance(8, "pr", state, ctx, output_dir=str(tmp_path))
-        assert g.get("handoff") is not None
-        handoff_text = "\n".join(g["handoff"])
-        assert "review-findings.json" in handoff_text
-
     def test_step_9_has_handoff(self, mod, tmp_path):
         """Step 9 should gate on review-report.md."""
         state = {"completed_steps": []}
@@ -548,15 +517,6 @@ class TestStep6DispatchAgents:
         assert "security-reviewer" in text
         assert "abc..HEAD" in text  # concrete range, not template
 
-    def test_references_agent_tool(self, mod, tmp_path):
-        """Should reference Agent tool, not Task tool."""
-        state = self._make_state_with_agents()
-        ctx = {"git": {"git_range": "abc..HEAD"}}
-        g = mod.get_step_guidance(6, "full", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "Agent tool" in text or "Agent" in text
-        assert "Task tool" not in text
-
     def test_codex_dispatch_uses_spawn_agent_and_canonical_reviewer(self, mod, tmp_path):
         """Codex dispatch reads the canonical reviewer instead of copying it."""
         state = self._make_state_with_agents()
@@ -614,6 +574,8 @@ class TestStep6DispatchAgents:
 
         assert "Agent tool" in text
         assert "spawn_agent" not in text
+        # The retired Task-tool spelling must not come back on this host.
+        assert "Task tool" not in text
 
     def test_references_status_check(self, mod, tmp_path):
         """Should reference agents_status.py for monitoring."""
@@ -953,15 +915,6 @@ class TestStep7SaveReviewBaseline:
         text = "\n".join(g["actions"])
         assert "NOT_DISPATCHED" in text
 
-    def test_step_7_discourages_sleep_polling(self, mod, tmp_path):
-        """Step 7 should tell the LLM to wait for notifications, not poll in a sleep loop."""
-        state = {"completed_steps": [], "resolved_params": {"git_range": "abc..HEAD"}}
-        ctx = {"git": {"git_range": "abc..HEAD", "base_ref": "main"}}
-        g = mod.get_step_guidance(7, "full", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "sleep" in text.lower() and "not" in text.lower() or "do not poll" in text.lower()
-        assert "notification" in text.lower() or "run_in_background" in text.lower()
-
     def test_claude_host_wait_uses_notifications_and_watchdog(self, mod, tmp_path):
         """Claude-host wait guidance: end-turn + notification wake-up + named
         anti-patterns + a background watchdog launched right after dispatch."""
@@ -1080,15 +1033,6 @@ class TestStep8Reconcile:
         text = "\n".join(g["situation"])
         assert "code-reviewer" in text
         assert "security-reviewer" in text
-
-    def test_includes_reconciliation_context_path(self, mod, tmp_path):
-        """All modes should pass reconciliation-context.md to reconciliator."""
-        for mode in ("pr", "full", "incremental"):
-            state = self._make_state_with_agents(change_purpose_exists=True)
-            ctx = {"git": {"git_range": "abc..HEAD", "changed_files_csv": "a.py"}}
-            g = mod.get_step_guidance(8, mode, state, ctx, output_dir=str(tmp_path))
-            text = "\n".join(g["actions"])
-            assert "reconciliation-context.md" in text
 
     def test_includes_change_purpose_when_available(self, mod, tmp_path):
         """Should include change purpose in reconciliator prompt."""
@@ -1442,13 +1386,6 @@ class TestStep8ReadinessGate:
 
 
 class TestStep9ReviewReport:
-    def test_writes_review_report(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "review-report.md" in text
-
     def test_references_review_findings(self, mod, tmp_path):
         state = {"completed_steps": []}
         ctx = {}
@@ -1487,16 +1424,6 @@ class TestStep9ReviewReport:
         text = "\n".join(g["actions"])
         assert "Maria" in text  # default addresses author by name
         assert "actionable" in text.lower()
-
-    def test_includes_output_instructions_override(self, mod, tmp_path):
-        """Step 9 should use caller-provided output_instructions from run-config.json verbatim."""
-        config = {"mode": "pr", "output_instructions": "Keep it brief. Bullet points only."}
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(9, "pr", state, ctx, config=config)
-        text = "\n".join(g["actions"])
-        assert "Keep it brief" in text
-        assert "Bullet points only" in text
 
     def test_surfaces_inline_coverage_gaps(self, mod, tmp_path):
         """Files no reviewer saw inline must be forced into the report."""
@@ -1753,15 +1680,6 @@ class TestStep10DecisionCritic:
             text = "\n".join(g["actions"])
             assert "review-report.md" in text
 
-    def test_has_verdict_handling(self, mod, tmp_path):
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx)
-        text = "\n".join(g["actions"])
-        assert "STAND" in text
-        assert "REVISE" in text
-        assert "ESCALATE" in text
-
     def test_instructs_wait_for_critic(self, mod, tmp_path):
         """Critic must NOT run in background — LLM needs the verdict."""
         state = {"completed_steps": []}
@@ -1770,15 +1688,6 @@ class TestStep10DecisionCritic:
         text = "\n".join(g["actions"])
         assert "wait" in text.lower() or "do not" in text.lower()
         assert "background" in text.lower()
-
-    def test_instructs_writing_review_verdict_json(self, mod, tmp_path):
-        """Should instruct the LLM to write review-verdict.json after acting on verdict."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "review-verdict.json" in text
-        assert "verdict" in text.lower()
 
     def test_revise_instructs_report_edit(self, mod, tmp_path):
         """REVISE verdict instructions must explicitly mention editing review-report.md."""
@@ -1984,14 +1893,6 @@ class TestCriticVerdictPersistence:
         every subprocess call in this class to a throwaway repo at
         tmp_path so none of them can touch the real checkout."""
         init_repo(tmp_path)
-
-    def test_step_10_instructs_writing_critic_verdict_file(self, mod, tmp_path):
-        """Step 10 should instruct writing decision-critic-verdict.json."""
-        state = {"completed_steps": []}
-        ctx = {}
-        g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "decision-critic-verdict.json" in text
 
     def test_step_11_reads_critic_verdict_from_file(self, tmp_path):
         """Step 11 should read decision-critic-verdict.json into state."""
