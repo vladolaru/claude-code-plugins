@@ -26,6 +26,12 @@ try:
         SKIP_REASON_DIRTY_WORKTREE,
         SKIP_REASON_WORKTREE_STATUS_FAILED,
     )
+    # One fence-width rule for the whole pipeline. The step-9 paste block
+    # below wraps machine-rendered Markdown that carries untrusted paths,
+    # so it needs exactly the widening this already does for the
+    # reconciliation context's fenced blocks; a second copy here is how the
+    # two would drift.
+    from .reconciliation_context import _markdown_fence_for
 except ImportError:
     _scripts_parent = str(Path(__file__).resolve().parent.parent)
     if _scripts_parent not in sys.path:
@@ -49,6 +55,7 @@ except ImportError:
         SKIP_REASON_DIRTY_WORKTREE,
         SKIP_REASON_WORKTREE_STATUS_FAILED,
     )
+    from review.reconciliation_context import _markdown_fence_for
 
 # ---------------------------------------------------------------------------
 # Pipeline Identity
@@ -1258,6 +1265,79 @@ fact; if the findings don't verify it, don't assert it.
 """
 
 
+def _render_review_coverage_section(gaps, claims, unscoped):
+    """Render the report's complete `## Review coverage` section, or "".
+
+    One paste, three populations, each with its own honest sentence:
+
+    * **gaps** — matched a reviewer domain, then every matching agent's
+      diff budget skipped them and none claimed them off the deferred
+      queue.
+    * **unscoped** — matched no reviewer domain at all, so no agent's
+      scope ever contained them.
+    * **claims** — never diffed inline, but a deferring agent says it
+      reviewed them anyway. A claim, never proof of read.
+
+    They are never merged: "no one saw it" and "someone says they saw it"
+    are different facts, and so are "starved by a budget" and "routed to
+    nobody". Returning finished Markdown rather than a description is the
+    whole point — the orchestrator's job here is to paste, not to
+    summarize.
+    """
+    gaps = gaps if isinstance(gaps, dict) else {}
+    claims = claims if isinstance(claims, dict) else {}
+    unscoped = unscoped if isinstance(unscoped, list) else []
+    if not (gaps or claims or unscoped):
+        return ""
+
+    lines = ["## Review coverage", ""]
+    if gaps:
+        lines.append(
+            f"{len(gaps)} changed file(s) were skipped by every matching "
+            "agent's diff budget and no reviewer reported reviewing them "
+            "from the deferred NOT DIFFED queue:"
+        )
+        lines.append("")
+        for f_path, agents in sorted(gaps.items()):
+            agents_list = agents if isinstance(agents, list) else [agents]
+            skipped_by = ", ".join(
+                _markdown_code_span(agent) for agent in agents_list
+            )
+            lines.append(
+                f"- {_markdown_code_span(f_path)} (skipped by: {skipped_by})"
+            )
+        lines.append("")
+    if unscoped:
+        lines.append(
+            f"{len(unscoped)} changed file(s) matched no reviewer's domain "
+            "and were reviewed by no one — no agent's scope contained them "
+            "in any form:"
+        )
+        lines.append("")
+        for f_path in sorted(unscoped):
+            lines.append(f"- {_markdown_code_span(f_path)}")
+        lines.append("")
+    if claims:
+        lines.append("### Reviewed from the deferred queue — claims, not proof of read")
+        lines.append("")
+        lines.append(
+            f"{len(claims)} changed file(s) never received their diff "
+            "inline, but a deferring agent claims to have reviewed them "
+            "from the NOT DIFFED queue. These claims are not proof of read:"
+        )
+        lines.append("")
+        for f_path, agents in sorted(claims.items()):
+            agents_list = agents if isinstance(agents, list) else [agents]
+            claimed_by = ", ".join(
+                _markdown_code_span(agent) for agent in agents_list
+            )
+            lines.append(
+                f"- {_markdown_code_span(f_path)} (claimed by: {claimed_by})"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip("\n")
+
+
 def _step_9_review_report(mode, state, context, config, output_dir):
     """Step 9: Review Report Synthesis — generate the review report."""
     od = output_dir or "<OUTPUT_DIR>"
@@ -1327,44 +1407,35 @@ def _step_9_review_report(mode, state, context, config, output_dir):
         actions.append(f"> **⚠ Host Context Banner:** {banner.get('message', '')}")
         actions.append("")
 
-    # Inline coverage gaps — computed deterministically at reconciliation and
+    # Inline coverage — computed deterministically at reconciliation and
     # loaded into state by _orchestrate_step. A starved review must not
-    # present as a clean one, regardless of reconciliator diligence.
-    gaps = state.get("inline_coverage_gaps") or {}
-    if gaps:
+    # present as a clean one, regardless of reconciliator diligence. The
+    # section is rendered here, complete, and pasted verbatim: an
+    # instruction to *describe* a measurement invites paraphrase, and a
+    # field run turned "skipped by every matching agent's diff budget and
+    # no reviewer reported reviewing them" into "read by nobody" — false
+    # for 8 of 41 files, and the false version propagated into the
+    # critic's context as fact.
+    coverage_section = _render_review_coverage_section(
+        state.get("inline_coverage_gaps"),
+        state.get("inline_coverage_claims"),
+        state.get("inline_coverage_unscoped"),
+    )
+    if coverage_section:
+        fence = _markdown_fence_for(coverage_section)
         actions.append("")
         actions.append(
-            f"**⚠ Review coverage:** {len(gaps)} changed file(s) were skipped "
-            "by every matching agent's diff budget and no reviewer reported "
-            "reviewing them from the deferred NOT DIFFED queue. Include a "
-            "'Review coverage' section in `review-report.md` listing them; "
-            "the verdict must acknowledge this gap:"
+            "**⚠ Review coverage — machine-rendered.** Copy the block below "
+            f"VERBATIM into `{od}/review-report.md`. You may add your own "
+            "commentary AFTER the block; never restate, summarize, "
+            "re-count, or edit the machine's sentences — the hedges in them "
+            "are the measurement, and a tighter paraphrase is a false "
+            "claim. The verdict must acknowledge this gap."
         )
-        for f_path, agents in sorted(gaps.items()):
-            agents_list = agents if isinstance(agents, list) else [str(agents)]
-            actions.append(f"- `{f_path}` (skipped by: {', '.join(agents_list)})")
         actions.append("")
-
-    claims = state.get("inline_coverage_claims") or {}
-    if not isinstance(claims, dict):
-        claims = {}
-    if claims:
-        actions.append("")
-        actions.append(
-            f"**⚠ Review coverage claims:** {len(claims)} changed file(s) were "
-            "never diffed inline, but a deferring agent claims review from the "
-            "NOT DIFFED queue. These claims are not proof of read. Include them "
-            "in the 'Review coverage' section of `review-report.md`, labeled as "
-            "claims:"
-        )
-        for f_path, agents in sorted(claims.items()):
-            agents_list = agents if isinstance(agents, list) else [agents]
-            claimed_by = ", ".join(
-                _markdown_code_span(agent) for agent in agents_list
-            )
-            actions.append(
-                f"- {_markdown_code_span(f_path)} (claimed by: {claimed_by})"
-            )
+        actions.append(f"{fence}markdown")
+        actions.append(coverage_section)
+        actions.append(fence)
         actions.append("")
 
     actions.append("")

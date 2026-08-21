@@ -1435,9 +1435,9 @@ class TestStep9ReviewReport:
         }
         g = mod.get_step_guidance(9, "full", state, {})
         text = "\n".join(g["actions"])
-        assert "Review coverage" in text
-        assert "src/starved.php" in text
-        assert "code-reviewer, security-reviewer" in text
+        assert "## Review coverage" in text
+        assert "`src/starved.php`" in text
+        assert "`code-reviewer`, `security-reviewer`" in text
 
     def test_surfaces_deferred_claims_as_not_proof(self, mod, tmp_path):
         """Deferred-review claims stay visible without becoming proof of review."""
@@ -1493,7 +1493,7 @@ class TestStep9ReviewReport:
             "inline_coverage_claims": ["unexpected-list"],
         }
         g = mod.get_step_guidance(9, "full", state, {})
-        assert "Review coverage claims" not in "\n".join(g["actions"])
+        assert "## Review coverage" not in "\n".join(g["actions"])
 
     @pytest.mark.parametrize(
         "reconciliation_payload",
@@ -1542,9 +1542,132 @@ class TestStep9ReviewReport:
         assert state["inline_coverage_claims"] == claims
         g = mod.get_step_guidance(9, "full", state, {})
         text = "\n".join(g["actions"])
-        assert "Review coverage claims" in text
-        assert "src/big_module.py" in text
-        assert "security-reviewer" in text
+        assert "claims, not proof of read" in text
+        assert "`src/big_module.py`" in text
+        assert "`security-reviewer`" in text
+
+    def test_coverage_section_is_one_verbatim_paste_block(self, mod):
+        """All three populations render into ONE fenced, ready-to-paste
+        section, with the copy-verbatim instruction attached.
+
+        The field failure this pins: the briefing described a hedged
+        measurement instead of rendering it, and the orchestrator restated
+        "skipped by every matching agent's diff budget and no reviewer
+        reported reviewing them" as "read by nobody" — false for files
+        that were provably read.
+        """
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
+            "inline_coverage_claims": {"src/big.py": ["security-reviewer"]},
+            "inline_coverage_unscoped": ["package-lock.json", ".editorconfig"],
+        }
+        g = mod.get_step_guidance(9, "full", state, {})
+        text = "\n".join(g["actions"])
+
+        # One paste, one heading, one fence pair.
+        assert text.count("## Review coverage") == 1
+        assert text.count("```markdown") == 1
+
+        # The hedged sentence is rendered, not described.
+        assert (
+            "1 changed file(s) were skipped by every matching agent's diff "
+            "budget and no reviewer reported reviewing them from the "
+            "deferred NOT DIFFED queue:" in text
+        )
+        assert "- `src/starved.php` (skipped by: `code-reviewer`)" in text
+
+        # Unscoped files get their own honest line.
+        assert (
+            "2 changed file(s) matched no reviewer's domain and were "
+            "reviewed by no one" in text
+        )
+        assert "- `package-lock.json`" in text
+        assert "- `.editorconfig`" in text
+
+        # Claims keep their own hedge, in their own subsection.
+        assert (
+            "### Reviewed from the deferred queue — claims, not proof of "
+            "read" in text
+        )
+        assert "- `src/big.py` (claimed by: `security-reviewer`)" in text
+
+        # And the paste instruction forbids paraphrase.
+        assert "VERBATIM" in text
+        assert "never restate, summarize, re-count, or edit" in text
+        assert "commentary AFTER the block" in text
+        assert "verdict must acknowledge this gap" in text
+
+    def test_coverage_section_renders_unscoped_files_alone(self, mod):
+        """A run whose only coverage problem is unrouted files still gets
+        the section — this population reaches no per-agent bucket."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {},
+            "inline_coverage_claims": {},
+            "inline_coverage_unscoped": ["assets/logo.png"],
+        }
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "## Review coverage" in text
+        assert (
+            "1 changed file(s) matched no reviewer's domain and were "
+            "reviewed by no one" in text
+        )
+        assert "- `assets/logo.png`" in text
+
+    def test_coverage_section_omits_unscoped_line_when_all_files_scoped(
+        self, mod
+    ):
+        """Measured-and-empty prints nothing — a zero line would read as a
+        finding."""
+        state = {
+            "completed_steps": [],
+            "inline_coverage_gaps": {"src/starved.php": ["code-reviewer"]},
+            "inline_coverage_claims": {},
+            "inline_coverage_unscoped": [],
+        }
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "## Review coverage" in text
+        assert "matched no reviewer's domain" not in text
+
+    def test_step9_state_loading_wires_unscoped_files(self, mod, tmp_path):
+        (tmp_path / "reconciliation-context.json").write_text(
+            json.dumps({
+                "inline_coverage": {
+                    "files_never_inline": {},
+                    "files_deferred_reviewed": {},
+                    "files_unscoped": ["package-lock.json", 7],
+                },
+            })
+        )
+        state = {}
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        assert state["inline_coverage_unscoped"] == ["package-lock.json"]
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "`package-lock.json`" in text
+
+    def test_step9_state_loading_treats_unmeasured_unscoped_as_no_section(
+        self, mod, tmp_path
+    ):
+        """`files_unscoped: null` is "not measured", not "none found"."""
+        (tmp_path / "reconciliation-context.json").write_text(
+            json.dumps({
+                "inline_coverage": {
+                    "files_never_inline": {},
+                    "files_deferred_reviewed": {},
+                    "files_unscoped": None,
+                },
+            })
+        )
+        state = {"inline_coverage_unscoped": ["stale.py"]}
+
+        mod._orchestrate_step(9, "full", {}, state, {}, str(tmp_path))
+
+        assert state["inline_coverage_unscoped"] == []
+        text = "\n".join(mod.get_step_guidance(9, "full", state, {})["actions"])
+        assert "## Review coverage" not in text
 
     def test_no_coverage_warning_without_gaps(self, mod, tmp_path):
         state = {"completed_steps": [], "inline_coverage_gaps": {}}

@@ -91,6 +91,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **Changed files matching no reviewer's domain stopped vanishing from coverage.** Every inline-coverage bucket was keyed on a file some agent's scope summary mentions, so lockfiles, binaries, and dotfiles that matched no domain landed in no bucket at all — invisible rather than uncovered (a field run's true never-covered population was ~46 while the report said 41). `inline_coverage.files_unscoped` now reports them, in the reconciliation context and in the report's coverage section. It stays `null` when nothing supplied a changed-file list, so "not measured" never reads as "none". It is deliberately NOT the same measurement as the run manifest's `coverage.uncovered` — different population over different evidence — and both sites now carry the divergence note.
 
+- **The review report's coverage prose is machine-rendered, not restated.** Step 9 used to hand the orchestrator a correctly hedged measurement and ask it to "include a Review coverage section" — an instruction to *describe* a measurement, which a field run duly paraphrased into "read by nobody" (false for 8 of 41 files, and the false version propagated into the critic's context as fact). The briefing now renders the complete `## Review coverage` section — gaps, unscoped files, and deferred-review claims with their own "not proof of read" hedge — inside a fenced block to be pasted verbatim, with commentary allowed only after it.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01
