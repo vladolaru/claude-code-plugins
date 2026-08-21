@@ -397,7 +397,12 @@ class TestSurvivalRateInReport:
             ingest_texts=[ingest_text],
         )
         report = format_quality_text_report([dispatch], None)
-        assert "Survival rate" in report or "survival" in report.lower()
+        # "Survival rate" alone does not discriminate: the else branch emits
+        # it too, on the "N/A" line. The computed percentage and the outcome
+        # breakdown exist only when ingest data was actually read.
+        assert "Survival rate: 100%" in report
+        assert "Confirmed: 1" in report
+        assert "N/A" not in report
 
     def test_text_report_shows_na_when_no_ingest(self):
         """When no ingest data, show N/A for survival rate."""
@@ -903,11 +908,32 @@ class TestBashBuilderRecognition:
         assert data["write_outputs"] == []
 
     def test_failed_then_retried_builder_heredoc_counts_once(self, tmp_path):
+        """Two attempts at one artifact yield one save — in EITHER order.
+
+        Both heredocs reconstruct to the same path, so the by-path reduction
+        at :577-583 collapses them whatever the terminal-success filter at
+        :539 does; the fail-then-retry direction alone cannot tell whether
+        that filter still works. The reverse order can, and it is the
+        dangerous one: a failed retry allowed into the reduction would
+        shadow the confirmed earlier save to the same artifact.
+        """
+        def _attempt(title):
+            body = (
+                "import sys, os\n"
+                'plugin_root = os.environ["PIRATEGOAT_PLUGIN_ROOT"]\n'
+                'sys.path.insert(0, os.path.join(plugin_root, "scripts"))\n'
+                "from review.agent.output import ReviewOutputBuilder\n"
+                'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+                f'builder.add_issue("high", "{title}", "src/f.php", "d", "r", line=1)\n'
+                'result = builder.save(os.environ["PIRATEGOAT_OUTPUT_DIR"])\n'
+            )
+            return _builder_heredoc(body=body)
+
         log = tmp_path / "agent.jsonl"
         entries = [
-            _bash_entry(_builder_heredoc(), tool_id="builder-fail"),
+            _bash_entry(_attempt("LOST"), tool_id="builder-fail"),
             _tool_result_entry("builder-fail", is_error=True),
-            _bash_entry(_builder_heredoc(), tool_id="builder-retry"),
+            _bash_entry(_attempt("KEPT"), tool_id="builder-retry"),
             _tool_result_entry("builder-retry"),
         ]
         log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
@@ -915,6 +941,21 @@ class TestBashBuilderRecognition:
         data = _mod.parse_subagent_log(str(log))
 
         assert len(data["write_outputs"]) == 1
+        assert "KEPT" in data["write_outputs"][0]["content"]
+
+        reversed_log = tmp_path / "agent-reversed.jsonl"
+        entries = [
+            _bash_entry(_attempt("KEPT"), tool_id="builder-ok"),
+            _tool_result_entry("builder-ok"),
+            _bash_entry(_attempt("LOST"), tool_id="builder-late-fail"),
+            _tool_result_entry("builder-late-fail", is_error=True),
+        ]
+        reversed_log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        data = _mod.parse_subagent_log(str(reversed_log))
+
+        assert len(data["write_outputs"]) == 1
+        assert "KEPT" in data["write_outputs"][0]["content"]
 
     @pytest.mark.parametrize(
         "structured",

@@ -344,6 +344,11 @@ class TestSafeModel:
             "claude-x\n",
             "evil-model",
             "Claude-opus-5",
+            # The tail charset is [a-z0-9._-]: "Claude-opus-5" only exercises
+            # the literal `claude-` prefix, so an uppercase or spaced tail is
+            # what the charset itself has to reject.
+            "claude-opus-5A",
+            "claude-opus 5",
             "claude-" + "a" * 200,
             "",
             None,

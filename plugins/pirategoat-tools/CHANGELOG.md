@@ -71,6 +71,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **Redundant test pins removed without losing a contract.** Per-section restatements of one table-driven sanitize loop, contracts pinned again at a heavier level than the one that owns them, extra prose assertions on briefings already pinned once, and four round-extension tests that asserted on their own locals — 84 collected tests, each cut proven by a mutation a surviving test still catches.
 
+- **A second, instrument-verified redundancy pass — and the coverage it exposed.** 188 more collected tests go: parametrize axes traversing one production loop, allowlist vocabularies pinned per value against a single regex, and duplicate levels this release created itself. Every cut names a surviving pin, and the same instruments found the opposite problem — guards the volume was hiding — so nine one-line pins were added (the Windows-drive and control-character checks in the canonical read-path validator, the model-id charset, `_dequote_git_path`'s legacy branch, both `extract_host_banner` fail-closed returns, the quick-mode COMMENT verdict mapping, the both-reasons dependency signal) and two tests that passed without exercising their own contract were made to discriminate. Net: fewer tests, higher mutation score.
+
 - **`schemas/review-output.ts` catches up with everything the pipeline actually serializes** (the critic-adjustment provenance record) and drops five discriminated-union interfaces no reviewer, native or repo-contributed, ever produced.
 
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*

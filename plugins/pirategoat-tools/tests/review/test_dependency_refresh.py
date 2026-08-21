@@ -74,6 +74,20 @@ class TestComposerDetection:
         assert signal["reasons"] == ["installed_state_missing"]
         assert signal["installed_state_present"] is False
 
+    def test_both_reasons_are_reported_when_both_hold(self, tmp_path):
+        """_signal appends independently, so a changed lockfile on a root
+        that also has no installed state must carry BOTH reasons in order.
+        The single-reason tests above each pass while the other reason is
+        silently dropped; only this one reads the accumulated list."""
+        root = _make_root(tmp_path, files=("composer.json", "composer.lock"))
+
+        result = detect_dependency_refresh(str(root), ["composer.lock"])
+
+        assert len(result["signals"]) == 1
+        signal = result["signals"][0]
+        assert signal["reasons"] == ["changed_in_range", "installed_state_missing"]
+        assert signal["installed_state_present"] is False
+
     def test_fresh_installed_state_and_untouched_manifests_stay_silent(self, tmp_path):
         root = _make_root(tmp_path,
                           files=("composer.json", "composer.lock"),

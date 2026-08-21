@@ -2525,6 +2525,35 @@ def test_extract_host_banner_reads_from_review_context(mod, tmp_path):
     assert banner["reason"] == "fully_unavailable"
 
 
+def test_extract_host_banner_returns_none_for_empty_output_dir(
+    mod, tmp_path, monkeypatch
+):
+    """An unresolved output dir arrives as "" — and os.path.join("", name)
+    is just `name`, so without the early return at :151 the banner would be
+    read from whatever review-context.json happens to sit in the CWD. The
+    fixture below is that foreign file."""
+    (tmp_path / "review-context.json").write_text(json.dumps({
+        "host_context": {"banner": {"degraded": True, "reason": "foreign"}},
+    }))
+    monkeypatch.chdir(tmp_path)
+
+    assert mod.extract_host_banner("") is None
+
+
+def test_extract_host_banner_returns_none_when_host_context_is_not_a_dict(
+    mod, tmp_path
+):
+    """A truthy non-dict host_context reaches :162 — `or {}` only rescues
+    the falsy shapes, so without this guard .get() raises on a list."""
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "review-context.json").write_text(json.dumps({
+        "version": 1,
+        "host_context": ["not", "a", "dict"],
+    }))
+    assert mod.extract_host_banner(str(outdir)) is None
+
+
 def test_extract_host_banner_returns_none_when_no_host_context(mod, tmp_path):
     outdir = tmp_path / "out"
     outdir.mkdir()

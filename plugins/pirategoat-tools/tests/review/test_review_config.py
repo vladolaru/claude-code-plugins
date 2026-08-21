@@ -564,6 +564,11 @@ class TestDequoteGitPath:
         [
             ('"r\\303\\250gles.md"', "règles.md"),
             ("plain.md", "plain.md"),
+            # The wrapper's own legacy branch (:376-377): the shared grammar
+            # reads a quote-delimited spelling with no escapes as an ordinary
+            # filename, and this gate additionally compares the unwrapped
+            # form. Nothing else in the file reaches that branch.
+            ('"plain.md"', "plain.md"),
         ],
     )
     def test_decodes_quoted_forms(self, mod, quoted, expected):

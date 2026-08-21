@@ -6283,6 +6283,15 @@ class TestTranscriptFamilyAvailability:
             pytest.param(r"C:\secret.py", id="windows-drive"),
             pytest.param(r"\\server\share.py", id="windows-unc"),
             pytest.param(r"src\file.py", id="backslash-separator"),
+            # The only shape the Windows-drive guard alone rejects: a
+            # forward-slash drive path has no backslash, no empty segment and
+            # no control character, so deleting _WINDOWS_DRIVE_RE leaves every
+            # other param green.
+            pytest.param("C:/secret.py", id="windows-drive-forward-slash"),
+            # _safe_string deliberately admits \n and \t as legitimate prose
+            # whitespace, so a path carrying one reaches _safe_repo_read_path
+            # intact and only its Cc/Cf check rejects it.
+            pytest.param("src/two\nlines.py", id="embedded-newline"),
             pytest.param("src/\x7fsecret.py", id="unicode-control"),
             pytest.param("src/\u202esecret.py", id="unicode-format"),
         ],
