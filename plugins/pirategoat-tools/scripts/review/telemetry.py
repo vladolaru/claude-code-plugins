@@ -388,28 +388,39 @@ class ReviewTelemetry:
                            resave: bool = False) -> None:
         """Append agent_complete event with duration from .started file. No-op if not started.
 
-        **An agent's completion is its LATEST successful save.** The save
-        echo deliberately invites a correction re-save (claim a deferred
-        file you actually read, then save again), so a reviewer publishing
-        twice is SANCTIONED, and each save logs its own completion with its
-        own duration. The event stream is append-only: it therefore holds
-        one event per SAVE, not one per AGENT, and a raw `agent_complete`
-        tally is not an agent count. A 19-reviewer field run logged 21.
+        The save echo deliberately invites a correction re-save (claim a
+        deferred file you actually read, then save again), so a reviewer
+        publishing twice is SANCTIONED, and each save logs its own
+        completion with its own duration. The event stream is append-only:
+        it therefore holds one event per SAVE, not one per AGENT, and a raw
+        `agent_complete` tally is not an agent count. A 19-reviewer field
+        run logged 21.
 
-        The contract over that stream is **last-wins per agent identity**,
-        resolved once in `project_agent_lifecycle()` — the projection both
-        the manifest producer and the metrics consumer run, so no consumer
-        has to re-derive it. Counting raw events where the answer means
-        "agents" is the bug this shape invites; every consumer either
-        reads the projection or names its field `*_events` honestly.
+        The contract over that stream is **last-wins per outstanding
+        EXECUTION SLOT**, resolved once in `project_agent_lifecycle()` —
+        the projection both the manifest producer and the metrics consumer
+        run, so no consumer has to re-derive it. A completion first matches
+        an outstanding start while any remain, because overlapping
+        executions of one reviewer are a supported case and each keeps its
+        own completion; only once every start is matched does a further
+        completion REPLACE the latest. So one agent with two starts and
+        three completions projects to TWO rows, not one. Identities
+        collapse to one row only for a single-execution agent — the
+        ordinary case, and the one the 19/21 field run was.
 
-        `resave` makes the raw stream self-describing, so the distinction
-        survives without replaying the projection: True when this agent's
-        `<reviewer>-review.json` already existed at publication time (a
-        correction), False for a first-and-only save. It is deliberately
-        NOT carried into the durable manifest — there the projection has
-        already collapsed the revisions, so the flag would describe an
-        event the manifest no longer contains.
+        `len(completed)` is therefore an EXECUTION count. It equals the
+        agent count exactly when every agent ran once; counting raw events
+        where the answer means "agents" is the bug this shape invites.
+        Every consumer either reads the projection or names its field
+        `*_events`.
+
+        `resave` records one observation and nothing more: a review JSON
+        for this reviewer was ALREADY published when this save reached
+        publication. It is not a correction count and not an agent-count
+        discriminator — a second execution's first save reports True, and a
+        save following a failed `os.replace()` reports False. It is
+        deliberately NOT carried into the durable manifest, where the
+        projection has already dropped the superseded events it describes.
         """
         if self.log_path is None:
             return
@@ -697,13 +708,18 @@ class ReviewTelemetry:
     ) -> tuple[List[dict], List[dict]]:
         """Sanitize raw events and run the shared lifecycle projection.
 
-        This is where the event stream's **last-wins-per-agent-identity**
-        contract becomes the manifest's shape: N sanctioned re-saves by one
-        reviewer are N `agent_complete` events in the JSONL and exactly ONE
-        row in `agents.completed` (the latest), so `len(completed)` counts
-        EXECUTIONS, never raw events. Consumers that want an agent count
-        read this projection; the raw log is the only place a per-save
-        tally — or the `resave` flag distinguishing the saves — survives.
+        This is where the event stream's **last-wins-per-outstanding-
+        execution-slot** contract becomes the manifest's shape. N
+        sanctioned re-saves by a reviewer that started ONCE are N
+        `agent_complete` events in the JSONL and exactly one row in
+        `agents.completed` (the latest); a reviewer that started twice
+        keeps two rows, because overlapping executions are supported and
+        each is its own execution. So `len(completed)` counts EXECUTIONS,
+        never raw events, and equals the agent count only when every agent
+        ran once. Consumers that want an agent count read this projection
+        — deduplicating on `agent` when retries make the two differ. The
+        raw log is the only place a per-save tally, or the `resave` flag
+        distinguishing the saves, survives.
         """
 
         def items():
