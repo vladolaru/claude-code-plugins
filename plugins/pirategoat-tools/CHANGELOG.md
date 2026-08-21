@@ -93,6 +93,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **The review report's coverage prose is machine-rendered, not restated.** Step 9 used to hand the orchestrator a correctly hedged measurement and ask it to "include a Review coverage section" — an instruction to *describe* a measurement, which a field run duly paraphrased into "read by nobody" (false for 8 of 41 files, and the false version propagated into the critic's context as fact). The briefing now renders the complete `## Review coverage` section — gaps, unscoped files, and deferred-review claims with their own "not proof of read" hedge — inside a fenced block to be pasted verbatim, with commentary allowed only after it.
 
+- **Critic adjustments are accounted for per entry, never in aggregate.** A field report said "all four spot-checked" about a five-entry batch, publishing the unverified entry as verified. Step 10 now requires one line per `adjustment_id` with its own outcome (`verified` / `refuted` / `not checked`) and forbids the batch-level phrasing outright.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01

@@ -1652,6 +1652,15 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"the decision did not land."
     )
     actions.append(
+        "   Account for the batch PER ENTRY, never in aggregate. Keep a "
+        "record of every `adjustment_id` in the file paired with what you "
+        "did to it: `verified` (you ran a probe and it held), `refuted` "
+        "(you rejected it above), or `not checked` (you did not "
+        "individually probe it). An entry you did not individually probe "
+        "is `not checked` — it is never absorbed into a batch-level "
+        "statement."
+    )
+    actions.append(
         f"3) Carry the surviving adjustments into `{od}/review-findings.json`:"
     )
     actions.append("```bash")
@@ -1686,6 +1695,16 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append(
         f"4) Edit `{od}/review-report.md` so it matches the updated findings — "
         f"counts, severity table, and finding list must agree with the JSON."
+    )
+    actions.append(
+        "   Where the report or your summary reports the critic pass, list "
+        "each adjustment id with its own outcome from step 2 — one line "
+        "per adjustment, `<adjustment_id>: verified | refuted | not "
+        "checked`. Never an aggregate count: \"all N spot-checked\" over a "
+        "batch where one entry went unprobed publishes that entry as "
+        "verified, which is the exact false claim per-entry accounting "
+        "exists to prevent. A batch where you checked none of the entries "
+        "is reported as N lines of `not checked`."
     )
     actions.append("5) Write the final review verdict.")
     actions.append("")

@@ -1781,6 +1781,42 @@ class TestStep10DecisionCritic:
         text = "\n".join(g["actions"])
         assert "decision-reviewer" in text
 
+    def test_spot_check_accounting_is_per_entry_never_aggregate(
+        self, mod, tmp_path
+    ):
+        """The field failure: a report said "all four spot-checked" about a
+        FIVE-entry batch, and the unverified entry propagated as fact.
+
+        The instruction must demand one line per adjustment id with its own
+        outcome, and must forbid the aggregate phrasing outright.
+        """
+        g = mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
+        revise = self._revise_section(g)
+
+        # Per-entry accounting during the spot-check itself.
+        assert "PER ENTRY, never in aggregate" in revise
+        assert "`not checked`" in revise
+        assert "never absorbed into a batch-level statement" in revise
+
+        # Per-entry accounting when reporting it.
+        assert "one line per adjustment" in revise
+        assert "`<adjustment_id>: verified | refuted | not checked`" in revise
+        assert "Never an aggregate count" in revise
+
+    def test_spot_check_instruction_carries_no_aggregate_phrasing(self, mod):
+        """An "all N spot-checked" phrase may appear in exactly one place:
+        the sentence that forbids it."""
+        revise = self._revise_section(
+            mod.get_step_guidance(10, "pr", {"completed_steps": []}, {})
+        )
+        aggregate = re.compile(r'all ["\u201c]?(?:N|\d+)["\u201d]? '
+                               r'(?:spot-check|verif|check)')
+        offenders = [
+            line for line in revise.split("\n")
+            if aggregate.search(line) and "Never an aggregate count" not in line
+        ]
+        assert not offenders, offenders
+
     def test_codex_critic_uses_canonical_agent_definition(self, mod, tmp_path):
         state = {"completed_steps": []}
         config = {"host": "codex"}
