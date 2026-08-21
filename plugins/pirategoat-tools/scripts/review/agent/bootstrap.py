@@ -1088,13 +1088,22 @@ def build_output(
                 "add_unreviewed() and ALSO claiming it with "
                 "add_deferred_reviewed() is a contradiction save() rejects "
                 "outright, not a way to hedge — call exactly one of the two "
-                "for a given path. "
-                "Declaring is for genuine budget exhaustion only: a declaration "
-                "written with most of your budget unspent is a protocol "
-                "violation, and citing your budget or ceiling as the reason for "
-                "skipping work you had calls left for is a false statement in "
-                "your review."
+                "for a given path."
             )
+            # A sentence calling an under-budget declaration a "protocol
+            # violation" and a "false statement" used to close this
+            # paragraph. It was deleted, not softened: it conditioned on a
+            # quantity no reviewer is ever shown at the moment it decides
+            # (models keep no running tool-call tally), and a 19-agent
+            # field run delivered it verbatim to every one of them with
+            # zero effect — median 44% of budget used, nine agents
+            # declaring 100+ files while under half budget. The same run
+            # falsified its premise: under-spend did not predict weak
+            # output. Salience at the decision point replaced it — save()
+            # echoes the target back when unreviewed files are recorded,
+            # in the one piece of feedback every agent reads. Do not
+            # restore a rule the reviewer cannot evaluate; make the number
+            # visible where the choice happens instead.
             lines.append("")
         lines.append(f"At {review_budget} calls: open findings → finish and write. No findings → wrap up.")
         lines.append(f"At {ceiling} calls: STOP exploring. Write output immediately, no exceptions.")
@@ -1189,6 +1198,17 @@ def build_output(
     lines.append("")
     pr_id_str = pr_number if pr_number else "0"
     lines.append("ReviewOutputBuilder — MUST use a one-shot quoted heredoc in this form:")
+    # The call-budget target, carried into the builder so save() can echo it
+    # back beside the unreviewed count — the one place the reviewer sees the
+    # number while it can still act on it. Omitted entirely when the run set
+    # no budget: unlike the version below there is no "unknown" case to
+    # represent, and both transcript analyzers recognize the envelope by
+    # REQUIRED-subset ⊆ names ⊆ REQUIRED|OPTIONAL, which this name joins.
+    budget_env = (
+        f"PIRATEGOAT_REVIEW_BUDGET={shlex.quote(str(review_budget))} "
+        if review_budget is not None
+        else ""
+    )
     lines.append(
         f"PIRATEGOAT_PLUGIN_ROOT={shlex.quote(plugin_root)} "
         f"PIRATEGOAT_OUTPUT_DIR={shlex.quote(output_dir)} "
@@ -1199,6 +1219,7 @@ def build_output(
         # transcript analyzers recognize a builder command by, so it must
         # not vary with whether this fact happens to be known.
         f"PIRATEGOAT_PLUGIN_VERSION={shlex.quote(plugin_version or '')} "
+        f"{budget_env}"
         "python3 <<'PY'"
     )
     lines.append("import sys, os")

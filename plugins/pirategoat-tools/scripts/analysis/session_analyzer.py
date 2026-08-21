@@ -69,7 +69,13 @@ _BUILDER_ENV_REQUIRED = frozenset({
 # a pre-1.114.0 transcript remains fully measurable. Refusing it would
 # report saves that demonstrably happened as no-save — a wrong measurement
 # rather than a missing one, and transcripts are immutable.
-_BUILDER_ENV_OPTIONAL = frozenset({"PIRATEGOAT_PLUGIN_VERSION"})
+# 1.114.0 also began carrying the run's call-budget target, emitted only
+# when the run calibrated one. Additive and unread here, exactly like the
+# version above.
+_BUILDER_ENV_OPTIONAL = frozenset({
+    "PIRATEGOAT_PLUGIN_VERSION",
+    "PIRATEGOAT_REVIEW_BUDGET",
+})
 _BUILDER_ENV_NAMES = frozenset(_BUILDER_ENV_REQUIRED | _BUILDER_ENV_OPTIONAL)
 # Must mirror ReviewOutputBuilder.add_issue()'s FULL positional order — a
 # parameter missing here is silently dropped from fully positional calls
@@ -136,7 +142,7 @@ def _builder_heredoc_env(command: Any) -> dict[str, str] | None:
         if name in env:  # a repeated assignment is not the mandated form
             return None
         env[name] = value
-    # Every required name present, nothing beyond the known optional one.
+    # Every required name present, nothing beyond the known optionals.
     if not _BUILDER_ENV_REQUIRED <= set(env) <= _BUILDER_ENV_NAMES:
         return None
     return env

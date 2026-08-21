@@ -125,6 +125,26 @@ def _coerce_text(value: Any, single_line: bool = False) -> str:
     return result
 
 
+def _review_budget_target() -> Optional[int]:
+    """The run's tool-call target, or None when there isn't an honest one.
+
+    Read from the builder envelope bootstrap emits
+    (``PIRATEGOAT_REVIEW_BUDGET``), which is present only when the run
+    calibrated a budget at all. Anything that is not a positive integer is
+    treated as absent rather than repaired: this value is only ever shown
+    back to the reviewer, and a target of "0" or "abc" is worse than no
+    target.
+    """
+    raw = os.environ.get("PIRATEGOAT_REVIEW_BUDGET")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 def _log_agent_complete_telemetry(output_dir, reviewer, verdict, issue_count, severities):
     """Best-effort telemetry logging on agent completion. Never raises."""
     try:
@@ -1314,6 +1334,23 @@ class ReviewOutputBuilder:
                     "were auto-declared unreviewed. If you actually read "
                     "them, claim them with add_deferred_reviewed(...) and "
                     "save again."
+                )
+            # Budget salience, and ONLY here. The briefing states the target
+            # once, thousands of tokens before the reviewer decides whether
+            # to stop; a 19-agent field run showed that placement changes
+            # nothing (0/19 reached target, median 44% spent, nine declaring
+            # 100+ files while under half budget). This echo is the one piece
+            # of feedback every agent reads, it arrives with a turn still
+            # left to act, and it only appears when there is something to act
+            # on — unreviewed files recorded. Silent when the envelope is
+            # absent or malformed: the builder must stay usable outside a
+            # pipeline run, where there is no target to report.
+            budget_target = _review_budget_target()
+            if self.unreviewed and budget_target is not None:
+                print(
+                    f"TARGET: ~{budget_target} tool calls — if you finished "
+                    "well under it with NOT DIFFED files left, read more and "
+                    "re-save before finalizing."
                 )
             # Completion telemetry and publication run under one exclusive
             # lock so {log, publish} is a single atomic unit per execution:

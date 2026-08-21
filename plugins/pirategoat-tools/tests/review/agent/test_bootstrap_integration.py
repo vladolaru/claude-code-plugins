@@ -566,9 +566,10 @@ class TestCanonicalExecutableBuilderSource:
     def test_envelope_carries_the_plugin_version_assignment(self, tmp_path):
         """The producing plugin version travels in the same envelope.
 
-        Emitted unconditionally, empty when unresolved, so the envelope
-        keeps a constant five-assignment shape — the transcript analyzers
-        recognize the builder command by exactly that shape.
+        Emitted unconditionally, empty when unresolved: it is a fact that
+        is sometimes unknown, never one that is sometimes absent, and the
+        transcript analyzers recognize the builder command by its
+        assignment names.
         """
         (tmp_path / "run-config.json").write_text(
             json.dumps({"mode": "pr", "plugin_version": "1.114.0"})
@@ -608,6 +609,52 @@ class TestCanonicalExecutableBuilderSource:
             has_php=False,
         )
         assert "PIRATEGOAT_PLUGIN_VERSION=''" in prompt
+
+    def test_envelope_carries_the_budget_target_when_one_is_set(self, tmp_path):
+        """save() can only echo the target if the target reaches the builder.
+
+        The briefing states it once, far from the moment of decision; the
+        echo restates it where the reviewer can still act. This assignment
+        is the only channel between the two.
+        """
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+            review_budget=80,
+        )
+        assert "PIRATEGOAT_REVIEW_BUDGET=80" in prompt
+        assert prompt.count("python3 <<'PY'") == 1
+
+    def test_envelope_omits_the_budget_assignment_when_there_is_none(
+        self, tmp_path
+    ):
+        """No calibrated budget is an absence, not an unknown value — an
+        empty target would be echoed back as a number the run never set."""
+        prompt = build_output(
+            agent_name="security-reviewer",
+            plugin_root=str(PLUGIN_ROOT),
+            status="OK",
+            review_rules="rules",
+            domain_rules=None,
+            scope_output="=== REVIEW SCOPE ===\nSTATUS: OK",
+            exploration_scope=None,
+            output_dir=str(tmp_path),
+            pr_number="42",
+            reviewer_name="security",
+            not_diffed_count=0,
+            has_php=False,
+        )
+        assert "PIRATEGOAT_REVIEW_BUDGET" not in prompt
 
     def test_main_reads_the_version_from_the_run_config_stamp(self, tmp_path):
         """One detector: step 1 stamps run-config.json, bootstrap forwards it.
@@ -1807,8 +1854,9 @@ class TestNotDiffedContractIsDelivered:
         [
             "Not reviewed (budget):",          # the declaration format
             'builder.add_unreviewed("<path>")',  # the supported API for it
-            "protocol violation",              # declaring on unspent budget
-            "false statement",                 # citing budget you did not spend
+            # The one enforced violation: save() auto-fills the gap, so an
+            # APPROVE cannot silently swallow deferred files.
+            "an APPROVE that silently ignores them is a protocol violation",
             "never count a declared-unreviewed file",
             "is a contradiction save() rejects",  # declare-vs-claim, moved from
                                                    # '## ReviewOutputBuilder API'
@@ -1818,6 +1866,30 @@ class TestNotDiffedContractIsDelivered:
         """Each clause of the contract appears in the delivered briefing."""
         output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
         assert phrase in output
+
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "false statement",
+            "Declaring is for genuine budget exhaustion only",
+            "written with most of your budget unspent",
+        ],
+    )
+    def test_unenforceable_underspend_rule_is_not_restored(
+        self, tmp_path, phrase
+    ):
+        """The under-spend "protocol violation" sentence must stay deleted.
+
+        It conditioned on a quantity no reviewer is ever shown at the moment
+        it decides — models keep no running tool-call tally — and a 19-agent
+        field run delivered it verbatim to every one of them for zero effect
+        (0/19 reached target, median 44% spent, nine declaring 100+ files
+        while under half budget). Its premise was falsified in the same run:
+        under-spend did not predict weak output. The replacement is salience
+        at the decision point (save()'s TARGET echo), not sterner prose.
+        """
+        output = self._build(tmp_path, self.NOT_DIFFED_SCOPE, not_diffed_count=1)
+        assert phrase not in output
 
     def test_contract_absent_without_not_diffed_files(self, tmp_path):
         """No NOT DIFFED files means no declaration contract to deliver."""

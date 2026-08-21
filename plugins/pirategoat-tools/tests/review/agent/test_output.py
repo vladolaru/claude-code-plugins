@@ -2256,6 +2256,88 @@ class TestSaveTimeDeferredValidation:
 
 
 # =============================================================================
+# TestBudgetTargetEcho
+# =============================================================================
+
+
+class TestBudgetTargetEcho:
+    """The call-budget target is surfaced where the reviewer can still act.
+
+    The briefing has always stated the target, thousands of tokens before
+    the moment a reviewer decides to stop, and a 19-agent field run showed
+    that placement moves nothing. The echo is the one feedback surface every
+    agent reads, so the target is repeated there — but only when unreviewed
+    files make it actionable, and only when the run actually set one.
+    """
+
+    @staticmethod
+    def _clean_env(monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEW_BUDGET", raising=False)
+
+    def _save_with_unreviewed(self, tmp_path, monkeypatch, capsys):
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_unreviewed("some/file.go")
+        builder.save(str(tmp_path))
+        return capsys.readouterr().out
+
+    def test_target_line_appears_with_unreviewed_and_budget(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._clean_env(monkeypatch)
+        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", "80")
+        out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
+        assert "TARGET: ~80 tool calls" in out
+        assert "read more and re-save before finalizing" in out
+        # Exactly one line, so the echo stays scannable.
+        assert sum(l.startswith("TARGET:") for l in out.splitlines()) == 1
+
+    def test_no_target_line_without_unreviewed_files(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Nothing left unread means nothing to act on — silence is right."""
+        self._clean_env(monkeypatch)
+        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", "80")
+        builder = ReviewOutputBuilder("123", "code")
+        builder.save(str(tmp_path))
+        assert "TARGET:" not in capsys.readouterr().out
+
+    def test_no_target_line_without_the_envelope(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The builder must stay usable outside a pipeline run."""
+        self._clean_env(monkeypatch)
+        out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
+        assert "TARGET:" not in out
+
+    @pytest.mark.parametrize("raw", ["", "   ", "abc", "0", "-5", "12.5"])
+    def test_malformed_budget_is_treated_as_absent(
+        self, tmp_path, monkeypatch, capsys, raw
+    ):
+        """A target of "0" or "abc" is worse than no target — never repair it."""
+        self._clean_env(monkeypatch)
+        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", raw)
+        out = self._save_with_unreviewed(tmp_path, monkeypatch, capsys)
+        assert "TARGET:" not in out
+
+    def test_autofilled_only_still_gets_the_target(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Auto-filled gaps are exactly the case the nudge exists for: the
+        agent declared nothing, so only the echo can tell it there is
+        unread work left."""
+        self._clean_env(monkeypatch)
+        monkeypatch.setenv("PIRATEGOAT_REVIEW_BUDGET", "40")
+        sidecar = tmp_path / "code-deferred-files.json"
+        sidecar.write_text(json.dumps({"deferred_files": ["a.go"]}))
+        builder = ReviewOutputBuilder("123", "code")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+        assert "TARGET: ~40 tool calls" in out
+
+
+# =============================================================================
 # TestTypeScriptContractLockstep
 # =============================================================================
 

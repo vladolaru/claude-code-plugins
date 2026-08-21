@@ -584,6 +584,35 @@ class TestBashBuilderRecognition:
         }
         assert _mod._categorize_tool_call("Bash", {"command": legacy})["category"] == "builder-output"
 
+    def test_budget_carrying_envelope_is_recognized(self):
+        """1.114.0 appends the call-budget target when the run set one.
+
+        The value is unread here — recognition is all the envelope is used
+        for — but an unknown assignment would drop the whole save from the
+        cohort, so the name has to be known to this reader.
+        """
+        with_budget = (
+            "PIRATEGOAT_PLUGIN_ROOT='/plug' "
+            "PIRATEGOAT_OUTPUT_DIR='/tmp/pr-review-42' "
+            "PIRATEGOAT_REVIEWER_NAME='security' "
+            "PIRATEGOAT_PR_ID='42' "
+            "PIRATEGOAT_PLUGIN_VERSION='1.114.0' "
+            "PIRATEGOAT_REVIEW_BUDGET='80' python3 <<'PY'\n"
+            "builder.save(os.environ[\"PIRATEGOAT_OUTPUT_DIR\"])\n"
+            "PY"
+        )
+
+        env = _mod._builder_heredoc_env(with_budget)
+
+        assert env is not None
+        assert env["PIRATEGOAT_REVIEW_BUDGET"] == "80"
+        assert (
+            _mod._categorize_tool_call("Bash", {"command": with_budget})[
+                "category"
+            ]
+            == "builder-output"
+        )
+
     @pytest.mark.parametrize(
         "command",
         [

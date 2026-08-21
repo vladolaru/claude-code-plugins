@@ -1104,6 +1104,13 @@ class TestAnalyzeSubagent:
         assert is_bootstrap_builder_heredoc(
             stable + "PIRATEGOAT_PLUGIN_VERSION= python3 <<PY\npass\nPY"
         )
+        # 1.114.0 also carries the call-budget target when the run set one.
+        # Unknown-name rejection would drop these saves from the cohort.
+        assert is_bootstrap_builder_heredoc(
+            stable
+            + "PIRATEGOAT_PLUGIN_VERSION=1.114.0 PIRATEGOAT_REVIEW_BUDGET=80 "
+            "python3 <<PY\npass\nPY"
+        )
 
     def test_real_bootstrap_builder_envelope_is_counted_as_one_attempt(
         self, tmp_path

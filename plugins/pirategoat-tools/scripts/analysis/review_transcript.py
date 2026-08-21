@@ -72,7 +72,15 @@ _BOOTSTRAP_BUILDER_ENV_REQUIRED = frozenset({
 # measured false is a wrong answer, not a missing one. Historical
 # transcripts are immutable; a reader that stops recognizing them does not
 # drop them from the cohort, it lies about them.
-_BOOTSTRAP_BUILDER_ENV_OPTIONAL = frozenset({"PIRATEGOAT_PLUGIN_VERSION"})
+# 1.114.0 also began carrying the run's call-budget target so save() can
+# echo it back to the reviewer. Like the version above it is optional by
+# construction — a run with no calibrated budget emits no such assignment
+# — and no measurement here reads its value, so every envelope generation
+# stays equally recognizable.
+_BOOTSTRAP_BUILDER_ENV_OPTIONAL = frozenset({
+    "PIRATEGOAT_PLUGIN_VERSION",
+    "PIRATEGOAT_REVIEW_BUDGET",
+})
 _BOOTSTRAP_BUILDER_ENV = frozenset(
     _BOOTSTRAP_BUILDER_ENV_REQUIRED | _BOOTSTRAP_BUILDER_ENV_OPTIONAL
 )
@@ -1326,8 +1334,8 @@ def _is_bootstrap_builder_heredoc(command: object) -> bool:
     unique = set(names)
     if len(unique) != len(names):
         return False
-    # Every required name present, and nothing beyond the known optional
-    # one: a foreign assignment means this is not an envelope any bootstrap
+    # Every required name present, and nothing beyond the known
+    # optionals: a foreign assignment means this is not an envelope any bootstrap
     # generation emitted, and its contents are not ours to interpret.
     return _BOOTSTRAP_BUILDER_ENV_REQUIRED <= unique <= _BOOTSTRAP_BUILDER_ENV
 
