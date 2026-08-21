@@ -3793,6 +3793,11 @@ class TestInlineCoverageMarkdown:
         )
         assert "- `package-lock.json`" in md
         assert md.index("No Reviewer's Scope") < md.index("## Metadata")
+        # ONE observation for the list, not one per file — the report
+        # already pastes this same list verbatim, so per-file entries
+        # would restate it once per file.
+        assert "ONE `add_observation()` naming the whole list" in md
+        assert "one `add_observation()` per file" not in md
 
     def test_unscoped_paths_are_neutralized_like_every_other_path(self, mod):
         """A path is producer data — a raw one can forge document

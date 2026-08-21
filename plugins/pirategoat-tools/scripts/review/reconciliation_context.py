@@ -1414,10 +1414,14 @@ def to_markdown(context: Dict[str, Any]) -> str:
             "domain and were reviewed by no one.** No agent's scope "
             "contained them — not inline, not deferred, not even as a "
             "name-only listing. No agent verdict covers them, and no "
-            "finding can exist for them. Carry this list into "
-            "`review-findings.json` as a coverage warning — one "
-            "`add_observation()` per file — so it survives into every "
-            "artifact rendered from that ledger.\n"
+            "finding can exist for them. Record this as ONE "
+            "`add_observation()` naming the whole list, not one per file: "
+            "the report already receives this same list rendered "
+            "verbatim, so per-file entries would restate it as many times "
+            "as there are files (46 of them on the run that prompted "
+            "this). The ledger's job here is to carry the gap "
+            "structurally into every artifact rendered from it; the "
+            "report's job is to say it.\n"
         )
         for f_path in unscoped:
             # Same neutralization every other rendered path gets: a path

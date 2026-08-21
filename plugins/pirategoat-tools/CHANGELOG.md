@@ -109,6 +109,8 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **A coverage population nothing measured stopped reading as a clean one.** `files_unscoped` distinguished unmeasured (`null`) from measured-and-empty (`[]`), but the CLI turned an absent `--changed-files` into `[]` before the builder saw it — and `orchestration.py` always passes the flag, passing `""` when `review-context.json` carries no CSV. The unmeasured branch was therefore unreachable in production, and the one run shape that reaches it (a file list that never arrived) published an empty gap list. An empty changed-file list is now an absent one: a review of zero changed files does not exist, so there is one rule and the failure reports unmeasured.
 
+- **The unscoped-files gap is recorded once, not once per file.** The reconciliation context asked for one `add_observation()` per unscoped file while step 9 pastes the same list into the report verbatim — 46 restatements of one fact on the run that prompted the change. The ledger now carries one aggregate observation naming the list, and the report keeps saying it.
+
 *The full narrative for this release — task-by-task rationale, mutation-testing evidence, and the scope trims that shaped its final form — lives in git history and `.claude/docs/analysis/`.*
 
 ## [1.113.0] - 2026-08-01
