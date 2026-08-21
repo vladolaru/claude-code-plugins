@@ -203,12 +203,10 @@ will not apply it (a pending file on a non-REVISE verdict is reported as a
 degradation, never applied).
 
 **This file is the only write path into `review-findings.json`.** Never edit
-that ledger yourself, and never ask the caller to hand-edit it: every
-sanctioned write stamps a content digest the pipeline re-checks at finalize,
-so an edit made outside this channel is reported as
-`post_apply_integrity: "modified_out_of_channel"` and degrades the run. A
-change worth making is worth making as an adjustment entry, where it carries
-its rationale and its provenance.
+that ledger yourself, and never ask the caller to hand-edit it: the
+adjustments ledger is the only sanctioned write path, and a hand edit is out
+of channel and forbidden. A change worth making is worth making as an
+adjustment entry, where it carries its rationale and its provenance.
 
 ## Return to Caller
 

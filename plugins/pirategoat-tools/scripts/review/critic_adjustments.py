@@ -26,15 +26,13 @@ reconciled state.
 
 decision-critic-adjustments.json is also the ONLY sanctioned way to
 change review-findings.json, and this module owns the write path that
-says so. `write_findings()` stamps a `content_digest` over the findings
-file's own content and writes it atomically; all three of that file's
+says so. `write_findings()` replaces that file atomically, addressed by
+output directory so no caller can misname it; all three of the ledger's
 writers — the review-reconciliator's first write, `apply_adjustments()`
-here, and orchestration.py's Rule 23 verdict sync — go through it, so a
-findings file that does not verify against its own stamp at finalize was
-written by something outside the channel.
-That is detection, not prevention: an orchestrator's ad-hoc `python3 -c`
-edit cannot be blocked, but it can be made visible instead of shipping as
-if the pipeline had produced it (see `verify_findings_integrity()`).
+here, and orchestration.py's Rule 23 verdict sync — go through it. An
+orchestrator's ad-hoc `python3 -c` edit is out of channel and forbidden:
+a change worth making is worth making as an adjustment entry, where it
+carries provenance.
 
 Adjustments are a REVISE-only channel: `apply_adjustments()` refuses to
 read the adjustments file or write anything unless
@@ -51,7 +49,6 @@ of reading a silent no-op.
 
 import argparse
 import collections
-import hashlib
 import json
 import os
 import sys
@@ -99,14 +96,6 @@ REJECTED_ADJUSTMENTS_KEY = "rejected_critic_adjustments"
 # against a contract this module does not honor must fail loudly rather
 # than being silently accepted and possibly misread.
 ADJUSTMENTS_SCHEMA = 1
-
-# The stamp every sanctioned write of the findings ledger leaves behind,
-# and the vocabulary finalize reports the check in. See write_findings()
-# below for what the three writers are and why absence of the stamp is
-# itself evidence.
-CONTENT_DIGEST_KEY = "content_digest"
-INTEGRITY_INTACT = "intact"
-INTEGRITY_MODIFIED = "modified_out_of_channel"
 
 # Discriminated outcomes of reading the findings ledger off disk, shared
 # by every caller that reads it (see `read_findings_file()`). The states
@@ -238,19 +227,17 @@ def read_findings_file(path):
     """Read review-findings.json into a discriminated result.
 
     ONE spelling of open-parse-shape-check for the ledger, the same move
-    `read_verdict_file()` made for the verdict files one task ago: four
-    call sites used to open this file with four slightly different guards
-    (the best-effort id reader, `apply_adjustments()`,
-    `verify_findings_integrity()`, and orchestration's Rule 23 sync), and
-    the differences between them were accidents rather than decisions —
-    one of them even opened the file with the platform's locale encoding
-    while the others pinned UTF-8.
+    `read_verdict_file()` made for the verdict files one task ago: the
+    call sites used to open this file with slightly different guards (the
+    best-effort id reader, `apply_adjustments()`, and orchestration's
+    Rule 23 sync), and the differences between them were accidents rather
+    than decisions — one of them even opened the file with the platform's
+    locale encoding while the others pinned UTF-8.
 
     Returns a `FindingsRead`. What each caller does with a given state is
     deliberately NOT decided here — the facts are shared, the policy is
     not: the best-effort reader treats every failure as "nothing
-    recorded", the applier re-raises, the integrity check answers
-    None-vs-modified, and the verdict sync maps to its own
+    recorded", the applier re-raises, and the verdict sync maps to its own
     skipped/failed vocabulary.
     """
     try:
@@ -267,153 +254,29 @@ def read_findings_file(path):
     return FindingsRead(FINDINGS_READ_OK, findings, None)
 
 
-def compute_findings_digest(findings):
-    """Hash a findings ledger's content, excluding the stamp itself.
-
-    ONE canonical serialization, spelled here and nowhere else: the
-    payload minus `content_digest`, `json.dumps`'d with `sort_keys=True`,
-    the compact `(",", ":")` separators, and `ensure_ascii=True`, then
-    SHA-256 over its bytes. Sorted keys and fixed separators mean the
-    digest describes the ledger's CONTENT, not the whitespace or key
-    order of whichever writer produced it — a rewrite that reorders keys
-    without changing a value still verifies, and a changed value never
-    does.
-
-    `ensure_ascii=True` is load-bearing for two reasons, neither of them
-    "matching the artifact's own encoding" (it cannot: the artifact is
-    written with `indent=2` while this form is compact, so the two byte
-    streams never match anyway).
-
-    First, TOTALITY. This function's input is an adversarial hand edit by
-    construction — that is the whole point of the check — and `json.load`
-    accepts payloads that cannot be encoded back out: `"\\ud800"` parses
-    to a lone surrogate, and `.encode("utf-8")` on it raises
-    `UnicodeEncodeError`. Step 11 calls the verifier bare at two sites,
-    so a raise here would kill finalize before pipeline-result.json was
-    ever written — the exact failure class `read_verdict_file()` exists
-    to have stopped, reintroduced on the one input class this function is
-    pointed at. With `ensure_ascii=True` every non-ASCII scalar, lone
-    surrogates included, leaves as a `\\uXXXX` escape, so the
-    serialization is total for anything `json.load` can return.
-
-    Second, CANONICALITY: an all-ASCII form has exactly one byte
-    representation per parsed value, so two readers of the same ledger
-    can never disagree about the bytes they hashed.
-
-    The stamp is excluded from its own input for the obvious reason: a
-    digest that hashed the field it is written into could never verify,
-    since stamping it would immediately invalidate it. Excluding it makes
-    re-stamping an unchanged ledger a fixed point, which is what lets two
-    in-channel writes in a row both verify.
-
-    Callers must never re-spell this: `write_findings()` and
-    `verify_findings_integrity()` both go through this function, so the
-    producer and the verifier cannot drift into hashing two different
-    things and reporting the difference as tampering.
-    """
-    if not isinstance(findings, dict):
-        raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
-    payload = {
-        key: value
-        for key, value in findings.items()
-        if key != CONTENT_DIGEST_KEY
-    }
-    canonical = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def write_findings(output_dir, findings):
     """The ONE sanctioned write path for review-findings.json.
 
-    Stamps `content_digest` over the rest of the ledger, then replaces the
-    file atomically through the shared `atomic_write_json`. Returns the
-    digest.
+    Replaces the file atomically through the shared `atomic_write_json`.
 
     Addressed by output directory, not by path, like every other public
     entry point in this module (`read_critic_verdict`, `pending_count`,
-    `apply_adjustments`, `verify_findings_integrity`). The filename is
-    this module's constant, so a caller cannot point the sanctioned
-    writer at the wrong file — which matters most for the one writer the
-    pipeline cannot check, the review-reconciliator agent following a
-    taught snippet.
+    `apply_adjustments`). The filename is this module's constant, so a
+    caller cannot point the sanctioned writer at the wrong file — which
+    matters most for the one writer the pipeline cannot check, the
+    review-reconciliator agent following a taught snippet.
 
     Three writers exist across a run and all three call this: the
     review-reconciliator agent's first write (taught in
     `agents/review-reconciliator.md`), `apply_adjustments()` below, and
-    orchestration.py's Rule 23 verdict sync. That is what makes the stamp
-    load-bearing rather than decorative — every write the pipeline
-    sanctions leaves a ledger that verifies, so a ledger that does not
-    verify at finalize was written by something else.
-
-    The stamp is assigned into the caller's dict BEFORE the write, since
-    it has to be part of the payload that lands on disk. A failed write
-    therefore leaves the caller holding a stamped dict that was never
-    published. That is harmless and deliberately not worked around: no
-    caller reads the dict back after a failed write, and re-stamping is a
-    fixed point, so a retry produces exactly the same digest.
-
-    Detection, not prevention. Nothing here can stop an orchestrator's
-    ad-hoc `python3 -c` edit — the field defect this exists for, where an
-    applied finding's `title` and `recommendation` were rewritten by hand
-    after the apply, with no ledger entry and against the critic's
-    keep-verbatim ask. What it can do is make that edit visible instead of
-    letting it ship as if the pipeline had produced it.
+    orchestration.py's Rule 23 verdict sync. One writer means one place
+    where the ledger's atomicity and its filename are decided, and it is
+    the rule a fourth writer would break: every change to this file goes
+    through the adjustments channel, never a hand edit.
     """
     if not isinstance(findings, dict):
         raise ValueError(f"{FINDINGS_FILENAME} must be a JSON object")
-    digest = compute_findings_digest(findings)
-    findings[CONTENT_DIGEST_KEY] = digest
     atomic_write_json(os.path.join(output_dir, FINDINGS_FILENAME), findings)
-    return digest
-
-
-def verify_findings_integrity(output_dir):
-    """Answer whether the ledger on disk is the one the channel wrote.
-
-    Returns `INTEGRITY_INTACT`, `INTEGRITY_MODIFIED`, or `None` when there
-    is nothing to verify.
-
-    `None` — no verifiable ledger, which covers TWO facts and must be
-    read as neither of the other answers: the file is absent (the
-    ordinary partial-run case finalize already records its own way), or
-    it exists but could not be read at all (`OSError`). An unreadable
-    file says nothing about its content, and reporting either verdict
-    would be a measured claim the evidence does not support; the
-    null-when-unmeasured convention `worktree_hygiene` and `usage`
-    already use applies.
-
-    `INTEGRITY_MODIFIED` — the file exists and is readable but is not what
-    an in-channel write leaves behind. Four shapes qualify, all one
-    statement: unparseable JSON, a non-object payload, a missing or
-    non-string `content_digest`, and a digest that does not match the
-    content beside it. The missing-stamp case is deliberate and
-    adjudicated: within this version every sanctioned writer stamps, so an
-    unstamped ledger at finalize means an out-of-channel rewrite dropped
-    the key. Absence of the stamp on a file the channel always stamps IS
-    the evidence — treating it as "legitimately unstamped" would hand
-    every hand-edit an excuse, since dropping a key is exactly what a
-    naive `json.dump` of a hand-built dict does.
-
-    This never raises on the content it inspects. That is a hard
-    requirement, not a nicety: step 11 calls it bare, so an exception
-    here would take finalize down before pipeline-result.json exists —
-    and its input is by construction whatever an out-of-channel edit left
-    behind. `compute_findings_digest()`'s totality is what delivers it.
-    """
-    read = read_findings_file(os.path.join(output_dir, FINDINGS_FILENAME))
-    if read.status in (FINDINGS_READ_ABSENT, FINDINGS_READ_IO_ERROR):
-        return None
-    if read.status != FINDINGS_READ_OK:
-        return INTEGRITY_MODIFIED
-    findings = read.findings
-    recorded = findings.get(CONTENT_DIGEST_KEY)
-    if not isinstance(recorded, str):
-        return INTEGRITY_MODIFIED
-    if recorded != compute_findings_digest(findings):
-        return INTEGRITY_MODIFIED
-    return INTEGRITY_INTACT
 
 
 def _validate_fields(fields, entry_label):

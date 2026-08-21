@@ -219,13 +219,11 @@ output['meta']['reconciliation'] = {
 # path. review-findings.json has three writers across a run (this one,
 # critic_adjustments.py applying the decision critic's adjustments, and the
 # pipeline's end-of-run verdict sync) and all three call write_findings():
-# it stamps a content digest over the ledger and replaces the file
-# atomically, so no writer can leave a torn file for the next one and the
-# pipeline can tell at finalize whether anything edited the ledger outside
-# this channel. A plain open() or a bare atomic write here would publish a
-# ledger the run then reports as modified out of channel. Pass the output
-# DIRECTORY, not a path — the filename is the pipeline's to know, so you
-# cannot misname the artifact.
+# it replaces the file atomically, so no writer can leave a torn file for
+# the next one. A plain open() or a bare atomic write here would be a
+# fourth write path for an artifact that must have exactly one. Pass the
+# output DIRECTORY, not a path — the filename is the pipeline's to know,
+# so you cannot misname the artifact.
 from review.critic_adjustments import write_findings
 write_findings(output_dir, output)
 ```

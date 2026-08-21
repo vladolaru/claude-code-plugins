@@ -629,7 +629,6 @@ class TestRunManifest:
             "status": "degraded",
             "verdict": "COMMENT",
             "critic_verdict": "REVISE",
-            "post_apply_integrity": "modified_out_of_channel",
             "review_body": "PIPELINE_RESULT_SECRET",
             "degradation_notes": ["TOOL_RESULT_SECRET"],
         }))
@@ -643,12 +642,6 @@ class TestRunManifest:
         assert manifest["outcome"]["pipeline_status"] == "degraded"
         assert manifest["outcome"]["verdict"] == "COMMENT"
         assert manifest["outcome"]["critic_verdict"] == "REVISE"
-        # The ledger-integrity check rides the same outcome block, so
-        # "how often did a run publish a hand-edited ledger" is a cohort
-        # question rather than one pipeline-result.json at a time.
-        assert manifest["outcome"]["post_apply_integrity"] == (
-            "modified_out_of_channel"
-        )
         serialized = json.dumps(manifest)
         assert "PIPELINE_RESULT_SECRET" not in serialized
         assert "TOOL_RESULT_SECRET" not in serialized

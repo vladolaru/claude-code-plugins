@@ -18,10 +18,10 @@ they all drift eventually — so there is now exactly one.
 
 One artifact may NOT use this function directly: review-findings.json is
 never written with a bare ``atomic_write_json``. It goes through
-``critic_adjustments.write_findings(output_dir, findings)``, which stamps
-the content digest finalize verifies and then calls this — a bare write
-here publishes a ledger the run reports as modified out of channel (see
-the one-write-path rule in the plugin's AGENTS.md).
+``critic_adjustments.write_findings(output_dir, findings)``, which owns
+the ledger's filename and calls this underneath — a bare write here is a
+fourth write path for an artifact that must have exactly one (see the
+one-write-path rule in the plugin's AGENTS.md).
 
 The one deliberate exception is agent/output.py's staged-nonce two-file
 write for ``<reviewer>-review.json``. That protocol coordinates BETWEEN

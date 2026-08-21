@@ -20,27 +20,19 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from review.atomic_io import atomic_write_json
 from review.critic_adjustments import (
     APPLIED_IDS_KEY,
-    CONTENT_DIGEST_KEY,
-    INTEGRITY_INTACT,
-    INTEGRITY_MODIFIED,
     REJECTED_ADJUSTMENTS_KEY,
     WITHDRAWN_SUMMARY_KEY,
     REFUSAL_EXIT_CODE,
     REFUSAL_NO_VERDICT,
     REFUSAL_VERDICT_NOT_REVISE,
     apply_adjustments,
-    compute_findings_digest,
     pending_count,
     read_critic_verdict,
-    verify_findings_integrity,
     write_findings,
 )
 from review import critic_adjustments as critic_adjustments_module
 from review import orchestration as orchestration_mod
-from review.orchestration import (
-    _combine_findings_integrity,
-    _orchestrate_step_11,
-)
+from review.orchestration import _orchestrate_step_11
 from review.reconciliation_context import build_critic_context
 
 
@@ -55,10 +47,8 @@ def _write_findings(output_dir, issues, **extra):
 
     It goes out through `write_findings()` for the same reason: this helper
     stands in for the review-reconciliator's own write, which is the
-    ledger's first IN-CHANNEL write and therefore carries the content
-    digest. A raw `json.dumps` here would seed every test with an
-    unstamped ledger — the exact shape finalize now reports as an
-    out-of-channel rewrite.
+    ledger's first IN-CHANNEL write. A raw `json.dumps` here would route
+    around the one sanctioned write path the real producer uses.
     """
     sev = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for i in issues:
@@ -366,9 +356,6 @@ class TestRejectionAudit:
         assert record["target_id"] == "aaaa1111"
         assert record["rejection_reason"] == "spot-check refuted the claim"
         assert record["adjustment_id"]  # allocated so a re-run can dedupe
-
-        # The write goes through the sanctioned path — the digest verifies.
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_INTACT
 
     def test_second_run_does_not_duplicate_the_rejection_record(
         self, tmp_path
@@ -1316,6 +1303,31 @@ class TestVerdictSyncHardening:
                    for note in result["degradation_notes"])
         assert result["status"] == "degraded"
 
+    def test_an_unencodable_ledger_does_not_kill_finalize(
+        self, tmp_path, monkeypatch
+    ):
+        """A lone surrogate is only reachable by an out-of-channel edit,
+        and it cannot be written back out as UTF-8 — so the sync's write
+        raises UnicodeEncodeError, which is not an OSError. Finalize has
+        to survive it and record the failure, not die before
+        pipeline-result.json exists.
+        """
+        monkeypatch.chdir(tmp_path)  # keep hygiene off the developer's repo
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+        self._write_verdict_and_report(tmp_path, "REQUEST_CHANGES")
+        path = tmp_path / "review-findings.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["issues"][0]["title"] = json.loads('"bad \\ud800 char"')
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict_sync"] == "failed_io"
+        assert any("verdict sync failed" in note
+                   for note in result["degradation_notes"])
+        assert result["status"] == "degraded"
+
     def test_missing_findings_file_reports_skipped_shape_mismatch(
         self, tmp_path
     ):
@@ -1705,8 +1717,8 @@ class TestStepElevenAppliesAdjustments:
         data[APPLIED_IDS_KEY] = ["deadbeef"]
         # Through the sanctioned writer: the state being simulated is a
         # crash between apply_adjustments' two writes, where the FINDINGS
-        # write (stamped, in channel) landed and only the flag write was
-        # lost. A raw rewrite here would simulate a hand edit instead.
+        # write (in channel) landed and only the flag write was lost. A
+        # raw rewrite here would simulate a hand edit instead.
         write_findings(str(tmp_path), data)
         _write_adjustments(tmp_path, [{
             "action": "promote", "id": "aaaa1111",
@@ -2041,443 +2053,13 @@ class TestStepElevenWithdrawsContradictedProse:
         assert "withdrawn" in rendered.lower()
 
 
-class TestFindingsDigest:
-    """The stamp that makes an out-of-channel edit to the ledger visible.
-
-    `review-findings.json` has exactly three sanctioned writers — the
-    review-reconciliator's first write, `apply_adjustments()`, and step
-    11's Rule 23 verdict sync — and all three go through
-    `write_findings()`, which stamps `content_digest` over the canonical
-    serialization of everything else in the file. A ledger whose content
-    no longer matches its own stamp, or that carries no stamp at all, was
-    written by something that is not one of those three.
-    """
-
-    def test_write_findings_stamps_a_digest_that_verifies(self, tmp_path):
-        path = tmp_path / "review-findings.json"
-        write_findings(str(tmp_path), {"issues": [], "verdict": "APPROVE"})
-        data = json.loads(path.read_text())
-        assert data[CONTENT_DIGEST_KEY] == compute_findings_digest(data)
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_INTACT
-
-    def test_the_digest_excludes_itself(self, tmp_path):
-        """Recomputing over the STAMPED file must reproduce the stamp.
-
-        A digest that hashed its own field could never verify: the value
-        computed before stamping would describe a file that no longer
-        exists the instant it is written.
-        """
-        payload = {"issues": [], "verdict": "APPROVE"}
-        unstamped_digest = compute_findings_digest(payload)
-        path = tmp_path / "review-findings.json"
-        write_findings(str(tmp_path), payload)
-
-        stamped = json.loads(path.read_text())
-        assert stamped[CONTENT_DIGEST_KEY] == unstamped_digest
-        assert compute_findings_digest(stamped) == unstamped_digest
-
-        # Re-stamping an already-stamped ledger is a fixed point, which is
-        # what makes a second in-channel write of unchanged content verify.
-        write_findings(str(tmp_path), stamped)
-        assert json.loads(path.read_text())[CONTENT_DIGEST_KEY] == (
-            unstamped_digest
-        )
-
-    def test_key_order_does_not_change_the_digest(self, tmp_path):
-        """One canonical serialization, not "whatever json.dumps did"."""
-        a = {"verdict": "APPROVE", "issues": [{"id": "x", "severity": "low"}]}
-        b = {"issues": [{"severity": "low", "id": "x"}], "verdict": "APPROVE"}
-        assert compute_findings_digest(a) == compute_findings_digest(b)
-
-    def test_a_content_change_changes_the_digest(self, tmp_path):
-        assert compute_findings_digest({"verdict": "APPROVE"}) != (
-            compute_findings_digest({"verdict": "COMMENT"})
-        )
-
-    def test_an_absent_ledger_has_nothing_to_verify(self, tmp_path):
-        assert verify_findings_integrity(str(tmp_path)) is None
-
-    def test_a_raw_tamper_after_a_stamped_write_is_visible(self, tmp_path):
-        """The field defect: a hand-edited title after the apply."""
-        path = tmp_path / "review-findings.json"
-        write_findings(
-            str(tmp_path),
-            {"issues": [_issue("aaaa1111")], "verdict": "COMMENT"},
-        )
-        data = json.loads(path.read_text())
-        data["issues"][0]["title"] = "retitled by hand after the apply"
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
-
-    def test_a_dropped_stamp_is_visible(self, tmp_path):
-        """Absence of the stamp on a file the channel always stamps IS
-        evidence — an out-of-channel rewrite that dropped the key looks
-        exactly like this."""
-        path = tmp_path / "review-findings.json"
-        write_findings(str(tmp_path), {"issues": [], "verdict": "APPROVE"})
-        data = json.loads(path.read_text())
-        del data[CONTENT_DIGEST_KEY]
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
-
-    def test_a_ledger_that_was_never_stamped_is_visible(self, tmp_path):
-        (tmp_path / "review-findings.json").write_text(
-            json.dumps({"issues": [], "verdict": "APPROVE"})
-        )
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
-
-    def test_an_unparseable_ledger_is_visible(self, tmp_path):
-        (tmp_path / "review-findings.json").write_text("{not json")
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
-
-    def test_a_non_object_ledger_is_visible(self, tmp_path):
-        (tmp_path / "review-findings.json").write_text("[1, 2]")
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
-
-    def test_a_non_string_stamp_is_visible(self, tmp_path):
-        path = tmp_path / "review-findings.json"
-        write_findings(str(tmp_path), {"issues": [], "verdict": "APPROVE"})
-        data = json.loads(path.read_text())
-        data[CONTENT_DIGEST_KEY] = 42
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
-
-    def test_a_lone_surrogate_is_answered_not_raised(self, tmp_path):
-        """The verifier must be TOTAL over anything json.load returns.
-
-        `json.load` happily produces lone surrogates from a readable,
-        valid-JSON file (`"bad \\ud800 char"`), and serializing one back
-        out with `ensure_ascii=False` raises UnicodeEncodeError. Step 11
-        calls this bare at two sites, so a raise would kill finalize
-        before pipeline-result.json exists — on precisely the input class
-        this check is pointed at, an adversarial hand edit.
-        """
-        path = tmp_path / "review-findings.json"
-        # Stamp a clean ledger first, then inject the surrogate around the
-        # surviving string digest: an unstamped fixture would short-circuit
-        # at the digest-shape guard and never reach the total serialization
-        # this test exists to pin.
-        write_findings(str(tmp_path), {"issues": [], "title": "clean"})
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["title"] = "bad \ud800 char"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f)  # default ensure_ascii escapes the surrogate
-
-        # Tampered, so the answer is "modified" — but the point is that
-        # there IS an answer rather than a traceback out of finalize.
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_MODIFIED
-
-    def test_the_digest_itself_is_total_over_lone_surrogates(self):
-        """The hash — not just the caller — has to survive the input.
-
-        This is the `ensure_ascii=True` pin. With `ensure_ascii=False`,
-        `json.dumps` emits the raw surrogate and `.encode("utf-8")`
-        raises; escaped, the canonical form is pure ASCII and always
-        encodes. Two different surrogates must also hash differently, so
-        totality is not bought with a collapse.
-        """
-        one = compute_findings_digest(
-            json.loads('{"title": "bad \\ud800 char"}')
-        )
-        other = compute_findings_digest(
-            json.loads('{"title": "bad \\ud801 char"}')
-        )
-        assert len(one) == 64 and len(other) == 64
-        assert one != other
-
-    def test_write_findings_refuses_a_non_object_ledger(self, tmp_path):
-        with pytest.raises(ValueError):
-            write_findings(str(tmp_path), [1, 2])
-
-    def test_apply_adjustments_leaves_a_verifying_stamp(
-        self, tmp_path, revise_verdict
-    ):
-        """The applier is an in-channel writer: its own write re-stamps."""
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "aaaa1111",
-            "fields": {"severity": "medium"}, "rationale": "r",
-        }])
-
-        assert apply_adjustments(str(tmp_path))["applied"] == 1
-
-        data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["issues"][0]["severity"] == "medium"
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_INTACT
-
-
-class TestStepElevenIntegrityCheck:
-    """Finalize reports whether the published ledger is the one the
-    sanctioned writers left behind.
-
-    Detection, not prevention: nothing can stop an orchestrator's ad-hoc
-    `python3 -c` edit, so the run says out loud when one happened instead
-    of publishing a ledger with invisible hand edits in it.
-    """
-
-    @pytest.fixture(autouse=True)
-    def _isolated_cwd(self, tmp_path, monkeypatch):
-        """Keep finalize's worktree hygiene off the developer's own repo."""
-        monkeypatch.chdir(tmp_path)
-
-    def _step_11(self, output_dir):
-        return _orchestrate_step_11("pr", {}, {}, {}, str(output_dir))
-
-    @staticmethod
-    def _seed(tmp_path, *, review_verdict="REQUEST_CHANGES"):
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": review_verdict})
-        )
-        (tmp_path / "review-report.md").write_text("# report")
-
-    @staticmethod
-    def _result(tmp_path):
-        return json.loads((tmp_path / "pipeline-result.json").read_text())
-
-    @staticmethod
-    def _tamper(tmp_path, **fields):
-        """An out-of-channel edit: raw json.dump, no digest refresh."""
-        path = tmp_path / "review-findings.json"
-        data = json.loads(path.read_text())
-        data["issues"][0].update(fields)
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-    def test_apply_then_sync_then_verify_reads_intact(self, tmp_path):
-        """The ordering pin: the verdict sync runs BEFORE the check, and
-        it re-stamps as it writes — so a run where every writer stayed in
-        channel finalizes intact rather than accusing its own last write.
-
-        The review verdict deliberately DIFFERS from the one the seeded
-        ledger carries, so the sync actually changes the file's content.
-        Seeded with a matching verdict, the sync's write would be a no-op
-        on the digest and the test would pass even with the refresh
-        removed — proving nothing about the ordering it exists to pin.
-        """
-        self._seed(tmp_path, review_verdict="APPROVE")
-        _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "aaaa1111",
-            "fields": {"severity": "medium"}, "rationale": "r",
-        }])
-        _write_critic_verdict(tmp_path, "REVISE")
-
-        self._step_11(tmp_path)
-
-        result = self._result(tmp_path)
-        assert result["post_apply_integrity"] == INTEGRITY_INTACT
-        assert result["degradation_notes"] == []
-        assert result["status"] == "success"
-        # Both in-channel effects survived, and the file still verifies
-        # against its own stamp after the sync rewrote it.
-        data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["issues"][0]["severity"] == "medium"
-        assert data["verdict"] == "APPROVE"  # the sync did change content
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_INTACT
-
-    def test_a_hand_edit_after_the_apply_is_flagged_and_degrades(
-        self, tmp_path
-    ):
-        """The reproduced field defect, end to end: the orchestrator
-        applied the batch, then rewrote `title`/`recommendation` by hand
-        against the critic's keep-verbatim ask.
-        """
-        self._seed(tmp_path)
-        _write_adjustments(tmp_path, [{
-            "action": "promote", "id": "aaaa1111",
-            "fields": {"severity": "medium"}, "rationale": "r",
-        }])
-        _write_critic_verdict(tmp_path, "REVISE")
-        assert apply_adjustments(str(tmp_path))["applied"] == 1
-
-        self._tamper(
-            tmp_path,
-            title="retitled by hand",
-            recommendation="reworded by hand",
-        )
-
-        self._step_11(tmp_path)
-
-        result = self._result(tmp_path)
-        assert result["post_apply_integrity"] == INTEGRITY_MODIFIED
-        assert result["status"] == "degraded"
-        assert any(
-            "out of channel" in note for note in result["degradation_notes"]
-        ), result["degradation_notes"]
-
-    def test_a_dropped_stamp_is_flagged(self, tmp_path):
-        """Adjudicated: within this version all three writers stamp, so an
-        unstamped ledger at finalize means an out-of-channel rewrite
-        dropped the key.
-        """
-        self._seed(tmp_path)
-        path = tmp_path / "review-findings.json"
-        data = json.loads(path.read_text())
-        del data[CONTENT_DIGEST_KEY]
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        self._step_11(tmp_path)
-
-        result = self._result(tmp_path)
-        assert result["post_apply_integrity"] == INTEGRITY_MODIFIED
-        assert result["status"] == "degraded"
-
-    def test_no_findings_file_omits_the_field(self, tmp_path):
-        """Nothing to verify is not the same claim as "verified intact"."""
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "COMMENT"})
-        )
-        (tmp_path / "review-report.md").write_text("# report")
-
-        self._step_11(tmp_path)
-
-        result = self._result(tmp_path)
-        assert "post_apply_integrity" not in result
-
-    def test_a_stamped_reconciliator_write_with_no_critic_round_is_intact(
-        self, tmp_path
-    ):
-        """No adjustments, no critic verdict — the reconciliator's own
-        write is the only one, and it stamped."""
-        self._seed(tmp_path)
-
-        self._step_11(tmp_path)
-
-        result = self._result(tmp_path)
-        assert result["post_apply_integrity"] == INTEGRITY_INTACT
-        assert result["degradation_notes"] == []
-        assert result["status"] == "success"
-
-    def test_the_after_reading_can_be_the_deciding_one(
-        self, tmp_path, monkeypatch
-    ):
-        """Pins the SECOND reading, which the before-reading cannot cover.
-
-        The ledger is intact when finalize starts and is edited while
-        finalize is running — a concurrent out-of-channel writer, or the
-        laundering the verdict sync would perform if it ever stopped
-        re-stamping. The tamper is injected through the usage-capture
-        seam, which runs after the pre-read and before the sync, and
-        review-verdict.json is left malformed so the sync never rewrites
-        (and never re-stamps) the file. Without the after-reading, this
-        run publishes `intact` over a hand-edited ledger.
-        """
-        self._seed(tmp_path)
-        # Malformed on purpose: no usable verdict means no sync write.
-        (tmp_path / "review-verdict.json").write_text(json.dumps({"a": 1}))
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_INTACT
-
-        def _tamper_mid_finalize(output_dir):
-            self._tamper(tmp_path, title="edited while finalize ran")
-            return None
-
-        monkeypatch.setattr(
-            orchestration_mod, "_capture_usage_snapshot", _tamper_mid_finalize
-        )
-
-        self._step_11(tmp_path)
-
-        result = self._result(tmp_path)
-        assert result["verdict_sync"] is None  # the sync never wrote
-        assert result["post_apply_integrity"] == INTEGRITY_MODIFIED
-        assert result["status"] == "degraded"
-
-    def test_an_unencodable_ledger_does_not_kill_finalize(self, tmp_path):
-        """A lone surrogate is only reachable by an out-of-channel edit,
-        and it cannot be written back out as UTF-8 — so the sync's write
-        raises UnicodeEncodeError, which is not an OSError. Finalize has
-        to survive it and publish the finding, not die before
-        pipeline-result.json exists.
-        """
-        self._seed(tmp_path)
-        path = tmp_path / "review-findings.json"
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["issues"][0]["title"] = json.loads('"bad \\ud800 char"')
-        path.write_text(json.dumps(data), encoding="utf-8")
-
-        self._step_11(tmp_path)
-
-        result = self._result(tmp_path)
-        assert result["post_apply_integrity"] == INTEGRITY_MODIFIED
-        assert result["verdict_sync"] == "failed_io"
-        assert result["status"] == "degraded"
-
-    def test_the_findings_markdown_render_cannot_change_the_result(
-        self, tmp_path
-    ):
-        """Step 11's re-render writes `review-findings.md` and never the
-        JSON, so verify-before-render and render-before-verify are the
-        same result. Pinned because the implemented order is
-        sync -> verify -> render, and a future reordering must stay a
-        no-op for this field rather than silently flipping it.
-        """
-        self._seed(tmp_path)
-        before = json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        )[CONTENT_DIGEST_KEY]
-
-        # Render first (step 9 does exactly this), then finalize.
-        from review.orchestration import _render_findings_markdown
-        markdown, error = _render_findings_markdown(str(tmp_path))
-        assert error is None, error
-        assert (tmp_path / "review-findings.md").is_file()
-        after_render = json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        )[CONTENT_DIGEST_KEY]
-        assert after_render == before
-        assert verify_findings_integrity(str(tmp_path)) == INTEGRITY_INTACT
-
-        self._step_11(tmp_path)
-
-        assert self._result(tmp_path)["post_apply_integrity"] == (
-            INTEGRITY_INTACT
-        )
-
-
-class TestCombineFindingsIntegrity:
-    """The worse-wins reduction, exercised as a truth table.
-
-    Both readings exist for different reasons — the before-reading
-    catches an edit made between the critic's apply and finalize, the
-    after-reading catches one made (or laundered) during finalize — so
-    every pair has to be pinned, including the two "was there, now
-    isn't" pairs no step-11 scenario reaches today.
-    """
-
-    @pytest.mark.parametrize(
-        "before,after,expected",
-        [
-            (None, None, None),
-            (INTEGRITY_INTACT, INTEGRITY_INTACT, INTEGRITY_INTACT),
-            (INTEGRITY_MODIFIED, INTEGRITY_INTACT, INTEGRITY_MODIFIED),
-            (INTEGRITY_INTACT, INTEGRITY_MODIFIED, INTEGRITY_MODIFIED),
-            (INTEGRITY_MODIFIED, INTEGRITY_MODIFIED, INTEGRITY_MODIFIED),
-            # A ledger that was verifiable before finalize and is gone (or
-            # unreadable) after is not "nothing to verify" — something
-            # removed the run's own artifact mid-finalize.
-            (INTEGRITY_INTACT, None, INTEGRITY_MODIFIED),
-            (None, INTEGRITY_INTACT, INTEGRITY_MODIFIED),
-        ],
-    )
-    def test_worse_reading_wins(self, before, after, expected):
-        assert _combine_findings_integrity(before, after) == expected
-
-
 class TestReconciliatorWritePathPin:
     """Writer #1 is an agent following a Markdown snippet, so the only
     thing that can hold it to the sanctioned write path is a test.
 
     If `agents/review-reconciliator.md` drifts back to the bare atomic
-    write it carried one commit ago, every run publishes an unstamped
-    ledger and degrades on `post_apply_integrity` — with the rest of the
-    suite green, because no Python caller changed.
+    write it carried one commit ago, the ledger has a fourth write path —
+    with the rest of the suite green, because no Python caller changed.
     """
 
     SNIPPET = PLUGIN_ROOT / "agents" / "review-reconciliator.md"

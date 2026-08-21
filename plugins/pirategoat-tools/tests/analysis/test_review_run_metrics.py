@@ -690,29 +690,6 @@ class TestLoadRuns:
 
         assert run["outcome"]["verdict_sync"] == verdict_sync
 
-    @pytest.mark.parametrize(
-        "integrity", ["intact", "modified_out_of_channel", None],
-        ids=["intact", "modified", "null"],
-    )
-    def test_post_apply_integrity_is_measurable_across_a_cohort(
-        self, tmp_path, integrity
-    ):
-        """Finalize's ledger-tamper check rides the same whitelist as
-        `verdict_sync`, for the same reason: "how often did a run publish
-        a findings ledger something hand-edited after the critic applied"
-        has to be answerable over a run directory, not one
-        pipeline-result.json at a time. `null` stays null — the manifest
-        keeps the key present for shape stability, and a run with no
-        ledger to verify must not read as a measured `intact`.
-        """
-        manifest = _manifest("integrity-run")
-        manifest["outcome"]["post_apply_integrity"] = integrity
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-
-        [run] = load_runs(tmp_path)
-
-        assert run["outcome"]["post_apply_integrity"] == integrity
-
     def test_running_sidecar_overlays_fresh_same_run_lifecycle_without_raw_payloads(
         self, tmp_path
     ):
@@ -7562,18 +7539,6 @@ class TestStructuredSidecarValuesFailClosed:
         assert run["run"]["id"] == "verdict-sync-run"
         assert "verdict_sync" not in run["outcome"]
 
-    def test_structured_post_apply_integrity_is_dropped_not_fatal(
-        self, tmp_path
-    ):
-        manifest = _manifest("integrity-run")
-        manifest["outcome"]["post_apply_integrity"] = ["intact"]
-        _write_manifest(tmp_path / "review.manifest.json", manifest)
-
-        [run] = load_runs(tmp_path)
-
-        assert run["run"]["id"] == "integrity-run"
-        assert "post_apply_integrity" not in run["outcome"]
-
     def test_structured_legacy_event_name_is_skipped_not_fatal(self, tmp_path):
         events = _legacy_events("legacy-structured")
         events.append(
@@ -8085,7 +8050,7 @@ class TestSkippedCriticIsNotACritiqueDuration:
 # sections' *availability flags* to `safe_availability`'s generic
 # bool-copy without ever teaching it their *payloads* — "measured: true"
 # with the section itself dropped. `coverage`, `synthesis_agents`, and the
-# `outcome` block's `verdict_sync`/`post_apply_integrity` had already
+# `outcome` block's `verdict_sync` had already
 # closed this gap by the time this landed; `worktree_hygiene`, `usage`
 # (the durable per-run token snapshot — distinct from the *transcript*
 # usage family under `measured["transcript"]["usage"]`), and

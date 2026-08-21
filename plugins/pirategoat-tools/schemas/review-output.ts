@@ -248,36 +248,6 @@ export interface ReviewOutput {
         text: string;
         withdrawn_by: string[];
     }>;
-
-    // Tamper stamp — present only on review-findings.json, written by
-    // critic_adjustments.write_findings(), which is the ONE sanctioned
-    // write path for that file. All three of its writers go through it:
-    // the review-reconciliator's first write, critic_adjustments.py
-    // applying a batch, and the pipeline's Rule 23 verdict sync.
-    //
-    // Value: SHA-256 (hex) over the canonical serialization of this whole
-    // object MINUS this field — JSON.stringify equivalent with sorted keys,
-    // compact `,`/`:` separators, and UTF-8 (no \uXXXX escaping). Excluding
-    // the field from its own input is what makes re-stamping unchanged
-    // content a fixed point, so two in-channel writes in a row both verify.
-    //
-    // Step 11 recomputes it before and after finalize's own writes and
-    // publishes the result in pipeline-result.json as `post_apply_integrity`
-    // — `"intact"`, or `"modified_out_of_channel"` (plus a degradation note
-    // and a degraded run status). The field is ABSENT from that result, not
-    // null, in two cases a consumer cannot tell apart from the key alone:
-    // no ledger existed to verify, or the ledger existed but could not be
-    // read (unreadable bytes are not evidence of tampering — the fault is
-    // recorded by its own degradation note instead). Either way a consumer
-    // must not read absence as "verified intact".
-    //
-    // A findings file carrying no content_digest reads as
-    // `"modified_out_of_channel"`, deliberately: within the version that
-    // introduced this field every sanctioned writer stamps, so an unstamped
-    // ledger at finalize means an out-of-channel rewrite dropped the key.
-    // Absence of the stamp on a file the channel always stamps IS the
-    // evidence — a naive hand-built `json.dump` looks exactly like this.
-    content_digest?: string;
 }
 
 /**

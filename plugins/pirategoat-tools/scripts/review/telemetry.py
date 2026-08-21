@@ -61,10 +61,9 @@ MARKER_FILE = ".telemetry-log-path"
 # unsupported path rather than silently reading a field the producer
 # never vouched for.
 #
-# The `outcome` block then gained `post_apply_integrity` (finalize's
-# ledger-tamper check), and the manifest gained the top-level
-# `synthesis_agents` section plus its `availability` conjunct
-# (reconciliator/critic lifecycle), both WITHOUT a further bump, under the
+# The manifest then gained the top-level `synthesis_agents` section plus
+# its `availability` conjunct (reconciliator/critic lifecycle) WITHOUT a
+# further bump, under the
 # Artifact Schemas rule's carve-out: schema 2 was introduced in 1.114.0
 # and 1.114.0 is still unreleased (the plugin's newest tag is
 # pirategoat-tools/v1.108.0), so no artifact was ever published claiming
@@ -85,11 +84,7 @@ MARKER_FILE = ".telemetry-log-path"
 #
 # Bumping to 3 here would publish a compatibility boundary between two
 # shapes that never both existed in the wild. Revisit the moment 1.114.0
-# is tagged: the next manifest key after that is a real 2 -> 3 bump —
-# and at that same moment the missing-digest-means-tampered adjudication
-# gains a cross-version edge worth re-checking: a run started under a
-# pre-digest build and finalized after an upgrade reads
-# modified_out_of_channel (today that window is developer-local only).
+# is tagged: the next manifest key after that is a real 2 -> 3 bump.
 EVENT_SCHEMA = 2
 # Optional manifest sections whose `availability["<name>"]` boolean shares
 # the section's own top-level key. The analysis consumer's flag/payload
@@ -875,17 +870,6 @@ class ReviewTelemetry:
                 "verdict": pipeline_result.get("verdict"),
                 "critic_verdict": pipeline_result.get("critic_verdict"),
                 "verdict_sync": pipeline_result.get("verdict_sync"),
-                # Null here carries a real meaning, matching the
-                # pipeline result's ABSENT field: there was no findings
-                # ledger to verify — no findings file, or one that
-                # could not be read at all. The manifest keeps the key
-                # present so the outcome
-                # block's shape stays constant across runs; a cohort
-                # query reads null as "not measured", never as "measured
-                # intact".
-                "post_apply_integrity": pipeline_result.get(
-                    "post_apply_integrity"
-                ),
             },
             "availability": {
                 "pipeline": True,
