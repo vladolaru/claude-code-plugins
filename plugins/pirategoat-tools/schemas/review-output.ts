@@ -89,7 +89,15 @@ export interface Issue {
 export interface Clearance {
     claim: string; // The absence being asserted
     method: string; // Exact searches run / files read (required)
-    evidence?: string | null; // Hit counts, file:line list (optional)
+    // Hit counts, file:line list, and — in a reconciled ledger — the
+    // agents the clearance came from ("per security-reviewer,
+    // concurrency-reviewer — 0 in-tree consumers"). Attribution rides in
+    // this free-text field by convention, with no field of its own:
+    // reconciliation collapses method-correlated clearances into ONE
+    // entry, so the names of every agent that ran the shared probe are
+    // what has to survive the merge. Unvalidated by construction — the
+    // contract lives in agents/review-reconciliator.md.
+    evidence?: string | null;
 }
 
 /**

@@ -759,7 +759,17 @@ class ReviewOutputBuilder:
             method: The exact searches run / files read that ground the claim
                 (e.g. "grep -rn 'th label' client/legacy/css/; read each hit").
                 Required — an absence claim without its method is unauditable.
-            evidence: Optional supporting detail (hit counts, file:line list).
+            evidence: Optional supporting detail — hit counts, a file:line
+                list, and, at reconciliation, WHO the clearance came from
+                ("per security-reviewer, concurrency-reviewer — 0 in-tree
+                consumers"). Attribution rides here by convention rather
+                than in its own field because the reconciliator collapses
+                method-correlated clearances into one entry: the names of
+                every agent that ran the shared probe are what survives
+                that merge, and they have nowhere else to go. Nothing
+                validates the convention — it is a documented contract
+                between `agents/review-reconciliator.md` and this field's
+                readers.
         """
         if not claim or not claim.strip():
             raise ValueError("add_clearance requires a non-empty claim.")
