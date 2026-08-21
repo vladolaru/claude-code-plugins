@@ -499,15 +499,25 @@ _AMBIGUOUS_SCRIPT_RE = re.compile(r"\.(js|mjs|cjs|ts)$", re.IGNORECASE)
 _UI_SNIFF_READ_BYTES = 64 * 1024
 
 
-def _file_has_ui_evidence(path: str, limit: int = _UI_SNIFF_READ_BYTES) -> bool:
+def _file_has_ui_evidence(
+    path: str, repo_root: str, limit: int = _UI_SNIFF_READ_BYTES
+) -> bool:
     """True when the first `limit` bytes of `path` show UI evidence.
 
-    Best-effort by construction: a deleted, unreadable, or binary file
-    yields False, so the patch scan is the only evidence for it. That is
-    the honest answer — nothing showed the file is a UI surface.
+    `path` is repository-relative, because every path in this module comes
+    from `git diff --name-only` and Git reports those from the repository
+    root whatever the process CWD is. `repo_root` is therefore REQUIRED,
+    not defaulted: opening a root-relative path against the CWD works only
+    when the pipeline happens to run from the top level, and silently reads
+    nothing — dropping a genuine UI file from scope — from any
+    subdirectory. Same reasoning as `bootstrap.py::get_file_history`.
+
+    Best-effort about the file itself: a deleted or unreadable file yields
+    False, so the patch scan is its only evidence. For a deletion that is
+    the honest answer — there is no file left to review.
     """
     try:
-        with open(path, "rb") as handle:
+        with open(os.path.join(repo_root, path), "rb") as handle:
             head = handle.read(limit)
     except OSError:
         return False
@@ -532,10 +542,29 @@ def filter_a11y_ui_evidence(
     left silent — a UI module edited only in its data layer still belongs
     to a11y.
 
+    The on-disk read is the WORKING TREE, resolved against the repository
+    root — one `git rev-parse --show-toplevel`, hoisted out of the loop.
+    Reading blobs with `git show <ref>:<path>` was the alternative and is
+    worse on both counts that matter here: it is one subprocess per file
+    instead of one per run, and it answers about a ref when the reviewer
+    is going to read the working tree — for an uncommitted or `--cached`
+    range there is no single right ref to name.
+
+    Fails OPEN. Dropping a file is a claim that evidence is ABSENT, and a
+    root we cannot resolve is a broken instrument, not an absence: every
+    candidate stays in scope rather than being dropped on unread disk.
+
     Returns (kept, dropped) preserving input order in both.
     """
     candidates = [f for f in files if _AMBIGUOUS_SCRIPT_RE.search(f)]
     if not candidates:
+        return list(files), []
+
+    try:
+        repo_root = run_cmd(["git", "rev-parse", "--show-toplevel"], check=True)
+    except RuntimeError:
+        repo_root = ""
+    if not repo_root:
         return list(files), []
 
     with_patch_evidence = classify_markup_evidence(
@@ -543,7 +572,8 @@ def filter_a11y_ui_evidence(
     )
     dropped = {
         f for f in candidates
-        if f not in with_patch_evidence and not _file_has_ui_evidence(f)
+        if f not in with_patch_evidence
+        and not _file_has_ui_evidence(f, repo_root)
     }
     if not dropped:
         return list(files), []

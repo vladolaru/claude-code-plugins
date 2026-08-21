@@ -2134,7 +2134,16 @@ class TestA11yUiEvidenceSniff:
         self._git(tmp_path, "add", ".")
         self._git(tmp_path, "commit", "-m", "feature")
 
-    def _scope_files(self, repo, domain):
+    def _scope_files(self, repo, domain, cwd=None):
+        """Build a11y scope, optionally from a SUBDIRECTORY of the repo.
+
+        `cwd` is not decoration. Every path in scope.py is
+        `git diff --name-only` output, which Git reports from the
+        repository root whatever the process CWD is — so a run from any
+        subdirectory is the case where a root-relative path opened against
+        the CWD reads nothing. Defaulting the harness to the repo top level
+        pins the one CWD that cannot expose that.
+        """
         args = argparse.Namespace(
             domain=domain,
             range="main..HEAD",
@@ -2149,7 +2158,7 @@ class TestA11yUiEvidenceSniff:
         )
         saved_cwd = os.getcwd()
         try:
-            os.chdir(repo)
+            os.chdir(cwd or repo)
             return review_scope.build_scope(args)["files"]
         finally:
             os.chdir(saved_cwd)
@@ -2211,6 +2220,42 @@ class TestA11yUiEvidenceSniff:
         )
         # ...but the file on disk does.
         assert self._scope_files(tmp_path, "a11y") == ["src/price.ts"]
+
+    def test_disk_evidence_survives_a_run_from_a_subdirectory(self, tmp_path):
+        """Regression: the on-disk read used to open the git-root-relative
+        path against the process CWD. From any subdirectory that raises
+        OSError, reads as "no evidence", and silently drops a genuine UI
+        file from a11y scope."""
+        ui_module_v1 = (
+            "import { createElement } from 'react';\n"
+            "const LABEL = 'Total';\n"
+            "export const price = (n: number) => `$${n}`;\n"
+        )
+        self._make_repo(
+            tmp_path,
+            {"src/price.ts": ui_module_v1.replace("`$${n}`", "`EUR ${n}`")},
+            base_files={"src/price.ts": ui_module_v1},
+        )
+        subdir = tmp_path / "src"
+        assert subdir.is_dir()
+        assert self._scope_files(tmp_path, "a11y", cwd=subdir) == [
+            "src/price.ts"
+        ]
+
+    def test_unresolvable_repo_root_keeps_every_candidate(self, tmp_path,
+                                                          monkeypatch):
+        """Fail OPEN. Dropping a file claims evidence is ABSENT; a root we
+        cannot resolve is a broken instrument, not an absence."""
+        real_run_cmd = review_scope.run_cmd
+
+        def _no_toplevel(cmd, *args, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--show-toplevel"]:
+                raise RuntimeError("no toplevel")
+            return real_run_cmd(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(review_scope, "run_cmd", _no_toplevel)
+        self._make_repo(tmp_path, {"server/orders.ts": self._BACKEND_TS})
+        assert self._scope_files(tmp_path, "a11y") == ["server/orders.ts"]
 
     def test_tsx_and_jsx_never_need_evidence(self, tmp_path):
         """JSX in the extension IS the evidence — a `.tsx` file with a
@@ -2313,14 +2358,16 @@ class TestBoundedUiSniffRead:
         target = tmp_path / "bundle.js"
         target.write_text("var pad = 0;\n" * 6000 + "import 'react';\n")
         assert target.stat().st_size > review_scope._UI_SNIFF_READ_BYTES
-        assert not review_scope._file_has_ui_evidence(str(target))
+        assert not review_scope._file_has_ui_evidence(
+            "bundle.js", str(tmp_path)
+        )
         assert review_scope._file_has_ui_evidence(
-            str(target), limit=target.stat().st_size
+            "bundle.js", str(tmp_path), limit=target.stat().st_size
         )
 
     def test_unreadable_file_is_not_evidence(self, tmp_path):
         assert not review_scope._file_has_ui_evidence(
-            str(tmp_path / "gone.ts")
+            "gone.ts", str(tmp_path)
         )
 
     def test_truncated_trailing_line_never_matches_a_fragment(self, tmp_path):
@@ -2329,4 +2376,6 @@ class TestBoundedUiSniffRead:
         target = tmp_path / "cut.ts"
         target.write_text("const a = 1;\nimport 'react-dom';\n")
         cut = len("const a = 1;\nimport 'react-do")
-        assert not review_scope._file_has_ui_evidence(str(target), limit=cut)
+        assert not review_scope._file_has_ui_evidence(
+            "cut.ts", str(tmp_path), limit=cut
+        )
