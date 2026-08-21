@@ -1113,9 +1113,25 @@ class TestAnalyzeSubagent:
             "python3 <<PY\npass\nPY"
         )
 
+    @pytest.mark.parametrize(
+        "review_budget",
+        [
+            pytest.param(None, id="no-budget"),
+            pytest.param(80, id="budgeted"),
+        ],
+    )
     def test_real_bootstrap_builder_envelope_is_counted_as_one_attempt(
-        self, tmp_path
+        self, tmp_path, review_budget
     ):
+        """Both rendered envelope shapes, from the real renderer.
+
+        Hand-built strings elsewhere pin the names; only this test proves
+        what bootstrap actually emits is recognized. A budgeted run appends
+        one more assignment, and recognition rejects any name it does not
+        know — so the shape that carries a budget has to be exercised here
+        too, or the estate greenlights a renderer that silently drops every
+        budgeted save out of the measured cohort.
+        """
         output_dir = tmp_path / "review output"
         bootstrap_output = _bootstrap_mod.build_output(
             agent_name="security-reviewer",
@@ -1130,7 +1146,11 @@ class TestAnalyzeSubagent:
             reviewer_name="security",
             not_diffed_count=0,
             has_php=False,
+            review_budget=review_budget,
         )
+        assert (
+            "PIRATEGOAT_REVIEW_BUDGET" in bootstrap_output
+        ) is (review_budget is not None)
         command_start = bootstrap_output.index("PIRATEGOAT_PLUGIN_ROOT=")
         command_end = bootstrap_output.index("\nPY", command_start) + len("\nPY")
         command = bootstrap_output[command_start:command_end]
