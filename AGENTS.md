@@ -335,6 +335,28 @@ Every commit that modifies plugin behavior (features, fixes, refactors, performa
 
 **Exempt from version bumps:** `docs`, `test`, `ci`, `style`, `chore` commits that don't change runtime behavior. Still add a changelog entry if the change is notable.
 
+### Changelog Entry Style
+
+The changelog's audience is a plugin user deciding whether a change affects
+them. The why-narrative, evidence, field-run numbers, and mechanism tour live
+in the commit body — git is the archive; never duplicate it into the changelog.
+
+- **One bullet per user-visible behavior, not per commit.** A follow-up fix to
+  an UNRELEASED entry folds into the bullet that introduced the behavior —
+  edit that bullet; never append a correction trail beneath it.
+- **One sentence per bullet; two at most**, and only when the second states a
+  consequence the first cannot carry. No bold-lead paragraph essays, no test
+  counts, no file-by-file tours.
+- **Purely internal changes** (refactors, test estate, doc wording, analysis
+  tooling performance) get no bullet unless a consumer would notice.
+- **The two-sentence test:** if a bullet cannot be written in two sentences,
+  it is either several behaviors (split it) or commit-body detail (cut it).
+
+Why this is a rule and not taste: the unreleased 1.114.0 entry twice grew past
+20KB of essay bullets and had to be distilled (121.6KB → 9.3KB → regrown to
+24KB → distilled again). Agents copy whichever pattern the file already shows,
+so the entry style is load-bearing — a single essay bullet re-seeds the drift.
+
 ### Plugin-Prefixed Tags
 
 Since this repository may contain multiple plugins with independent version cycles, use **plugin-prefixed tags**:
