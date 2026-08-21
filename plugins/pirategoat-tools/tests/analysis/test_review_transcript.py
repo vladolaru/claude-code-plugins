@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
+import inspect
 import json
+import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -6026,3 +6029,95 @@ class TestScopeExemptRegistrySync:
             and config.get("dispatch_class") != "special"
         }
         assert _mod._SCOPE_EXEMPT_REVIEWERS == expected
+
+
+def _branched_tool_names(func, *variables: str) -> set[str]:
+    """Tool names a function branches on, read from its own source.
+
+    Parsed rather than restated: a hand-written replica of the branch set
+    is exactly the drift this guard exists to catch. Recognizes every
+    spelling the module actually reaches for — `name == "X"`, the
+    reversed `"X" == name`, and `name in {...}` / `(...)` / `[...]` over
+    string constants, which is the natural style here (`_operation`'s own
+    `name in _SAFE_TOOL_NAMES` sits two functions away).
+    """
+    names: set[str] = set()
+    source = textwrap.dedent(inspect.getsource(func))
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+            continue
+        operator = node.ops[0]
+        left, right = node.left, node.comparators[0]
+        if isinstance(operator, ast.Eq):
+            # Either side may hold the variable; the other holds the name.
+            for subject, value in ((left, right), (right, left)):
+                if (
+                    isinstance(subject, ast.Name)
+                    and subject.id in variables
+                    and isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                ):
+                    names.add(value.value)
+        elif isinstance(operator, ast.In):
+            if not isinstance(left, ast.Name) or left.id not in variables:
+                continue
+            if not isinstance(right, (ast.Set, ast.Tuple, ast.List)):
+                continue
+            names.update(
+                element.value
+                for element in right.elts
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)
+            )
+    return names
+
+
+class TestEvidenceToolNameSync:
+    """`_EVIDENCE_TOOL_NAMES` restates facts that live in two functions.
+
+    It sits UPSTREAM of both: `_result_state` short-circuits on it before
+    `_tool_shape_succeeded` ever runs, so adding a shape validator for a
+    new tool without adding its name would silently disable the validator
+    and start resolving that tool's results on pairing alone. The reverse
+    direction matters too — a name left behind after its branch is gone
+    keeps a tool out of the carve-out for no reason — so this is pinned as
+    an EQUALITY, not a subset.
+    """
+
+    def _sources(self) -> tuple[set[str], set[str]]:
+        validated = _branched_tool_names(_mod._tool_shape_succeeded, "tool_name")
+        typed = _branched_tool_names(_mod._operation, "name")
+        assert validated, "no tool-name branches found — parser drifted"
+        assert typed, "no tool-name branches found — parser drifted"
+        return validated, typed
+
+    def test_evidence_tools_are_exactly_the_branched_tool_names(self):
+        validated, typed = self._sources()
+
+        assert validated | typed == _mod._EVIDENCE_TOOL_NAMES
+
+    def test_the_parser_sees_every_spelling_these_branches_could_use(self):
+        """Guard the guard: an equality pin is only as good as the parser.
+
+        A `_tool_shape_succeeded` rewritten into membership tests or
+        reversed comparisons must still be read, or the equality above
+        would start failing for a parser reason and invite a hand-edit to
+        the set instead of a fix here.
+        """
+        def sample(tool_name, name):
+            if tool_name == "Read":
+                return 1
+            if "Write" == tool_name:
+                return 2
+            if tool_name in {"Edit", "Grep"}:
+                return 3
+            if name in ("Glob",):
+                return 4
+            if name in ["Bash"]:
+                return 5
+            return 0
+
+        assert _branched_tool_names(sample, "tool_name", "name") == {
+            "Read", "Write", "Edit", "Grep", "Glob", "Bash",
+        }
+
