@@ -2232,24 +2232,34 @@ class TestAnalyzeSubagent:
         )[0] == "unknown"
 
     def test_unknown_tool_cannot_reuse_read_success_shape(self, tmp_path):
+        """A foreign tool never borrows Read's shape validator to claim a read.
+
+        Shape validation exists so an EVIDENCE tool's payload can be mined;
+        a tool this module mines nothing from must not acquire a read just
+        by echoing Read's envelope — while still resolving, because a paired
+        result with no error signal answered the only question asked of it.
+        """
+        (tmp_path / "safe").mkdir()
+        (tmp_path / "safe" / "read.py").write_text("x = 1\n", encoding="utf-8")
         transcript = _write_jsonl(
             tmp_path / "unknown-tool-shape.jsonl",
             [
-                _assistant(_call("first", "CustomTool", target="safe")),
-                _result("first", "API Error: retry", is_error=None),
-                _assistant(_call("second", "CustomTool", target="safe")),
+                _assistant(_call("only", "CustomTool", target="safe")),
                 _result(
-                    "second",
+                    "only",
                     "ordinary result",
                     is_error=None,
-                    structured=_current_read_result("/safe/read.py"),
+                    structured=_current_read_result(
+                        str(tmp_path / "safe" / "read.py")
+                    ),
                 ),
             ],
         )
 
-        failure = analyze_subagent(transcript, tmp_path, [])["tool_failures"][0]
-        assert failure["tool"] == "Other"
-        assert failure["recovered"] is False
+        analysis = analyze_subagent(transcript, tmp_path, [])
+        assert analysis["observed_reads"]["all"] == []
+        assert analysis["unresolved_calls"] == 0
+        assert analysis["tool_failures"] == []
 
     @pytest.mark.parametrize(
         "tool_name,tool_input,structured",
@@ -5241,6 +5251,89 @@ class TestBudgetAndEvidenceAccounting:
         } in result["warnings"]
         assert result["completeness"]["scope_comparable_reads"] is False
 
+    def test_foreign_result_shape_on_an_unmined_tool_is_resolved(
+        self, tmp_path
+    ):
+        """WebSearch/WebFetch/MCP results carry payload shapes this module
+        does not model, and it mines no evidence from them. A PAIRED result
+        with no error signal resolves the call: an unfamiliar shape is not
+        missing evidence, and treating it as such fired this warning on
+        every reviewer that ran a web search."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("web", "WebSearch", query="wp nonce verification"),
+                    usage=_usage(1, 2),
+                ),
+                _result(
+                    "web",
+                    "search results",
+                    is_error=None,
+                    structured={
+                        "query": "wp nonce verification",
+                        "results": [{"title": "t", "url": "https://example.test"}],
+                        "durationSeconds": 3,
+                    },
+                ),
+            ],
+        )
+
+        codes = {warning["code"] for warning in result["warnings"]}
+        assert "agent_transcript_unresolved_calls" not in codes
+        assert result["completeness"]["agent_data"] is True
+        assert result["completeness"]["scope_comparable_reads"] is True
+        assert result["tool_failures"] == []
+        [entry] = result["agent_usage"]
+        assert entry["tool_calls"] == 1
+
+    def test_error_signal_beats_foreign_shape_on_an_unmined_tool(
+        self, tmp_path
+    ):
+        """Resolving unfamiliar shapes must not swallow real failures: an
+        explicit `is_error` on the same unmined tool is still a failure."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("web", "WebFetch", url="https://example.test"),
+                    usage=_usage(1, 2),
+                ),
+                _result(
+                    "web",
+                    "request failed",
+                    is_error=True,
+                    structured={"code": "ENOTFOUND"},
+                ),
+            ],
+        )
+
+        codes = {warning["code"] for warning in result["warnings"]}
+        assert "agent_transcript_unresolved_calls" not in codes
+        [failure] = result["tool_failures"]
+        assert failure["tool"] == "Other"
+        assert failure["category"] == "structured_failure"
+        assert failure["detector"] == "structured"
+
+    def test_unpaired_call_stays_unresolved_on_an_unmined_tool(self, tmp_path):
+        """The pairing, not the shape, decides: a call the transcript never
+        answered is unresolved for every tool, mined or not."""
+        result = self._run_with_subagent(
+            tmp_path,
+            [
+                _assistant(
+                    _call("web", "WebSearch", query="wp nonce verification"),
+                    usage=_usage(1, 2),
+                ),
+            ],
+        )
+
+        assert {
+            "code": "agent_transcript_unresolved_calls",
+            "agent": "security-reviewer",
+        } in result["warnings"]
+        assert result["completeness"]["agent_data"] is False
+
     @pytest.mark.parametrize(
         "structured",
         [
@@ -5326,6 +5419,50 @@ class TestBudgetAndEvidenceAccounting:
         } in result["warnings"]
         assert result["completeness"]["usage"] is False
         assert result["completeness"]["tool_failures"] is False
+
+    def test_orchestrator_mcp_results_do_not_degrade_main_evidence(
+        self, tmp_path
+    ):
+        """The orchestrator's own transcript is full of MCP and dispatch
+        tools whose payload shapes this module does not model. The same
+        classifier serves both halves, so a paired MCP result with no error
+        signal resolves here too — otherwise the main session reported
+        incomplete evidence on every run that touched an MCP server."""
+        sessions = tmp_path / "sessions"
+        output_dir = tmp_path / "run"
+        _write_jsonl(
+            sessions / "mcp-main.jsonl",
+            [
+                _at(_assistant(usage=_usage(1, 2)), 0),
+                _at(
+                    _assistant(
+                        _call(
+                            "mcp",
+                            "mcp__linear-server__get_issue",
+                            id="WOOPLUG-1",
+                        ),
+                        usage=_usage(2, 3),
+                    ),
+                    10,
+                ),
+                _at(
+                    _result(
+                        "mcp",
+                        "issue payload",
+                        is_error=None,
+                        structured={"content": [{"type": "text", "text": "x"}]},
+                    ),
+                    11,
+                ),
+            ],
+        )
+        manifest = _manifest("mcp-main", tmp_path, output_dir, started=[])
+
+        result = enrich_run_transcript(manifest, sessions, set())
+
+        codes = [warning["code"] for warning in result["warnings"]]
+        assert "orchestrator_transcript_unresolved_calls" not in codes
+        assert result["completeness"]["orchestrator_data"] is True
 
     def test_scope_exempt_reviewer_reads_are_non_scope_comparable(
         self, tmp_path

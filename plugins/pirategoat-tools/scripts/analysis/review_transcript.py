@@ -80,6 +80,20 @@ _BOOTSTRAP_BUILDER_ENV = frozenset(
 # anomalies (dangling, malformed, duplicated calls) are the correlation
 # machinery's domain — every unresolved-evidence carve-out must exempt both.
 _DISPATCH_TOOL_NAMES = frozenset({"Agent", "Task"})
+# The ONLY tools whose results this module mines evidence from, and
+# therefore the only ones whose result payload has to be understood rather
+# than merely paired. Anchored to what the module actually reads:
+# `_tool_shape_succeeded` validates Read/Write/Edit/Grep/Glob payload SHAPE
+# (their result text is arbitrary content — file bodies, matched lines,
+# filenames — so signature-scanning it would flip successes into failures),
+# `_operation` gives Read/Write/Edit/Bash a typed operation and target that
+# the failure/recovery taxonomy keys on, `observed_reads` is built from
+# successful Read and Bash calls, and `artifact_writes` counts Bash builder
+# heredocs. Every other tool — WebSearch, WebFetch, MCP tools, Agent/Task —
+# contributes nothing to any of those measurements.
+_EVIDENCE_TOOL_NAMES = frozenset(
+    {"Read", "Write", "Edit", "Grep", "Glob", "Bash"}
+)
 _NON_SCOPE_COMPARABLE_AGENTS = frozenset(
     {"review-reconciliator", "decision-reviewer", "critic"}
 )
@@ -764,14 +778,39 @@ def _result_state(
     tool_name: str | None = None,
     operation: str | None = None,
 ) -> tuple[str, str | None, str | None]:
-    """Return success/failure/unknown plus safe category and detector."""
+    """Return success/failure/unknown plus safe category and detector.
+
+    ``unknown`` means UNRESOLVED EVIDENCE — the call was issued and nothing
+    can be said about what came back. That is a property of the pairing and
+    of explicit signals, never of how familiar a payload's shape looks.
+    """
     if result is None:
+        # No paired tool_result: the transcript ends mid-call. Nothing was
+        # ever observed about this call, so its reads, failures, and
+        # builder attempts are genuinely missing.
         return "unknown", None, None
     block = result.get("block", {})
     structured = result.get("structured")
     if block.get("is_error") is True or _structured_failure(structured):
         return "failure", "structured_failure", "structured"
     if block.get("is_error") is False or _structured_success(structured):
+        return "success", None, None
+
+    if tool_name not in _EVIDENCE_TOOL_NAMES:
+        # Nothing downstream mines this call: it yields no read, no builder
+        # attempt, and no shape this module validates. The only question
+        # ever asked of its result is "did it fail?", and the explicit
+        # signals above answered no — so a PAIRED result fully resolves it.
+        # Deciding otherwise on the strength of an unfamiliar payload shape
+        # reported 15 of 19 reviewers as carrying incomplete evidence on
+        # every run that used WebSearch, and made the orchestrator's own
+        # MCP-heavy transcript permanently unresolved.
+        #
+        # The text signature scan below is skipped for the same reason it
+        # is skipped for shape-validated tools: these payloads carry
+        # arbitrary fetched content, and "api error" appearing inside a web
+        # result is not this call failing. A real failure of these tools
+        # arrives as `is_error` or a structured error field.
         return "success", None, None
 
     nonterminal = _structured_nonterminal(structured)
@@ -790,6 +829,11 @@ def _result_state(
     if nonterminal:
         return "unknown", None, None
     if structured is not None:
+        # An EVIDENCE tool (see `_EVIDENCE_TOOL_NAMES`) whose payload its own
+        # shape validator rejected. Here the shape genuinely is the verdict:
+        # this module reads that payload to derive a read, a target, or a
+        # builder attempt, and one it cannot vouch for leaves that
+        # derivation unmade — unresolved evidence, not a resolved call.
         return "unknown", None, None
     # A paired tool_result is the success signal in legacy/current records
     # that omit both ``is_error`` and structured result data. Known failure
@@ -1516,11 +1560,12 @@ def _analyze_entries(
             result, call["name"], operation
         )
         if state == "unknown" and call["name"] not in _DISPATCH_TOOL_NAMES:
-            # The call resolves to neither success nor failure — either the
-            # transcript ends mid-call (no tool_result) or the paired result
-            # payload matches no recognized schema. Either way the call
-            # vanishes from read and failure metrics, so the evidence is
-            # incomplete.
+            # The call resolves to neither success nor failure — the
+            # transcript ends mid-call (no tool_result), or an evidence
+            # tool's paired payload matches no recognized schema. Either way
+            # the call vanishes from read and failure metrics, so the
+            # evidence is incomplete. A tool this module mines nothing from
+            # never lands here on shape alone; see `_result_state`.
             unresolved_calls += 1
         analyzed_calls.append(
             {
