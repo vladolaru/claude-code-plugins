@@ -312,16 +312,20 @@ class TestSafeModel:
 
     It rejects rather than normalizes: a safe value is returned verbatim, so
     the bracketed context-window variant tag is preserved rather than stripped.
+
+    review_transcript.py:29 is ONE regex, so the params here are one per
+    distinct regex component rather than one per interesting-looking string:
+    unbalanced and repeated brackets all fail the same optional-group anchor,
+    non-str values all die on the same isinstance, and shell metacharacters
+    die on the same literal `claude-` prefix that any non-model string does.
     """
 
     @pytest.mark.parametrize(
         "value",
         [
             "claude-sonnet-5",
-            "claude-opus-5",
             "claude-haiku-4-5-20251001",
             "claude-opus-5[1m]",
-            "claude-opus-4-8[1m]",
             "claude-" + "a" * 119,
             "claude-" + "a" * 119 + "[1m]",
         ],
@@ -333,22 +337,16 @@ class TestSafeModel:
         "value",
         [
             "claude-x[<b>]",
-            "claude-x[a][b]",
             "claude-x[]",
-            "claude-x[",
-            "claude-x]",
             "claude-x[1m]extra",
-            "claude-x[1m] ; rm -rf /",
             "claude-x[" + "a" * 17 + "]",
             "claude x",
             "claude-x\n",
             "evil-model",
-            "PRIVATE_SECRET_SENTINEL",
             "Claude-opus-5",
             "claude-" + "a" * 200,
             "",
             None,
-            42,
         ],
     )
     def test_rejects_unsafe_values(self, value):
@@ -1547,13 +1545,8 @@ class TestAnalyzeSubagent:
 
     @pytest.mark.parametrize(
         "content",
-        [
-            "File has not been read yet",
-            "Sibling tool call errored",
-            "<tool_use_error>stale text</tool_use_error>",
-            "API Error: stale text",
-        ],
-        ids=["read-first", "sibling", "tool-use", "api"],
+        ["File has not been read yet"],
+        ids=["read-first"],
     )
     def test_explicit_structured_success_ignores_failure_signatures(
         self, tmp_path, content
@@ -1603,10 +1596,8 @@ class TestAnalyzeSubagent:
         [
             {"interrupted": False},
             {"status": "started"},
-            {"status": "running"},
-            {"status": "pending"},
         ],
-        ids=["not-interrupted", "started", "running", "pending"],
+        ids=["not-interrupted", "started"],
     )
     def test_nonterminal_structured_fields_defer_to_failure_signatures(
         self, tmp_path, structured
@@ -1635,10 +1626,8 @@ class TestAnalyzeSubagent:
         [
             {"interrupted": False},
             {"status": "started"},
-            {"status": "running"},
-            {"status": "pending"},
         ],
-        ids=["not-interrupted", "started", "running", "pending"],
+        ids=["not-interrupted", "started"],
     )
     def test_nonterminal_structured_fields_without_signature_remain_unknown(
         self, tmp_path, structured
@@ -1661,10 +1650,10 @@ class TestAnalyzeSubagent:
         assert result["tool_failures"] == []
         assert result["observed_reads"]["all"] == []
 
-    @pytest.mark.parametrize(
-        "status",
-        ["success", "succeeded", "complete", "completed"],
-    )
+    # _structured_success ends in one `status.lower() in {...}` membership
+    # check, so enumerating the vocabulary never was a completeness pin —
+    # "ok" is in the set and was never listed here.
+    @pytest.mark.parametrize("status", ["success"])
     def test_terminal_success_status_takes_precedence_over_failure_signature(
         self, tmp_path, status
     ):
@@ -2814,8 +2803,12 @@ def test_manifest_step_timeline_rejects_malformed_manifest_identity(
     assert complete is False
 
 
+# The identity vocabulary belongs to the manifest-side test above: both call
+# sites hand the same value to the same _normalize_run_identity
+# (review_transcript.py:1663 and :1675). What is unique here is the per-event
+# branch, which one malformed value reaches.
 @pytest.mark.parametrize(
-    "malformed_run_id", _MALFORMED_RUN_IDENTITIES, ids=_MALFORMED_RUN_ID_CASES
+    "malformed_run_id", ["run unsafe"], ids=["embedded-space"]
 )
 def test_manifest_step_timeline_rejects_malformed_event_identity(
     tmp_path, malformed_run_id

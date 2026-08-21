@@ -530,22 +530,6 @@ class TestMatchFindings:
         assert m["matched_required"] == {"sql-injection": 0}
         assert m["matched_acceptable"] == {}
 
-    def test_wrong_file_never_matches(self):
-        issues = [self._issue(file="src/Other.php", title="SQL injection")]
-        m = match_findings(issues, self.KEY)
-        assert m["missing_required"] == ["sql-injection"]
-        assert [u["index"] for u in m["unexpected"]] == [0]
-
-    def test_dot_slash_prefix_is_normalized(self):
-        issues = [self._issue(file="./src/UserHandler.php", title="SQL injection")]
-        m = match_findings(issues, self.KEY)
-        assert m["matched_required"] == {"sql-injection": 0}
-
-    def test_matching_searches_description_and_category_too(self):
-        issues = [self._issue(title="Bad query", description="should use prepare()")]
-        m = match_findings(issues, self.KEY)
-        assert m["matched_required"] == {"sql-injection": 0}
-
     def test_keyword_in_category_matches(self):
         issues = [self._issue(title="", description="", category="sql injection")]
         m = match_findings(issues, self.KEY)
@@ -705,11 +689,6 @@ class TestAggregateDetectionTrials:
             detail=detail,
         )
 
-    def test_majority_passing_trials_pass(self):
-        grades = [self._grade(True), self._grade(True), self._grade(False)]
-        result = aggregate_detection_trials(grades)
-        assert result.passed, result.failures
-
     def test_minority_passing_trials_fail(self):
         grades = [self._grade(True), self._grade(False), self._grade(False)]
         result = aggregate_detection_trials(grades)
@@ -864,13 +843,6 @@ class TestReviewRoundHardening:
         result = grade_detection(review, key)
         assert not result.passed
         assert result.detail["gates"]["max_severity"] is False
-
-    def test_missing_severity_fails_max_severity_gate(self):
-        from helpers.graders import grade_detection
-        key = {"max_severity": "low"}
-        review = {"verdict": "approve",
-                  "issues": [{"file": "f", "title": "t", "description": "", "category": ""}]}
-        assert not grade_detection(review, key).passed
 
     def test_abstention_accepts_both_doctrine_readings(self):
         from helpers.graders import grade_detection

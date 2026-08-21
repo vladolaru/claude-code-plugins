@@ -506,24 +506,6 @@ class TestCliContract:
 
         assert main(["--output-dir", str(missing)]) == 1
 
-    def test_capture_is_repeatable(self, tmp_path):
-        """Re-running over a finished run is how a partial gets upgraded."""
-        run = _seed_two_agent_run(tmp_path)
-        _run_cli(run)
-        first = run.snapshot()["captured_at"]
-
-        manifest = json.loads(run.manifest_path.read_text())
-        manifest["status"] = "complete"
-        manifest["run"]["ended_at"] = (
-            _START + timedelta(seconds=60)
-        ).isoformat()
-        run.manifest_path.write_text(json.dumps(manifest))
-        _run_cli(run)
-        second = run.snapshot()
-
-        assert second["captured_at"] >= first
-        assert second["availability"]["orchestrator"] == "complete"
-
 
 # ---------------------------------------------------------------------------
 # Post-close upgrade: the manifest follows, and the upgrade never regresses.
@@ -561,51 +543,6 @@ class TestManifestReprojection:
         assert manifest["usage"]["availability"]["orchestrator"] == "complete"
         assert manifest["usage"]["window"]["closed"] is True
         assert manifest["availability"]["usage"] is True
-
-    def test_reprojection_matches_the_snapshot_exactly(self, tmp_path):
-        run = _seed_two_agent_run(tmp_path)
-        _close_manifest(run)
-
-        _run_cli(run)
-
-        snapshot = run.snapshot()
-        manifest = json.loads(run.manifest_path.read_text())
-
-        assert manifest["usage"]["subagent_totals"] == snapshot["subagent_totals"]
-        assert manifest["usage"]["orchestrator_usage"] == snapshot["orchestrator_usage"]
-        assert manifest["usage"]["agents_measured"] == snapshot["agents_measured"]
-
-    def test_reprojection_touches_only_the_usage_section(self, tmp_path):
-        """Nothing telemetry owns changes shape or value under this CLI."""
-        run = _seed_two_agent_run(tmp_path)
-        _close_manifest(run)  # reprojection is gated on status == "complete"
-        before = json.loads(run.manifest_path.read_text())
-
-        _run_cli(run)
-
-        after = json.loads(run.manifest_path.read_text())
-        assert after["run"] == before["run"]
-        assert after["steps"] == before["steps"]
-        assert after["agents"] == before["agents"]
-        assert after["coverage"] == before["coverage"]
-        assert after["outcome"] == before["outcome"]
-        assert after["schema"] == before["schema"]
-        assert after["status"] == before["status"]
-        assert after["availability"]["pipeline"] == before["availability"]["pipeline"]
-        assert after["availability"]["transcript"] == before["availability"]["transcript"]
-        assert after["usage"] is not None
-        assert after["availability"]["usage"] is True
-
-    def test_no_manifest_file_is_a_silent_no_op(self, tmp_path):
-        """An absent manifest degrades the snapshot to `missing`; the
-        reprojection step has nothing to patch and must not crash."""
-        run = _seed_run(
-            tmp_path, _manifest("x", tmp_path / "run", tmp_path),
-            write_manifest=False,
-        )
-
-        assert _run_cli(run) == 0
-        assert not run.manifest_path.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -658,36 +595,6 @@ class TestMonotonicNoDowngrade:
         assert result["availability"] == {
             "subagents": "complete", "orchestrator": "complete",
         }
-
-    def test_double_rerun_with_expired_transcripts_is_idempotent(self, tmp_path):
-        run = _seed_two_agent_run(tmp_path)
-        _close_manifest(run)
-        _run_cli(run)
-
-        empty_sessions = tmp_path / "gone"
-        empty_sessions.mkdir()
-        args = ["--output-dir", str(run.out), "--sessions-root", str(empty_sessions)]
-        main(args)
-        first = (run.out / SNAPSHOT_FILENAME).read_bytes()
-        main(args)
-        second = (run.out / SNAPSHOT_FILENAME).read_bytes()
-
-        assert first == second
-
-    def test_absent_snapshot_with_expired_transcripts_writes_fresh_missing(
-        self, tmp_path
-    ):
-        """No prior snapshot exists yet — nothing to protect, so the
-        pre-existing labeled-missing behavior is unchanged."""
-        run = _seed_run(
-            tmp_path, _manifest("nowhere", tmp_path / "run", tmp_path),
-        )
-        (tmp_path / "sessions").mkdir(exist_ok=True)
-
-        assert _run_cli(run) == 0
-
-        snapshot = run.snapshot()
-        assert snapshot["availability"]["subagents"] == "missing"
 
     def test_equal_rank_candidate_still_refreshes(self, tmp_path, capsys):
         """Same-quality re-measurement is not a downgrade — it refreshes

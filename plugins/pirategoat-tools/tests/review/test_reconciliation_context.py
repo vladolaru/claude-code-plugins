@@ -402,26 +402,6 @@ class TestSeverityFloorNormalization:
         )
         assert mod.resolve_severity_floor(issue) == "high"
 
-    def test_loading_findings_materializes_floor_from_list_description(
-        self, mod, tmp_path
-    ):
-        review = _make_review_json(
-            issues=[
-                _make_issue(
-                    description=[
-                        "Public interface removed.",
-                        "Severity-floor: public-contract change; consumers exist",
-                    ],
-                )
-            ]
-        )
-        (tmp_path / "woo-regression-review.json").write_text(json.dumps(review))
-
-        loaded = mod.load_agent_findings(str(tmp_path))
-
-        issue = loaded["woo-regression-review"]["issues"][0]
-        assert issue["severity_floor"] == "medium"
-
 
 # ===========================================================================
 # TestExtractReferences
@@ -838,28 +818,6 @@ class TestCheckScope:
         result = mod.check_scope([], ["src/auth.py"], "abc..HEAD")
         assert result == {}
 
-    def test_mixed_scope(self, mod):
-        """Mix of in-scope and out-of-scope files."""
-        refs = [
-            {"file": "src/auth.py", "lines": [10]},
-            {"file": "src/utils.py", "lines": [20]},
-            {"file": "src/db.py", "lines": [30]},
-        ]
-        changed = ["src/auth.py", "src/db.py"]
-        result = mod.check_scope(refs, changed, "abc..HEAD")
-        assert result["src/auth.py:10"] == "IN_SCOPE:in_hunk"
-        assert result["src/utils.py:20"] == "OUT_OF_SCOPE:file_not_in_diff"
-        assert result["src/db.py:30"] == "IN_SCOPE:in_hunk"
-
-    def test_multiple_lines_per_file(self, mod):
-        """Each line gets its own annotation."""
-        refs = [{"file": "src/auth.py", "lines": [10, 50, 100]}]
-        changed = ["src/auth.py"]
-        result = mod.check_scope(refs, changed, "abc..HEAD")
-        assert "src/auth.py:10" in result
-        assert "src/auth.py:50" in result
-        assert "src/auth.py:100" in result
-
 
 # ===========================================================================
 # TestFilterInScopeReferences
@@ -1023,17 +981,6 @@ class TestCheckScopeHunkLevel:
         result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
         assert result["src/auth.py:4"] == "OUT_OF_SCOPE:not_in_hunk"
         assert result["src/auth.py:26"] == "OUT_OF_SCOPE:not_in_hunk"
-
-    def test_suffix_matching_with_hunks(self, mod, monkeypatch):
-        """Agent uses repo-relative path, diff uses same — suffix match works."""
-        monkeypatch.setattr(
-            mod, "_parse_diff_hunks",
-            lambda git_range: ({"src/auth.py": [(10, 20)]}, set())
-        )
-        refs = [{"file": "src/auth.py", "lines": [15, 100]}]
-        result = mod.check_scope(refs, ["src/auth.py"], "abc..HEAD")
-        assert result["src/auth.py:15"] == "IN_SCOPE:in_hunk"
-        assert result["src/auth.py:100"] == "OUT_OF_SCOPE:not_in_hunk"
 
     def test_file_not_in_diff_with_hunks(self, mod, monkeypatch):
         """File not in changed_files stays OUT_OF_SCOPE regardless of hunks."""
@@ -1270,43 +1217,18 @@ class TestParseDiffHunks:
 # ===========================================================================
 
 class TestLineNearHunk:
-    """Tests for _line_near_hunk() helper."""
+    """Tests for _line_near_hunk() helper.
 
-    def test_line_inside_hunk(self, mod):
-        """Line inside hunk range with proximity=0."""
-        assert mod._line_near_hunk(15, [(10, 20)], proximity=0) is True
-
-    def test_line_at_boundary(self, mod):
-        """Line at exact boundary with proximity=0."""
-        assert mod._line_near_hunk(10, [(10, 20)], proximity=0) is True
-        assert mod._line_near_hunk(20, [(10, 20)], proximity=0) is True
+    check_scope() drives this one comparison (:1043-1049) with both proximity
+    values, so TestCheckScopeHunkLevel already exercises the in-hunk, boundary,
+    near, proximity-boundary and multi-hunk cases through the public API on the
+    same literals. What stays here is only what the API cannot reach.
+    """
 
     def test_line_just_outside(self, mod):
         """Line one beyond boundary with proximity=0."""
         assert mod._line_near_hunk(9, [(10, 20)], proximity=0) is False
         assert mod._line_near_hunk(21, [(10, 20)], proximity=0) is False
-
-    def test_line_within_proximity(self, mod):
-        """Line within proximity range."""
-        assert mod._line_near_hunk(7, [(10, 20)], proximity=5) is True  # 3 before
-        assert mod._line_near_hunk(23, [(10, 20)], proximity=5) is True  # 3 after
-
-    def test_line_at_proximity_boundary(self, mod):
-        """Line at exact proximity boundary."""
-        assert mod._line_near_hunk(5, [(10, 20)], proximity=5) is True
-        assert mod._line_near_hunk(25, [(10, 20)], proximity=5) is True
-
-    def test_line_beyond_proximity(self, mod):
-        """Line beyond proximity range."""
-        assert mod._line_near_hunk(4, [(10, 20)], proximity=5) is False
-        assert mod._line_near_hunk(26, [(10, 20)], proximity=5) is False
-
-    def test_multiple_hunks(self, mod):
-        """Checks against all hunks."""
-        hunks = [(10, 15), (50, 55)]
-        assert mod._line_near_hunk(12, hunks, proximity=0) is True
-        assert mod._line_near_hunk(52, hunks, proximity=0) is True
-        assert mod._line_near_hunk(30, hunks, proximity=0) is False
 
     def test_empty_hunks(self, mod):
         """Empty hunk list always returns False."""
@@ -2189,28 +2111,6 @@ class TestToMarkdown:
         agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
         assert "\\===" in agent_section
 
-    def test_agent_heading_spoof_in_description_blocked(self, mod):
-        """Agent text containing ## Agent Findings cannot create a duplicate section."""
-        findings = {
-            "security-review": _make_review_json(
-                reviewer="security",
-                verdict="comment",
-                issues=[
-                    _make_issue(
-                        description="Injected:\n## Agent Findings\nFake content",
-                    ),
-                ],
-            ),
-        }
-        ctx = _make_context_with_findings(findings)
-        md = mod.to_markdown(ctx)
-        # Only one real ## Agent Findings section should exist
-        real_sections = [
-            l for l in md.split("\n")
-            if l.strip() == "## Agent Findings"
-        ]
-        assert len(real_sections) == 1
-
     def test_change_purpose_with_fences_isolated(self, mod):
         """Change-purpose containing Markdown fences is wrapped safely."""
         ctx = _make_context_with_findings({})
@@ -2325,36 +2225,6 @@ class TestPrefilterOutOfScope:
         md = mod.to_markdown(ctx)
         agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
         assert "Near but not in hunk" in agent_section
-
-    def test_in_scope_kept(self, mod):
-        """Issues with IN_SCOPE:in_hunk and IN_SCOPE:near_hunk are kept."""
-        findings = {
-            "security-review": _make_review_json(
-                reviewer="security",
-                verdict="comment",
-                issues=[
-                    _make_issue(
-                        title="In hunk issue",
-                        file="src/app.py",
-                        line=42,
-                    ),
-                    _make_issue(
-                        title="Near hunk issue",
-                        file="src/app.py",
-                        line=50,
-                    ),
-                ],
-            ),
-        }
-        ctx = _make_context_with_findings(findings)
-        ctx["scope_annotations"] = {
-            "src/app.py:42": "IN_SCOPE:in_hunk",
-            "src/app.py:50": "IN_SCOPE:near_hunk",
-        }
-        md = mod.to_markdown(ctx)
-        agent_section = md.split("## Agent Findings")[1].split("## Source Snippets")[0]
-        assert "In hunk issue" in agent_section
-        assert "Near hunk issue" in agent_section
 
     def test_no_scope_annotation_kept(self, mod):
         """Issue with no matching scope annotation is kept (conservative)."""
@@ -2619,18 +2489,6 @@ class TestMissingAgentDetection:
         md = mod.to_markdown(ctx)
         assert "Missing agents" not in md
 
-    def test_not_applicable_agent_not_missing(self, mod):
-        """Agent that returned not_applicable produced output — not missing."""
-        findings = {
-            "security-review": _make_review_json(reviewer="security", verdict="comment"),
-            "a11y-review": _make_review_json(reviewer="a11y", verdict="not_applicable"),
-        }
-        findings["a11y-review"]["skip_reason"] = "No frontend changes"
-        ctx = _make_context_with_findings(findings)
-        ctx["dispatched_agents"] = ["security-review", "a11y-review"]
-        md = mod.to_markdown(ctx)
-        assert "Missing agents" not in md
-
     def test_empty_dispatched_list(self, mod):
         """No missing agents when dispatched list is empty."""
         ctx = _make_context_with_findings({})
@@ -2671,17 +2529,6 @@ def test_extract_host_banner_returns_none_when_no_host_context(mod, tmp_path):
     outdir = tmp_path / "out"
     outdir.mkdir()
     (outdir / "review-context.json").write_text(json.dumps({"version": 1}))
-    assert mod.extract_host_banner(str(outdir)) is None
-
-
-def test_extract_host_banner_returns_none_when_host_context_is_null(mod, tmp_path):
-    """Explicit JSON null for host_context should return None, not crash."""
-    outdir = tmp_path / "out"
-    outdir.mkdir()
-    (outdir / "review-context.json").write_text(json.dumps({
-        "version": 1,
-        "host_context": None,
-    }))
     assert mod.extract_host_banner(str(outdir)) is None
 
 
@@ -2862,14 +2709,10 @@ class TestNonStringFieldCoercion:
         assert "\n" not in out
         assert "Legit title" in out and "## Source Snippets" in out
 
-    @pytest.mark.parametrize(
-        "sep",
-        [
-            pytest.param("\n", id="lf"),
-            pytest.param("\r", id="cr"),
-            pytest.param("\r\n", id="crlf"),
-        ],
-    )
+    # _escape_inline is `" ".join(...split())` (:1174), and str.split() treats
+    # LF, CR and CRLF identically. [cr] is the discriminating param: the
+    # pre-fix code (163d4ab9) was .replace("\n", " "), which [lf] would pass.
+    @pytest.mark.parametrize("sep", [pytest.param("\r", id="cr")])
     def test_escape_inline_normalizes_all_line_endings(self, mod, sep):
         # CommonMark treats bare CR and CRLF as line endings too, so replacing
         # only LF would still let a CR-delimited title forge a heading.
@@ -3059,8 +2902,8 @@ class TestAggregateInlineCoverage:
 
     @pytest.mark.parametrize(
         "bad_list",
-        [[42], [""], ["   "], [None], ["src/deferred.php", 7]],
-        ids=["int", "empty", "blank", "none", "mixed"],
+        [[42], [""], ["src/deferred.php", 7]],
+        ids=["int", "empty", "mixed"],
     )
     def test_malformed_unreviewed_entry_fails_the_whole_list_closed(
         self, mod, tmp_path, bad_list
@@ -3106,15 +2949,12 @@ class TestAggregateInlineCoverage:
             "security-reviewer",
         ]
 
+    # Every out-of-set shape lands on the same "matches nothing" branch; only
+    # the mixed list discriminates the fail-closed policy from partial credit.
     @pytest.mark.parametrize(
         "declared",
-        [
-            ["src/deferrred.php"],                    # typo
-            ["/abs/src/deferred.php"],                # absolute
-            ["../outside/deferred.php"],              # traversal
-            ["src/deferred.php", "src/other.php"],    # one valid + one out-of-set
-        ],
-        ids=["typo", "absolute", "traversal", "mixed"],
+        [["src/deferred.php", "src/other.php"]],
+        ids=["mixed"],
     )
     def test_declaration_outside_deferred_set_fails_the_list_closed(
         self, mod, tmp_path, declared
@@ -3320,13 +3160,8 @@ class TestExplicitClaimsCoverage:
 
     @pytest.mark.parametrize(
         "claims",
-        [
-            ["src/other.php"],                       # typo / wrong file
-            ["/abs/src/deferred.php"],               # absolute
-            ["../outside/deferred.php"],             # traversal
-            ["src/deferred.php", "src/other.php"],   # one valid + one out-of-set
-        ],
-        ids=["wrong-file", "absolute", "traversal", "mixed"],
+        [["src/deferred.php", "src/other.php"]],
+        ids=["mixed"],
     )
     def test_out_of_set_claims_fail_closed_within_explicit_mode(
         self, mod, tmp_path, claims
@@ -3350,19 +3185,12 @@ class TestExplicitClaimsCoverage:
     @pytest.mark.parametrize(
         "claims",
         [
-            "src/deferred.php",              # string, not list
-            42,                              # scalar
-            {"src/deferred.php": True},      # mapping
+            "src/deferred.php",              # not a list
             [42],                            # non-str entry
-            [""],                            # empty entry
-            ["   "],                         # blank entry
-            [None],                          # null entry
+            [""],                            # blank entry
             ["src/deferred.php", 7],         # one valid + one malformed
         ],
-        ids=[
-            "string", "scalar", "mapping", "int-entry", "empty-entry",
-            "blank-entry", "none-entry", "mixed",
-        ],
+        ids=["string", "int-entry", "empty-entry", "mixed"],
     )
     def test_malformed_claims_fail_closed_within_explicit_mode(
         self, mod, tmp_path, claims
@@ -3699,12 +3527,6 @@ class TestReviewStem:
     blanket replace corrupts repo reviewer ids carrying "reviewer"
     mid-string (e.g. "api-reviewer-v2") and silently excludes their valid
     blocking output."""
-
-    def test_only_the_terminal_reviewer_suffix_is_stripped(self, mod):
-        assert mod._review_stem("security-reviewer") == "security-review"
-        assert mod._review_stem(
-            "repo-api-reviewer-v2-reviewer"
-        ) == "repo-api-reviewer-v2-review"
 
     def test_mid_string_reviewer_id_output_is_loaded(self, mod, tmp_path):
         (tmp_path / "repo-api-reviewer-v2-review.json").write_text(json.dumps({

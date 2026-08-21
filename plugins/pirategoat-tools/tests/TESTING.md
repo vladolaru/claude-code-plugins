@@ -397,9 +397,9 @@ the user-scope INSTALLED plugin would silently answer instead
 copy plus user hooks and memory, making runs machine-independent. Model
 routing is pinned to `agent_registry.json` (the single source of truth) at
 three layers: `check_model_routing` refuses to dispatch when frontmatter
-drifts from the registry tier, a `TestDispatchIdentity` guard requires the
-two to stay equal for every agent, and each run's JSON `modelUsage` is
-verified post-hoc — the PRIMARY model sums only `inputTokens`,
+drifts from the registry tier, a `TestDispatchIdentity` guard runs that same
+check against every registered agent's canonical definition, and each run's
+JSON `modelUsage` is verified post-hoc — the PRIMARY model sums only `inputTokens`,
 `outputTokens`, `cacheReadInputTokens`, and `cacheCreationInputTokens`, then
 resolves `canonicalModel` before registry-tier validation (`modelUsage` is a
 session accumulator that includes auxiliary calls). Any nonzero dispatch exit —
@@ -604,7 +604,7 @@ The `build_output()`-based test classes (`TestReviewOutputBuilderAPIExample`, `T
 - Functions that need a git repo CWD — call `build_scope()` directly with `os.chdir()` (saves ~0.15s interpreter spawn per test while keeping real git behavior)
 - Any test already covered by a unit test on the same function — delete the subprocess duplicate
 
-**Example — config round-trip (from `TestQuickModeConfig`):**
+**Example — config round-trip (from `TestStateManagement`):**
 ```python
 # Wrong: two subprocess spawns to verify config persistence (~1.5s)
 self._run("--step", "1", "--mode", "pr", "--output-dir", str(tmp_path), "--pr-number", "42", "--quick")

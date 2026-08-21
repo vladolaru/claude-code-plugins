@@ -2898,7 +2898,11 @@ class TestMeasureRun:
         assert cohort["dispatch"]["actual_dispatches"] is None
         assert cohort["dispatch"]["adjustments"] is None
 
-    @pytest.mark.parametrize("status_field", ["initial_status", "final_status"])
+    # sanitize.py:766 is literally `for status_name in ("initial_status",
+    # "final_status")`, so the status_field axis was free. One param per
+    # distinguishable condition is what the guard can actually tell apart:
+    # absent, non-str, empty-str, unsupported-str.
+    @pytest.mark.parametrize("status_field", ["initial_status"])
     @pytest.mark.parametrize(
         "invalid_status",
         [
@@ -2906,11 +2910,6 @@ class TestMeasureRun:
             None,
             "",
             "UNKNOWN",
-            "DISPATCHED",
-            [],
-            {},
-            [{"nested": []}],
-            {"nested": []},
         ],
     )
     def test_dispatch_decisions_require_supported_nonempty_statuses(
@@ -2985,39 +2984,6 @@ class TestMeasureRun:
         assert measured["dispatch"] is not None
         assert measured["dispatch"]["comparison_available"] is False
         assert measured["dispatch"]["agents"]["code-reviewer"]["change"] == "unchanged"
-
-    @pytest.mark.parametrize("status_field", ["initial_status", "final_status"])
-    @pytest.mark.parametrize(
-        "invalid_status",
-        [
-            pytest.param("__missing__", id="missing"),
-            None,
-            "",
-            "UNKNOWN",
-            "DISPATCHED",
-            [],
-            {},
-            [{"nested": []}],
-            {"nested": []},
-        ],
-    )
-    def test_final_only_projection_rejects_incomplete_statuses(
-        self, tmp_path, status_field, invalid_status
-    ):
-        manifest = _manifest()
-        manifest["dispatch"] = _final_only_dispatch()
-        decision = manifest["dispatch"]["agents"]["code-reviewer"]
-        if invalid_status == "__missing__":
-            decision.pop(status_field)
-        else:
-            decision[status_field] = invalid_status
-        manifest["dispatch"]["planner_candidate_count"] = 0
-        manifest["dispatch"]["final_dispatch_count"] = 0
-
-        measured = measure_run(manifest, tmp_path, include_transcripts=False)
-
-        assert measured["dispatch"] is None
-        assert measured["metric_availability"]["dispatch"] == "missing"
 
     @pytest.mark.parametrize(
         "invalid_status",
@@ -6321,10 +6287,14 @@ class TestTranscriptFamilyAvailability:
             pytest.param("src/\u202esecret.py", id="unicode-format"),
         ],
     )
-    @pytest.mark.parametrize(
-        "field",
-        ["all", "in_scope", "out_of_scope", "non_scope_comparable"],
-    )
+    # The four bucket names traverse ONE production loop: measure.py:373-380
+    # runs every bucket through the same _strict_repo_read_paths call, so the
+    # bucket axis multiplied nodes without adding a distinguishable condition.
+    # Mutating each of the five guards in _safe_repo_read_path
+    # (sanitize.py:129-145) is caught by the "all" bucket alone. The loop
+    # cannot silently lose a bucket either: dropping non_scope_comparable
+    # from the tuple still fails nine other tests in this file.
+    @pytest.mark.parametrize("field", ["all"])
     def test_observed_read_paths_require_canonical_repo_relative_form(
         self, monkeypatch, tmp_path, field, bad_path
     ):

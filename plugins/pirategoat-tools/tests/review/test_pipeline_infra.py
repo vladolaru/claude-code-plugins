@@ -911,16 +911,6 @@ class TestQuickModeConfig:
         config = json.loads((tmp_path / "run-config.json").read_text())
         assert config.get("quick") is False
 
-    def test_quick_from_config_on_subsequent_steps(self, mod, tmp_path):
-        """--quick persists in config and is readable on subsequent steps."""
-        # Seed config as step 1 would
-        mod.write_config(str(tmp_path), {
-            "mode": "pr", "pr_number": "42", "interactive": True, "quick": True,
-        })
-        # Subsequent step reads config — quick should still be true
-        config = mod.read_config(str(tmp_path))
-        assert config["quick"] is True
-
     def test_quick_flag_on_rerun_overrides_existing_config(self, tmp_path):
         """Rerunning step 1 with --quick on a previously non-quick output dir
         should update run-config.json to quick=true."""

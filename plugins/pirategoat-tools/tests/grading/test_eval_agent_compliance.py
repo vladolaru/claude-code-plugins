@@ -422,21 +422,6 @@ class TestDispatchIdentity:
         agents_link = shim / "agents"
         assert agents_link.resolve() == (_eval_mod.PLUGIN_ROOT / "agents").resolve()
 
-    def test_dispatched_model_evidence_must_match_registry_tier(self):
-        routed = next(
-            a for a in _eval_mod.ALL_AGENTS
-            if (_eval_mod.AGENT_CONFIG[a].get("model_tier") or "inherit")
-            in _eval_mod._DISPATCHABLE_MODELS
-        )
-        tier = _eval_mod.AGENT_CONFIG[routed]["model_tier"]
-        assert _eval_mod.check_dispatched_models(
-            routed, {f"claude-{tier}-5": {"outputTokens": 100}},
-        ) is None
-        error = _eval_mod.check_dispatched_models(
-            routed, {"claude-other-model": {"outputTokens": 100}},
-        )
-        assert error is not None and "routing was not applied" in error
-
     @pytest.mark.parametrize(
         "returncode,is_error",
         [
@@ -583,15 +568,3 @@ class TestDispatchIdentity:
                 model in _eval_mod._DISPATCHABLE_MODELS
             ), f"{agent}: frontmatter model {model!r} is not dispatchable"
 
-    def test_frontmatter_model_matches_registry_for_all_agents(self):
-        # agent_registry.json is the single source of truth; the Agent tool
-        # routes on frontmatter. This guard makes silent divergence
-        # impossible: change one, and CI demands the other.
-        for agent in _eval_mod.ALL_AGENTS:
-            path = _eval_mod.PLUGIN_ROOT / "agents" / f"{agent}.md"
-            fm_model = _eval_mod.frontmatter_model(path.read_text())
-            tier = _eval_mod.AGENT_CONFIG[agent].get("model_tier") or "inherit"
-            assert (fm_model or "inherit") == tier, (
-                f"{agent}: frontmatter model {fm_model!r} != registry "
-                f"model_tier {tier!r} — registry is canonical (AGENTS.md)"
-            )

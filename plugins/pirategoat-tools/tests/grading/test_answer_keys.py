@@ -215,13 +215,21 @@ def test_max_unexpected_is_currently_unused():
     )
 
 
+# Keys with no finding specs hit the early return below and assert nothing;
+# they stay fully validated by test_answer_key_is_well_formed. Enumerating
+# them here only manufactured node ids.
+_SPEC_ENTRIES = [
+    (name, agent, key)
+    for name, agent, key in KEYED_ENTRIES
+    if key.get("required_findings") or key.get("acceptable_findings")
+]
+
+
 @pytest.mark.parametrize(
-    "name,agent,key", KEYED_ENTRIES, ids=[f"{n}-{a}" for n, a, _ in KEYED_ENTRIES]
+    "name,agent,key", _SPEC_ENTRIES, ids=[f"{n}-{a}" for n, a, _ in _SPEC_ENTRIES]
 )
 def test_finding_specs_resolve_against_fixture(name, agent, key):
     specs = list(key.get("required_findings", [])) + list(key.get("acceptable_findings", []))
-    if not specs:
-        return
     diff_text = Path(SCENARIOS[name]["diff"]).read_text()
     new_files = _diff_new_files(diff_text)
     seen_ids = set()

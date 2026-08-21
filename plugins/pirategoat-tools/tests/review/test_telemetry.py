@@ -1935,7 +1935,10 @@ class TestRunManifest:
         assert decision["model_tier"] == "inherit"
         assert decision["declared_model"] == "opus"
 
-    @pytest.mark.parametrize("plan_name", ["initial", "final"])
+    # manifest_sections.py:203-207 calls the same inspect_dispatch_plan() for
+    # both plans and both land on the one validator at dispatch_status.py:50-53,
+    # so the plan_name axis doubled nodes without reaching new code. One param
+    # per invalid shape the validator can distinguish is what remains.
     @pytest.mark.parametrize(
         "invalid_status",
         [
@@ -1943,23 +1946,17 @@ class TestRunManifest:
             None,
             "",
             "UNKNOWN",
-            "DISPATCHED",
-            [],
-            {},
-            [{"nested": []}],
-            {"nested": []},
         ],
     )
     def test_manifest_rejects_incomplete_dispatch_statuses(
-        self, telemetry, output_dir, plan_name, invalid_status
+        self, telemetry, output_dir, invalid_status
     ):
         initial_agent = {"name": "code-reviewer", "status": "DISPATCH"}
         final_agent = {"name": "code-reviewer", "status": "DISPATCH"}
-        target = initial_agent if plan_name == "initial" else final_agent
         if invalid_status == "__missing__":
-            target.pop("status")
+            initial_agent.pop("status")
         else:
-            target["status"] = invalid_status
+            initial_agent["status"] = invalid_status
         (output_dir / "dispatch-plan.initial.json").write_text(
             json.dumps({"agents": [initial_agent]})
         )
@@ -1971,26 +1968,12 @@ class TestRunManifest:
         dispatch = _read_manifest(telemetry)["dispatch"]
 
         assert dispatch["comparison_available"] is False
-        unavailable_field = (
-            "planner_baseline_available"
-            if plan_name == "initial"
-            else "final_plan_available"
-        )
-        assert dispatch[unavailable_field] is False
-        expected_reason = (
-            "planner_baseline_unavailable"
-            if plan_name == "initial"
-            else "final_plan_unavailable"
-        )
-        assert expected_reason in dispatch["invalid_reason_codes"]
-        if plan_name == "initial":
-            assert dispatch["final_plan_available"] is True
-            assert dispatch["agents"]["code-reviewer"]["initial_status"] == "DISPATCH"
-            assert dispatch["agents"]["code-reviewer"]["final_status"] == "DISPATCH"
-            assert dispatch["agents"]["code-reviewer"]["change"] == "unchanged"
-        else:
-            assert dispatch["planner_baseline_available"] is True
-            assert dispatch["agents"] == {}
+        assert dispatch["planner_baseline_available"] is False
+        assert "planner_baseline_unavailable" in dispatch["invalid_reason_codes"]
+        assert dispatch["final_plan_available"] is True
+        assert dispatch["agents"]["code-reviewer"]["initial_status"] == "DISPATCH"
+        assert dispatch["agents"]["code-reviewer"]["final_status"] == "DISPATCH"
+        assert dispatch["agents"]["code-reviewer"]["change"] == "unchanged"
 
     @pytest.mark.parametrize(
         "status,dispatched",

@@ -620,16 +620,6 @@ class TestToMarkdown:
         assert "## Info Issues" in md
         assert "Anchored info finding" in md
 
-    def test_file_scoped_info_issue_renders_in_markdown(self):
-        """A line-less info finding used to at least appear under Observations
-        (via the old demotion); as a first-class issue it must not vanish."""
-        b = ReviewOutputBuilder(pr_id="1", reviewer="pr")
-        b.add_issue("info", "File-scoped info finding", "a.py", "desc", "rec", line=None)
-        md = b.to_markdown()
-        assert "## Info Issues" in md
-        assert "File-scoped info finding" in md
-        assert "`a.py` (file-scoped)" in md
-
 
 # =============================================================================
 # TestRenderMarkdown

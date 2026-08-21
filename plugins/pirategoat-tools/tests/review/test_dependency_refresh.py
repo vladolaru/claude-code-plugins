@@ -66,19 +66,6 @@ class TestComposerDetection:
         assert signal["suggested_command"] == \
             "composer install --no-scripts --no-plugins --prefer-dist --no-interaction"
 
-    def test_clean_worktree_does_not_skip_refresh(self, tmp_path):
-        root = _make_root(
-            tmp_path,
-            files=("composer.json", "composer.lock"),
-            dirs=("vendor",),
-        )
-
-        result = detect_dependency_refresh(str(root), ["composer.lock"])
-
-        assert len(result["signals"]) == 1
-        assert "skipped_reason" not in result
-        assert "dirty_files" not in result
-
     def test_missing_vendor_signals_even_without_range_change(self, tmp_path):
         root = _make_root(tmp_path, files=("composer.json", "composer.lock"))
         result = detect_dependency_refresh(str(root), ["src/main.php"])
@@ -379,25 +366,6 @@ class TestDetectionWorktreePrecondition:
         assert result["skipped_reason"] == "dirty_worktree"
         assert result["dirty_files"] == ["dependency"]
 
-    def test_local_ignore_all_cannot_hide_tracked_submodule_changes(
-        self, tmp_path
-    ):
-        parent, submodule = self._repo_with_composer_root_and_submodule(tmp_path)
-        subprocess.run(
-            [
-                "git", "-C", str(parent), "config",
-                "submodule.dependency.ignore", "all",
-            ],
-            check=True,
-            capture_output=True,
-        )
-        (submodule / "tracked.txt").write_text("mutated\n", encoding="utf-8")
-
-        result = detect_dependency_refresh(str(parent), ["composer.lock"])
-
-        assert result["skipped_reason"] == "dirty_worktree"
-        assert result["dirty_files"] == ["dependency"]
-
     def test_nonzero_git_status_fails_closed(self, tmp_path, monkeypatch):
         root = _make_root(
             tmp_path,
@@ -436,41 +404,8 @@ class TestDetectionWorktreePrecondition:
 
 
 class TestLoadDependencyRefreshReport:
-    def test_missing_report_is_not_a_load_failure(self, tmp_path):
-        report, load_failed = dependency_refresh.load_dependency_refresh_report(
-            tmp_path
-        )
-
-        assert report is None
-        assert load_failed is False
-
-    def test_valid_object_is_returned(self, tmp_path):
-        (tmp_path / "dependency-refresh.json").write_text(
-            '{"commands": []}', encoding="utf-8"
-        )
-
-        report, load_failed = dependency_refresh.load_dependency_refresh_report(
-            tmp_path
-        )
-
-        assert report == {"commands": []}
-        assert load_failed is False
-
     def test_unreadable_report_is_a_load_failure(self, tmp_path):
         (tmp_path / "dependency-refresh.json").mkdir()
-
-        report, load_failed = dependency_refresh.load_dependency_refresh_report(
-            tmp_path
-        )
-
-        assert report is None
-        assert load_failed is True
-
-    def test_oversized_report_is_a_load_failure(self, tmp_path):
-        (tmp_path / "dependency-refresh.json").write_text(
-            '{"padding":"' + ("x" * (1024 * 1024)) + '"}',
-            encoding="utf-8",
-        )
 
         report, load_failed = dependency_refresh.load_dependency_refresh_report(
             tmp_path

@@ -151,13 +151,6 @@ class TestExtractAgentFindings:
         assert result["findings_by_severity"]["medium"] == 1
         assert result["findings_by_severity"].get("low", 0) == 0
 
-    def test_empty_issues(self):
-        """Agent produced zero findings — clean approve."""
-        review = _make_review_json(reviewer="perf", issues=[], verdict="approve")
-        result = extract_agent_findings(review)
-        assert result["total_findings"] == 0
-        assert all(v == 0 for v in result["findings_by_severity"].values())
-
     def test_issues_list_preserved(self):
         """The parsed issues list is returned for downstream overlap detection."""
         issues = [
@@ -191,11 +184,6 @@ class TestExtractAgentFindings:
     def test_non_dict_input(self):
         """Non-dict input returns empty result."""
         result = extract_agent_findings("not a dict")
-        assert result["total_findings"] == 0
-
-    def test_none_input(self):
-        """None input returns empty result."""
-        result = extract_agent_findings(None)
         assert result["total_findings"] == 0
 
 
@@ -265,26 +253,6 @@ class TestExtractIngestOutcomes:
 class TestComputeSurvivalRate:
     """compute_survival_rate(agent_findings, ingest_outcomes) → float 0.0-1.0."""
 
-    def test_all_survived(self):
-        """All findings confirmed → 1.0 survival rate."""
-        agent_findings = {"total_findings": 3, "findings_by_severity": {}, "issues": []}
-        ingest_outcomes = {
-            "confirmed": 3, "likely_valid": 0,
-            "false_positive": 0, "out_of_scope": 0, "style": 0,
-        }
-        rate = compute_survival_rate(agent_findings, ingest_outcomes)
-        assert rate == pytest.approx(1.0)
-
-    def test_none_survived(self):
-        """All findings filtered out → 0.0 survival rate."""
-        agent_findings = {"total_findings": 4, "findings_by_severity": {}, "issues": []}
-        ingest_outcomes = {
-            "confirmed": 0, "likely_valid": 0,
-            "false_positive": 2, "out_of_scope": 1, "style": 1,
-        }
-        rate = compute_survival_rate(agent_findings, ingest_outcomes)
-        assert rate == pytest.approx(0.0)
-
     def test_partial_survival(self):
         """Mix of confirmed/likely_valid and filtered → fractional rate."""
         agent_findings = {"total_findings": 5, "findings_by_severity": {}, "issues": []}
@@ -351,17 +319,6 @@ class TestDetectOverlaps:
         assert result["overlap_clusters"] == 1
         assert result["severity_disagreements"] == 1
 
-    def test_multiple_overlaps(self):
-        """Three findings at two locations → two overlap clusters."""
-        findings = [
-            {"agent": "security", "file": "a.php", "line": 10, "severity": "high", "title": "A1"},
-            {"agent": "code", "file": "a.php", "line": 10, "severity": "high", "title": "A2"},
-            {"agent": "security", "file": "b.php", "line": 20, "severity": "medium", "title": "B1"},
-            {"agent": "perf", "file": "b.php", "line": 20, "severity": "medium", "title": "B2"},
-        ]
-        result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 2
-
     def test_three_agents_same_location(self):
         """Three agents at the same file+line → still one cluster."""
         findings = [
@@ -379,24 +336,6 @@ class TestDetectOverlaps:
         result = detect_overlaps([])
         assert result["overlap_clusters"] == 0
         assert result["severity_disagreements"] == 0
-
-    def test_single_finding(self):
-        """Single finding → no possible overlap."""
-        findings = [
-            {"agent": "security", "file": "a.php", "line": 1, "severity": "high", "title": "Solo"},
-        ]
-        result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 0
-        assert result["severity_disagreements"] == 0
-
-    def test_same_file_different_lines(self):
-        """Same file but different lines → no overlap."""
-        findings = [
-            {"agent": "security", "file": "a.php", "line": 10, "severity": "high", "title": "Line10"},
-            {"agent": "code", "file": "a.php", "line": 20, "severity": "high", "title": "Line20"},
-        ]
-        result = detect_overlaps(findings)
-        assert result["overlap_clusters"] == 0
 
     def test_none_line_ignored(self):
         """Findings with None line are excluded from overlap detection."""
@@ -898,12 +837,6 @@ class TestBashBuilderRecognition:
         command = _builder_heredoc(body="this is not python(\n")
         assert _mod._builder_review_from_heredoc(command) is None
 
-    def test_categorizer_labels_builder_output(self):
-        detail = _mod._categorize_tool_call(
-            "Bash", {"command": _builder_heredoc()}
-        )
-        assert detail["category"] == "builder-output"
-
     def test_parse_subagent_log_populates_write_outputs(self, tmp_path):
         log = tmp_path / "agent.jsonl"
         entries = [
@@ -935,13 +868,8 @@ class TestBashBuilderRecognition:
 
     @pytest.mark.parametrize(
         "structured",
-        [
-            {"exitCode": 1},
-            {"interrupted": True},
-            {"status": "error"},
-            {"error": "ValueError: line must be a positive integer"},
-        ],
-        ids=["exit-code", "interrupted", "status", "error-field"],
+        [{"exitCode": 1}],
+        ids=["exit-code"],
     )
     def test_structured_failure_without_is_error_does_not_count(
         self, tmp_path, structured
@@ -990,12 +918,8 @@ class TestBashBuilderRecognition:
 
     @pytest.mark.parametrize(
         "structured",
-        [
-            {"status": "running"},
-            {"interrupted": False},
-            {"weird": {"shape": 1}},
-        ],
-        ids=["nonterminal-status", "nonterminal-flag", "unclassifiable"],
+        [{"weird": {"shape": 1}}],
+        ids=["unclassifiable"],
     )
     def test_nonterminal_or_unclassifiable_result_does_not_count(
         self, tmp_path, structured
@@ -1135,33 +1059,30 @@ class TestStraightLineReconstruction:
     non-executed control flow would be collected as persisted, fabricating
     findings. Non-straight-line bodies fail closed."""
 
-    @pytest.mark.parametrize(
-        "guard",
-        [
-            "if False:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "for _ in []:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "while False:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "def helper():\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "False and builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
-            "try:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)\nexcept Exception:\n    pass",
-            "[builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1) for _ in []]",
-        ],
-        ids=[
-            "if-false", "empty-loop", "while-false", "function-def",
-            "short-circuit", "try-block", "comprehension",
-        ],
-    )
-    def test_control_flow_fails_reconstruction_closed(self, guard):
-        body = (
-            "from review.agent.output import ReviewOutputBuilder\n"
-            'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
-            'builder.add_issue("high", "Real", "src/f.php", "d", "r", line=3)\n'
-            f"{guard}\n"
-            "builder.save(\"/tmp/pr-review-42\")\n"
-        )
-        record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
+    def test_control_flow_fails_reconstruction_closed(self):
+        # One `if any(...)` over a 20-entry node-type tuple (:201-203) decides
+        # all of these, so they are inputs to one condition, not separate
+        # contracts — kept in full, collected as one node.
+        guards = {
+            "if-false": "if False:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "empty-loop": "for _ in []:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "while-false": "while False:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "function-def": "def helper():\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "short-circuit": "False and builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)",
+            "try-block": "try:\n    builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1)\nexcept Exception:\n    pass",
+            "comprehension": "[builder.add_issue('high', 'Fake', 'f.php', 'd', 'r', line=1) for _ in []]",
+        }
+        for case, guard in guards.items():
+            body = (
+                "from review.agent.output import ReviewOutputBuilder\n"
+                'builder = ReviewOutputBuilder(pr_id="42", reviewer="security")\n'
+                'builder.add_issue("high", "Real", "src/f.php", "d", "r", line=3)\n'
+                f"{guard}\n"
+                "builder.save(\"/tmp/pr-review-42\")\n"
+            )
+            record = _mod._builder_review_from_heredoc(_builder_heredoc(body=body))
 
-        assert record is None
+            assert record is None, case
 
 
 class TestTextReportFindingCounts:

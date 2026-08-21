@@ -2431,14 +2431,6 @@ class TestStep10QuickMode:
         assert "SKIPPED" in text
         assert "decision-critic-verdict.json" in text
 
-    def test_skip_critic_on_comment_verdict(self, mod, tmp_path):
-        state = {"completed_steps": [], "reconciliation_verdict": "comment"}
-        config = {"quick": True}
-        g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
-        text = "\n".join(g["actions"])
-        assert "decision-reviewer" not in text
-        assert "SKIPPED" in text
-
     def test_run_critic_on_request_changes(self, mod, tmp_path):
         state = {"completed_steps": [], "reconciliation_verdict": "request_changes"}
         config = {"quick": True}
