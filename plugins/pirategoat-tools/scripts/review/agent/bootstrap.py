@@ -1198,9 +1198,11 @@ def build_output(
     lines.append(f"  - {output_dir}/{reviewer_name}-review.json")
     # The namespace rule, taught once. A field run had a reviewer awk-slice
     # its scoped diff into three ad-hoc .patch files inside OUTPUT_DIR — a
-    # sound technique in the wrong place, and nothing had ever told it
-    # otherwise (the only $TMPDIR mention in anything a reviewer receives
-    # was buried in a protocol probe example). OUTPUT_DIR is scanned by
+    # sound technique in the wrong place, and nothing in what this function
+    # renders had ever said otherwise — the only $TMPDIR mention reaching a
+    # bootstrap-briefed reviewer was buried in a protocol probe example
+    # about running tests. (agents/codex-reviewer.md names it too, but that
+    # adapter does not receive this briefing.) OUTPUT_DIR is scanned by
     # readiness gates, swept for stale artifacts, and mined by the metrics
     # layer, all of which key on filenames the pipeline expects.
     lines.append(
