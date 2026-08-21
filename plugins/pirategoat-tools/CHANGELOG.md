@@ -43,9 +43,17 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 - **Retired the `version: "1.0.0"` string** that every review JSON carried unbumped through six shape changes, replacing it with an integer `schema` field the plugin's `AGENTS.md` and `schemas/review-output.ts` both commit to bumping on any shape change. Telemetry events and the run manifest make the same move, replacing their separate `schema_version` name with the same `schema` convention every other artifact already used.
 
+- **Budget pressure moved from the briefing to the save echo.** The claim-or-declare contract no longer calls an under-budget declaration a "protocol violation" — a rule conditioned on a running tool-call tally no reviewer is ever shown, delivered verbatim to 19 agents for zero effect (0/19 reached target, median 44% spent, nine declaring 100+ files while under half budget). The target now travels into the builder envelope and `save()` echoes it back whenever the saved output records unreviewed files, in the one feedback surface every agent reads and while it still has a turn to act. The enforced half of the contract is unchanged: an APPROVE that silently ignores deferred files is still a violation, and save-time auto-fill is what makes that real.
+
+- **`add_unreviewed()` is variadic**, matching its sibling `add_deferred_reviewed(*files)`. Reviewers read the pair as symmetric and called it that way, losing calls to `takes 2 positional arguments but 126 were given`. Both APIs now run one shared batch validator, so they cannot drift apart on path grammar or membership rules the way they did when each kept its own loop. Single-path calls are unchanged.
+
+- **Reviewers are told that OUTPUT_DIR is an artifact-only namespace** and that scratch work belongs in `$TMPDIR`. A field run had a reviewer slice its scoped diff into ad-hoc `.patch` files inside the run directory — sound technique, wrong place, and nothing had ever said so.
+
 - **Transcript failure-recovery analysis is now linear in transcript size** — one reverse traversal classifies later-success recovery instead of rescanning the remaining calls for every failure.
 
 ### Fixed
+
+- **The builder's `meta` stopped fake-zeroing.** `meta.files_reviewed` defaulted to 0, making a reviewer that never reported a count indistinguishable from one reporting it read nothing; `meta.review_duration_ms` was measured from the builder's own construction — which happens inside the final heredoc — so it timed the write and called it the review, and a 211-second reconciliator published a duration of 0. Both now report a measurement or null: the count only when `set_files_reviewed()` states one, the duration derived from the actor's dispatch marker (`<agent>.started` for reviewers, `<agent>.synthesis-started` for synthesis agents). `schemas/review-output.ts` types both nullable.
 
 - **Dependency-refresh hardening.** Refresh now refuses to run against a dirty or unverifiable tracked worktree, decodes Git-quoted changed paths correctly when detecting stale roots, keeps malformed or oversized self-reports from discarding independent verification evidence, and `--refresh-host-context` preserves the rest of `review-context.json` instead of replacing the whole file.
 
