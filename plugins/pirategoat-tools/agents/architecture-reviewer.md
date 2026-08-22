@@ -2,7 +2,7 @@
 name: architecture-reviewer
 description: Software architecture code review for design patterns, SOLID principles, coupling, cohesion, and architectural decisions
 model: sonnet
-effort: medium
+effort: high
 color: blue
 tools:
   - Read

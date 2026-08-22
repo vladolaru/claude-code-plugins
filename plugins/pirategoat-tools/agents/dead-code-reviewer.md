@@ -2,7 +2,7 @@
 name: dead-code-reviewer
 description: Identifies dead code introduced or exposed by changes — unused functions, unreachable paths, orphaned imports, parameters without callers, and code made obsolete by refactors
 model: sonnet
-effort: medium
+effort: high
 color: black
 tools:
   - Read

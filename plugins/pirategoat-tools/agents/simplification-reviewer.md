@@ -2,7 +2,7 @@
 name: simplification-reviewer
 description: Reviews code changes for unnecessary complexity — over-abstraction, premature generalization, defensive code for impossible cases, unnecessary indirection, and verbose logic where concise alternatives exist
 model: sonnet
-effort: medium
+effort: high
 color: yellow
 tools:
   - Read

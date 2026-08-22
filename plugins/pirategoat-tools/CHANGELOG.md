@@ -26,6 +26,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 
 ### Changed
 
+- **Domain reviewers run at high reasoning effort** — all domain reviewers now dispatch with `effort: high`, and three tests reviewers that had no effort setting are pinned to high for family uniformity.
 - **`review-findings.md` is a mechanical render of `review-findings.json`** — the reconciliator writes JSON only, closing a field-witnessed staleness split after a critic REVISE.
 - **Module boundaries** — `pipeline.py` split into `pipeline_contract.py`, `briefings.py`, and `orchestration.py`; `pipeline.py` remains the executable facade.
 - **One containment invariant** — `scripts/containment.py` backs both advisory-host and repo-contributed rule/reviewer resolution.

@@ -2,7 +2,7 @@
 name: code-clarity-reviewer
 description: Code clarity review for naming accuracy, documentation correctness, and intent communication — flags names that lie, docs that contradict code, and semantic confusion that builds wrong mental models
 model: sonnet
-effort: medium
+effort: high
 color: cyan
 tools:
   - Read

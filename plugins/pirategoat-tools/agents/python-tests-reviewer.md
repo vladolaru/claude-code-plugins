@@ -2,6 +2,7 @@
 name: python-tests-reviewer
 description: Python test quality review for pytest fixtures, parametrize, mock/patch patterns, pytest-asyncio, hypothesis property-based testing, and factory_boy
 model: haiku
+effort: high
 color: blue
 tools:
   - Read

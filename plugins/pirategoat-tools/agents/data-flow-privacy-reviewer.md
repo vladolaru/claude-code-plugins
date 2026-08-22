@@ -2,7 +2,7 @@
 name: data-flow-privacy-reviewer
 description: Data flow and privacy code review for PII in logs, data leakage in API responses, GDPR erasure gaps, payment data handling, and cross-boundary data flow
 model: sonnet
-effort: medium
+effort: high
 color: purple
 tools:
   - Read

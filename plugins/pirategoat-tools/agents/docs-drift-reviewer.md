@@ -2,7 +2,7 @@
 name: docs-drift-reviewer
 description: Documentation drift review — detects when code changes cause README, CLAUDE.md, AGENTS.md, API docs, or guides to become stale
 model: sonnet
-effort: medium
+effort: high
 color: pink
 tools:
   - Read

@@ -2,7 +2,7 @@
 name: toolchain-reviewer
 description: Developer toolchain review for package manager configs, build tools, linting configs, version constraints, CI pipelines, and supply chain settings — actively searches changelogs for deprecations and behavior changes
 model: sonnet
-effort: medium
+effort: high
 color: cyan
 tools:
   - Read

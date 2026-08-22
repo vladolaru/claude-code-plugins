@@ -2,7 +2,7 @@
 name: reference-integrity-reviewer
 description: Verifies that references in code — plugin slugs, asset paths, URLs, constants, hook names — actually resolve to existing targets, whether internal (codebase files, classes) or external (registries, endpoints)
 model: sonnet
-effort: medium
+effort: high
 color: yellow
 tools:
   - Read

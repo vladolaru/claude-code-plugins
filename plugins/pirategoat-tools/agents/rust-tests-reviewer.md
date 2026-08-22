@@ -2,6 +2,7 @@
 name: rust-tests-reviewer
 description: Rust test quality review for built-in test framework patterns, assert macros, async tests, mockall, proptest, rstest, insta snapshots, criterion benchmarks, and serial_test isolation
 model: haiku
+effort: high
 color: orange
 tools:
   - Read

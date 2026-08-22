@@ -2,7 +2,7 @@
 name: e2e-tests-reviewer
 description: Playwright E2E test quality review for locator strategies, Page Object Model, auto-waiting, network interception, and WordPress/WooCommerce test helpers
 model: sonnet
-effort: medium
+effort: high
 color: green
 tools:
   - Read

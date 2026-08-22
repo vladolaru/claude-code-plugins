@@ -2,7 +2,7 @@
 name: code-reviewer
 description: Reviews code changes for real issues in context of stated goals. Supports full review or focused review of specific commits.
 model: opus
-effort: medium
+effort: high
 color: blue
 tools:
   - Read
