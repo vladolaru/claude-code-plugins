@@ -333,3 +333,50 @@ def test_scan_holds_no_items_by_default(tmp_path):
     )
 
     assert codex_rollout.scan_thread(path).items == []
+
+
+def test_parent_agent_path_strips_last_segment():
+    assert codex_rollout.parent_agent_path("/root/child_1") == "/root"
+    assert codex_rollout.parent_agent_path("/root/child_1/grandchild") == "/root/child_1"
+
+
+def test_parent_agent_path_of_root_is_none():
+    assert codex_rollout.parent_agent_path("/root") is None
+
+
+def test_build_tree_groups_children_under_parents(tmp_path):
+    today = date(2026, 8, 22)
+
+    specs = [
+        ("root", None),
+        ("child-a", "/root/a"),
+        ("child-b", "/root/b"),
+        ("grandchild", "/root/a/deep"),
+    ]
+    for name, agent_path in specs:
+        overrides = {"id": name}
+        if agent_path:
+            overrides["source"] = _subagent_source(agent_path=agent_path)
+        _write_rollout(tmp_path, today, name, **overrides)
+
+    metas = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
+    tree = codex_rollout.build_tree(metas)
+
+    assert [m.thread_id for m in tree.roots] == ["root"]
+    assert sorted(m.thread_id for m in tree.children_of("/root")) == ["child-a", "child-b"]
+    assert [m.thread_id for m in tree.children_of("/root/a")] == ["grandchild"]
+
+
+def test_build_tree_treats_orphans_as_roots(tmp_path):
+    """A child whose parent falls outside the window still has to be reported."""
+    today = date(2026, 8, 22)
+
+    _write_rollout(
+        tmp_path, today, "orphan", id="orphan", source=_subagent_source(agent_path="/root/gone/x")
+    )
+
+    metas = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
+    tree = codex_rollout.build_tree(metas)
+
+    assert [m.thread_id for m in tree.roots] == ["orphan"]
+    assert [m.thread_id for m in tree.orphans] == ["orphan"]

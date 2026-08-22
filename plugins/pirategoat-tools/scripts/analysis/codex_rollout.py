@@ -265,3 +265,47 @@ def scan_thread(path: Path, keep_items: bool = False) -> ThreadScan:
     scan.cached_input_tokens = last_usage.get("cached_input_tokens", 0)
     scan.input_tokens = last_usage.get("input_tokens", 0)
     return scan
+
+
+def parent_agent_path(agent_path: str) -> str | None:
+    """The parent's agent_path, or None for a root thread.
+
+    agent_path encodes tree position literally, so "/root/a/deep" hangs off
+    "/root/a". This is the only correlation mechanism the tools implement:
+    it needs nothing beyond line 1 of each rollout.
+    """
+    head = agent_path.rsplit("/", 1)[0]
+    return head or None
+
+
+@dataclass
+class ThreadTree:
+    """Threads grouped by tree position, built from agent_path alone."""
+
+    roots: list[ThreadMeta]
+    orphans: list[ThreadMeta]
+    _by_parent: dict[str, list[ThreadMeta]]
+
+    def children_of(self, agent_path: str) -> list[ThreadMeta]:
+        return self._by_parent.get(agent_path, [])
+
+
+def build_tree(metas: list[ThreadMeta]) -> ThreadTree:
+    """Group threads into a tree. Threads whose parent is absent become roots."""
+    known_paths = {meta.agent_path for meta in metas}
+    by_parent: dict[str, list[ThreadMeta]] = {}
+    roots: list[ThreadMeta] = []
+    orphans: list[ThreadMeta] = []
+
+    for meta in metas:
+        parent = parent_agent_path(meta.agent_path)
+        if parent is None:
+            roots.append(meta)
+        elif parent in known_paths:
+            by_parent.setdefault(parent, []).append(meta)
+        else:
+            # Parent is outside the window. Report it rather than drop it.
+            roots.append(meta)
+            orphans.append(meta)
+
+    return ThreadTree(roots=roots, orphans=orphans, _by_parent=by_parent)
