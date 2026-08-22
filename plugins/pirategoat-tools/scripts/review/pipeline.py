@@ -480,6 +480,13 @@ def clean_stale_artifacts(output_dir):
 # Output Formatting
 # ---------------------------------------------------------------------------
 
+_RUN_EXACT_NOTE = (
+    "Run this command exactly as printed — never pipe it through "
+    "head/tail/grep or redirect it to skim; every line of a step "
+    "briefing is load-bearing."
+)
+
+
 def format_output(step, guidance):
     """Format guidance into curated-context-pipeline output."""
     lines = []
@@ -530,6 +537,7 @@ def format_output(step, guidance):
         lines.append("")
         lines.append("Complete the actions above, then re-run this step.")
         lines.append(f"Run: python3 {SCRIPTS_DIR / 'pipeline.py'} --step {step} --output-dir <OUTPUT_DIR>")
+        lines.append(_RUN_EXACT_NOTE)
     elif next_step:
         lines.append(f"{'─' * 60}")
         ns = next_step
@@ -538,6 +546,7 @@ def format_output(step, guidance):
             lines.append(f"    ({ns['skip_reason']})")
         lines.append("")
         lines.append(f"Run: python3 {SCRIPTS_DIR / 'pipeline.py'} --step {ns['step']} --output-dir <OUTPUT_DIR>")
+        lines.append(_RUN_EXACT_NOTE)
     else:
         lines.append(f"{'─' * 60}")
         lines.append("✅ PIPELINE COMPLETE")

@@ -55,6 +55,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Doc-drift guards** pin the AGENTS.md registry reference and README model tiers to `agent_registry.json` in both directions.
 - **Test estate** — 273 redundant pins removed with coverage increased (11 previously-unpinned guards now pinned); every cut mutation-verified.
 - **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, five never-produced interfaces dropped.
+- **Step handoffs pin a no-truncation rule** — every next-step and blocks-progress footer now tells the orchestrator to run the printed command unfiltered, since piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines.
 
 *The full narrative for this release — rationale, evidence, and field-run numbers — lives in the commit bodies and `.claude/docs/analysis/`.*
 

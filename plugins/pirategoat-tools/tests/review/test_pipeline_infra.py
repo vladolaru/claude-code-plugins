@@ -521,6 +521,28 @@ class TestFormatOutput:
         assert "HANDOFF" in output
         assert "change-purpose.md" in output
 
+    def test_step_footer_carries_no_truncation_rule(self, mod):
+        """Every step handoff (next-step and blocks-progress) tells the
+        orchestrator to run the command unfiltered — the run12 failure was
+        `--step 10 | head -60` eating the verdict instructions."""
+        guidance_next = {
+            "phase": "SETUP", "title": "T",
+            "situation": [], "actions": [],
+            "handoff": None, "next_step": {"step": 5, "title": "Next"},
+            "skip_reason": None,
+        }
+        guidance_wait = {
+            "phase": "SYNTHESIS", "title": "T",
+            "situation": [], "actions": [],
+            "handoff": None, "next_step": None,
+            "skip_reason": None, "blocks_progress": True,
+        }
+        out_next = mod.format_output(3, guidance_next)
+        out_wait = mod.format_output(3, guidance_wait)
+        assert mod._RUN_EXACT_NOTE in out_next
+        assert mod._RUN_EXACT_NOTE in out_wait
+        assert "never pipe" in mod._RUN_EXACT_NOTE
+
 
 class TestCLIIntegration:
     """Subprocess tests for the CLI."""
