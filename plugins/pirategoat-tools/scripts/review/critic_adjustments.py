@@ -304,6 +304,88 @@ def _validate_fields(fields, entry_label):
             )
 
 
+def validate_adjustments(payload):
+    """Validate the batch SHAPE of a decision-critic adjustments document,
+    without resolving any id against an actual findings ledger.
+
+    Returns a list of human-readable problems; an empty list means valid.
+    This is the "does this batch make grammatical sense" check — document
+    is an object, schema is exactly ADJUSTMENTS_SCHEMA, 'adjustments' is a
+    list, and every entry has a recognized action, an adjustable field set
+    (via `_validate_fields()`), a required-field-complete `add`, and no
+    critic-supplied id on `add` — shared by two callers with two different
+    amounts of context available: `critic.py`'s save gate, which runs
+    BEFORE any findings ledger exists to check ids against, and
+    `apply_adjustments()` below, which re-checks the same shape
+    defensively right before it goes on to do the ledger-dependent checks
+    (does an id name a real issue, is a target removed earlier in this
+    batch) that only it has the context to make.
+
+    Deliberately excludes anything that needs `review-findings.json`: an
+    entry's target existing, per-batch duplicate targets, and a target
+    removed earlier in the same batch all stay in `apply_adjustments()`,
+    which is the only caller with a ledger to check them against.
+    """
+    if not isinstance(payload, dict):
+        return [f"{ADJUSTMENTS_FILENAME} must be a JSON object"]
+    schema = payload.get("schema")
+    if schema != ADJUSTMENTS_SCHEMA:
+        return [
+            f"{ADJUSTMENTS_FILENAME}: 'schema' must be {ADJUSTMENTS_SCHEMA}, "
+            f"got {schema!r}"
+        ]
+    adjustments = payload.get("adjustments")
+    if not isinstance(adjustments, list):
+        return [f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"]
+
+    problems = []
+    seen_ids = {}
+    for idx, entry in enumerate(adjustments):
+        label = f"adjustment[{idx}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{label} must be an object")
+            continue
+        adjustment_id = entry.get("adjustment_id")
+        if adjustment_id is not None:
+            if not isinstance(adjustment_id, str) or not adjustment_id:
+                problems.append(
+                    f"{label}: 'adjustment_id' must be a non-empty string"
+                )
+            elif adjustment_id in seen_ids:
+                problems.append(
+                    f"{label}: duplicate adjustment_id {adjustment_id!r} "
+                    f"(also adjustment[{seen_ids[adjustment_id]}]) — ids "
+                    f"identify which decisions a ledger already contains"
+                )
+            else:
+                seen_ids[adjustment_id] = idx
+        action = entry.get("action")
+        if action not in ACTIONS:
+            problems.append(
+                f"{label}: unknown action {action!r} "
+                f"(allowed: {', '.join(ACTIONS)})"
+            )
+            continue
+        fields = entry.get("fields") or {}
+        try:
+            _validate_fields(fields, label)
+        except ValueError as err:
+            problems.append(str(err))
+            continue
+        if action == "add":
+            missing = [k for k in ADD_REQUIRED_FIELDS if k not in fields]
+            if missing:
+                problems.append(
+                    f"{label}: add requires fields {', '.join(missing)}"
+                )
+            if entry.get("id") is not None:
+                problems.append(
+                    f"{label}: ids are generated, not assigned — the "
+                    f"critic must not invent ids"
+                )
+    return problems
+
+
 def _apply_scope_pairing(issue, line_is_null):
     """Keep `scope` and `line` consistent for one issue.
 
@@ -571,22 +653,15 @@ def apply_adjustments(output_dir):
     # diagnosis from "an object with the wrong schema", and collapsing the
     # two would misreport a shape defect as a content defect (a critic
     # fixing 'schema' on a payload that isn't even a dict yet gets nowhere).
-    if not isinstance(doc, dict):
-        raise ValueError(f"{ADJUSTMENTS_FILENAME} must be a JSON object")
-    # Doc-level shape check, same tier as the 'adjustments' list check right
-    # below: schema describes the WHOLE document's contract, not one entry,
-    # so it is validated before any entry is even looked at.
-    schema = doc.get("schema")
-    if schema != ADJUSTMENTS_SCHEMA:
-        raise ValueError(
-            f"{ADJUSTMENTS_FILENAME}: 'schema' must be {ADJUSTMENTS_SCHEMA}, "
-            f"got {schema!r}"
-        )
+    # `validate_adjustments()` is the shared batch-shape check (see its own
+    # docstring): the critic's own save gate runs it before any findings
+    # ledger exists, and this is the SAME check run again here, defensively,
+    # right before the ledger-dependent checks below that only this
+    # function has the context to make.
+    problems = validate_adjustments(doc)
+    if problems:
+        raise ValueError(problems[0])
     adjustments = doc.get("adjustments")
-    if not isinstance(adjustments, list):
-        raise ValueError(
-            f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"
-        )
     read = read_findings_file(findings_path)
     # This path is about to WRITE against what it reads, so every failure
     # is loud. Absent, unreadable, and unparseable re-raise the original
