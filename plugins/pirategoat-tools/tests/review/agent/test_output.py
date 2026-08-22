@@ -2482,6 +2482,132 @@ class TestBudgetTargetEcho:
 
 
 # =============================================================================
+# TestSaveEchoProgressAndNextUnread
+# =============================================================================
+
+
+class TestSaveEchoProgressAndNextUnread:
+    """The TARGET echo names the continuation: a progress fraction plus the
+    first unread NOT DIFFED files, largest first — run12 showed that
+    exhortation without a concrete next action moves resaves but not
+    utilization. Both lines ride the same gate as TARGET (unreviewed files
+    declared and a real budget) and read from the same schema-2 sidecar.
+    """
+
+    @staticmethod
+    def _clean_env(monkeypatch):
+        monkeypatch.delenv("PIRATEGOAT_OUTPUT_DIR", raising=False)
+        monkeypatch.delenv("PIRATEGOAT_REVIEWER_NAME", raising=False)
+
+    @staticmethod
+    def _write_sidecar(tmp_path, reviewer="code", schema=2, deferred_files=None,
+                        **fields):
+        payload = {"schema": schema, "deferred_files": deferred_files or []}
+        payload.update(fields)
+        (tmp_path / f"{reviewer}-deferred-files.json").write_text(
+            json.dumps(payload)
+        )
+
+    def test_progress_and_next_unread_appear_with_claims_and_declarations(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._clean_env(monkeypatch)
+        deferred = [f"deferred/{i:02d}.go" for i in range(20)]  # largest first
+        self._write_sidecar(
+            tmp_path, deferred_files=deferred, review_budget=80,
+            budget_capped=False, in_scope_count=30, diffed_count=10,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed(*deferred[:3])  # claimed
+        builder.add_unreviewed(*deferred[3:5])  # declared
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+
+        # 10 diffed + 3 claimed = 13 of 30.
+        assert "PROGRESS: covered 13 of 30 in-scope files." in out
+        assert "NEXT UNREAD (largest first):" in out
+        # 20 deferred - 3 claimed - 2 declared = 15 remaining; capped at 10
+        # with the rest counted.
+        assert out.count("\n  - ") == 10
+        assert "(+5 more)" in out
+        # Replays the sidecar's own order (largest first), not re-sorted or
+        # re-derived: the first listed file is the largest remaining one.
+        next_unread_block = out.split("NEXT UNREAD (largest first):\n", 1)[1]
+        listed = [
+            line[len("  - "):] for line in next_unread_block.splitlines()
+            if line.startswith("  - ")
+        ]
+        assert listed == deferred[5:15]
+
+    def test_no_progress_or_next_unread_without_unreviewed_files(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Nothing declared or auto-filled means the TARGET gate never
+        opens, so its two extensions must not appear either."""
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path, review_budget=80, in_scope_count=30, diffed_count=30,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+        assert "PROGRESS:" not in out
+        assert "NEXT UNREAD" not in out
+
+    def test_no_progress_or_next_unread_with_schema_1_sidecar(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A schema-1 sidecar has no budget (Task 4's contract) — since
+        both extensions ride the TARGET gate, they are silently skipped
+        along with it, exactly like an absent sidecar."""
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path, schema=1, deferred_files=["some/file.go"],
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_unreviewed("some/file.go")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+        assert "PROGRESS:" not in out
+        assert "NEXT UNREAD" not in out
+
+    def test_next_unread_omitted_when_nothing_remains(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Every deferred file already claimed or declared: no continuation
+        to name, so the header must not print."""
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path, deferred_files=["a.go", "b.go"], review_budget=40,
+            in_scope_count=5, diffed_count=3,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go")
+        builder.add_unreviewed("b.go")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+        assert "NEXT UNREAD" not in out
+
+    def test_progress_omitted_without_a_usable_in_scope_count(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """in_scope_count is its own fact, independent of the budget and
+        deferred-files list — an absent or non-positive value must not
+        block NEXT UNREAD, which reads a different field."""
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path, deferred_files=["a.go", "b.go"], review_budget=40,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_unreviewed("a.go")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+        assert "PROGRESS:" not in out
+        assert "NEXT UNREAD (largest first):" in out
+        assert "  - b.go" in out
+
+
+# =============================================================================
 # TestMetaIsNeverFakeZero
 # =============================================================================
 

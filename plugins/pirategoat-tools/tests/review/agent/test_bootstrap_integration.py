@@ -2079,3 +2079,101 @@ class TestNotDiffedContractIsDelivered:
         assert "Never spend tool calls enumerating unreviewed files" in output
         assert "auto-declared" in output
 
+
+class TestDeferredFilesOrderingEndToEnd:
+    """The deferred-files sidecar's list is largest-first end to end.
+
+    load_scope_facts() reads budget_exceeded_files straight off the
+    scope-summary sidecar in PRIORITY-TIER order (production files before
+    test files, regardless of size, for domains with budget_priority
+    "production_first") — not pure size order. A small production file can
+    therefore land ahead of a much larger test file in the raw list. This
+    reproduces that exact divergence with a real git repo and checks
+    bootstrap's own re-sort (order_by_diffstat_largest_first) fixes it in
+    the sidecar it persists — the same sidecar output.py's save() replays
+    for the NEXT UNREAD echo.
+    """
+
+    def _repo_with_priority_tier_divergence(self, repo_dir):
+        """A small production file and a much larger test file, sized so
+        both exceed history-insights-reviewer's 500-line max (registry
+        budget_override does not affect scope.py's own --max-lines
+        deferral, only the tool-call target build_output later reports)."""
+        os.makedirs(os.path.join(repo_dir, "src"), exist_ok=True)
+        os.makedirs(os.path.join(repo_dir, "tests"), exist_ok=True)
+
+        def write(relpath, n_lines):
+            with open(os.path.join(repo_dir, relpath), "w") as f:
+                f.write("\n".join(f"line {i}" for i in range(n_lines)) + "\n")
+
+        subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=repo_dir, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"],
+            cwd=repo_dir, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"],
+            cwd=repo_dir, capture_output=True, check=True,
+        )
+        for relpath, n in [
+            ("src/huge_prod.py", 5), ("src/small_prod.py", 5),
+            ("tests/huge_test.py", 5),
+        ]:
+            write(relpath, n)
+        subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"], cwd=repo_dir, capture_output=True, check=True
+        )
+        # huge_prod (485) nearly exhausts the 500-line budget; small_prod
+        # (35, still production tier) is processed next and deferred; only
+        # then does the test tier run, deferring huge_test (405) — larger
+        # than small_prod but ordered after it by the priority tier alone.
+        for relpath, n in [
+            ("src/huge_prod.py", 485), ("src/small_prod.py", 35),
+            ("tests/huge_test.py", 405),
+        ]:
+            write(relpath, n)
+        subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "changes"], cwd=repo_dir, capture_output=True, check=True
+        )
+
+    def test_sidecar_deferred_files_are_largest_first_despite_priority_tiering(
+        self, tmp_path
+    ):
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        self._repo_with_priority_tier_divergence(str(repo_dir))
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        result = subprocess.run(
+            [
+                sys.executable, str(BOOTSTRAP_SCRIPT),
+                "--agent", "history-insights-reviewer",
+                "--output-dir", str(output_dir),
+                "--range", "HEAD~1..HEAD",
+            ],
+            cwd=str(repo_dir), capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0
+
+        sidecar = json.loads(
+            (output_dir / "history-insights-deferred-files.json").read_text()
+        )
+        # Both deferred (the regression this guards): a same-tier-only
+        # re-sort would still fail to fix the divergence, since these two
+        # files are in DIFFERENT priority tiers.
+        assert set(sidecar["deferred_files"]) == {
+            "src/small_prod.py", "tests/huge_test.py",
+        }
+        # Largest first, size overriding the priority tier that put the
+        # smaller production file first in scope.py's own raw ordering.
+        assert sidecar["deferred_files"] == [
+            "tests/huge_test.py", "src/small_prod.py",
+        ]
+

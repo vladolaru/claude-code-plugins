@@ -1513,6 +1513,46 @@ class ReviewOutputBuilder:
                     "well under it with NOT DIFFED files left, read more and "
                     "re-save before finalizing."
                 )
+                # The target alone moved re-saves but not utilization in
+                # run12 (0/19 agents reached target) — a number with no
+                # concrete next action is exhortation. PROGRESS states how
+                # much of the total in-scope workload (inline + deferred) is
+                # actually covered; NEXT UNREAD names the specific files
+                # still to read, largest first (the sidecar's own order —
+                # see bootstrap.py's order_by_diffstat_largest_first), so
+                # the very next tool call has an obvious target. Both read
+                # the same schema-2 sidecar as budget_target and are
+                # silently absent on the same schema-1/missing sidecar it
+                # already tolerates.
+                meta = self._read_deferred_sidecar(output_dir, self.reviewer)
+                in_scope = meta.get("in_scope_count")
+                if (
+                    isinstance(in_scope, int)
+                    and not isinstance(in_scope, bool)
+                    and in_scope > 0
+                ):
+                    covered = (
+                        (meta.get("diffed_count") or 0)
+                        + len(self.deferred_reviewed)
+                    )
+                    print(
+                        f"PROGRESS: covered {covered} of {in_scope} "
+                        "in-scope files."
+                    )
+                deferred_files_ordered = meta.get("deferred_files")
+                if isinstance(deferred_files_ordered, list):
+                    accounted = set(self.deferred_reviewed) | set(declared)
+                    remaining = [
+                        p for p in deferred_files_ordered
+                        if isinstance(p, str) and p not in accounted
+                    ]
+                    if remaining:
+                        head, rest = remaining[:10], remaining[10:]
+                        print("NEXT UNREAD (largest first):")
+                        for p in head:
+                            print(f"  - {p}")
+                        if rest:
+                            print(f"  (+{len(rest)} more)")
             # Completion telemetry and publication run under one exclusive
             # lock so {log, publish} is a single atomic unit per execution:
             # the manifest's latest agent_complete always describes the

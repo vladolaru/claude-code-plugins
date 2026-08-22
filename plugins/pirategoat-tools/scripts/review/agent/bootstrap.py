@@ -412,6 +412,44 @@ def extract_scope_line_count(scope_output: str) -> int:
     return total
 
 
+def extract_file_diffstat(scope_output: str) -> Dict[str, int]:
+    """Map each scope-listed file to its total changed lines (+N -M summed).
+
+    Parsed from every "path  (+N -M)" stat-shaped line scope.py renders,
+    regardless of section (FILES, NOT DIFFED, CHANGED (no diff)) — the one
+    per-file size bootstrap has, used only to ORDER already-known file sets
+    (the deferred-files sidecar's largest-first contract). A file matching
+    no stat line here sorts as 0, never excluded from whatever set it is
+    ordering.
+    """
+    stats: Dict[str, int] = {}
+    if not scope_output:
+        return stats
+    for line in scope_output.splitlines():
+        match = re.match(r'\s*(.+?)\s{2,}\(\+(\d+)\s+-(\d+)\)', line)
+        if match:
+            path, added, removed = match.groups()
+            stats[path.strip()] = int(added) + int(removed)
+    return stats
+
+
+def order_by_diffstat_largest_first(
+    paths: List[str], diffstat_totals: Dict[str, int]
+) -> List[str]:
+    """Order ``paths`` by descending total changed lines, largest first.
+
+    The one ordering rule the deferred-files sidecar's ``deferred_files``
+    list is pinned to — the save echo's NEXT UNREAD list (output.py)
+    replays that order verbatim, and the briefing already promises
+    "largest first" for this queue. A path with no entry in
+    ``diffstat_totals`` sorts as 0, never excluded. Stable: paths tied on
+    size (including two unknown paths) keep their relative input order.
+    """
+    return sorted(
+        paths, key=lambda p: diffstat_totals.get(p, 0), reverse=True
+    )
+
+
 def load_scope_facts(summary_paths: List[str]) -> Optional[Dict[str, Any]]:
     """Derive scope facts from the machine-readable scope-summary sidecars.
 
@@ -1809,6 +1847,16 @@ def main():
     # their meaning, and list-only lines never enter budget sizing.
     not_diffed_paths = scope_facts["not_diffed"]
     list_only_paths = scope_facts["list_only"]
+    # load_scope_facts() reads budget_exceeded_files straight off the
+    # summary sidecar in priority-tier order (production_first /
+    # markup_evidence ahead of size), not the pure size order the rendered
+    # NOT DIFFED text applies at print time — so this re-sort is required
+    # for that path and a no-op (already sorted) for the text-parsing
+    # fallback.
+    diffstat_totals = extract_file_diffstat(scope_output) if scope_output else {}
+    not_diffed_paths = order_by_diffstat_largest_first(
+        not_diffed_paths, diffstat_totals
+    )
     telemetry_scope_paths = list(
         dict.fromkeys([*scope_files_for_budget, *not_diffed_paths, *list_only_paths])
     )

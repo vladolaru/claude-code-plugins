@@ -39,6 +39,8 @@ extract_not_diffed_files = _mod.extract_not_diffed_files
 extract_list_only_files = _mod.extract_list_only_files
 extract_scope_line_count = _mod.extract_scope_line_count
 load_scope_facts = _mod.load_scope_facts
+extract_file_diffstat = _mod.extract_file_diffstat
+order_by_diffstat_largest_first = _mod.order_by_diffstat_largest_first
 resolve_overall_status = _mod.resolve_overall_status
 REVIEWER_PROTOCOL_SKIP_SECTIONS = _mod.REVIEWER_PROTOCOL_SKIP_SECTIONS
 
@@ -234,6 +236,69 @@ class TestPersistDeferredSidecar:
             "in_scope_count": None,
             "diffed_count": None,
         }
+
+
+class TestExtractFileDiffstat:
+    """Per-file size, parsed from any stat-shaped scope.py line."""
+
+    def test_extracts_stats_from_files_and_not_diffed_sections(self):
+        scope_output = (
+            "=== FILES ===\n"
+            "src/small.py  (+2 -1)\n"
+            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
+            "src/huge.py  (+400 -50)\n"
+        )
+        assert extract_file_diffstat(scope_output) == {
+            "src/small.py": 3,
+            "src/huge.py": 450,
+        }
+
+    def test_empty_scope_output_returns_empty_dict(self):
+        assert extract_file_diffstat("") == {}
+
+    def test_lines_without_the_stat_shape_are_ignored(self):
+        scope_output = (
+            "=== NOT DIFFED (budget exceeded, 1 files) ===\n"
+            "These files ARE IN YOUR SCOPE\n"
+            "src/a.py  (+5 -0)\n"
+        )
+        assert extract_file_diffstat(scope_output) == {"src/a.py": 5}
+
+
+class TestOrderByDiffstatLargestFirst:
+    """The deferred-files sidecar's ordering contract, in isolation."""
+
+    def test_sorts_descending_by_total_lines(self):
+        result = order_by_diffstat_largest_first(
+            ["a.py", "b.py", "c.py"],
+            {"a.py": 10, "b.py": 500, "c.py": 100},
+        )
+        assert result == ["b.py", "c.py", "a.py"]
+
+    def test_unknown_paths_sort_as_zero_and_never_get_excluded(self):
+        result = order_by_diffstat_largest_first(
+            ["known.py", "unknown.py"], {"known.py": 5}
+        )
+        assert result == ["known.py", "unknown.py"]
+
+    def test_ties_keep_relative_input_order(self):
+        """Stable: two equal-size (or both-unknown) paths do not get
+        reordered relative to each other."""
+        result = order_by_diffstat_largest_first(
+            ["first.py", "second.py"], {}
+        )
+        assert result == ["first.py", "second.py"]
+
+    def test_priority_tier_order_is_overridden_by_size(self):
+        """The regression this exists for: load_scope_facts() hands back
+        budget_exceeded_files in priority-tier order (a small
+        production-tier file ahead of a much larger ordinary file) — this
+        function must re-sort by size regardless of the input order."""
+        result = order_by_diffstat_largest_first(
+            ["small-priority.py", "huge-ordinary.py"],
+            {"small-priority.py": 20, "huge-ordinary.py": 900},
+        )
+        assert result == ["huge-ordinary.py", "small-priority.py"]
 
 
 class TestExtractProtocolSections:
