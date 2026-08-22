@@ -229,10 +229,14 @@ class TestCriticSave:
         assert "adjustments" in result.stdout.lower()
         assert [p.name for p in tmp_path.iterdir()] == [findings.name]
 
-    def test_critic_save_rejects_stand_with_adjustments(self, tmp_path):
+    @pytest.mark.parametrize("verdict", ["STAND", "ESCALATE"])
+    def test_critic_save_rejects_non_revise_with_adjustments(
+        self, tmp_path, verdict
+    ):
         """STAND/ESCALATE alongside a non-empty batch is the contradiction
         the apply gate could only quarantine downstream; now rejected at
-        source."""
+        source. run_save() treats both verdicts identically — pin both,
+        not just one."""
         findings = self._write_findings(tmp_path)
         adjustments = self._write_adjustments(tmp_path, [{
             "action": "promote", "id": "aaaa1111",
@@ -240,13 +244,63 @@ class TestCriticSave:
         }])
 
         result = self._run_save(
-            tmp_path, "--verdict", "STAND",
+            tmp_path, "--verdict", verdict,
             "--findings", str(findings), "--adjustments", str(adjustments),
         )
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
         assert "contradiction" in result.stdout.lower()
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "a.json", "f.md",
+        ], "a rejected save must write nothing"
+
+    def test_critic_save_stand_without_adjustments_succeeds(self, tmp_path):
+        """The success-path counterpart to the rejection tests above: a
+        STAND with no --adjustments is the ordinary case, not just the one
+        that must be refused when adjustments are present."""
+        findings = self._write_findings(tmp_path)
+
+        result = self._run_save(
+            tmp_path, "--verdict", "STAND", "--findings", str(findings),
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (tmp_path / "decision-critic-findings.md").is_file()
+        assert not (tmp_path / "decision-critic-adjustments.json").exists()
+        verdict_doc = json.loads(
+            (tmp_path / "decision-critic-verdict.json").read_text()
+        )
+        assert verdict_doc == {"verdict": "STAND"}
+        assert "RECORDED VERDICT: STAND" in result.stdout
+        assert "RECORDED ADJUSTMENTS: 0" in result.stdout
+
+    def test_critic_save_rejects_two_simultaneous_problems(self, tmp_path):
+        """run_save() must collect every problem, not stop at the first —
+        the same "don't stop at problems[0]" contract TestValidateAdjustments
+        pins for the validator itself, pinned here at the save-command
+        level with a bad verdict AND an invalid batch in the same call."""
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "obliterate", "id": "aaaa1111",
+            "fields": {}, "rationale": "r",
+        }])
+
+        result = self._run_save(
+            tmp_path, "--verdict", "MAYBE",
+            "--findings", str(findings), "--adjustments", str(adjustments),
+        )
+
+        assert result.returncode != 0
+        rejected_lines = [
+            line for line in result.stdout.splitlines()
+            if line.startswith("REJECTED:")
+        ]
+        assert len(rejected_lines) == 2, (
+            f"expected exactly 2 REJECTED lines, got: {rejected_lines}"
+        )
+        assert any("verdict must be one of" in line for line in rejected_lines)
+        assert any("obliterate" in line for line in rejected_lines)
         assert sorted(p.name for p in tmp_path.iterdir()) == [
             "a.json", "f.md",
         ], "a rejected save must write nothing"

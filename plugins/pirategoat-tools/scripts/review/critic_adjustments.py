@@ -743,6 +743,21 @@ def apply_adjustments(output_dir):
             catch_up.append(entry)
             continue
         action = entry.get("action")
+        # DEFENSIVE RE-CHECK, not independent coverage, from here through
+        # the `add` branch below: validate_adjustments() (called above,
+        # before this loop even starts) already verified action-in-ACTIONS,
+        # `fields` vocabulary/severity/line shape, add's required fields,
+        # and add's id-must-be-None rule against the WHOLE document — it is
+        # a strict superset of these checks, gating before any entry here
+        # is reached. A future caller (including step 11) must not assume
+        # this loop is where those facts are independently established;
+        # they are only re-verified here so a hand-edited adjustments.json
+        # that somehow slipped past the earlier gate still fails per-entry
+        # instead of silently applying. The `else` branch below — id
+        # resolution against `by_id`/`seen_targets`/`removed_in_batch` — is
+        # DIFFERENT: it needs the findings ledger, which
+        # validate_adjustments() never sees, so those checks remain the
+        # actual (non-redundant) authority.
         if action not in ACTIONS:
             raise ValueError(
                 f"{label}: unknown action {action!r} "

@@ -28,6 +28,7 @@ from review.critic_adjustments import (
     apply_adjustments,
     pending_count,
     read_critic_verdict,
+    validate_adjustments,
     write_findings,
 )
 from review import critic_adjustments as critic_adjustments_module
@@ -687,6 +688,136 @@ class TestBatchCoherence:
             (tmp_path / "decision-critic-adjustments.json").read_text()
         )
         assert "adjustment_id" not in doc["adjustments"][0]  # nothing written
+
+
+class TestValidateAdjustments:
+    """Direct unit coverage for the shared batch-shape validator extracted
+    from apply_adjustments(). Every OTHER exercise of this logic goes
+    through apply_adjustments() (which only ever raises `problems[0]`) or
+    through critic.py's save tests (which each trigger exactly one
+    problem) — neither pins the load-bearing "collect every problem,
+    don't stop at the first" property, so it must be pinned here, calling
+    validate_adjustments() directly."""
+
+    def test_valid_batch_returns_no_problems(self):
+        assert validate_adjustments({
+            "schema": 1,
+            "adjustments": [{
+                "action": "promote", "id": "aaaa1111",
+                "fields": {"severity": "high"}, "rationale": "r",
+            }],
+        }) == []
+
+    def test_non_object_payload_is_a_problem(self):
+        assert validate_adjustments([1, 2, 3]) == [
+            "decision-critic-adjustments.json must be a JSON object"
+        ]
+
+    def test_wrong_schema_is_a_problem(self):
+        problems = validate_adjustments({"schema": 2, "adjustments": []})
+        assert len(problems) == 1
+        assert "'schema' must be 1" in problems[0]
+
+    def test_adjustments_not_a_list_is_a_problem(self):
+        assert validate_adjustments({"schema": 1, "adjustments": "nope"}) == [
+            "decision-critic-adjustments.json: 'adjustments' must be a list"
+        ]
+
+    def test_missing_adjustments_key_is_a_problem(self):
+        assert validate_adjustments({"schema": 1}) == [
+            "decision-critic-adjustments.json: 'adjustments' must be a list"
+        ]
+
+    def test_entry_not_an_object_is_a_problem(self):
+        assert validate_adjustments({
+            "schema": 1, "adjustments": ["not-a-dict"],
+        }) == ["adjustment[0] must be an object"]
+
+    def test_duplicate_adjustment_id_is_a_problem(self):
+        problems = validate_adjustments({
+            "schema": 1,
+            "adjustments": [
+                {"adjustment_id": "dup", "action": "promote", "id": "aaaa1111",
+                 "fields": {"severity": "high"}, "rationale": "r"},
+                {"adjustment_id": "dup", "action": "promote", "id": "bbbb2222",
+                 "fields": {"severity": "high"}, "rationale": "r"},
+            ],
+        })
+        assert any("duplicate adjustment_id" in p for p in problems)
+
+    def test_blank_adjustment_id_is_a_problem(self):
+        problems = validate_adjustments({
+            "schema": 1,
+            "adjustments": [{
+                "adjustment_id": "", "action": "promote", "id": "aaaa1111",
+                "fields": {"severity": "high"}, "rationale": "r",
+            }],
+        })
+        assert any(
+            "'adjustment_id' must be a non-empty string" in p for p in problems
+        )
+
+    def test_unknown_action_is_a_problem(self):
+        problems = validate_adjustments({
+            "schema": 1,
+            "adjustments": [{
+                "action": "obliterate", "id": "aaaa1111",
+                "fields": {}, "rationale": "r",
+            }],
+        })
+        assert any("unknown action" in p and "obliterate" in p for p in problems)
+
+    def test_invalid_field_is_a_problem(self):
+        problems = validate_adjustments({
+            "schema": 1,
+            "adjustments": [{
+                "action": "correct", "id": "aaaa1111",
+                "fields": {"verdict": "APPROVE"}, "rationale": "r",
+            }],
+        })
+        assert any("not adjustable" in p for p in problems)
+
+    def test_add_missing_required_fields_is_a_problem(self):
+        problems = validate_adjustments({
+            "schema": 1,
+            "adjustments": [{
+                "action": "add", "id": None,
+                "fields": {"severity": "low"}, "rationale": "r",
+            }],
+        })
+        assert any("add requires fields" in p for p in problems)
+
+    def test_add_with_a_critic_supplied_id_is_a_problem(self):
+        problems = validate_adjustments({
+            "schema": 1,
+            "adjustments": [{
+                "action": "add", "id": "cccc3333",
+                "fields": {"severity": "low", "title": "t", "file": "f.go",
+                           "description": "d", "recommendation": "r"},
+                "rationale": "r",
+            }],
+        })
+        assert any("ids are generated" in p for p in problems)
+
+    def test_two_independent_problems_are_both_reported(self):
+        """The load-bearing property under test: validate_adjustments()
+        collects every problem instead of stopping at the first one it
+        finds. apply_adjustments() only ever surfaces `problems[0]`, so
+        this can only be pinned by calling the validator directly."""
+        problems = validate_adjustments({
+            "schema": 1,
+            "adjustments": [
+                {"action": "obliterate", "id": "aaaa1111",
+                 "fields": {}, "rationale": "r"},
+                {"action": "add", "id": "cccc3333",
+                 "fields": {"severity": "low", "title": "t", "file": "f.go",
+                            "description": "d", "recommendation": "r"},
+                 "rationale": "r"},
+            ],
+        })
+        assert len(problems) == 2
+        assert any("unknown action" in p and "obliterate" in p for p in problems)
+        assert any("ids are generated" in p for p in problems)
 
 
 class TestAdjustmentsSchemaValidation:
