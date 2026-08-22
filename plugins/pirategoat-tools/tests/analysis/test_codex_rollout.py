@@ -174,19 +174,45 @@ def test_agent_filter_accepts_comma_separated_list(tmp_path):
     assert sorted(m.thread_id for m in found) == ["e", "w"]
 
 
-def test_skips_probably_active_rollouts(tmp_path):
+def test_skips_active_subagents_but_keeps_their_finished_siblings(tmp_path):
     """A rollout still being written grows mid-read, so its numbers are junk."""
     today = date(2026, 8, 22)
-    _write_rollout(tmp_path, today, "active", mtime=time.time(), id="active")
-    _write_rollout(tmp_path, today, "finished", id="finished")
+    _write_rollout(tmp_path, today, "root", id="root")
+    _write_rollout(tmp_path, today, "active", mtime=time.time(), id="active",
+                   source=_subagent_source(agent_path="/root/a"))
+    _write_rollout(tmp_path, today, "finished", id="finished",
+                   source=_subagent_source(agent_path="/root/b"))
 
-    found = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
-    assert [m.thread_id for m in found] == ["finished"]
+    stats = codex_rollout.DiscoveryStats()
+    found = codex_rollout.discover_threads(tmp_path, since_days=7, today=today, stats=stats)
+    assert sorted(m.thread_id for m in found) == ["finished", "root"]
+    assert stats.skipped_active == 1
 
     found_all = codex_rollout.discover_threads(
         tmp_path, since_days=7, today=today, include_active=True
     )
-    assert sorted(m.thread_id for m in found_all) == ["active", "finished"]
+    assert sorted(m.thread_id for m in found_all) == ["active", "finished", "root"]
+
+
+def test_a_live_root_still_carries_its_finished_subagents(tmp_path):
+    """Dropping a running session's root discarded every completed child.
+
+    One real session had its only root written 0.4 minutes earlier, which
+    disqualified the session and threw away 242 finished subagents. Membership
+    in the window and trustworthiness of a rollout's own numbers are separate
+    questions.
+    """
+    today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today, "live-root", mtime=time.time(), id="live-root")
+    _write_rollout(tmp_path, today, "done-child", id="done-child", source=_subagent_source())
+
+    stats = codex_rollout.DiscoveryStats()
+    found = codex_rollout.discover_threads(tmp_path, since_days=7, today=today, stats=stats)
+
+    assert sorted(m.thread_id for m in found) == ["done-child", "live-root"]
+    assert stats.active_roots_included == 1
+    assert any("still running" in note for note in stats.notes())
+    assert next(m for m in found if m.thread_id == "live-root").is_active is True
 
 
 def test_respects_limit_newest_first(tmp_path):

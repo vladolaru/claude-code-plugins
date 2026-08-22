@@ -206,8 +206,18 @@ def main() -> None:
         # Prefer the newest root. Picking the newest thread outright often lands
         # on a subagent, and a leaf has no tree to show. When a filter such as
         # --agent excludes every root, fall back to the newest match.
+        # Rank sessions by their most recent activity, not by when their root
+        # rollout was written. A root is written at session start, so ordering
+        # by it picks a session opened moments ago over one still running with
+        # hundreds of subagents — which is the opposite of "what was I doing".
+        last_activity: dict[str, float] = {}
+        for meta in everything:
+            previous = last_activity.get(meta.session_id, 0.0)
+            last_activity[meta.session_id] = max(previous, meta.mtime)
+
         session_roots = {m.thread_id for m in tree_roots}
         roots = [m for m in candidates if m.thread_id in session_roots]
+        roots.sort(key=lambda m: last_activity.get(m.session_id, m.mtime), reverse=True)
         selected = (roots or candidates or [None])[0]
 
     if selected is None:

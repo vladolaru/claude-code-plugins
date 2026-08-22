@@ -53,6 +53,7 @@ class ThreadMeta:
     cli_version: str
     path: Path
     mtime: float
+    is_active: bool = False
 
 
 def _thread_spawn(payload: dict) -> dict:
@@ -139,6 +140,7 @@ class DiscoveryStats:
 
     scanned: int = 0
     skipped_active: int = 0
+    active_roots_included: int = 0
     skipped_unreadable: int = 0
     dropped_unrooted_threads: int = 0
     dropped_unrooted_sessions: int = 0
@@ -150,6 +152,11 @@ class DiscoveryStats:
             lines.append(
                 f"{self.skipped_active} rollout(s) skipped as still being written; "
                 f"pass --include-active to include them (their numbers may be inconsistent)."
+            )
+        if self.active_roots_included:
+            lines.append(
+                f"{self.active_roots_included} session(s) are still running. Their main thread is "
+                f"included so the session stays whole, but its own totals may be incomplete."
             )
         if self.dropped_unrooted_threads:
             lines.append(
@@ -202,16 +209,27 @@ def discover_threads(
     for day_dir in _day_dirs(sessions_dir, since_days, today):
         for path in day_dir.glob("*.jsonl"):
             stats.scanned += 1
-            if not include_active and (now - path.stat().st_mtime) < ACTIVE_WINDOW_SECONDS:
-                stats.skipped_active += 1
-                continue
             meta = read_thread_meta(path)
             if meta is None:
                 stats.skipped_unreadable += 1
                 continue
-            in_window.append(meta)
+            meta.is_active = (now - meta.mtime) < ACTIVE_WINDOW_SECONDS
             if meta.agent_path == ROOT_AGENT_PATH:
+                # Membership is decided before the active check on purpose. A
+                # session whose root is still being written is still a session
+                # in this window, and dropping it would discard every finished
+                # subagent beneath it — 242 of them in one real case.
                 rooted_sessions.add(meta.session_id)
+            if meta.is_active and not include_active:
+                if meta.agent_path == ROOT_AGENT_PATH:
+                    # Keep a live root: without it the session has no tree and
+                    # its finished children would be unreachable. Its own
+                    # numbers are flagged rather than trusted.
+                    stats.active_roots_included += 1
+                else:
+                    stats.skipped_active += 1
+                    continue
+            in_window.append(meta)
 
     dropped_sessions = set()
     found: list[ThreadMeta] = []
