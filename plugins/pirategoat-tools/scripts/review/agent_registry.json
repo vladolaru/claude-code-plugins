@@ -154,6 +154,7 @@
       "scope_flags": [],
       "no_semantic_filter": true,
       "dispatch_class": "conditional",
+      "require_php_source_file": true,
       "triage_criteria": [
         "PHP registering or consuming hooks and filters",
         "WordPress options, transients, or REST API usage",

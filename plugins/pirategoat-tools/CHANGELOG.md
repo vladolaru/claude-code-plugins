@@ -56,6 +56,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Test estate** — 273 redundant pins removed with coverage increased (11 previously-unpinned guards now pinned); every cut mutation-verified.
 - **`schemas/review-output.ts` reconciled** — critic-adjustment provenance added, five never-produced interfaces dropped.
 - **Step handoffs pin a no-truncation rule** — every next-step and blocks-progress footer now tells the orchestrator to run the printed command unfiltered, since piping it through `head`/`tail`/`grep` was eating load-bearing briefing lines.
+- **`wp-architecture-reviewer` requires an actual PHP file** — keyword matches like "hook" or "filter" in commit messages no longer dispatch it into a pure-TS/JS diff.
 
 *The full narrative for this release — rationale, evidence, and field-run numbers — lives in the commit bodies and `.claude/docs/analysis/`.*
 

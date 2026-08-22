@@ -1758,6 +1758,48 @@ class TestWooRegressionReviewerTriage:
 
 
 # =============================================================================
+# Unit Tests — wp-architecture-reviewer PHP source gate
+# =============================================================================
+
+class TestWpArchitectureReviewerTriage:
+    """run12: 'hook, filter, transient' keywords matched a pure-TS repo's
+    commit messages and planned wp-architecture into a React codebase.
+    The agent must require an actual PHP source file before dispatching."""
+
+    def _config(self, registry):
+        return registry["agents"]["wp-architecture-reviewer"]
+
+    def test_registry_declares_php_source_gate(self, registry):
+        config = self._config(registry)
+        assert config["require_php_source_file"] is True
+        assert config["dispatch_class"] == "conditional"
+
+    def test_skipped_for_keyword_match_with_no_php_files(self, registry):
+        """Commit message matches triage keywords ('hook', 'filter') but the
+        changed files are TS-only → SKIPPED_TRIAGE, not a false-positive
+        DISPATCH into a non-PHP codebase."""
+        status, reason = triage_conditional_agent(
+            "wp-architecture-reviewer", self._config(registry),
+            ["src/hooks/useTransient.ts"],
+            "add hook and filter transient cache",
+            {},
+        )
+        assert status == "SKIPPED_TRIAGE"
+        assert "PHP" in reason
+
+    def test_dispatches_for_keyword_match_with_php_file(self, registry):
+        """Same keyword signal, but a real PHP source file is in scope →
+        DISPATCH still fires."""
+        status, reason = triage_conditional_agent(
+            "wp-architecture-reviewer", self._config(registry),
+            ["includes/class-wc-hooks.php"],
+            "add hook and filter transient cache",
+            {},
+        )
+        assert status == "DISPATCH"
+
+
+# =============================================================================
 # Keyword matching precision — word-start anchoring, separator normalization,
 # structural-path stoplist
 # =============================================================================
