@@ -40,6 +40,22 @@ except ImportError:  # non-POSIX host — publish without the completion-publica
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
+try:
+    from ..verdict_rules import GATING_SEVERITIES, verdict_for_counts
+except ImportError:
+    # Stand-alone use — `python3 output.py render <file>` runs with no
+    # `review` package on sys.path, and the CLI is a supported entry point
+    # (see the module docstring). Unlike the telemetry hook below, this one
+    # cannot degrade to a no-op: the verdict IS the artifact's headline, so
+    # the fallback puts `scripts/` on the path and imports the same module
+    # rather than keeping a local copy of the ladder to drift from.
+    _SCRIPTS_DIR = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    if _SCRIPTS_DIR not in sys.path:
+        sys.path.insert(0, _SCRIPTS_DIR)
+    from review.verdict_rules import GATING_SEVERITIES, verdict_for_counts
+
 
 # The shape schemas/review-output.ts documents. Bump in the SAME commit as
 # any key added, removed, or re-typed in the serialized artifact, update the
@@ -75,24 +91,23 @@ _VERDICT_RANK = {
 
 
 def _verdict_for_issues(issues) -> str:
-    """Calculate a gating verdict for the supplied findings."""
-    counts = {'critical': 0, 'high': 0, 'medium': 0}
+    """Calculate a gating verdict for the supplied findings.
+
+    Counting lives here (this is the side that holds issue dicts); the
+    thresholds live in `review/verdict_rules.py`, shared with
+    `critic_adjustments.py`, which recomputes the ledger verdict after an
+    applying critic batch. Two ladders would let a demoted finding publish
+    the pre-demotion verdict — and step 11 now derives the pipeline's
+    published verdict from that ledger.
+    """
+    counts = {severity: 0 for severity in GATING_SEVERITIES}
 
     for issue in issues:
         sev = issue['severity']
         if sev in counts:
             counts[sev] += 1
 
-    if counts['critical'] > 0:
-        return 'block'
-    if counts['high'] >= 3:
-        return 'block'
-    if counts['high'] > 0 or counts['medium'] >= 5:
-        return 'request_changes'
-    if counts['medium'] > 0:
-        return 'comment'
-
-    return 'approve'
+    return verdict_for_counts(counts)
 
 
 def _coerce_text(value: Any, single_line: bool = False) -> str:
@@ -354,24 +369,57 @@ def render_markdown(data: Dict) -> str:
     # retracted one are different facts. Prose that survived a critic round
     # untouched still renders as prose: that is the STAND case, and the
     # marker below says exactly whose words they are.
+    withdrawn = data.get('withdrawn_narrative_summary')
     if data.get('narrative_summary'):
         md.append("## Assessment\n\n")
         md.append(f"{data['narrative_summary']}\n\n")
+        # Whose words these are depends on whether a batch already withdrew
+        # the reconciler's. After a withdrawal the standing text is the
+        # orchestrator's `revised_narrative`, carried in through the
+        # adjustments channel — attributing it to the reconciler would
+        # credit prose that was retracted a step earlier.
         md.append(
+            "*Post-critic assessment, written after the critic "
+            "adjustments applied.*\n\n"
+            if withdrawn else
             "*Reconciler-authored assessment, not adjusted by the decision "
             "critic.*\n\n"
         )
-    elif data.get('withdrawn_narrative_summary'):
+    elif withdrawn:
         # Keyed on the withdrawal record itself, not on
         # applied_critic_adjustments: a ledger that never carried a summary
         # records no withdrawal, and rendering a retraction notice for it
         # would claim an act that never happened.
+        #
+        # An explicit absence, not a pointer: the previous wording sent the
+        # reader to "the report for the current assessment", which on a bot
+        # run is a file nobody opens and on any run may carry no post-critic
+        # assessment at all. The retracted text is deliberately NOT shown
+        # here — it is the one thing this section must not present as
+        # current.
         md.append("## Assessment\n\n")
         md.append(
-            "The producer's assessment was withdrawn when critic "
-            "adjustments applied; see the report for the current "
-            "assessment.\n\n"
+            "No current assessment: the reconciler's summary was withdrawn "
+            "under critic revision and not replaced; see the findings.\n\n"
         )
+
+    # What the orchestrator did with each critic decision, from the ledger's
+    # own record rather than from prose in a report. A batch nobody probed
+    # renders as N lines of `not_checked` — the honest default — instead of
+    # being indistinguishable from one checked entry by entry.
+    applied_adjustments = data.get('applied_critic_adjustments')
+    if isinstance(applied_adjustments, list) and applied_adjustments:
+        md.append("## Critic Adjustments Applied\n\n")
+        for record in applied_adjustments:
+            if isinstance(record, dict):
+                adjustment_id = record.get('adjustment_id', '')
+                spot_check = record.get('spot_check', 'not_checked')
+            else:
+                # The bare-id shape this key held before it carried an
+                # outcome; nothing recorded a check, so nothing claims one.
+                adjustment_id, spot_check = record, 'not_checked'
+            md.append(f"- `{adjustment_id}` — {spot_check}\n")
+        md.append("\n")
 
     # Issues — every severity that counts toward total_issues must render,
     # or the Markdown claims findings it doesn't show.

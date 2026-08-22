@@ -1692,13 +1692,16 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         f"the decision did not land."
     )
     actions.append(
-        "   Account for the batch PER ENTRY, never in aggregate. Keep a "
-        "record of every `adjustment_id` in the file paired with what you "
-        "did to it: `verified` (you ran a probe and it held), `refuted` "
-        "(you rejected it above), or `not checked` (you did not "
-        "individually probe it). An entry you did not individually probe "
-        "is `not checked` — it is never absorbed into a batch-level "
-        "statement."
+        "   Account for the batch PER ENTRY, never in aggregate, and write "
+        "that accounting INTO the adjustments file: give every entry a "
+        "`\"spot_check\"` field — `\"verified\"` (you ran a probe and it "
+        "held), `\"refuted\"` (you rejected it above), or `\"not_checked\"` "
+        "(you did not individually probe it). An entry you did not "
+        "individually probe is `not_checked` — it is never absorbed into a "
+        "batch-level statement. The field is the machine-readable seat for "
+        "this judgment: the applier carries it onto the findings ledger, so "
+        "an unstated outcome is recorded as `not_checked` rather than "
+        "silently reading as checked."
     )
     actions.append(
         f"3) Carry the surviving adjustments into `{od}/review-findings.json`:"
@@ -1729,8 +1732,12 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "`narrative_summary` — its adjustments can correct any finding but "
         "not ledger-level prose, so an assessment the batch may have "
         "contradicted is retracted (kept under "
-        "`withdrawn_narrative_summary`) rather than left standing. Your "
-        "step 4 below is where the current assessment gets written."
+        "`withdrawn_narrative_summary`) rather than left standing. Write "
+        "your post-critic assessment as a top-level `\"revised_narrative\"` "
+        "string on the adjustments file BEFORE running the command above, "
+        "and the applier moves it into the ledger's `narrative_summary`. "
+        "Leave it out and the ledger honestly renders \"No current "
+        "assessment\" — never the withdrawn text presented as current."
     )
     actions.append(
         f"4) Edit `{od}/review-report.md` so it matches the updated findings — "

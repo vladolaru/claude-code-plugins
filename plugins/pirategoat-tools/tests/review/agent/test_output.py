@@ -3177,8 +3177,11 @@ class TestAssessmentProvenance:
         rendered = render_markdown(data)
         assert "## Assessment" in rendered
         assert "withdrawn" in rendered.lower()
-        assert "critic adjustments applied" in rendered.lower()
-        assert "see the report" in rendered.lower()
+        # An explicit absence, not a pointer at a file nobody may open: a
+        # withdrawn-and-unreplaced assessment says it has no current one.
+        assert "no current assessment" in rendered.lower()
+        assert "not replaced" in rendered.lower()
+        assert "Old claim." not in rendered
 
     def test_applied_batch_without_a_withdrawal_claims_no_retraction(self):
         """A reconciler that never wrote a summary has nothing to retract:

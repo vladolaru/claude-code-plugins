@@ -169,6 +169,13 @@ export interface ReviewOutput {
     // withdrawn_narrative_summary below; a non-empty
     // withdrawn_narrative_summary is what the renderer reads as "withdrawn"
     // rather than "never written".
+    //
+    // Non-null BESIDE a withdrawal record means the orchestrator supplied a
+    // post-critic assessment through the adjustments channel
+    // (`revised_narrative` on decision-critic-adjustments.json), which
+    // apply_adjustments() moves into this field. The renderer attributes it
+    // accordingly — the reconciler's marker would credit prose that was
+    // retracted a step earlier.
     narrative_summary: string | null;
 
     // Clearances (optional) — auditable absence claims ("nothing depends on
@@ -226,11 +233,33 @@ export interface ReviewOutput {
     // Decision-critic provenance — present only on review-findings.json,
     // and only once critic_adjustments.py has applied a batch.
 
-    // Ids of the adjustments this ledger already contains. Present after
-    // the first applied batch; its non-emptiness beside a null
-    // narrative_summary is what distinguishes a withdrawn assessment from
-    // one the producer never wrote.
-    applied_critic_adjustments?: string[];
+    // One record per adjustment this ledger already contains. Present after
+    // the first applied batch. `adjustment_id` is the idempotence
+    // bookkeeping — a crash between the two writes converges on it —
+    // and `spot_check` is the orchestrator's own outcome for that decision,
+    // written into decision-critic-adjustments.json at step 10 and carried
+    // here on apply. An entry applied without one is recorded as
+    // "not_checked": never required, because step 11's defensive re-run
+    // exists for orchestrators that crashed before probing anything.
+    // Rendered as the "## Critic Adjustments Applied" list.
+    //
+    // Readers must tolerate a bare-string entry: that is the shape this key
+    // held earlier in the same unreleased window, and apply_adjustments()
+    // still reads it (as "not_checked") so a ledger written then keeps its
+    // idempotence. Nothing writes that shape any more.
+    applied_critic_adjustments?: Array<
+        { adjustment_id: string; spot_check: 'verified' | 'refuted' | 'not_checked' }
+        | string
+    >;
+
+    // The ledger's verdict BEFORE any critic batch applied, recorded the
+    // first time an applying batch changed it — first time only, so a
+    // second round names what the ledger came in as rather than what the
+    // previous round left behind. `verdict` itself is recomputed from the
+    // post-batch severities through the shared ladder in
+    // scripts/review/verdict_rules.py, because step 11 DERIVES the
+    // published pipeline verdict from it.
+    verdict_before_adjustments?: Verdict | null;
 
     // Findings the critic removed. Moved out of `issues` rather than
     // deleted, each carrying the `critic_adjustment` record (see Issue

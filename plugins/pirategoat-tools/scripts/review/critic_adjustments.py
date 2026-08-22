@@ -14,9 +14,9 @@ A half-applied batch must never exist on disk, which takes more than
 validating first. Each file is replaced atomically via atomic_io's shared
 `atomic_write_json` (temp file in the same directory, then os.replace),
 and application is recorded on BOTH sides: every pending entry carries a
-stable `adjustment_id`, and review-findings.json lists the ids it
-already contains under `applied_critic_adjustments`. Ids are allocated
-and persisted before the findings write, so every crash point converges
+stable `adjustment_id`, and review-findings.json lists the decisions it
+already contains under `applied_critic_adjustments`, one record per id.
+Ids are allocated and persisted before the findings write, so every crash point converges
 on the next run: if the findings write landed, its recorded ids make the
 entries skip and only their flags catch up; if it did not, nothing was
 recorded and the batch applies normally. Without that record, a crash
@@ -27,9 +27,9 @@ reconciled state.
 decision-critic-adjustments.json is also the ONLY sanctioned way to
 change review-findings.json, and this module owns the write path that
 says so. `write_findings()` replaces that file atomically, addressed by
-output directory so no caller can misname it; all three of the ledger's
-writers — the review-reconciliator's first write, `apply_adjustments()`
-here, and orchestration.py's Rule 23 verdict sync — go through it. An
+output directory so no caller can misname it; both of the ledger's
+writers — the review-reconciliator's first write (through
+`findings_save.py`) and `apply_adjustments()` here — go through it. An
 orchestrator's ad-hoc `python3 -c` edit is out of channel and forbidden:
 a change worth making is worth making as an adjustment entry, where it
 carries provenance.
@@ -56,11 +56,13 @@ import uuid
 
 try:
     from .atomic_io import atomic_write_json
+    from .verdict_rules import verdict_for_counts
 except ImportError:
     _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _scripts_parent not in sys.path:
         sys.path.insert(0, _scripts_parent)
     from review.atomic_io import atomic_write_json
+    from review.verdict_rules import verdict_for_counts
 
 ACTIONS = ("promote", "demote", "rescope", "correct", "add", "remove")
 # `scope` is deliberately absent: it is derived from `line` to preserve the
@@ -72,10 +74,51 @@ ADD_REQUIRED_FIELDS = ("severity", "title", "file", "description",
                        "recommendation")
 VALID_SEVERITIES = ("critical", "high", "medium", "low", "info")
 
+# The orchestrator's per-entry verdict on the critic's claim, written into
+# the adjustments file after it probes each one. A machine-readable seat for
+# a judgment that previously had nowhere to land but the human report: a run
+# whose orchestrator never probed anything published a batch nothing could
+# tell apart from one checked entry by entry.
+#
+# NEVER required at apply. Step 11's defensive re-run exists precisely for
+# orchestrators that crashed before doing the step-10 work, and requiring the
+# key there would turn the honest default into a hard failure for exactly the
+# runs the re-run is meant to converge. An entry applied without one is
+# recorded as SPOT_CHECK_NOT_CHECKED — the honest default, which the ledger's
+# Markdown render then shows per id.
+SPOT_CHECK_KEY = "spot_check"
+SPOT_CHECK_VERIFIED = "verified"
+SPOT_CHECK_REFUTED = "refuted"
+SPOT_CHECK_NOT_CHECKED = "not_checked"
+SPOT_CHECK_VALUES = (
+    SPOT_CHECK_VERIFIED, SPOT_CHECK_REFUTED, SPOT_CHECK_NOT_CHECKED,
+)
+
+# The orchestrator's post-critic assessment, top-level on the adjustments
+# document. An applying batch withdraws the reconciler's `narrative_summary`
+# (see WITHDRAWN_SUMMARY_KEY below) and nothing used to replace it, so a
+# REVISE run published a ledger whose Assessment section was a pointer to
+# prose only a human could read. This is that assessment's machine-readable
+# seat: on apply it BECOMES the ledger's narrative_summary, with the
+# withdrawal record left intact beside it.
+REVISED_NARRATIVE_KEY = "revised_narrative"
+
 ADJUSTMENTS_FILENAME = "decision-critic-adjustments.json"
 FINDINGS_FILENAME = "review-findings.json"
 CRITIC_VERDICT_FILENAME = "decision-critic-verdict.json"
+# One record per adjustment this ledger already contains:
+# `{"adjustment_id": ..., "spot_check": ...}`. The id half is the
+# idempotence bookkeeping (see apply_adjustments' docstring); the spot_check
+# half is the orchestrator's outcome for that decision, so the ledger — the
+# artifact bot mode, baselines, and metrics actually read — carries what was
+# probed rather than leaving it to the human report.
 APPLIED_IDS_KEY = "applied_critic_adjustments"
+
+# Where the ledger's pre-adjustment verdict goes the FIRST time an applying
+# batch changes it — the same audit spirit as WITHDRAWN_SUMMARY_KEY below.
+# First time only: a second round must name what the ledger came in as, not
+# what the previous round left behind.
+VERDICT_BEFORE_ADJUSTMENTS_KEY = "verdict_before_adjustments"
 # The rejection half of the same audit trail: entries the orchestrator's
 # spot-check refuted (`rejected: true` + `rejection_reason`) were, before
 # this key existed, visible only in decision-critic-adjustments.json — a
@@ -163,17 +206,15 @@ def read_verdict_file(path):
     its verdict string, or ``None`` if the file is absent, unreadable, not
     valid JSON, not a JSON object, or has no string ``verdict`` field.
 
-    This is the shape-parsing core shared by `read_critic_verdict()`
-    (decision-critic-verdict.json, below) and orchestration.py's Rule 23
-    read of review-verdict.json — the same file shape, read by two
-    modules that used to parse it two different ways. The
-    review-verdict.json side reimplemented a narrower guard, only
-    `(json.JSONDecodeError, OSError)`, and then called `.get()`
-    unconditionally: a well-formed-JSON-but-non-object file (`[1, 2]`,
-    `"hello"`, `5`) sailed past that tuple and `.get()` raised
-    `AttributeError` on it, crashing finalize before pipeline-result.json
-    was ever written. Sharing this core closes that gap at the root
-    instead of patching each call site's guard separately.
+    The shape-parsing core behind `read_critic_verdict()` below. It was
+    shared with orchestration.py's read of review-verdict.json until that
+    artifact was retired — step 11 derives the published verdict from the
+    findings ledger now rather than reading a transcribed one — and it
+    stays a named function rather than being inlined into its one
+    remaining caller because the guard it encodes is what a second reader
+    gets wrong: a well-formed-JSON-but-non-object file (`[1, 2]`,
+    `"hello"`, `5`) sails past a `(json.JSONDecodeError, OSError)` tuple,
+    and the `.get()` behind it raises `AttributeError`.
     """
     if not os.path.isfile(path):
         return None
@@ -229,8 +270,8 @@ def read_findings_file(path):
     ONE spelling of open-parse-shape-check for the ledger, the same move
     `read_verdict_file()` made for the verdict files one task ago: the
     call sites used to open this file with slightly different guards (the
-    best-effort id reader, `apply_adjustments()`, and orchestration's
-    Rule 23 sync), and the differences between them were accidents rather
+    best-effort id reader, `apply_adjustments()`, and orchestration's own
+    reads), and the differences between them were accidents rather
     than decisions — one of them even opened the file with the platform's
     locale encoding while the others pinned UTF-8.
 
@@ -266,12 +307,12 @@ def write_findings(output_dir, findings):
     matters most for the one writer the pipeline cannot check, the
     review-reconciliator agent following a taught snippet.
 
-    Three writers exist across a run and all three call this: the
+    Two writers exist across a run and both call this: the
     review-reconciliator agent's first write (taught in
-    `agents/review-reconciliator.md`), `apply_adjustments()` below, and
-    orchestration.py's Rule 23 verdict sync. One writer means one place
+    `agents/review-reconciliator.md`, via `findings_save.py`) and
+    `apply_adjustments()` below. One writer means one place
     where the ledger's atomicity and its filename are decided, and it is
-    the rule a fourth writer would break: every change to this file goes
+    the rule a third writer would break: every change to this file goes
     through the adjustments channel, never a hand edit.
     """
     if not isinstance(findings, dict):
@@ -339,12 +380,38 @@ def validate_adjustments(payload):
         return [f"{ADJUSTMENTS_FILENAME}: 'adjustments' must be a list"]
 
     problems = []
+    revised = payload.get(REVISED_NARRATIVE_KEY)
+    if revised is not None and not isinstance(revised, str):
+        problems.append(
+            f"{ADJUSTMENTS_FILENAME}: {REVISED_NARRATIVE_KEY!r} must be a "
+            f"string"
+        )
     seen_ids = {}
     for idx, entry in enumerate(adjustments):
         label = f"adjustment[{idx}]"
         if not isinstance(entry, dict):
             problems.append(f"{label} must be an object")
             continue
+        # Checked before the action gate below, and with `continue` on
+        # failure, so a batch is refused for a bad spot_check even on an
+        # entry whose action is also unknown — the orchestrator sees both
+        # problems' cause, not one hiding the other.
+        if SPOT_CHECK_KEY in entry:
+            spot_check = entry[SPOT_CHECK_KEY]
+            if spot_check not in SPOT_CHECK_VALUES:
+                problems.append(
+                    f"{label}: unknown spot_check {spot_check!r} "
+                    f"(allowed: {', '.join(SPOT_CHECK_VALUES)})"
+                )
+            elif (
+                entry.get("rejected") is True
+                and spot_check != SPOT_CHECK_REFUTED
+            ):
+                problems.append(
+                    f"{label}: a rejected entry's spot_check must be "
+                    f"{SPOT_CHECK_REFUTED!r} — rejecting a decision IS "
+                    f"refuting it, and {spot_check!r} claims the opposite"
+                )
         adjustment_id = entry.get("adjustment_id")
         if adjustment_id is not None:
             if not isinstance(adjustment_id, str) or not adjustment_id:
@@ -411,6 +478,14 @@ def _recount_summary(findings, issues):
     summary that undercounts its own list. Every write through this
     module is validated, so the only source is a malformed pre-existing
     ledger — which is worth failing on, not smoothing over.
+
+    Returns the recounted severity counts, which the caller feeds to
+    `verdict_rules.verdict_for_counts()`. This function used to leave
+    `verdict` alone — survivable only while step 11 copied an
+    orchestrator-transcribed verdict over the ledger's. With the published
+    verdict now DERIVED from this ledger, the recount and the verdict have
+    to move together or a demoted-to-low finding list publishes the
+    pre-demotion verdict with machine authority.
     """
     counts = {severity: 0 for severity in VALID_SEVERITIES}
     for index, issue in enumerate(issues):
@@ -430,30 +505,59 @@ def _recount_summary(findings, issues):
     summary = findings.setdefault("summary", {})
     summary["total_issues"] = len(issues)
     summary["by_severity"] = counts
+    return counts
 
 
-def _load_recorded_ids(findings):
-    """Read the adjustment ids the findings file already contains."""
+def _applied_record(value):
+    """Normalize one `applied_critic_adjustments` entry to its record shape.
+
+    Returns `{"adjustment_id": ..., "spot_check": ...}`, or None when the
+    entry is neither shape this key has ever held.
+
+    The bare-string shape is what the key held before it grew a spot_check
+    half, inside the same unreleased window. It is accepted on READ so a run
+    directory carrying such a ledger keeps its idempotence — the id is what
+    that bookkeeping turns on, and re-applying a landed batch would let
+    `prior` report the critic's own output as the reconciled state. It is
+    never WRITTEN: every record this module emits carries both halves, with
+    the un-recorded spot_check reading as the honest SPOT_CHECK_NOT_CHECKED.
+    """
+    if isinstance(value, str) and value:
+        return {
+            "adjustment_id": value, SPOT_CHECK_KEY: SPOT_CHECK_NOT_CHECKED,
+        }
+    if (
+        isinstance(value, dict)
+        and isinstance(value.get("adjustment_id"), str)
+        and value["adjustment_id"]
+    ):
+        return dict(value)
+    return None
+
+
+def _load_recorded_records(findings):
+    """Read the adjustment records the findings file already contains."""
     recorded = findings.get(APPLIED_IDS_KEY)
     if recorded is None:
         return []
-    if not isinstance(recorded, list) or not all(
-        isinstance(value, str) for value in recorded
-    ):
+    records = [_applied_record(value) for value in recorded] if isinstance(
+        recorded, list
+    ) else None
+    if records is None or None in records:
         raise ValueError(
             f"{FINDINGS_FILENAME}: {APPLIED_IDS_KEY!r} must be a list of "
-            f"strings"
+            f"records carrying a non-empty string 'adjustment_id'"
         )
-    return list(recorded)
+    return records
 
 
 def _load_rejected_records(findings):
     """Read the rejection audit records the findings file already contains.
 
-    Mirrors `_load_recorded_ids()` for the applied side: `None` (the key
+    Mirrors `_load_recorded_records()` for the applied side: `None` (the key
     has never been written) reads as an empty list, and anything present
     but not a list of objects is a malformed pre-existing ledger — worth
-    failing on, the same call `_load_recorded_ids()` makes, since this
+    failing on, the same call `_load_recorded_records()` makes, since this
     function is about to write against what it reads.
     """
     recorded = findings.get(REJECTED_ADJUSTMENTS_KEY)
@@ -526,7 +630,8 @@ def _recorded_ids_best_effort(output_dir):
     recorded = findings.get(APPLIED_IDS_KEY)
     if not isinstance(recorded, list):
         return set()
-    return {value for value in recorded if isinstance(value, str)}
+    records = (_applied_record(value) for value in recorded)
+    return {record["adjustment_id"] for record in records if record}
 
 
 def pending_count(output_dir):
@@ -618,6 +723,16 @@ def apply_adjustments(output_dir):
     refuses the whole batch — the reason is the entire payload of the
     audit record.
 
+    An applying batch also settles three ledger-level facts the critic's
+    finding-level vocabulary cannot reach. `verdict` is recomputed from the
+    post-batch severities through the shared ladder in `verdict_rules.py`,
+    with the pre-apply value preserved once under
+    `VERDICT_BEFORE_ADJUSTMENTS_KEY`; the reconciler's `narrative_summary`
+    is withdrawn and replaced by the document's `revised_narrative` when it
+    carries one; and each applied entry's `spot_check` — the orchestrator's
+    own outcome for that decision, defaulting to SPOT_CHECK_NOT_CHECKED —
+    lands beside its id in `APPLIED_IDS_KEY`.
+
     Gated on the critic's verdict, checked before anything else is read
     or written: adjustments are a REVISE-only channel (see module
     docstring), so any other verdict — or none on file — refuses the
@@ -693,8 +808,10 @@ def apply_adjustments(output_dir):
     }
 
     _index_adjustment_ids(adjustments)
-    recorded_ids = _load_recorded_ids(findings)
-    already_recorded = set(recorded_ids)
+    recorded_records = _load_recorded_records(findings)
+    already_recorded = {
+        record["adjustment_id"] for record in recorded_records
+    }
     rejected_records = _load_rejected_records(findings)
     already_rejected_ids = {
         record.get("adjustment_id")
@@ -858,7 +975,16 @@ def apply_adjustments(output_dir):
             if "line" in fields:
                 _apply_scope_pairing(target, fields["line"] is None)
             target["critic_adjustment"] = provenance
-        recorded_ids.append(entry["adjustment_id"])
+        spot_check = entry.get(SPOT_CHECK_KEY)
+        if spot_check not in SPOT_CHECK_VALUES:
+            # Never required (see SPOT_CHECK_KEY): an orchestrator that
+            # crashed before step 10's probes still converges here, and the
+            # ledger says so rather than implying a check nobody ran.
+            spot_check = SPOT_CHECK_NOT_CHECKED
+        recorded_records.append({
+            "adjustment_id": entry["adjustment_id"],
+            SPOT_CHECK_KEY: spot_check,
+        })
         batch_ids.append(entry["adjustment_id"])
         applied += 1
 
@@ -870,12 +996,29 @@ def apply_adjustments(output_dir):
         atomic_write_json(adj_path, doc)
 
     if applied:
-        _recount_summary(findings, issues)
-        findings[APPLIED_IDS_KEY] = recorded_ids
-        # Only the ids applied in THIS call: recorded_ids is cumulative
+        counts = _recount_summary(findings, issues)
+        # Recomputed from the severities this batch just left behind,
+        # through the ladder agent/output.py publishes reviews with — one
+        # rule, so an adjusted ledger and a freshly written one can never
+        # disagree about what their own findings mean.
+        recomputed = verdict_for_counts(counts)
+        if findings.get("verdict") != recomputed:
+            findings.setdefault(
+                VERDICT_BEFORE_ADJUSTMENTS_KEY, findings.get("verdict")
+            )
+            findings["verdict"] = recomputed
+        findings[APPLIED_IDS_KEY] = recorded_records
+        # Only the ids applied in THIS call: recorded_records is cumulative
         # across every batch the ledger ever absorbed, and a second
         # withdrawal must name the decisions that caused it, not history.
         _withdraw_narrative_summary(findings, batch_ids)
+        # The orchestrator's post-critic assessment takes the seat the
+        # withdrawal just emptied. The withdrawal record stays: replacement
+        # is not erasure, and the reconciler's retracted words remain
+        # readable beside the ids that cost them their standing.
+        revised = doc.get(REVISED_NARRATIVE_KEY)
+        if isinstance(revised, str) and revised.strip():
+            findings[NARRATIVE_SUMMARY_KEY] = revised
     if rejection_records:
         findings[REJECTED_ADJUSTMENTS_KEY] = rejected_records + rejection_records
     if applied or rejection_records:

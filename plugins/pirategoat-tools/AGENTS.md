@@ -438,7 +438,7 @@ builder.add_recommendation("immediate", "Fix the XSS vulnerability")
 output = builder.build()  # Returns dict with verdict, summary, issues, etc.
 ```
 
-Verdict is auto-calculated from issue severities:
+Verdict is auto-calculated from issue severities by `verdict_for_counts()` in `scripts/review/verdict_rules.py` — the ONE place the thresholds live, shared with `critic_adjustments.py`, which recomputes the ledger verdict after every applying critic batch. Never re-inline the ladder: step 11 derives the published pipeline verdict from that ledger, so a second copy that drifts reaches GitHub.
 - Any critical → `block`
 - 3+ highs → `block`
 - Any high (or 5+ mediums) → `request_changes`

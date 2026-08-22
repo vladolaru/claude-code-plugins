@@ -95,6 +95,14 @@ def _write_critic_verdict(output_dir, verdict):
     )
 
 
+def _applied_ids(findings):
+    """The ids out of `applied_critic_adjustments`, whose entries are
+    records (`{"adjustment_id": ..., "spot_check": ...}`) rather than bare
+    strings — the id half is the idempotence bookkeeping, the spot_check
+    half is the orchestrator's outcome for that decision."""
+    return [record["adjustment_id"] for record in findings[APPLIED_IDS_KEY]]
+
+
 def _issue(id_, severity="low"):
     return {"id": id_, "severity": severity, "title": "t", "file": "f.go",
             "line": 10, "description": "d", "recommendation": "r",
@@ -524,7 +532,7 @@ class TestCrashSafety:
         doc = json.loads(adj_path.read_text())
         entry = doc["adjustments"][0]
         assert entry["adjustment_id"]  # allocated before the findings write
-        assert json.loads(after_first)["applied_critic_adjustments"] == [
+        assert _applied_ids(json.loads(after_first)) == [
             entry["adjustment_id"]
         ]
 
@@ -2036,7 +2044,7 @@ class TestNarrativeSummaryInvalidation:
         assert withdrawn[0]["text"] == self._SUMMARY
         # Tied to the exact decisions that caused it, the same way each
         # touched finding names the action that touched it.
-        assert withdrawn[0]["withdrawn_by"] == data[APPLIED_IDS_KEY]
+        assert withdrawn[0]["withdrawn_by"] == _applied_ids(data)
 
     def test_a_second_withdrawal_names_only_its_own_batch(self, tmp_path):
         """withdrawn_by is causal attribution, not history: a second
@@ -2050,7 +2058,7 @@ class TestNarrativeSummaryInvalidation:
         apply_adjustments(tmp_path)
         findings_path = tmp_path / "review-findings.json"
         data = json.loads(findings_path.read_text())
-        first_batch = list(data[APPLIED_IDS_KEY])
+        first_batch = _applied_ids(data)
         # Simulate a re-reconciliation writing fresh prose.
         data["narrative_summary"] = "Fresh assessment after round two."
         findings_path.write_text(json.dumps(data))
@@ -2063,7 +2071,7 @@ class TestNarrativeSummaryInvalidation:
         withdrawn = data[WITHDRAWN_SUMMARY_KEY]
         assert len(withdrawn) == 2
         second_batch = [
-            i for i in data[APPLIED_IDS_KEY] if i not in first_batch
+            i for i in _applied_ids(data) if i not in first_batch
         ]
         assert second_batch
         assert withdrawn[1]["withdrawn_by"] == second_batch
@@ -2366,3 +2374,382 @@ class TestReconciliatorWritePathPin:
         ):
             assert forbidden not in text, forbidden
 
+
+
+# =============================================================================
+# Orchestrator judgment in the adjustments channel
+# =============================================================================
+
+class TestSpotCheckVocabulary:
+    """`spot_check` is the orchestrator's per-entry verdict on the critic's
+    claim, written into the adjustments file rather than left as prose.
+
+    Before it existed, the step-10 briefing asked for per-entry accounting
+    and the only place it could land was the human report — so a run whose
+    orchestrator skipped the probe published a batch nothing could tell
+    apart from one that was checked entry by entry.
+
+    Deliberately NEVER required at apply: step 11's defensive re-run exists
+    for orchestrators that crashed before doing the step-10 work, and
+    requiring the key there would turn the honest default into a hard
+    failure for exactly the runs the re-run is meant to converge.
+    """
+
+    def _batch(self, **entry_extra):
+        entry = {
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }
+        entry.update(entry_extra)
+        return {"schema": 1, "adjustments": [entry]}
+
+    @pytest.mark.parametrize("value", ["verified", "refuted", "not_checked"])
+    def test_each_vocabulary_value_is_accepted(self, value):
+        assert validate_adjustments(self._batch(spot_check=value)) == []
+
+    def test_an_absent_spot_check_is_not_a_problem(self):
+        assert validate_adjustments(self._batch()) == []
+
+    @pytest.mark.parametrize("value", [
+        "checked", "VERIFIED", "not checked", "", True, 1, None,
+    ])
+    def test_an_unknown_value_rejects_the_batch(self, value):
+        problems = validate_adjustments(self._batch(spot_check=value))
+        assert problems and "spot_check" in problems[0]
+
+    def test_a_rejected_entry_may_not_claim_verified(self):
+        problems = validate_adjustments(self._batch(
+            rejected=True, rejection_reason="probe refuted it",
+            spot_check="verified",
+        ))
+        assert problems and "refuted" in problems[0]
+
+    def test_a_rejected_entry_marked_refuted_is_accepted(self):
+        assert validate_adjustments(self._batch(
+            rejected=True, rejection_reason="probe refuted it",
+            spot_check="refuted",
+        )) == []
+
+    def test_a_rejected_entry_without_a_spot_check_is_accepted(self):
+        """`rejected: true` already means refuted; the key is redundant
+        there, not mandatory."""
+        assert validate_adjustments(self._batch(
+            rejected=True, rejection_reason="probe refuted it",
+        )) == []
+
+    def test_the_gate_the_critic_saves_through_shares_this_check(self, tmp_path):
+        """validate_adjustments is the seam critic.py --save and
+        apply_adjustments both run — a rejection here is a rejection on
+        both paths, with no second implementation to keep in step."""
+        _write_critic_verdict(tmp_path, "REVISE")
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        (tmp_path / "decision-critic-adjustments.json").write_text(
+            json.dumps(self._batch(spot_check="probably fine"))
+        )
+        with pytest.raises(ValueError, match="spot_check"):
+            apply_adjustments(str(tmp_path))
+
+
+class TestSpotCheckRecordedInTheLedger:
+    """The applied-ids record carries the orchestrator's outcome per id."""
+
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
+    def _apply(self, tmp_path, **entry_extra):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        entry = {
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }
+        entry.update(entry_extra)
+        _write_adjustments(tmp_path, [entry])
+        assert apply_adjustments(str(tmp_path))["applied"] == 1
+        return json.loads((tmp_path / "review-findings.json").read_text())
+
+    def test_an_unchecked_entry_records_not_checked(self, tmp_path):
+        data = self._apply(tmp_path)
+        assert data[APPLIED_IDS_KEY][0]["spot_check"] == "not_checked"
+
+    @pytest.mark.parametrize("value", ["verified", "not_checked"])
+    def test_a_declared_outcome_is_recorded_verbatim(self, tmp_path, value):
+        data = self._apply(tmp_path, spot_check=value)
+        assert data[APPLIED_IDS_KEY][0]["spot_check"] == value
+
+    def test_the_record_still_carries_the_adjustment_id(self, tmp_path):
+        data = self._apply(tmp_path)
+        adjustments = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        assert data[APPLIED_IDS_KEY][0]["adjustment_id"] == (
+            adjustments["adjustments"][0]["adjustment_id"]
+        )
+
+    def test_a_legacy_string_record_still_reads_as_applied(self, tmp_path):
+        """A ledger written before the record grew a shape must not
+        re-apply its own settled decisions — idempotence is keyed on the
+        id, whichever way the id was stored."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        data[APPLIED_IDS_KEY] = ["legacy-id"]
+        write_findings(str(tmp_path), data)
+        _write_adjustments(tmp_path, [{
+            "adjustment_id": "legacy-id", "action": "demote",
+            "id": "aaaa1111", "fields": {"severity": "low"},
+            "rationale": "already landed",
+        }])
+        assert apply_adjustments(str(tmp_path))["applied"] == 0
+        after = json.loads((tmp_path / "review-findings.json").read_text())
+        assert after["issues"][0]["severity"] == "high"
+
+    def test_pending_count_reads_both_record_shapes(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")])
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        data[APPLIED_IDS_KEY] = [
+            "legacy-id", {"adjustment_id": "new-id", "spot_check": "verified"},
+        ]
+        write_findings(str(tmp_path), data)
+        _write_adjustments(tmp_path, [
+            {"adjustment_id": "legacy-id", "action": "demote", "id": "aaaa1111",
+             "fields": {"severity": "low"}, "rationale": "r"},
+            {"adjustment_id": "new-id", "action": "promote", "id": "aaaa1111",
+             "fields": {"severity": "critical"}, "rationale": "r"},
+        ])
+        assert pending_count(str(tmp_path)) == 0
+
+
+class TestRevisedNarrative:
+    """The orchestrator's post-critic assessment, in the channel.
+
+    An applying batch withdraws the reconciler's `narrative_summary` and
+    nothing used to replace it, so a REVISE run published a ledger whose
+    Assessment section pointed at a report the machine could not read.
+    """
+
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
+    _SUMMARY = "One CRITICAL blocker: the payment path is unescaped."
+    _REVISED = "After spot-checking: the blocker is guarded upstream."
+
+    def _seed(self, tmp_path):
+        _write_findings(
+            tmp_path, [_issue("aaaa1111", "critical")],
+            narrative_summary=self._SUMMARY,
+        )
+
+    def _write_doc(self, tmp_path, **doc_extra):
+        doc = {"schema": 1, "adjustments": [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }]}
+        doc.update(doc_extra)
+        (tmp_path / "decision-critic-adjustments.json").write_text(
+            json.dumps(doc)
+        )
+
+    def test_a_non_string_revised_narrative_rejects_the_batch(self):
+        problems = validate_adjustments({
+            "schema": 1, "adjustments": [], "revised_narrative": ["a", "b"],
+        })
+        assert problems and "revised_narrative" in problems[0]
+
+    def test_a_string_revised_narrative_is_accepted(self):
+        assert validate_adjustments({
+            "schema": 1, "adjustments": [], "revised_narrative": "text",
+        }) == []
+
+    def test_it_becomes_the_ledger_assessment(self, tmp_path):
+        self._seed(tmp_path)
+        self._write_doc(tmp_path, revised_narrative=self._REVISED)
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["narrative_summary"] == self._REVISED
+
+    def test_the_withdrawal_record_survives_the_replacement(self, tmp_path):
+        """Replacement is not erasure: the reconciler's retracted words
+        stay auditable beside the ids that cost them their standing."""
+        self._seed(tmp_path)
+        self._write_doc(tmp_path, revised_narrative=self._REVISED)
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data[WITHDRAWN_SUMMARY_KEY][0]["text"] == self._SUMMARY
+
+    def test_a_blank_revised_narrative_leaves_the_summary_withdrawn(
+        self, tmp_path
+    ):
+        self._seed(tmp_path)
+        self._write_doc(tmp_path, revised_narrative="   ")
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["narrative_summary"] is None
+
+    def test_a_batch_that_applies_nothing_never_replaces_the_summary(
+        self, tmp_path
+    ):
+        self._seed(tmp_path)
+        self._write_doc(tmp_path, revised_narrative=self._REVISED)
+        doc = json.loads(
+            (tmp_path / "decision-critic-adjustments.json").read_text()
+        )
+        doc["adjustments"][0]["applied"] = True
+        doc["adjustments"][0]["adjustment_id"] = "already-landed"
+        (tmp_path / "decision-critic-adjustments.json").write_text(
+            json.dumps(doc)
+        )
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["narrative_summary"] == self._SUMMARY
+
+
+class TestWithdrawnAssessmentRender:
+    """A withdrawn-and-unreplaced assessment renders as an explicit
+    absence — never an empty section, never the retracted text.
+
+    The prior wording sent the reader to "the report for the current
+    assessment", which on a bot run is a file nobody reads and on any run
+    may carry no post-critic assessment at all.
+    """
+
+    def _render(self, **overrides):
+        from review.agent.output import render_markdown
+        data = {
+            "pr_id": "42", "reviewer": "reconciliator",
+            "timestamp": "2026-08-13T10:00:00", "plugin_version": None,
+            "schema": 1, "verdict": "approve",
+            "summary": {"total_issues": 0, "by_severity": {
+                "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+            }},
+            "issues": [], "narrative_summary": None,
+            "unreviewed": None, "deferred_reviewed": [], "observations": None,
+            "recommendations": None, "positive_observations": None,
+            "clearances": None,
+            "meta": {"files_reviewed": 1, "unreviewed_autofilled": None,
+                     "review_duration_ms": 1, "confidence_score": 0.9},
+        }
+        data.update(overrides)
+        return render_markdown(data)
+
+    def test_withdrawn_without_replacement_says_so(self):
+        md = self._render(withdrawn_narrative_summary=[
+            {"text": "One CRITICAL blocker.", "withdrawn_by": ["a1"]},
+        ])
+        assert "No current assessment" in md
+        assert "not replaced" in md
+        assert "One CRITICAL blocker." not in md
+
+    def test_a_replacement_is_not_attributed_to_the_reconciler(self):
+        md = self._render(
+            narrative_summary="After spot-checking: guarded upstream.",
+            withdrawn_narrative_summary=[
+                {"text": "One CRITICAL blocker.", "withdrawn_by": ["a1"]},
+            ],
+        )
+        assert "After spot-checking: guarded upstream." in md
+        assert "not adjusted by the decision critic" not in md
+
+    def test_an_untouched_assessment_still_reads_as_the_reconcilers(self):
+        md = self._render(narrative_summary="The change is sound.")
+        assert "not adjusted by the decision critic" in md
+
+    def test_spot_check_outcomes_render_per_id(self):
+        md = self._render(applied_critic_adjustments=[
+            {"adjustment_id": "aaaa", "spot_check": "verified"},
+            {"adjustment_id": "bbbb", "spot_check": "not_checked"},
+        ])
+        assert "aaaa" in md and "verified" in md
+        assert "bbbb" in md and "not_checked" in md
+
+    def test_no_applied_adjustments_renders_no_section(self):
+        assert "Critic Adjustments" not in self._render()
+
+
+class TestLedgerVerdictRecompute:
+    """`_recount_summary` rebuilt the severities and left `verdict` alone.
+
+    That was survivable while step 11 copied an orchestrator-transcribed
+    verdict over the ledger's; with the published verdict DERIVED from the
+    ledger, a stale `request_changes` over a demoted-to-low issue list is
+    machine authority for a wrong GitHub verdict.
+    """
+
+    pytestmark = pytest.mark.usefixtures("revise_verdict")
+
+    def test_demoting_the_last_high_moves_the_verdict(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")],
+                        verdict="request_changes")
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }])
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict"] == "approve"
+
+    def test_promoting_to_critical_blocks(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "medium")],
+                        verdict="comment")
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "critical"}, "rationale": "unguarded",
+        }])
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict"] == "block"
+
+    def test_the_pre_apply_verdict_is_preserved(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")],
+                        verdict="request_changes")
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }])
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict_before_adjustments"] == "request_changes"
+
+    def test_the_audit_trail_records_only_the_first_change(self, tmp_path):
+        """A second round must name what the ledger came in as, not what
+        the previous round left behind."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")],
+                        verdict="request_changes")
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "round one",
+        }])
+        apply_adjustments(str(tmp_path))
+        _write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "medium"}, "rationale": "round two",
+        }])
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict"] == "comment"
+        assert data["verdict_before_adjustments"] == "request_changes"
+
+    def test_a_batch_that_applies_nothing_leaves_the_verdict_alone(
+        self, tmp_path
+    ):
+        """Including the stale-but-untouched case: nothing applied means
+        nothing was recomputed, and no audit trail is fabricated."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "high")],
+                        verdict="deliberately-stale")
+        _write_adjustments(tmp_path, [{
+            "adjustment_id": "landed", "applied": True, "action": "demote",
+            "id": "aaaa1111", "fields": {"severity": "low"}, "rationale": "r",
+        }])
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict"] == "deliberately-stale"
+        assert "verdict_before_adjustments" not in data
+
+    def test_an_unchanged_verdict_records_no_audit_trail(self, tmp_path):
+        _write_findings(tmp_path, [_issue("aaaa1111", "high"),
+                                   _issue("bbbb2222", "high")],
+                        verdict="request_changes")
+        _write_adjustments(tmp_path, [{
+            "action": "demote", "id": "aaaa1111",
+            "fields": {"severity": "low"}, "rationale": "guarded upstream",
+        }])
+        apply_adjustments(str(tmp_path))
+        data = json.loads((tmp_path / "review-findings.json").read_text())
+        assert data["verdict"] == "request_changes"
+        assert "verdict_before_adjustments" not in data
