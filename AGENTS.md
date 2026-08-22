@@ -286,6 +286,8 @@ The `plugins/pirategoat-tools/tests/` directory contains deterministic evals (no
 | `scripts/analysis/session_analyzer.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_session_analyzer.py -v` |
 | `scripts/analysis/review_transcript.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_transcript.py -v` |
 | `scripts/analysis/review_run_metrics.py` or `scripts/analysis/review_metrics/*.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_review_run_metrics.py -v` |
+| `scripts/analysis/codex_rollout.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_codex_rollout.py -v` |
+| `scripts/analysis/codex_session_analyzer.py` or `scripts/analysis/codex_session_metrics.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_codex_session_scripts.py -v` |
 | `scripts/analysis/usage_snapshot.py` | `pytest plugins/pirategoat-tools/tests/analysis/test_usage_snapshot.py plugins/pirategoat-tools/tests/review/test_orchestration_hygiene.py plugins/pirategoat-tools/tests/review/test_telemetry.py -v` (the CLI, the step-11 seam that invokes it, and `ReviewTelemetry.reproject_usage()` — the manifest's own out-of-band `usage` patch a manual re-run calls into) |
 | `tests/helpers/graders.py` | `pytest plugins/pirategoat-tools/tests/grading/test_graders.py -v` |
 | `tests/grading/eval_agent_compliance.py` | `pytest plugins/pirategoat-tools/tests/grading/test_eval_agent_compliance.py -v` |
