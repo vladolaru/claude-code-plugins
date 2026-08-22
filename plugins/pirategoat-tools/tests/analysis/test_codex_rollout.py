@@ -82,7 +82,7 @@ def test_parses_subagent_thread(tmp_path):
     assert meta.agent_role == "worker"
     assert meta.agent_path == "/root/child_1"
     assert meta.depth == 1
-    assert meta.parent_thread_id == "thread-root"
+    assert meta.spawn_parent_thread_id == "thread-root"
 
 
 def test_tolerates_source_as_bare_string(tmp_path):
@@ -151,6 +151,7 @@ def test_filters_by_cwd(tmp_path):
 
 def test_filters_by_agent_role(tmp_path):
     today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today, "root", id="root")
     _write_rollout(tmp_path, today, "w", id="w", source=_subagent_source(role="worker"))
     _write_rollout(tmp_path, today, "r", id="r", source=_subagent_source(role="code-reviewer"))
 
@@ -161,6 +162,7 @@ def test_filters_by_agent_role(tmp_path):
 
 def test_agent_filter_accepts_comma_separated_list(tmp_path):
     today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today, "root", id="root")
     _write_rollout(tmp_path, today, "w", id="w", source=_subagent_source(role="worker"))
     _write_rollout(tmp_path, today, "r", id="r", source=_subagent_source(role="code-reviewer"))
     _write_rollout(tmp_path, today, "e", id="e", source=_subagent_source(role="explorer"))
@@ -371,19 +373,90 @@ def test_build_tree_groups_children_under_parents(tmp_path):
     assert [m.thread_id for m in tree.children_of(by_id["child-a"])] == ["grandchild"]
 
 
-def test_build_tree_treats_orphans_as_roots(tmp_path):
-    """A child whose parent falls outside the window still has to be reported."""
-    today = date(2026, 8, 22)
+def test_threads_are_excluded_when_their_session_is_not_rooted_in_the_window(tmp_path):
+    """--since selects whole sessions, so a subagent without its root is not reported.
 
+    Reporting it as a root instead invented a tree that never existed.
+    """
+    today = date(2026, 8, 22)
     _write_rollout(
-        tmp_path, today, "orphan", id="orphan", source=_subagent_source(agent_path="/root/gone/x")
+        tmp_path, today, "stray", id="stray", session_id="elsewhere",
+        source=_subagent_source(agent_path="/root/gone/x"),
+    )
+    _write_rollout(tmp_path, today, "rooted", id="rooted", session_id="here")
+
+    stats = codex_rollout.DiscoveryStats()
+    metas = codex_rollout.discover_threads(tmp_path, since_days=7, today=today, stats=stats)
+
+    assert [m.thread_id for m in metas] == ["rooted"]
+    assert stats.dropped_unrooted_threads == 1
+    assert stats.dropped_unrooted_sessions == 1
+    assert any("widen --since" in note for note in stats.notes())
+
+
+def test_a_rooted_session_keeps_subagents_of_any_age(tmp_path):
+    """Once a session is rooted in the window, its whole tree comes along."""
+    today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today - timedelta(days=6), "root", id="root")
+    _write_rollout(tmp_path, today, "late-child", id="late-child", source=_subagent_source())
+
+    metas = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
+
+    assert sorted(m.thread_id for m in metas) == ["late-child", "root"]
+
+
+def test_resumes_do_not_split_a_session(tmp_path):
+    """Resuming writes another root rollout under the same session_id.
+
+    A resume continues the session rather than starting one, so the session is
+    represented once — by its original root, the one whose thread id equals the
+    session id — with the rest available as resumes.
+    """
+    today = date(2026, 8, 22)
+    base = time.time() - STALE_OFFSET - 500
+    _write_rollout(tmp_path, today, "orig", mtime=base, id="sess-1", session_id="sess-1")
+    _write_rollout(tmp_path, today, "resume-1", mtime=base + 100, id="r1", session_id="sess-1")
+    _write_rollout(tmp_path, today, "resume-2", mtime=base + 200, id="r2", session_id="sess-1")
+    _write_rollout(
+        tmp_path, today, "child", mtime=base + 50, id="kid", session_id="sess-1",
+        source=_subagent_source(),
     )
 
     metas = codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
     tree = codex_rollout.build_tree(metas)
 
-    assert [m.thread_id for m in tree.roots] == ["orphan"]
-    assert [m.thread_id for m in tree.orphans] == ["orphan"]
+    assert [m.thread_id for m in tree.roots] == ["sess-1"]
+    assert [m.thread_id for m in tree.resumes_of(tree.roots[0])] == ["r1", "r2"]
+    assert [m.thread_id for m in tree.children_of(tree.roots[0])] == ["kid"]
+
+
+def test_session_representative_falls_back_to_earliest_root(tmp_path):
+    """Where the original rollout has aged out, the earliest present one stands in."""
+    today = date(2026, 8, 22)
+    base = time.time() - STALE_OFFSET - 500
+    _write_rollout(tmp_path, today, "r1", mtime=base + 100, id="r1", session_id="sess-1")
+    _write_rollout(tmp_path, today, "r2", mtime=base + 200, id="r2", session_id="sess-1")
+
+    tree = codex_rollout.build_tree(
+        codex_rollout.discover_threads(tmp_path, since_days=7, today=today)
+    )
+
+    assert [m.thread_id for m in tree.roots] == ["r1"]
+
+
+def test_resumed_root_records_what_it_resumed_from(tmp_path):
+    """parent_thread_id on a root means "resumed from", not "spawned by".
+
+    4047 of 4290 resumed roots in the sampled corpus carry it, so merging the
+    two relations would answer "who spawned this?" with a resume pointer.
+    """
+    path = tmp_path / "rollout-resumed.jsonl"
+    path.write_text(_meta_line(id="r2", session_id="sess-1", parent_thread_id="sess-1") + "\n")
+
+    meta = codex_rollout.read_thread_meta(path)
+
+    assert meta.resumed_from_thread_id == "sess-1"
+    assert meta.spawn_parent_thread_id is None
 
 
 def test_build_tree_does_not_merge_separate_sessions(tmp_path):
@@ -449,6 +522,7 @@ def test_scan_reports_cached_and_input_token_totals(tmp_path):
 
 def test_agent_filter_tolerates_spaces_after_commas(tmp_path):
     today = date(2026, 8, 22)
+    _write_rollout(tmp_path, today, "root", id="root")
     _write_rollout(tmp_path, today, "w", id="w", source=_subagent_source(role="worker"))
     _write_rollout(tmp_path, today, "e", id="e", source=_subagent_source(role="explorer"))
 

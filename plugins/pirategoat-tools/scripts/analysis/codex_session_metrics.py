@@ -98,9 +98,12 @@ def _roll_up(rows: list[dict]) -> list[dict]:
     return sorted(grouped.values(), key=lambda e: e["total_tokens"], reverse=True)
 
 
-def _markdown(rows: list[dict], by_role: list[dict]) -> str:
+def _markdown(rows: list[dict], by_role: list[dict], notes: list[str] | None = None) -> str:
     if not rows:
-        return "No threads matched the given filters.\n"
+        body = "No threads matched the given filters."
+        for note in notes or []:
+            body += f"\n\nNote: {note}"
+        return body + "\n"
 
     lines = ["| " + " | ".join(name for name, _ in COLUMNS) + " |"]
     lines.append("|" + "|".join("---" for _ in COLUMNS) + "|")
@@ -116,6 +119,9 @@ def _markdown(rows: list[dict], by_role: list[dict]) -> str:
             f"{entry['duration_seconds']} | {entry['commands']} | {entry['failed_commands']} | "
             f"{entry['files_changed']} |"
         )
+    for note in notes or []:
+        lines.append("")
+        lines.append(f"> Note: {note}")
     return "\n".join(lines)
 
 
@@ -161,6 +167,7 @@ def main() -> None:
         print(f"Error: sessions directory not found: {sessions_dir}", file=sys.stderr)
         sys.exit(1)
 
+    stats = codex_rollout.DiscoveryStats()
     metas = codex_rollout.discover_threads(
         sessions_dir,
         since_days=args.since,
@@ -168,19 +175,20 @@ def main() -> None:
         agent=args.agent,
         limit=args.limit,
         include_active=args.include_active,
+        stats=stats,
     )
 
     rows = [_row(meta, codex_rollout.scan_thread(meta.path)) for meta in metas]
     by_role = _roll_up(rows)
-    report = {"threads": rows, "by_role": by_role}
+    report = {"threads": rows, "by_role": by_role, "notes": stats.notes()}
 
     if args.format == "json":
         text = json.dumps(report, indent=2)
     elif args.format == "markdown":
-        text = _markdown(rows, by_role)
+        text = _markdown(rows, by_role, stats.notes())
     else:
         text = (
-            _markdown(rows, by_role)
+            _markdown(rows, by_role, stats.notes())
             + f"\n\n{JSON_FENCE}\n"
             + json.dumps(report, indent=2)
             + f"\n{FENCE_END}"

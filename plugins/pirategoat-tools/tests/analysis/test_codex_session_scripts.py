@@ -344,3 +344,126 @@ def test_analyzer_json_keeps_the_full_command(sessions_dir):
     data = json.loads(result.stdout)
 
     assert "line-199" in str(data["failures"][0]["command"])
+
+
+def _stray_meta(thread_id, session_id):
+    """A subagent line belonging to a session with no root in the window."""
+    payload = {
+        "session_id": session_id,
+        "id": thread_id,
+        "cwd": "/work/project",
+        "originator": "codex-tui",
+        "cli_version": "0.147.0",
+        "source": {
+            "subagent": {
+                "thread_spawn": {
+                    "parent_thread_id": "gone",
+                    "depth": 1,
+                    "agent_path": "/root/gone",
+                    "agent_nickname": "Tester",
+                    "agent_role": "worker",
+                }
+            }
+        },
+    }
+    return json.dumps({"timestamp": "2026-08-22T10:00:00.000Z", "type": "session_meta", "payload": payload})
+
+
+def _root_meta(thread_id, session_id):
+    """A root rollout line with an explicit session id (for resume fixtures)."""
+    payload = {
+        "session_id": session_id,
+        "id": thread_id,
+        "cwd": "/work/project",
+        "originator": "codex-tui",
+        "cli_version": "0.147.0",
+    }
+    return json.dumps({"timestamp": "2026-08-22T10:00:00.000Z", "type": "session_meta", "payload": payload})
+
+
+def test_analyzer_presents_a_resumed_session_as_one_session(sessions_dir):
+    """A resume continues the session; it must not appear as a separate root."""
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    base = time.time() - STALE_OFFSET - 500
+    for name, tid, offset in [("orig", "sess-x", 0), ("res1", "rx1", 100), ("res2", "rx2", 200)]:
+        path = day_dir / f"rollout-{name}.jsonl"
+        path.write_text("\n".join([_root_meta(tid, "sess-x"), _command(), _tokens(50)]) + "\n")
+        os.utime(path, (base + offset, base + offset))
+
+    result = _run(
+        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
+        "--thread-id", "sess-x", "--format", "json",
+    )
+    data = json.loads(result.stdout)
+
+    assert data["session_id"] == "sess-x"
+    assert data["thread"]["thread_id"] == "sess-x"
+    assert sorted(r["thread_id"] for r in data["resumes"]) == ["rx1", "rx2"]
+
+
+def test_analyzer_does_not_sum_resume_tokens_into_the_session(sessions_dir):
+    """A resume replays prior context, so its tokens are re-sent, not new work."""
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    base = time.time() - STALE_OFFSET - 500
+    orig = day_dir / "rollout-o.jsonl"
+    orig.write_text("\n".join([_root_meta("sess-y", "sess-y"), _tokens(100)]) + "\n")
+    os.utime(orig, (base, base))
+    res = day_dir / "rollout-r.jsonl"
+    res.write_text("\n".join([_root_meta("ry1", "sess-y"), _tokens(9000)]) + "\n")
+    os.utime(res, (base + 100, base + 100))
+
+    data = json.loads(
+        _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
+             "--thread-id", "sess-y", "--format", "json").stdout
+    )
+
+    assert data["thread"]["total_tokens"] == 100
+    assert data["resumes"][0]["total_tokens"] == 9000
+
+
+def test_analyzer_explains_why_threads_were_excluded(sessions_dir):
+    """Silently analyzing nothing is confusing; say what was skipped."""
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    stray = day_dir / "rollout-stray.jsonl"
+    stray.write_text("\n".join([_stray_meta("stray", "other-session"), _tokens(5)]) + "\n")
+    stale = time.time() - STALE_OFFSET
+    os.utime(stray, (stale, stale))
+
+    data = json.loads(
+        _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650",
+             "--format", "json").stdout
+    )
+
+    assert any("widen --since" in note for note in data["notes"])
+
+
+def test_metrics_reports_skip_notes(sessions_dir):
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    stray = day_dir / "rollout-stray2.jsonl"
+    stray.write_text("\n".join([_stray_meta("stray2", "other-session-2"), _tokens(5)]) + "\n")
+    stale = time.time() - STALE_OFFSET
+    os.utime(stray, (stale, stale))
+
+    result = _run(METRICS, "--sessions-dir", str(sessions_dir), "--since", "3650", "--format", "json")
+    data = json.loads(result.stdout)
+
+    assert any("widen --since" in note for note in data["notes"])
+
+
+def test_analyzer_caps_the_failed_command_list(sessions_dir):
+    """A real 30-day run had 36 failures; printing every one buries the report."""
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    lines = [_meta("many-failures")]
+    lines += [_command(exit_code=1, command=f"cmd-{i}") for i in range(25)]
+    path = day_dir / "rollout-many.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    stale = time.time() - STALE_OFFSET
+    os.utime(path, (stale, stale))
+
+    result = _run(
+        ANALYZER, "--sessions-dir", str(sessions_dir), "--since", "3650", "--thread-id", "many-failures"
+    )
+
+    assert "… and 15 more" in result.stdout
+    shown = [ln for ln in result.stdout.splitlines() if ln.strip().startswith("exit 1:")]
+    assert len(shown) == 10

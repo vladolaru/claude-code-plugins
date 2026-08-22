@@ -28,17 +28,24 @@ ACTIVE_WINDOW_SECONDS = 300
 
 ROOT_AGENT_PATH = "/root"
 
-DEFAULT_SINCE_DAYS = 7
+DEFAULT_SINCE_DAYS = 30
 DEFAULT_LIMIT = 20
 
 
 @dataclass
 class ThreadMeta:
-    """Identity and tree position of one Codex thread, from its line 1."""
+    """Identity and tree position of one Codex thread, from its line 1.
+
+    A session is resumed by writing a NEW root rollout that keeps the original
+    session_id but takes a fresh thread id, so one session_id commonly maps to
+    many root rollouts (4920 roots across 631 sessions in the sampled corpus).
+    The original root is the one where session_id == thread_id.
+    """
 
     thread_id: str
     session_id: str
-    parent_thread_id: str | None
+    spawn_parent_thread_id: str | None
+    resumed_from_thread_id: str | None
     cwd: str
     agent_role: str
     agent_path: str
@@ -89,7 +96,13 @@ def read_thread_meta(path: Path) -> ThreadMeta | None:
     return ThreadMeta(
         thread_id=payload.get("id") or "",
         session_id=payload.get("session_id") or "",
-        parent_thread_id=spawn.get("parent_thread_id") or payload.get("parent_thread_id"),
+        # Two distinct relations, deliberately not merged. The spawn-block value
+        # means "the thread that spawned me"; the payload-level value on a root
+        # means "the thread I was resumed from". Real data is dominated by the
+        # second: 4047 of 4290 resumed roots carry it, so a single merged field
+        # would answer "who spawned this?" with a resume pointer most of the time.
+        spawn_parent_thread_id=spawn.get("parent_thread_id"),
+        resumed_from_thread_id=payload.get("parent_thread_id"),
         cwd=payload.get("cwd") or "",
         agent_role=spawn.get("agent_role") or "root",
         agent_path=spawn.get("agent_path") or ROOT_AGENT_PATH,
@@ -120,6 +133,33 @@ def _day_dirs(sessions_dir: Path, since_days: int, today: date) -> Iterator[Path
             yield candidate
 
 
+@dataclass
+class DiscoveryStats:
+    """What discovery skipped, so a caller can explain an empty or thin result."""
+
+    scanned: int = 0
+    skipped_active: int = 0
+    skipped_unreadable: int = 0
+    dropped_unrooted_threads: int = 0
+    dropped_unrooted_sessions: int = 0
+
+    def notes(self) -> list[str]:
+        """Human-readable lines worth printing. Empty when nothing was skipped."""
+        lines = []
+        if self.skipped_active:
+            lines.append(
+                f"{self.skipped_active} rollout(s) skipped as still being written; "
+                f"pass --include-active to include them (their numbers may be inconsistent)."
+            )
+        if self.dropped_unrooted_threads:
+            lines.append(
+                f"{self.dropped_unrooted_threads} thread(s) from "
+                f"{self.dropped_unrooted_sessions} session(s) excluded because the session "
+                f"started before the window; widen --since to include them."
+            )
+        return lines
+
+
 def discover_threads(
     sessions_dir: Path,
     since_days: int = DEFAULT_SINCE_DAYS,
@@ -129,8 +169,25 @@ def discover_threads(
     include_active: bool = False,
     today: date | None = None,
     now: float | None = None,
+    stats: DiscoveryStats | None = None,
 ) -> list[ThreadMeta]:
-    """Find finished threads in the window, newest first, after filtering."""
+    """Find threads belonging to sessions ROOTED in the window, newest first.
+
+    The window selects whole sessions, not individual threads. A session
+    qualifies when one of its root rollouts falls inside it; every thread of a
+    qualifying session is then included regardless of its own date, and threads
+    whose session is not rooted in the window are excluded.
+
+    Filtering threads by their own date instead would cut trees in half: a
+    subagent spawned days after its session started would appear without its
+    root. That is safe to rely on because a subagent is never dated earlier
+    than its session's first root rollout — 0 exceptions in 5248 sampled
+    subagents — so a rooted session's whole tree is already inside the window.
+
+    `cwd` and `agent` filter the returned threads; they do not affect which
+    sessions qualify, so narrowing by role still yields threads from complete
+    sessions. Pass a DiscoveryStats to learn what was skipped.
+    """
     sessions_dir = Path(sessions_dir)
     if not sessions_dir.is_dir():
         return []
@@ -138,20 +195,37 @@ def discover_threads(
     today = today or date.today()
     now = now if now is not None else time.time()
     roles = {part.strip() for part in agent.split(",")} if agent else None
+    stats = stats if stats is not None else DiscoveryStats()
 
-    found: list[ThreadMeta] = []
+    in_window: list[ThreadMeta] = []
+    rooted_sessions: set[str] = set()
     for day_dir in _day_dirs(sessions_dir, since_days, today):
         for path in day_dir.glob("*.jsonl"):
+            stats.scanned += 1
             if not include_active and (now - path.stat().st_mtime) < ACTIVE_WINDOW_SECONDS:
+                stats.skipped_active += 1
                 continue
             meta = read_thread_meta(path)
             if meta is None:
+                stats.skipped_unreadable += 1
                 continue
-            if cwd is not None and meta.cwd != cwd:
-                continue
-            if roles is not None and meta.agent_role not in roles:
-                continue
-            found.append(meta)
+            in_window.append(meta)
+            if meta.agent_path == ROOT_AGENT_PATH:
+                rooted_sessions.add(meta.session_id)
+
+    dropped_sessions = set()
+    found: list[ThreadMeta] = []
+    for meta in in_window:
+        if meta.session_id not in rooted_sessions:
+            stats.dropped_unrooted_threads += 1
+            dropped_sessions.add(meta.session_id)
+            continue
+        if cwd is not None and meta.cwd != cwd:
+            continue
+        if roles is not None and meta.agent_role not in roles:
+            continue
+        found.append(meta)
+    stats.dropped_unrooted_sessions = len(dropped_sessions)
 
     found.sort(key=lambda m: m.mtime, reverse=True)
     return found[:limit] if limit is not None else found
@@ -290,20 +364,24 @@ def parent_agent_path(agent_path: str) -> str | None:
 
 @dataclass
 class ThreadTree:
-    """Threads grouped by tree position, built from agent_path alone.
+    """Threads grouped into one tree per SESSION.
 
     Keyed by (session_id, agent_path), because agent_path is scoped to one
-    session and NOT globally unique — every root thread is "/root". Keying on
-    the bare path merges every session in the window into one namespace.
+    session and is NOT globally unique — every root thread is "/root". Keying
+    on the bare path merges every session in the window into one namespace.
 
-    `orphans` is a subset of `roots`: a thread whose parent fell outside the
-    window is surfaced as a root so it is not lost, and also listed here so a
-    caller can say so. Do not count both.
+    `roots` holds one entry per session, never one per root rollout. Resuming a
+    session writes an additional root rollout under the same session_id, so a
+    session commonly has many (4920 root rollouts across 631 sessions in the
+    sampled corpus). A resume is a continuation, not a new session, so the
+    session is represented once — by its original root where one is present,
+    otherwise its earliest — and the remaining rollouts are available from
+    `resumes_of()`.
     """
 
     roots: list[ThreadMeta]
-    orphans: list[ThreadMeta]
     children_by_parent: dict[tuple[str, str], list[ThreadMeta]] = field(default_factory=dict)
+    resumes_by_session: dict[str, list[ThreadMeta]] = field(default_factory=dict)
 
     def children_of(self, meta: ThreadMeta) -> list[ThreadMeta]:
         """Direct children of one thread. Takes the ThreadMeta, not a path.
@@ -313,24 +391,59 @@ class ThreadTree:
         """
         return self.children_by_parent.get((meta.session_id, meta.agent_path), [])
 
+    def resumes_of(self, meta: ThreadMeta) -> list[ThreadMeta]:
+        """The session's additional root rollouts, oldest first, excluding `meta`.
+
+        Deliberately NOT summed into the session's totals. A resume rollout
+        replays the prior context, so its token count is largely re-sent rather
+        than new work — one real session showed six resumes carrying 10-21M
+        tokens each while executing zero commands, against the original's 104M
+        tokens and 1157 commands. Adding them would inflate the session badly.
+        """
+        return self.resumes_by_session.get(meta.session_id, [])
+
+
+def _session_representative(rollouts: list[ThreadMeta]) -> ThreadMeta:
+    """The rollout that stands for the session: the original, else the earliest.
+
+    The original is identifiable because Codex gives the first root rollout a
+    thread id equal to the session id; resumes keep the session id but take a
+    fresh thread id.
+    """
+    for meta in rollouts:
+        if meta.thread_id == meta.session_id:
+            return meta
+    return min(rollouts, key=lambda m: m.mtime)
+
 
 def build_tree(metas: list[ThreadMeta]) -> ThreadTree:
-    """Group threads into a tree. Threads whose parent is absent become roots."""
+    """Group threads into one tree per session, collapsing resumes."""
     known = {(meta.session_id, meta.agent_path) for meta in metas}
     children_by_parent: dict[tuple[str, str], list[ThreadMeta]] = {}
-    roots: list[ThreadMeta] = []
-    orphans: list[ThreadMeta] = []
+    root_rollouts: dict[str, list[ThreadMeta]] = {}
 
     for meta in metas:
         parent = parent_agent_path(meta.agent_path)
-        key = (meta.session_id, parent)
         if parent is None:
-            roots.append(meta)
-        elif key in known:
-            children_by_parent.setdefault(key, []).append(meta)
-        else:
-            # Parent is outside the window. Report it rather than drop it.
-            roots.append(meta)
-            orphans.append(meta)
+            root_rollouts.setdefault(meta.session_id, []).append(meta)
+        elif (meta.session_id, parent) in known:
+            children_by_parent.setdefault((meta.session_id, parent), []).append(meta)
+        # A thread whose parent is absent is dropped here rather than promoted to
+        # a root: discover_threads only returns threads from sessions that are
+        # rooted in the window, so this can only be a genuinely broken chain.
 
-    return ThreadTree(roots=roots, orphans=orphans, children_by_parent=children_by_parent)
+    roots: list[ThreadMeta] = []
+    resumes_by_session: dict[str, list[ThreadMeta]] = {}
+    for session_id, rollouts in root_rollouts.items():
+        representative = _session_representative(rollouts)
+        roots.append(representative)
+        others = sorted((m for m in rollouts if m is not representative), key=lambda m: m.mtime)
+        if others:
+            resumes_by_session[session_id] = others
+
+    roots.sort(key=lambda m: m.mtime, reverse=True)
+    return ThreadTree(
+        roots=roots,
+        children_by_parent=children_by_parent,
+        resumes_by_session=resumes_by_session,
+    )

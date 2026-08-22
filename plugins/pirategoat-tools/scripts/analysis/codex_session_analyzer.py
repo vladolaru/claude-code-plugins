@@ -73,6 +73,7 @@ def _failed_commands(scan) -> list[dict]:
 
 
 COMMAND_PREVIEW_CHARS = 120
+MAX_FAILURES_SHOWN = 10
 
 
 def _command_preview(command) -> str:
@@ -93,7 +94,8 @@ def _command_preview(command) -> str:
 def _render_text(report: dict) -> str:
     lines = []
     thread = report["thread"]
-    lines.append(f"Thread {thread['thread_id']}  [{thread['agent_role']}]")
+    lines.append(f"Session {report['session_id']}")
+    lines.append(f"  main thread: {thread['thread_id']}  [{thread['agent_role']}]")
     lines.append(f"  cwd:       {thread['cwd']}")
     lines.append(f"  model:     {thread['model'] or 'unknown'}")
     lines.append(f"  duration:  {thread['duration_seconds']}s")
@@ -103,9 +105,13 @@ def _render_text(report: dict) -> str:
         f"files changed: {thread['files_changed']}"
     )
     if report["failures"]:
-        lines.append("  failed commands:")
-        for failure in report["failures"]:
+        shown = report["failures"][:MAX_FAILURES_SHOWN]
+        lines.append(f"  failed commands ({len(report['failures'])}):")
+        for failure in shown:
             lines.append(f"    exit {failure['exit_code']}: {_command_preview(failure['command'])}")
+        remaining = len(report["failures"]) - len(shown)
+        if remaining:
+            lines.append(f"    … and {remaining} more (use --format json for all of them)")
 
     for child in report["children"]:
         lines.append("")
@@ -116,9 +122,18 @@ def _render_text(report: dict) -> str:
             f"{child['files_changed']} files"
         )
 
-    if report["orphans"]:
+    if report["resumes"]:
         lines.append("")
-        lines.append(f"  {len(report['orphans'])} thread(s) had a parent outside the window.")
+        lines.append(f"  resumed {len(report['resumes'])} time(s) — same session, continued later:")
+        for resume in report["resumes"]:
+            lines.append(
+                f"    {resume['thread_id']}  {resume['duration_seconds']}s, "
+                f"{resume['commands']} commands  (tokens not summed: a resume replays context)"
+            )
+
+    for note in report["notes"]:
+        lines.append("")
+        lines.append(f"  Note: {note}")
     return "\n".join(lines)
 
 
@@ -165,11 +180,13 @@ def main() -> None:
 
     # The tree needs every thread in the window, not just the filtered ones,
     # so children are still reachable when --agent narrows the selection.
+    stats = codex_rollout.DiscoveryStats()
     everything = codex_rollout.discover_threads(
         sessions_dir,
         since_days=args.since,
         limit=None,
         include_active=args.include_active,
+        stats=stats,
     )
     candidates = codex_rollout.discover_threads(
         sessions_dir,
@@ -180,31 +197,43 @@ def main() -> None:
         include_active=args.include_active,
     )
 
+    tree = codex_rollout.build_tree(everything)
+    tree_roots = tree.roots
+
     if args.thread_id:
         selected = next((m for m in everything if m.thread_id == args.thread_id), None)
     else:
         # Prefer the newest root. Picking the newest thread outright often lands
         # on a subagent, and a leaf has no tree to show. When a filter such as
         # --agent excludes every root, fall back to the newest match.
-        roots = [m for m in candidates if m.agent_path == codex_rollout.ROOT_AGENT_PATH]
+        session_roots = {m.thread_id for m in tree_roots}
+        roots = [m for m in candidates if m.thread_id in session_roots]
         selected = (roots or candidates or [None])[0]
 
     if selected is None:
         print("Error: no threads matched the given filters", file=sys.stderr)
         sys.exit(1)
 
-    tree = codex_rollout.build_tree(everything)
     root_scan = codex_rollout.scan_thread(selected.path, keep_items=True)
 
     children = []
     for child in tree.children_of(selected):
         children.append(_thread_report(child, codex_rollout.scan_thread(child.path)))
 
+    # Resumes are reported, never folded into the session's totals: a resume
+    # replays prior context, so its tokens are largely re-sent rather than new.
+    resumes = [
+        _thread_report(rollout, codex_rollout.scan_thread(rollout.path))
+        for rollout in tree.resumes_of(selected)
+    ]
+
     report = {
+        "session_id": selected.session_id,
         "thread": _thread_report(selected, root_scan),
         "children": children,
+        "resumes": resumes,
         "failures": _failed_commands(root_scan),
-        "orphans": [m.thread_id for m in tree.orphans],
+        "notes": stats.notes(),
     }
 
     text = json.dumps(report, indent=2) if args.format == "json" else _render_text(report)
