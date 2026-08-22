@@ -2518,26 +2518,28 @@ class TestSaveEchoProgressAndNextUnread:
             budget_capped=False, in_scope_count=30, diffed_count=10,
         )
         builder = ReviewOutputBuilder("123", "code")
-        builder.add_deferred_reviewed(*deferred[:3])  # claimed
-        builder.add_unreviewed(*deferred[3:5])  # declared
+        builder.add_deferred_reviewed(*deferred[:3])  # claimed — read
+        builder.add_unreviewed(*deferred[3:5])  # declared — NOT read
         builder.save(str(tmp_path))
         out = capsys.readouterr().out
 
         # 10 diffed + 3 claimed = 13 of 30.
         assert "PROGRESS: covered 13 of 30 in-scope files." in out
         assert "NEXT UNREAD (largest first):" in out
-        # 20 deferred - 3 claimed - 2 declared = 15 remaining; capped at 10
-        # with the rest counted.
+        # 20 deferred - 3 claimed = 17 remaining (declared files are still
+        # unread and stay in the list — controller ruling: declared != read).
+        # Capped at 10 with the rest counted.
         assert out.count("\n  - ") == 10
-        assert "(+5 more)" in out
+        assert "(+7 more)" in out
         # Replays the sidecar's own order (largest first), not re-sorted or
-        # re-derived: the first listed file is the largest remaining one.
+        # re-derived: the first listed file is the largest remaining one,
+        # and the two declared-but-unclaimed files (index 3, 4) reappear.
         next_unread_block = out.split("NEXT UNREAD (largest first):\n", 1)[1]
         listed = [
             line[len("  - "):] for line in next_unread_block.splitlines()
             if line.startswith("  - ")
         ]
-        assert listed == deferred[5:15]
+        assert listed == deferred[3:13]
 
     def test_no_progress_or_next_unread_without_unreviewed_files(
         self, tmp_path, monkeypatch, capsys
@@ -2571,11 +2573,36 @@ class TestSaveEchoProgressAndNextUnread:
         assert "PROGRESS:" not in out
         assert "NEXT UNREAD" not in out
 
-    def test_next_unread_omitted_when_nothing_remains(
+    def test_next_unread_omitted_only_when_every_deferred_file_is_claimed(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Every deferred file already claimed or declared: no continuation
-        to name, so the header must not print."""
+        """Only a CLAIM (add_deferred_reviewed) removes a file from NEXT
+        UNREAD — a DECLARATION (add_unreviewed) states the file was NOT
+        read, so it must stay in the list (controller ruling: declared !=
+        read; run12's bulk-declaring cohort is exactly who this targets).
+        With every deferred file claimed there is nothing left to declare
+        or auto-fill, so self.unreviewed stays empty and the whole
+        TARGET/PROGRESS/NEXT UNREAD block never runs."""
+        self._clean_env(monkeypatch)
+        self._write_sidecar(
+            tmp_path, deferred_files=["a.go", "b.go"], review_budget=40,
+            in_scope_count=5, diffed_count=3,
+        )
+        builder = ReviewOutputBuilder("123", "code")
+        builder.add_deferred_reviewed("a.go", "b.go")
+        builder.save(str(tmp_path))
+        out = capsys.readouterr().out
+        assert "TARGET:" not in out
+        assert "PROGRESS:" not in out
+        assert "NEXT UNREAD" not in out
+
+    def test_declared_file_reappears_in_next_unread(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A declared-but-unclaimed file is still unread — it must keep
+        the NEXT UNREAD list alive rather than being silenced, which is
+        the exact behavior a bulk-declaring reviewer would otherwise get
+        a free pass from."""
         self._clean_env(monkeypatch)
         self._write_sidecar(
             tmp_path, deferred_files=["a.go", "b.go"], review_budget=40,
@@ -2586,7 +2613,9 @@ class TestSaveEchoProgressAndNextUnread:
         builder.add_unreviewed("b.go")
         builder.save(str(tmp_path))
         out = capsys.readouterr().out
-        assert "NEXT UNREAD" not in out
+        assert "NEXT UNREAD (largest first):" in out
+        assert "  - b.go" in out
+        assert "  - a.go" not in out
 
     def test_progress_omitted_without_a_usable_in_scope_count(
         self, tmp_path, monkeypatch, capsys
@@ -2604,6 +2633,9 @@ class TestSaveEchoProgressAndNextUnread:
         out = capsys.readouterr().out
         assert "PROGRESS:" not in out
         assert "NEXT UNREAD (largest first):" in out
+        # a.go is declared (not claimed) and b.go is auto-filled — neither
+        # is excluded, only a claim would be.
+        assert "  - a.go" in out
         assert "  - b.go" in out
 
 

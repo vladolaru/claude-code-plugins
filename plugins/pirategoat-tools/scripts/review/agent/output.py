@@ -1541,7 +1541,16 @@ class ReviewOutputBuilder:
                     )
                 deferred_files_ordered = meta.get("deferred_files")
                 if isinstance(deferred_files_ordered, list):
-                    accounted = set(self.deferred_reviewed) | set(declared)
+                    # Only a CLAIM (add_deferred_reviewed) removes a file
+                    # from this list — a DECLARATION (add_unreviewed) is
+                    # the reviewer stating it did NOT read the file, not
+                    # that it did. run12's bulk-declaring cohort is exactly
+                    # who this list has to keep naming: excluding
+                    # `declared` here would silence the nudge for the very
+                    # runs that most need a concrete next file. Auto-filled
+                    # entries (declared by neither claim nor statement)
+                    # stay in the list for the same reason.
+                    accounted = set(self.deferred_reviewed)
                     remaining = [
                         p for p in deferred_files_ordered
                         if isinstance(p, str) and p not in accounted
