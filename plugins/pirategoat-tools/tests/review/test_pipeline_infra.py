@@ -233,6 +233,43 @@ class TestStateManagement:
         assert resolved["mode"] == "pr"  # config wins over CLI
 
 
+class TestCleanStaleArtifacts:
+    """clean_stale_artifacts sweeps by allowlist, guarded by an identity marker."""
+
+    def test_sweep_removes_everything_but_baseline(self, mod, tmp_path):
+        """run12: run11's als.patch/coreLlm.patch/replay.patch survived the
+        40-entry blocklist into run12's telemetry snapshot. Allowlist inverts:
+        unpredicted scratch cannot survive."""
+        d = tmp_path / "out"
+        d.mkdir()
+        (d / ".branch-review-baseline.json").write_text("{}")
+        (d / "run-config.json").write_text("{}")  # bot pre-seeds this
+        (d / "review-context.json").write_text("{}")  # and this
+        (d / "als.patch").write_text("x")
+        (d / "unpredicted-scratch.txt").write_text("x")
+        (d / "subdir").mkdir()
+        (d / "subdir" / "y").write_text("x")
+        mod.clean_stale_artifacts(str(d))
+        assert sorted(os.listdir(d)) == [
+            ".branch-review-baseline.json", "review-context.json",
+            "run-config.json",
+        ]
+
+    def test_sweep_refuses_unrecognized_directory(self, mod, tmp_path):
+        d = tmp_path / "notours"
+        d.mkdir()
+        (d / "important-user-file.txt").write_text("x")
+        with pytest.raises(SystemExit):
+            mod.clean_stale_artifacts(str(d))
+        assert (d / "important-user-file.txt").exists()
+
+    def test_sweep_accepts_empty_or_missing_dir(self, mod, tmp_path):
+        mod.clean_stale_artifacts(str(tmp_path / "missing"))  # no raise
+        e = tmp_path / "empty"
+        e.mkdir()
+        mod.clean_stale_artifacts(str(e))  # no raise
+
+
 class TestTelemetryIdentityHelpers:
     """Step 1 identity discovery is best-effort and release-aware."""
 
@@ -551,8 +588,18 @@ class TestCLIIntegration:
     def _isolated_repo(self, tmp_path):
         """run_pipeline's cwd has no default — see its docstring. Isolate
         every subprocess call in this class to a throwaway repo at
-        tmp_path so none of them can touch the real checkout."""
+        tmp_path/repo so none of them can touch the real checkout. The repo
+        lives in a subdirectory, never at tmp_path itself: tmp_path also
+        doubles as --output-dir in most of these tests, and the allowlist
+        sweep's identity guard correctly refuses a non-empty, unmarked
+        directory — a repo's .git/README.md would trip it on every first
+        call."""
         init_repo(tmp_path)
+        # tmp_path also serves as --output-dir in these tests: seed a
+        # harmless, allowlisted pipeline-identity marker so the sweep's
+        # identity guard doesn't refuse a directory that already holds
+        # unrelated repo files (.git, README.md) on the very first call.
+        (tmp_path / ".branch-review-baseline.json").write_text("{}")
 
     def test_step_1_pr_mode_exits_0(self, tmp_path):
         r = run_pipeline("--step", "1", "--mode", "pr",
@@ -956,6 +1003,11 @@ class TestSkippedStepRecording:
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
         init_repo(tmp_path)
+        # tmp_path also serves as --output-dir in these tests: seed a
+        # harmless, allowlisted pipeline-identity marker so the sweep's
+        # identity guard doesn't refuse a directory that already holds
+        # unrelated repo files (.git, README.md) on the very first call.
+        (tmp_path / ".branch-review-baseline.json").write_text("{}")
 
     def test_skipped_steps_recorded_with_condition(self, tmp_path):
         """Branch mode passes over step 2 — needs_workspace_setup is PR-only."""
@@ -1009,6 +1061,11 @@ class TestQuickModeConfig:
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
         init_repo(tmp_path)
+        # tmp_path also serves as --output-dir in these tests: seed a
+        # harmless, allowlisted pipeline-identity marker so the sweep's
+        # identity guard doesn't refuse a directory that already holds
+        # unrelated repo files (.git, README.md) on the very first call.
+        (tmp_path / ".branch-review-baseline.json").write_text("{}")
 
     def test_quick_flag_stored_in_config(self, tmp_path):
         """Passing --quick stores quick=true in run-config.json."""
@@ -1107,6 +1164,11 @@ class TestHostConfig:
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
         init_repo(tmp_path)
+        # tmp_path also serves as --output-dir in these tests: seed a
+        # harmless, allowlisted pipeline-identity marker so the sweep's
+        # identity guard doesn't refuse a directory that already holds
+        # unrelated repo files (.git, README.md) on the very first call.
+        (tmp_path / ".branch-review-baseline.json").write_text("{}")
 
     def test_claude_is_the_backward_compatible_default(self, tmp_path):
         result = run_pipeline(
@@ -1134,6 +1196,11 @@ class TestDependencyRefreshConfig:
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
         init_repo(tmp_path)
+        # tmp_path also serves as --output-dir in these tests: seed a
+        # harmless, allowlisted pipeline-identity marker so the sweep's
+        # identity guard doesn't refuse a directory that already holds
+        # unrelated repo files (.git, README.md) on the very first call.
+        (tmp_path / ".branch-review-baseline.json").write_text("{}")
 
     def _trusting_env(self, tmp_path):
         config_dir = tmp_path / "xdg" / "pirategoat"

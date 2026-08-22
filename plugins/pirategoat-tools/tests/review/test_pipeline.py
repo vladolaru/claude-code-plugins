@@ -2120,6 +2120,11 @@ class TestCriticVerdictPersistence:
         every subprocess call in this class to a throwaway repo at
         tmp_path so none of them can touch the real checkout."""
         init_repo(tmp_path)
+        # tmp_path also serves as --output-dir in these tests: seed a
+        # harmless, allowlisted pipeline-identity marker so the sweep's
+        # identity guard doesn't refuse a directory that already holds
+        # unrelated repo files (.git, README.md) on the very first call.
+        (tmp_path / ".branch-review-baseline.json").write_text("{}")
 
     def test_step_11_reads_critic_verdict_from_file(self, tmp_path):
         """Step 11 should read decision-critic-verdict.json into state."""

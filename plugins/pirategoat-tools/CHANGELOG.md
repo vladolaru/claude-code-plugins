@@ -36,6 +36,7 @@ Adds trust-gated dependency refresh and a durable measurement layer (worktree hy
 - **Budget pressure moved to the save echo** — the unenforceable under-budget "protocol violation" rule is deleted, and the target now echoes back at save time whenever unreviewed files are declared, read from the deferred-files sidecar (schema bumped 1→2 to carry it) bootstrap writes rather than an env var so the echo survives a reviewer rebuilding its own save command; the enforced half (auto-fill; no silent APPROVE) is unchanged.
 - **`add_unreviewed()` is variadic**, sharing one batch validator with `add_deferred_reviewed()`.
 - **OUTPUT_DIR is taught as artifact-only**; scratch work goes to `$TMPDIR`.
+- **The output-dir sweep is an allowlist, not a blocklist** — every run's own artifacts survive by name, everything else is deleted, and a non-empty directory with no pipeline identity marker refuses to be swept.
 
 ### Fixed
 

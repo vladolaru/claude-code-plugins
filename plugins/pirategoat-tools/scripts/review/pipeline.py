@@ -25,10 +25,10 @@ Zero external dependencies (stdlib only).
 """
 
 import argparse
-import glob as glob_mod
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import uuid
@@ -202,62 +202,31 @@ except ImportError:
     )
     from review.atomic_io import atomic_write_json
 
-# Artifacts to clear at step 1 (stale from previous runs)
-_STALE_ARTIFACTS = [
-    "pipeline-state.json",
-    ".telemetry-log-path",
-    "dispatch-plan.json",
-    "dispatch-plan.initial.json",
-    "*-review.json",
-    "*-review.md",
-    "*-scope-summary*.json",
-    "*-deferred-files.json",
-    "*-advisory-entitlement.json",
-    "*.started",
-    "reconciliation-context.json",
-    "reconciliation-context.md",
-    "critic-context.md",
-    "review-findings.json",
-    "review-findings.md",
-    "review-report.md",
-    "review-verdict.json",
-    "pipeline-result.json",
-    "decision-critic-findings.md",
-    "decision-critic-verdict.json",
-    "change-purpose.md",
-    "scoped-diff.patch",
-    "*-scoped-diff.patch",
-    "dependency-refresh.json",
-    "dependency-refresh-verification.json",
-    # Listed by exact name, not swept by a glob: `glob` never matches a
-    # leading dot, so a `*.json` pattern would silently skip the baseline
-    # (same reason `.telemetry-log-path` is spelled out above). A stale
-    # baseline surviving into the next run is what would let a failed
-    # capture read as a successful one — and, before the repo-identity
-    # gate, could have authorized a sweep in a repo this run never
-    # measured.
-    ".worktree-baseline.json",
-    "worktree-hygiene.json",
-    # Same per-run rule: a surviving snapshot would let a rerun in this
-    # output dir publish a previous run's token cost as its own.
-    "usage-snapshot.json",
-    # And a surviving synthesis-agent lifecycle would let a rerun publish
-    # a previous run's reconciliator/critic durations as its own.
-    "synthesis-agents.json",
-    # Its dispatch markers need their own pattern: they are deliberately
-    # NOT named `<agent>.started` (that suffix is the reviewer contract
-    # other tools scan, and a synthesis marker landing in it got treated
-    # as a reviewer and renamed away), and `*.started` does not match
-    # `*.synthesis-started`. A surviving marker would make finalize
-    # report last run's dispatch as this run's stall.
-    "*.synthesis-started",
-]
-
-# Files to preserve across runs
-_PRESERVED_FILES = {
-    "run-config.json",
+# Sweep survivors. Everything else in the output directory is per-run
+# and regenerated — including scratch nobody predicted, which is the
+# class the old 40-entry blocklist could never close (run12: a prior
+# run's reviewer .patch scratch survived it into telemetry).
+# AMENDED per adversarial review (B1, source-verified):
+#   .branch-review-baseline.json — cross-run incremental-review state.
+#   run-config.json    — pre-seeded by pirategoat-bot BEFORE step 1 runs
+#                        (orchestrator-review.js writes it, and the sweep
+#                        at pipeline.py:762 runs before read_config:765);
+#                        also in today's _PRESERVED_FILES for this reason.
+#   review-context.json — bot-owned, pre-seeded the same way; context.py
+#                        is gap-filling and reads whatever already exists.
+_SWEEP_ALLOWLIST = frozenset({
     ".branch-review-baseline.json",
-}
+    "run-config.json",
+    "review-context.json",
+})
+
+# The sweep is rm-everything-shaped, so it only runs in a directory that
+# proves it is pipeline-owned — same spirit as the worktree sweep's
+# repo-identity gate. A mistargeted --output-dir fails loudly instead of
+# being emptied.
+_PIPELINE_DIR_MARKERS = (
+    ".branch-review-baseline.json", "pipeline-state.json", "run-config.json",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -456,24 +425,25 @@ def resolve_params(output_dir, cli_mode=None, cli_pr_number=None,
 # ---------------------------------------------------------------------------
 
 def clean_stale_artifacts(output_dir):
-    """Remove stale run artifacts, preserving run-config.json and .branch-review-baseline.json."""
-    for pattern in _STALE_ARTIFACTS:
-        if "*" in pattern:
-            for filepath in glob_mod.glob(os.path.join(output_dir, pattern)):
-                basename = os.path.basename(filepath)
-                if basename not in _PRESERVED_FILES:
-                    try:
-                        os.remove(filepath)
-                    except OSError:
-                        pass
-        else:
-            filepath = os.path.join(output_dir, pattern)
-            basename = os.path.basename(filepath)
-            if basename not in _PRESERVED_FILES and os.path.exists(filepath):
-                try:
-                    os.remove(filepath)
-                except OSError:
-                    pass
+    """Allowlist sweep: delete every per-run artifact from prior runs."""
+    if not os.path.isdir(output_dir):
+        return
+    entries = os.listdir(output_dir)
+    if entries and not any(m in entries for m in _PIPELINE_DIR_MARKERS):
+        raise SystemExit(
+            f"Refusing to sweep {output_dir}: no pipeline identity marker "
+            "found in a non-empty directory — is --output-dir correct?")
+    for name in entries:
+        if name in _SWEEP_ALLOWLIST:
+            continue
+        path = os.path.join(output_dir, name)
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------

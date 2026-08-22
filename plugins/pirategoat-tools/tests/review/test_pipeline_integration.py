@@ -84,22 +84,28 @@ class TestTelemetryIntegration:
     @pytest.fixture(autouse=True)
     def _isolated_repo(self, tmp_path):
         """Every subprocess call in this class needs an isolated cwd — see
-        run_pipeline's docstring. Tests that need a specific git identity
-        build their own `repo` subdir instead; this just gives the rest of
-        the class a safe default at `tmp_path` itself."""
-        _init_git_repo(tmp_path)
+        run_pipeline's docstring. The repo lives at `tmp_path/repo`, never
+        at `tmp_path` itself: `tmp_path/out` is `--output-dir` for the rest
+        of the class, and the allowlist sweep deletes any subdirectory it
+        doesn't recognize (including a nested repo) — output-dir and repo
+        must be siblings, not ancestor/descendant. Tests that need a
+        specific git identity build their own `repo` subdir the same way."""
+        (tmp_path / "repo").mkdir()
+        _init_git_repo(tmp_path / "repo")
+        (tmp_path / "out").mkdir()
 
     def test_step_1_creates_telemetry_log(self, tmp_path):
         """Step 1 should create a telemetry log and running manifest."""
+        out = tmp_path / "out"
         log_dir = tmp_path / "telemetry-logs"
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             r = run_pipeline(
                 "--step", "1", "--mode", "pr",
-                "--output-dir", str(tmp_path), "--pr-number", "42",
-                cwd=tmp_path,
+                "--output-dir", str(out), "--pr-number", "42",
+                cwd=tmp_path / "repo",
             )
         assert r.returncode == 0
-        marker = tmp_path / ".telemetry-log-path"
+        marker = out / ".telemetry-log-path"
         assert marker.is_file()
         log_path = Path(marker.read_text().strip())
         manifest_path = log_path.with_suffix(".manifest.json")
@@ -109,6 +115,7 @@ class TestTelemetryIntegration:
 
     def test_telemetry_failure_does_not_break_pipeline(self, tmp_path):
         """Pipeline works even if telemetry log_dir is unwritable."""
+        out = tmp_path / "out"
         log_dir = tmp_path / "unwritable"
         log_dir.mkdir()
         log_dir.chmod(0o000)
@@ -116,8 +123,8 @@ class TestTelemetryIntegration:
             with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
                 r = run_pipeline(
                     "--step", "1", "--mode", "pr",
-                    "--output-dir", str(tmp_path), "--pr-number", "42",
-                    cwd=tmp_path,
+                    "--output-dir", str(out), "--pr-number", "42",
+                    cwd=tmp_path / "repo",
                 )
             assert r.returncode == 0
             assert "Step 1" in r.stdout
@@ -126,15 +133,16 @@ class TestTelemetryIntegration:
 
     def test_step_2_appends_to_telemetry_log(self, tmp_path):
         """Subsequent steps append to the log created by step 1."""
+        out = tmp_path / "out"
         log_dir = tmp_path / "telemetry-logs"
         env = {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}
         with patch.dict(os.environ, env):
             run_pipeline("--step", "1", "--mode", "pr",
-                          "--output-dir", str(tmp_path), "--pr-number", "42",
-                          cwd=tmp_path)
+                          "--output-dir", str(out), "--pr-number", "42",
+                          cwd=tmp_path / "repo")
             run_pipeline("--step", "3", "--mode", "pr",
-                         "--output-dir", str(tmp_path), cwd=tmp_path)
-        marker = tmp_path / ".telemetry-log-path"
+                         "--output-dir", str(out), cwd=tmp_path / "repo")
+        marker = out / ".telemetry-log-path"
         log_path = marker.read_text().strip()
         with open(log_path) as f:
             lines = f.readlines()
@@ -151,15 +159,16 @@ class TestTelemetryIntegration:
         "main..HEAD" stores "main" as merge_base) are resolved instead — a
         durable manifest must never record a movable ref as base_sha.
         """
+        out = tmp_path / "out"
         context_base = "a" * 40
         context_head = "b" * 40
-        (tmp_path / "run-config.json").write_text(json.dumps({
+        (out / "run-config.json").write_text(json.dumps({
             "mode": "pr",
             "pr_number": "42",
             "interactive": False,
             "session_id": "bot-session",
         }))
-        (tmp_path / "review-context.json").write_text(json.dumps({
+        (out / "review-context.json").write_text(json.dumps({
             "git": {
                 "git_range": "context-base..context-head",
                 "merge_base": context_base,
@@ -169,10 +178,10 @@ class TestTelemetryIntegration:
         log_dir = tmp_path / "telemetry-logs"
 
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
-            result = run_pipeline("--step", "1", "--output-dir", str(tmp_path), cwd=tmp_path)
+            result = run_pipeline("--step", "1", "--output-dir", str(out), cwd=tmp_path / "repo")
 
         assert result.returncode == 0
-        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        log_path = (out / ".telemetry-log-path").read_text().strip()
         with open(log_path) as f:
             start = json.loads(f.readline())
         assert start["pipeline"]["git"] == {
@@ -184,9 +193,8 @@ class TestTelemetryIntegration:
     def test_step_1_resolves_symbolic_context_merge_base(self, tmp_path):
         """A symbolic context merge_base (explicit "main..HEAD" range) must be
         resolved to a commit SHA before entering the durable run identity."""
+        out = tmp_path / "out"
         repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
         subprocess.run(
             ["git", "branch", "-M", "main"],
             cwd=repo, capture_output=True, check=True,
@@ -195,13 +203,13 @@ class TestTelemetryIntegration:
             ["git", "rev-parse", "main"],
             cwd=repo, capture_output=True, text=True, check=True,
         ).stdout.strip()
-        (tmp_path / "run-config.json").write_text(json.dumps({
+        (out / "run-config.json").write_text(json.dumps({
             "mode": "full",
             "interactive": False,
             "session_id": "bot-session",
             "git_range": "main..HEAD",
         }))
-        (tmp_path / "review-context.json").write_text(json.dumps({
+        (out / "review-context.json").write_text(json.dumps({
             "git": {
                 "git_range": "main..HEAD",
                 "merge_base": "main",
@@ -212,11 +220,11 @@ class TestTelemetryIntegration:
 
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             result = run_pipeline(
-                "--step", "1", "--output-dir", str(tmp_path), cwd=repo
+                "--step", "1", "--output-dir", str(out), cwd=repo
             )
 
         assert result.returncode == 0
-        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        log_path = (out / ".telemetry-log-path").read_text().strip()
         with open(log_path) as f:
             start = json.loads(f.readline())
         git_identity = start["pipeline"]["git"]
@@ -226,11 +234,13 @@ class TestTelemetryIntegration:
 
     def test_step_1_interactive_run_ignores_stale_context_git_identity(self, tmp_path):
         """Interactive reruns do not leak the prior run's preserved Git identity."""
-        (tmp_path / "run-config.json").write_text(json.dumps({
+        out = tmp_path / "out"
+        repo = tmp_path / "repo"
+        (out / "run-config.json").write_text(json.dumps({
             "mode": "full",
             "interactive": True,
         }))
-        (tmp_path / "review-context.json").write_text(json.dumps({
+        (out / "review-context.json").write_text(json.dumps({
             "git": {
                 "git_range": "stale-base..stale-head",
                 "merge_base": "stale-base-sha",
@@ -238,20 +248,17 @@ class TestTelemetryIntegration:
             },
         }))
         log_dir = tmp_path / "telemetry-logs"
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
         current_head = subprocess.check_output(
             ["git", "rev-parse", "--verify", "HEAD"], cwd=repo, text=True
         ).strip()
 
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             result = run_pipeline(
-                "--step", "1", "--output-dir", str(tmp_path), cwd=str(repo)
+                "--step", "1", "--output-dir", str(out), cwd=str(repo)
             )
 
         assert result.returncode == 0
-        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        log_path = (out / ".telemetry-log-path").read_text().strip()
         with open(log_path) as f:
             start = json.loads(f.readline())
         assert start["pipeline"]["git"] == {
@@ -261,19 +268,21 @@ class TestTelemetryIntegration:
         }
         manifest = json.loads(Path(log_path).with_suffix(".manifest.json").read_text())
         assert manifest["run"]["git"] == start["pipeline"]["git"]
-        assert json.loads((tmp_path / "review-context.json").read_text()) == {
-            "output": {"directory": str(tmp_path)},
+        assert json.loads((out / "review-context.json").read_text()) == {
+            "output": {"directory": str(out)},
         }
 
     def test_step_1_interactive_range_resolves_current_git_not_stale_context(self, tmp_path):
         """An explicit interactive range resolves Git even when stale context matches it."""
+        out = tmp_path / "out"
+        repo = tmp_path / "repo"
         git_range = "HEAD~1..HEAD~1"
-        (tmp_path / "run-config.json").write_text(json.dumps({
+        (out / "run-config.json").write_text(json.dumps({
             "mode": "full",
             "interactive": True,
             "git_range": git_range,
         }))
-        (tmp_path / "review-context.json").write_text(json.dumps({
+        (out / "review-context.json").write_text(json.dumps({
             "git": {
                 "git_range": git_range,
                 "merge_base": "stale-base-sha",
@@ -281,9 +290,6 @@ class TestTelemetryIntegration:
             },
         }))
         log_dir = tmp_path / "telemetry-logs"
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _init_git_repo(repo)
         _add_commit(repo)
         expected_sha = subprocess.check_output(
             ["git", "rev-parse", "--verify", "HEAD~1"], cwd=repo, text=True
@@ -291,11 +297,11 @@ class TestTelemetryIntegration:
 
         with patch.dict(os.environ, {"PIRATEGOAT_TELEMETRY_LOG_DIR": str(log_dir)}):
             result = run_pipeline(
-                "--step", "1", "--output-dir", str(tmp_path), cwd=str(repo)
+                "--step", "1", "--output-dir", str(out), cwd=str(repo)
             )
 
         assert result.returncode == 0
-        log_path = (tmp_path / ".telemetry-log-path").read_text().strip()
+        log_path = (out / ".telemetry-log-path").read_text().strip()
         with open(log_path) as f:
             start = json.loads(f.readline())
         assert start["pipeline"]["git"] == {
@@ -307,11 +313,13 @@ class TestTelemetryIntegration:
     def test_incremental_context_uses_step_1_output_seed_for_baseline(
         self, tmp_path
     ):
-        # _isolated_repo (autouse) already initialized tmp_path as a repo.
+        # _isolated_repo (autouse) already initialized tmp_path/repo as a repo.
+        out = tmp_path / "out"
+        repo = tmp_path / "repo"
         baseline_sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+            ["git", "rev-parse", "HEAD"], cwd=repo, text=True
         ).strip()
-        (tmp_path / ".branch-review-baseline.json").write_text(json.dumps({
+        (out / ".branch-review-baseline.json").write_text(json.dumps({
             "last_reviewed_sha": baseline_sha,
         }))
         log_dir = tmp_path / "telemetry-logs"
@@ -321,23 +329,23 @@ class TestTelemetryIntegration:
         ):
             step_1 = run_pipeline(
                 "--step", "1", "--mode", "incremental",
-                "--output-dir", str(tmp_path), cwd=tmp_path,
+                "--output-dir", str(out), cwd=repo,
             )
             seeded_context = json.loads(
-                (tmp_path / "review-context.json").read_text()
+                (out / "review-context.json").read_text()
             )
             step_3 = run_pipeline(
-                "--step", "3", "--output-dir", str(tmp_path), cwd=tmp_path,
+                "--step", "3", "--output-dir", str(out), cwd=repo,
             )
 
         assert step_1.returncode == 0
-        assert seeded_context == {"output": {"directory": str(tmp_path)}}
+        assert seeded_context == {"output": {"directory": str(out)}}
         assert step_3.returncode == 0
-        context = json.loads((tmp_path / "review-context.json").read_text())
-        assert context["output"]["directory"] == str(tmp_path)
+        context = json.loads((out / "review-context.json").read_text())
+        assert context["output"]["directory"] == str(out)
         assert context["git"]["merge_base"] == baseline_sha
         assert context["git"]["git_range"] == f"{baseline_sha}..HEAD"
-        assert (tmp_path / ".branch-review-baseline.json").is_file()
+        assert (out / ".branch-review-baseline.json").is_file()
 
 
 
@@ -346,23 +354,29 @@ class TestStep2Orchestration:
 
     def test_step_2_completes_without_crash(self, tmp_path):
         """Step 2 should complete even when review/workspace_setup.py fails (no git repo)."""
-        _init_git_repo(tmp_path)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=str(tmp_path))
+                   "--output-dir", str(out), "--pr-number", "42", cwd=str(repo))
         r = run_pipeline("--step", "2", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=str(tmp_path))
+                       "--output-dir", str(out), cwd=str(repo))
         assert r.returncode == 0
-        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        state = json.loads((out / "pipeline-state.json").read_text())
         assert 2 in state["completed_steps"]
 
     def test_step_2_stores_workspace_setup_result(self, tmp_path):
         """Step 2 should store workspace_setup_result in state."""
-        _init_git_repo(tmp_path)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
-                   "--output-dir", str(tmp_path), "--pr-number", "42", cwd=str(tmp_path))
+                   "--output-dir", str(out), "--pr-number", "42", cwd=str(repo))
         run_pipeline("--step", "2", "--mode", "pr",
-                       "--output-dir", str(tmp_path), cwd=str(tmp_path))
-        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+                       "--output-dir", str(out), cwd=str(repo))
+        state = json.loads((out / "pipeline-state.json").read_text())
         assert "workspace_setup_result" in state
 
 
@@ -589,18 +603,19 @@ class TestStep5Orchestration:
     def test_step_5_stores_dispatch_plan_summary(self, tmp_path):
         """Step 5 should store dispatch plan summary in state."""
         repo = self._make_repo(tmp_path)
+        out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "full",
-                   "--output-dir", str(tmp_path), cwd=str(repo))
+                   "--output-dir", str(out), cwd=str(repo))
         ctx = {
             "git": {"merge_base": "abc", "git_range": "abc..HEAD",
                     "changed_files": ["a.py"], "commit_count": 1},
             "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
         }
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        (out / "review-context.json").write_text(json.dumps(ctx))
         r = run_pipeline("--step", "5", "--mode", "full",
-                       "--output-dir", str(tmp_path), cwd=str(repo))
+                       "--output-dir", str(out), cwd=str(repo))
         assert r.returncode == 0
-        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        state = json.loads((out / "pipeline-state.json").read_text())
         assert 5 in state["completed_steps"]
         assert "dispatch_plan_summary" in state
 
@@ -608,12 +623,13 @@ class TestStep5Orchestration:
         self, tmp_path
     ):
         repo = self._make_repo(tmp_path)
+        out = tmp_path / "out"
         run_pipeline(
             "--step", "1", "--mode", "full",
-            "--output-dir", str(tmp_path), "--git-range", "HEAD~1..HEAD",
+            "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
             "--refresh-deps", cwd=str(repo),
         )
-        (tmp_path / "dependency-refresh.json").write_text(json.dumps({
+        (out / "dependency-refresh.json").write_text(json.dumps({
             "status": "completed",
             "commands": [],
             "tracked_files_dirty": False,
@@ -621,27 +637,28 @@ class TestStep5Orchestration:
 
         result = run_pipeline(
             "--step", "5", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=str(repo),
+            "--output-dir", str(out), cwd=str(repo),
         )
 
         assert result.returncode == 0
         verification = json.loads(
-            (tmp_path / "dependency-refresh-verification.json").read_text()
+            (out / "dependency-refresh-verification.json").read_text()
         )
         assert verification["report_present"] is True
-        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        state = json.loads((out / "pipeline-state.json").read_text())
         assert state["dependency_refresh_verification"] == verification
 
     def test_step_5_records_skip_without_running_refresh_verification(
         self, tmp_path
     ):
         repo = self._make_repo(tmp_path)
+        out = tmp_path / "out"
         run_pipeline(
             "--step", "1", "--mode", "full",
-            "--output-dir", str(tmp_path), "--git-range", "HEAD~1..HEAD",
+            "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
             "--refresh-deps", cwd=str(repo),
         )
-        state_path = tmp_path / "pipeline-state.json"
+        state_path = out / "pipeline-state.json"
         state = json.loads(state_path.read_text())
         state["dependency_refresh"] = {
             "signals": [{"manager": "npm"}],
@@ -652,12 +669,12 @@ class TestStep5Orchestration:
 
         result = run_pipeline(
             "--step", "5", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=str(repo),
+            "--output-dir", str(out), cwd=str(repo),
         )
 
         assert result.returncode == 0
         skipped = json.loads(
-            (tmp_path / "dependency-refresh-verification.json").read_text()
+            (out / "dependency-refresh-verification.json").read_text()
         )
         assert skipped == {
             "dirty_files": ["tracked.txt"],
@@ -672,12 +689,13 @@ class TestStep5Orchestration:
         self, tmp_path
     ):
         repo = self._make_repo(tmp_path)
+        out = tmp_path / "out"
         run_pipeline(
             "--step", "1", "--mode", "full",
-            "--output-dir", str(tmp_path), "--git-range", "HEAD~1..HEAD",
+            "--output-dir", str(out), "--git-range", "HEAD~1..HEAD",
             "--no-refresh-deps", cwd=str(repo),
         )
-        (tmp_path / "dependency-refresh.json").write_text(json.dumps({
+        (out / "dependency-refresh.json").write_text(json.dumps({
             "status": "completed",
             "commands": [],
             "tracked_files_dirty": False,
@@ -685,12 +703,12 @@ class TestStep5Orchestration:
 
         result = run_pipeline(
             "--step", "5", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=str(repo),
+            "--output-dir", str(out), cwd=str(repo),
         )
 
         assert result.returncode == 0
-        assert not (tmp_path / "dependency-refresh-verification.json").exists()
-        state = json.loads((tmp_path / "pipeline-state.json").read_text())
+        assert not (out / "dependency-refresh-verification.json").exists()
+        state = json.loads((out / "pipeline-state.json").read_text())
         assert "dependency_refresh_verification" not in state
 
     def test_step_5_dependency_refresh_verification_warns_before_dispatch(
@@ -796,8 +814,9 @@ class TestStep5Orchestration:
     ):
         """Step 5 keeps the deterministic plan unchanged for measurement."""
         repo = self._make_repo(tmp_path)
+        out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "full",
-                  "--output-dir", str(tmp_path), cwd=str(repo))
+                  "--output-dir", str(out), cwd=str(repo))
         ctx = {
             "git": {
                 "git_range": "HEAD~1..HEAD",
@@ -806,16 +825,16 @@ class TestStep5Orchestration:
             },
             "pr_size": {"files": 1, "lines": 10, "category": "tiny"},
         }
-        (tmp_path / "review-context.json").write_text(json.dumps(ctx))
+        (out / "review-context.json").write_text(json.dumps(ctx))
 
         result = run_pipeline(
-            "--step", "5", "--mode", "full", "--output-dir", str(tmp_path),
+            "--step", "5", "--mode", "full", "--output-dir", str(out),
             cwd=str(repo),
         )
 
         assert result.returncode == 0
-        initial_path = tmp_path / "dispatch-plan.initial.json"
-        final_path = tmp_path / "dispatch-plan.json"
+        initial_path = out / "dispatch-plan.initial.json"
+        final_path = out / "dispatch-plan.json"
         initial = json.loads(initial_path.read_text())
         final = json.loads(final_path.read_text())
         assert initial == final
@@ -851,9 +870,10 @@ class TestStep5Orchestration:
 
     def test_step_5_real_planner_projects_persisted_codex_host(self, tmp_path):
         repo = self._make_repo(tmp_path)
+        out = tmp_path / "out"
         result = run_pipeline(
             "--step", "1", "--mode", "full",
-            "--output-dir", str(tmp_path), "--host", "codex",
+            "--output-dir", str(out), "--host", "codex",
             cwd=str(repo),
         )
         assert result.returncode == 0
@@ -882,15 +902,15 @@ class TestStep5Orchestration:
                 "untrusted": [],
             },
         }
-        (tmp_path / "review-context.json").write_text(json.dumps(context))
+        (out / "review-context.json").write_text(json.dumps(context))
 
         result = run_pipeline(
             "--step", "5", "--mode", "full",
-            "--output-dir", str(tmp_path), cwd=str(repo),
+            "--output-dir", str(out), cwd=str(repo),
         )
 
         assert result.returncode == 0
-        plan = json.loads((tmp_path / "dispatch-plan.json").read_text())
+        plan = json.loads((out / "dispatch-plan.json").read_text())
         entry = next(
             agent for agent in plan["agents"]
             if agent.get("adapter") == "repo-reviewer-adapter"
@@ -990,26 +1010,6 @@ class TestStep5Orchestration:
             )
 
         assert not (tmp_path / "dispatch-plan.initial.json").exists()
-
-    def test_step_1_clears_stale_initial_dispatch_plan(self, mod, tmp_path):
-        """A prior run's planner baseline cannot leak into the next run."""
-        initial_path = tmp_path / "dispatch-plan.initial.json"
-        initial_path.write_text('{"stale": true}')
-
-        mod.clean_stale_artifacts(str(tmp_path))
-
-        assert not initial_path.exists()
-
-    def test_step_1_clears_stale_dependency_refresh_verification(
-        self, mod, tmp_path
-    ):
-        verification_path = tmp_path / "dependency-refresh-verification.json"
-        verification_path.write_text('{"report_present": true}')
-
-        mod.clean_stale_artifacts(str(tmp_path))
-
-        assert not verification_path.exists()
-
 
 class TestStep6Orchestration:
     """Step 6 main() reads dispatch-plan.json and populates dispatched_agents."""
