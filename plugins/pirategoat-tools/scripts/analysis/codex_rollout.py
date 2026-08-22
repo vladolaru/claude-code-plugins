@@ -13,8 +13,11 @@ codex_session_analyzer.py and codex_session_metrics.py build on it.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
+from typing import Iterator
 
 DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
@@ -23,6 +26,9 @@ DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 ACTIVE_WINDOW_SECONDS = 300
 
 ROOT_AGENT_PATH = "/root"
+
+DEFAULT_SINCE_DAYS = 7
+DEFAULT_LIMIT = 20
 
 
 @dataclass
@@ -91,3 +97,53 @@ def read_thread_meta(path: Path) -> ThreadMeta | None:
         path=path,
         mtime=path.stat().st_mtime if path.exists() else 0.0,
     )
+
+
+def _day_dirs(sessions_dir: Path, since_days: int, today: date) -> Iterator[Path]:
+    """Yield the YYYY/MM/DD directories inside the window that actually exist.
+
+    Walking only these keeps discovery proportional to the window rather than
+    to the ~10k rollouts a long-running install accumulates.
+    """
+    for offset in range(since_days + 1):
+        day = today - timedelta(days=offset)
+        candidate = sessions_dir / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+        if candidate.is_dir():
+            yield candidate
+
+
+def discover_threads(
+    sessions_dir: Path,
+    since_days: int = DEFAULT_SINCE_DAYS,
+    cwd: str | None = None,
+    agent: str | None = None,
+    limit: int | None = DEFAULT_LIMIT,
+    include_active: bool = False,
+    today: date | None = None,
+    now: float | None = None,
+) -> list[ThreadMeta]:
+    """Find finished threads in the window, newest first, after filtering."""
+    sessions_dir = Path(sessions_dir)
+    if not sessions_dir.is_dir():
+        return []
+
+    today = today or date.today()
+    now = now if now is not None else time.time()
+    roles = {part.strip() for part in agent.split(",")} if agent else None
+
+    found: list[ThreadMeta] = []
+    for day_dir in _day_dirs(sessions_dir, since_days, today):
+        for path in day_dir.glob("*.jsonl"):
+            if not include_active and (now - path.stat().st_mtime) < ACTIVE_WINDOW_SECONDS:
+                continue
+            meta = read_thread_meta(path)
+            if meta is None:
+                continue
+            if cwd is not None and meta.cwd != cwd:
+                continue
+            if roles is not None and meta.agent_role not in roles:
+                continue
+            found.append(meta)
+
+    found.sort(key=lambda m: m.mtime, reverse=True)
+    return found[:limit] if limit else found
