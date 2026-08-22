@@ -161,6 +161,133 @@ class TestCriticContextArg:
         assert "F1" in result.stdout or "finding IDs" in result.stdout.lower()
 
 
+class TestCriticSave:
+    """--save is the ONLY channel the decision-reviewer agent is allowed to
+    write decision-critic-* artifacts through (agents/decision-reviewer.md):
+    it validates the whole batch and records verdict + findings +
+    adjustments atomically, or writes nothing at all."""
+
+    def _run_save(self, output_dir, *extra_args):
+        cmd = [
+            sys.executable, str(SCRIPT), "--save",
+            "--output-dir", str(output_dir), *extra_args,
+        ]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+    def _write_findings(self, tmp_path, text="# Decision Critic Findings\n"):
+        path = tmp_path / "f.md"
+        path.write_text(text)
+        return path
+
+    def _write_adjustments(self, tmp_path, adjustments):
+        path = tmp_path / "a.json"
+        path.write_text(json.dumps({"schema": 1, "adjustments": adjustments}))
+        return path
+
+    def test_critic_save_writes_all_artifacts_atomically(self, tmp_path):
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+        }])
+
+        result = self._run_save(
+            tmp_path, "--verdict", "REVISE",
+            "--findings", str(findings), "--adjustments", str(adjustments),
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (tmp_path / "decision-critic-findings.md").is_file()
+        assert (tmp_path / "decision-critic-adjustments.json").is_file()
+        verdict_doc = json.loads(
+            (tmp_path / "decision-critic-verdict.json").read_text()
+        )
+        assert verdict_doc == {"verdict": "REVISE"}
+
+    def test_critic_save_rejects_bad_verdict(self, tmp_path):
+        findings = self._write_findings(tmp_path)
+
+        result = self._run_save(
+            tmp_path, "--verdict", "MAYBE", "--findings", str(findings),
+        )
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert [p.name for p in tmp_path.iterdir()] == [findings.name], (
+            "a rejected save must write nothing"
+        )
+
+    def test_critic_save_rejects_revise_without_adjustments(self, tmp_path):
+        findings = self._write_findings(tmp_path)
+
+        result = self._run_save(
+            tmp_path, "--verdict", "REVISE", "--findings", str(findings),
+        )
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert "adjustments" in result.stdout.lower()
+        assert [p.name for p in tmp_path.iterdir()] == [findings.name]
+
+    def test_critic_save_rejects_stand_with_adjustments(self, tmp_path):
+        """STAND/ESCALATE alongside a non-empty batch is the contradiction
+        the apply gate could only quarantine downstream; now rejected at
+        source."""
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+        }])
+
+        result = self._run_save(
+            tmp_path, "--verdict", "STAND",
+            "--findings", str(findings), "--adjustments", str(adjustments),
+        )
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert "contradiction" in result.stdout.lower()
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "a.json", "f.md",
+        ], "a rejected save must write nothing"
+
+    def test_critic_save_rejects_invalid_batch(self, tmp_path):
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "action": "obliterate", "id": "aaaa1111",
+            "fields": {}, "rationale": "r",
+        }])
+
+        result = self._run_save(
+            tmp_path, "--verdict", "REVISE",
+            "--findings", str(findings), "--adjustments", str(adjustments),
+        )
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert "obliterate" in result.stdout
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "a.json", "f.md",
+        ]
+
+    def test_critic_save_echo_names_what_was_recorded(self, tmp_path):
+        findings = self._write_findings(tmp_path)
+        adjustments = self._write_adjustments(tmp_path, [{
+            "adjustment_id": "adj-1",
+            "action": "promote", "id": "aaaa1111",
+            "fields": {"severity": "high"}, "rationale": "r",
+        }])
+
+        result = self._run_save(
+            tmp_path, "--verdict", "REVISE",
+            "--findings", str(findings), "--adjustments", str(adjustments),
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "REVISE" in result.stdout
+        assert "adj-1" in result.stdout
+
+
 class TestReviewSpecificLanguage:
     """Prompts should contain review-specific terms, not generic decision language."""
 

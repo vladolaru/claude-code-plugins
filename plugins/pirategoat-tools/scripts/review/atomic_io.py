@@ -35,6 +35,38 @@ import os
 import tempfile
 
 
+def _atomic_write(path, write_payload):
+    """Shared staging for both writers below: write via
+    ``write_payload(file_obj)`` to a temp file in the SAME directory as
+    ``path``, then replace ``path`` with it in one step. The crash-safety
+    contract — same-directory temp file (so ``os.replace`` stays a
+    same-filesystem rename), best-effort cleanup of the temp file on
+    failure, never touching ``path`` itself until the replace — is
+    written once here; ``atomic_write_json`` and ``atomic_write_text``
+    differ only in how they serialize ``payload`` onto the open file.
+    """
+    directory = os.path.dirname(path) or "."
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            delete=False,
+            dir=directory,
+            encoding="utf-8",
+        ) as temp_file:
+            temp_path = temp_file.name
+            write_payload(temp_file)
+            temp_file.flush()
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
 def atomic_write_json(path, payload):
     """Replace a JSON artifact in one step, or leave the old one intact.
 
@@ -60,23 +92,18 @@ def atomic_write_json(path, payload):
     disk can still lose the write; that risk existed in all five prior
     spellings and is unchanged by this consolidation.
     """
-    directory = os.path.dirname(path) or "."
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            delete=False,
-            dir=directory,
-            encoding="utf-8",
-        ) as temp_file:
-            temp_path = temp_file.name
-            json.dump(payload, temp_file, indent=2, ensure_ascii=False)
-            temp_file.flush()
-        os.replace(temp_path, path)
-        temp_path = None
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
+    _atomic_write(
+        path, lambda f: json.dump(payload, f, indent=2, ensure_ascii=False)
+    )
+
+
+def atomic_write_text(path, text):
+    """Replace a plain-text artifact in one step, or leave the old one
+    intact — the same crash-safety contract as ``atomic_write_json``
+    (same-directory temp file, then ``os.replace``), for artifacts that
+    are prose rather than JSON. The decision critic's save channel uses
+    this for ``decision-critic-findings.md``: a Markdown findings document
+    has no JSON shape to serialize, but still must never be observable
+    half-written on disk.
+    """
+    _atomic_write(path, lambda f: f.write(text))

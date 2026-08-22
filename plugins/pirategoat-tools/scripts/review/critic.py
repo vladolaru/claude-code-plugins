@@ -13,8 +13,20 @@ Grounded in:
 """
 
 import argparse
+import json
+import os
 import sys
 from typing import Optional
+
+try:
+    from . import critic_adjustments
+    from .atomic_io import atomic_write_json, atomic_write_text
+except ImportError:
+    _scripts_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _scripts_parent not in sys.path:
+        sys.path.insert(0, _scripts_parent)
+    from review import critic_adjustments
+    from review.atomic_io import atomic_write_json, atomic_write_text
 
 
 TOTAL_STEPS = 4
@@ -287,26 +299,168 @@ def format_output(step: int, total_steps: int, guidance: dict) -> str:
     return "\n".join(lines)
 
 
+def _read_required(path, problems, label):
+    """Read a required save-mode input file as text.
+
+    Records a problem (and returns None) instead of raising when the path
+    is absent, missing, or unreadable — `run_save()` collects every
+    problem before deciding whether to write anything, so a bad
+    `--findings`/`--adjustments` path is just one more REJECTED line, not
+    a crash.
+    """
+    if not path:
+        problems.append(f"--{label} is required")
+        return None
+    if not os.path.isfile(path):
+        problems.append(f"--{label} file not found: {path}")
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError as err:
+        problems.append(f"--{label} could not be read ({path}): {err}")
+        return None
+
+
+def _read_json(path, problems, label):
+    """Read a required save-mode input file as JSON.
+
+    Layered on `_read_required()`: a missing/unreadable file reports
+    through that shared check, and a present-but-unparseable file gets
+    its own problem here instead of an uncaught `JSONDecodeError`.
+    """
+    text = _read_required(path, problems, label)
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as err:
+        problems.append(f"--{label} is not valid JSON ({path}): {err}")
+        return None
+
+
+def run_save(args):
+    """Validate and atomically record one critic verdict.
+
+    The ONLY channel the decision-reviewer agent is allowed to write
+    `decision-critic-findings.md`, `decision-critic-adjustments.json`, and
+    `decision-critic-verdict.json` through (see agents/decision-reviewer.md)
+    — raw writes to the output directory are forbidden, closing the gap a
+    critic writing those files directly left open: nothing here validates
+    a hand-written artifact after the fact.
+
+    Every problem is collected before anything is decided, the same
+    all-or-nothing style `critic_adjustments.validate_adjustments()` and
+    `apply_adjustments()` use: a bad verdict, a missing findings file, an
+    invalid adjustments batch, and a REVISE/STAND contradiction are all
+    independent facts, and reporting only the first would make a caller
+    fix one problem at a time instead of seeing the whole rejection at
+    once. On ANY problem, nothing is written — this function's failure
+    mode is silence on disk, never a partial artifact set — and every
+    problem is echoed as its own ``REJECTED: <problem>`` line.
+
+    Returns the process exit code (0 on success, 1 on rejection) rather
+    than raising, so `main()` can `sys.exit()` it directly.
+    """
+    problems = []
+    verdict = (args.verdict or "").strip().upper()
+    if verdict not in CRITIC_VERDICTS:
+        problems.append(
+            f"verdict must be one of {sorted(CRITIC_VERDICTS)}, got "
+            f"{args.verdict!r}"
+        )
+    findings_text = _read_required(args.findings, problems, "findings")
+    adjustments = None
+    if args.adjustments:
+        adjustments = _read_json(args.adjustments, problems, "adjustments")
+        if adjustments is not None:
+            problems.extend(critic_adjustments.validate_adjustments(adjustments))
+    adjustments_doc = adjustments if isinstance(adjustments, dict) else {}
+    entries = adjustments_doc.get("adjustments") or []
+    if verdict == "REVISE" and not entries:
+        problems.append("REVISE requires a non-empty adjustments batch")
+    if verdict in ("STAND", "ESCALATE") and entries:
+        problems.append(
+            f"{verdict} with adjustments is a contradiction — adjustments "
+            f"are a REVISE-only channel"
+        )
+
+    if problems:
+        for p in problems:
+            print(f"REJECTED: {p}")
+        return 1
+
+    od = args.output_dir
+    atomic_write_text(
+        os.path.join(od, "decision-critic-findings.md"), findings_text
+    )
+    if adjustments is not None:
+        atomic_write_json(
+            os.path.join(od, "decision-critic-adjustments.json"), adjustments
+        )
+    atomic_write_json(
+        os.path.join(od, "decision-critic-verdict.json"), {"verdict": verdict}
+    )
+    print(f"RECORDED VERDICT: {verdict}")
+    print(
+        f"RECORDED ADJUSTMENTS: {len(entries)}"
+        + (
+            " — " + ", ".join(e.get("adjustment_id", "?") for e in entries)
+            if entries else ""
+        )
+    )
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Review Critic - Review-specific decision criticism workflow"
     )
     parser.add_argument(
+        "--save",
+        action="store_true",
+        help=(
+            "Save mode: validate and atomically record the critic's "
+            "verdict, findings, and (REVISE only) adjustments. Requires "
+            "--verdict, --findings, --output-dir, and optionally "
+            "--adjustments. Mutually exclusive with the step-guidance "
+            "mode below."
+        ),
+    )
+    parser.add_argument(
+        "--verdict",
+        type=str,
+        default=None,
+        help="Save mode: STAND | REVISE | ESCALATE",
+    )
+    parser.add_argument(
+        "--findings",
+        type=str,
+        default=None,
+        help="Save mode: path to the findings Markdown to record",
+    )
+    parser.add_argument(
+        "--adjustments",
+        type=str,
+        default=None,
+        help="Save mode: path to the adjustments JSON (REVISE only)",
+    )
+    parser.add_argument(
         "--step-number",
         type=int,
-        required=True,
+        default=None,
         help="Current step number (1-4)",
     )
     parser.add_argument(
         "--total-steps",
         type=int,
-        required=True,
+        default=None,
         help="Total steps in workflow (always 4)",
     )
     parser.add_argument(
         "--report",
         type=str,
-        required=True,
+        default=None,
         help="Path to the review report being criticized",
     )
     parser.add_argument(
@@ -324,11 +478,25 @@ def main():
     parser.add_argument(
         "--thoughts",
         type=str,
-        required=True,
+        default=None,
         help="Accumulated analysis state from previous steps",
     )
 
     args = parser.parse_args()
+
+    if args.save:
+        sys.exit(run_save(args))
+
+    if (
+        args.step_number is None
+        or args.total_steps is None
+        or args.report is None
+        or args.thoughts is None
+    ):
+        parser.error(
+            "--step-number, --total-steps, --report, and --thoughts are "
+            "required unless --save is given"
+        )
 
     # Validate total steps matches the constant
     if args.total_steps != TOTAL_STEPS:
