@@ -375,7 +375,7 @@ PLUGIN_ROOT="$SKILL_DIR/../.."
 # Analyze specific agent type across recent sessions
 python3 "$PLUGIN_ROOT/scripts/analysis/session_analyzer.py" \
     --sessions-dir ~/.claude/projects/<project-path-hash> \
-    --agent patterns-reviewer --max-sessions 20
+    --agent patterns-reviewer --limit 20
 
 # Extract metrics from a specific session
 python3 "$PLUGIN_ROOT/scripts/analysis/session_metrics.py" \

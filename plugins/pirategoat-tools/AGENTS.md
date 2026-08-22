@@ -579,7 +579,7 @@ Parses subagent JSONL logs from Claude Code sessions to extract tool call sequen
 python3 scripts/analysis/session_analyzer.py \
     --sessions-dir ~/.claude/projects/<encoded-project-path> \
     --agent patterns-reviewer \
-    --max-sessions 20
+    --limit 20
 
 # JSON output for programmatic analysis
 python3 scripts/analysis/session_analyzer.py \
@@ -590,7 +590,7 @@ python3 scripts/analysis/session_analyzer.py \
 # Analyze all agents (no --agent filter)
 python3 scripts/analysis/session_analyzer.py \
     --sessions-dir ~/.claude/projects/<encoded-project-path> \
-    --max-sessions 5
+    --limit 5
 
 # Write to file
 python3 scripts/analysis/session_analyzer.py \
