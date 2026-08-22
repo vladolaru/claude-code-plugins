@@ -122,7 +122,10 @@ def _write_rollout(sessions_dir, day: date, name: str, mtime=None, **meta_overri
     """
     day_dir = sessions_dir / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
     day_dir.mkdir(parents=True, exist_ok=True)
-    path = day_dir / f"rollout-{name}.jsonl"
+    # Real Codex embeds the thread id in the filename; lookup uses that as a
+    # fast path, so fixtures must match the shape.
+    thread_id = meta_overrides.get("id", "thread-1")
+    path = day_dir / f"rollout-2026-08-22T10-00-00-{thread_id}.jsonl"
     path.write_text(_meta_line(**meta_overrides) + "\n")
     stamp = mtime if mtime is not None else time.time() - STALE_OFFSET
     os.utime(path, (stamp, stamp))

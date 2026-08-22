@@ -209,9 +209,30 @@ PLUGIN_ROOT="$SKILL_DIR/../.."
 
 Both scripts share these flags: `--sessions-dir` (default `~/.codex/sessions`), `--cwd` (exact working-directory match), `--since` (days back, default 7), `--agent` (comma-separated `agent_role` list), `--limit` (default 20), `--format`, `--output`, and `--include-active`. `--format` values differ by script because the outputs differ: the analyzer emits `text` or `json`, the metrics script emits `markdown`, `json`, or `both`. Metric names and output shapes match the Claude Code `session_metrics.py`, so figures from both tools can be read side by side.
 
+### Digging into one specific session
+
+This is the common case, and it needs no window at all. `--thread-id` accepts the session's own id, its root thread, or **any subagent inside it**, searches the whole archive, and ignores `--since`:
+
+```bash
+python3 "$PLUGIN_ROOT/scripts/analysis/codex_session_analyzer.py" --thread-id 019f50c7-b8d8-77a0-9e3d-e3495401787a
+python3 "$PLUGIN_ROOT/scripts/analysis/codex_session_metrics.py" --thread-id 019f50c7-b8d8-77a0-9e3d-e3495401787a --format markdown
+```
+
+The report names the thread you asked for, not a different one: naming a subagent reports that subagent and prints its `session_id` so you can re-run against the whole session. Lookup is a filename glob first — the thread id is part of the rollout filename — falling back to a content scan, so it stays fast without depending on the naming convention.
+
+**Neither tool applies a window by default.** With no `--thread-id` and no `--since` both exit 2 and tell you to pick a scope. That is deliberate: a too-narrow window returns almost nothing, which is indistinguishable from having done no work, and silently guessing one would hide real sessions.
+
+**Finding the id when you don't have it:** sweep with `codex_session_metrics.py --since <days>` to list recent sessions with their thread ids, then dig with `--thread-id`.
+
+**Large sessions are capped.** The analyzer deep-scans the 20 largest subagents by default, because reading them all means reading their whole rollouts — one real session has 621 subagents totalling 11 GB, about 85 seconds of I/O for a list too long to read. Pass `--children N`, or `--children 0` for all.
+
 **`--since` selects whole sessions, not individual threads.** A session qualifies when one of its root rollouts falls in the window, and then every thread of that session is included regardless of its own date. This matters because a subagent is frequently dated days after the session that spawned it — filtering threads by their own date would return subagents without their root and cut trees in half. The guarantee that makes it safe: no subagent is ever dated earlier than its session's first root rollout (0 exceptions in 5,248 sampled subagents), so a rooted session's whole tree is already inside the window.
 
 **Threads whose session started before the window are excluded, and both CLIs say so.** Look for the `Note:` line — `637 thread(s) from 4 session(s) excluded because the session started before the window; widen --since to include them.` A thin result with that note means widen the window, not that the run had no subagents. The default is 30 days.
+
+**`total_tokens` counts billed input including re-sent context, not unique tokens.** A real subagent shows 5.1 billion tokens across 35,434 turns in one 86 MB rollout — each turn re-sends roughly 178k of context, 98% of it cache reads. The figure is correct, not a runaway; read it alongside `cached_pct` before drawing any cost conclusion.
+
+**`agent_role` is absent on more than half of real subagents** — `agent_role: null` in the spawn block, 2,812 of 5,326 sampled. Those are reported as `unknown`. Do not default them to `root`: that claims a subagent IS the session root and corrupts both role filtering and the by-role rollup.
 
 **Resuming a session does not start a new one.** A resume writes an additional root rollout that keeps the original `session_id` but takes a fresh thread id, so one session commonly has many — 4,920 root rollouts across 631 sessions on a real machine. The tools represent a session once, by its original root (the rollout whose thread id equals the session id), and list the rest as resumes. **Resume tokens are never summed into the session total**: a resume replays the prior context, so its token count is largely re-sent rather than new work. One real session showed six resumes carrying 10-21M tokens each while executing zero commands, against the original's 104M tokens and 1,157 commands.
 

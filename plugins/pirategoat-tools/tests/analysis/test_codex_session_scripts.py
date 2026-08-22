@@ -79,10 +79,10 @@ def sessions_dir(tmp_path):
     day_dir = tmp_path / "2026" / "08" / "22"
     day_dir.mkdir(parents=True)
 
-    root = day_dir / "rollout-root.jsonl"
+    root = day_dir / "rollout-2026-08-22T10-00-00-root-thread.jsonl"
     root.write_text("\n".join([_meta("root-thread"), _command(), _tokens(100)]) + "\n")
 
-    child = day_dir / "rollout-child.jsonl"
+    child = day_dir / "rollout-2026-08-22T10-00-01-child-thread.jsonl"
     child.write_text(
         "\n".join(
             [
@@ -150,7 +150,7 @@ def test_analyzer_selects_an_explicit_thread_id(sessions_dir):
 def test_analyzer_prefers_a_root_over_a_newer_subagent(sessions_dir):
     """Defaulting to the newest thread outright can land on a leaf, which has no tree."""
     day_dir = sessions_dir / "2026" / "08" / "22"
-    newer_child = day_dir / "rollout-newer-child.jsonl"
+    newer_child = day_dir / "rollout-2026-08-22T10-00-02-newer-child.jsonl"
     newer_child.write_text(
         "\n".join([_meta("newer-child", agent_path="/root/reviewer_2", role="explorer"), _tokens(10)]) + "\n"
     )
@@ -301,7 +301,7 @@ def test_analyzer_text_truncates_long_command_lines(sessions_dir):
     """
     day_dir = sessions_dir / "2026" / "08" / "22"
     script = "set -eu\n" + "\n".join(f"echo line-{i}" for i in range(200))
-    noisy = day_dir / "rollout-noisy.jsonl"
+    noisy = day_dir / "rollout-2026-08-22T10-00-03-noisy-thread.jsonl"
     noisy.write_text(
         "\n".join(
             [
@@ -330,7 +330,7 @@ def test_analyzer_json_keeps_the_full_command(sessions_dir):
     """Truncation is a text-rendering concern; JSON stays full fidelity."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     script = "set -eu\n" + "\n".join(f"echo line-{i}" for i in range(200))
-    noisy = day_dir / "rollout-noisy2.jsonl"
+    noisy = day_dir / "rollout-2026-08-22T10-00-04-noisy2.jsonl"
     noisy.write_text(
         "\n".join([_meta("noisy2"), _command(exit_code=1, command=["/bin/zsh", "-lc", script])]) + "\n"
     )
@@ -386,7 +386,7 @@ def test_analyzer_presents_a_resumed_session_as_one_session(sessions_dir):
     day_dir = sessions_dir / "2026" / "08" / "22"
     base = time.time() - STALE_OFFSET - 500
     for name, tid, offset in [("orig", "sess-x", 0), ("res1", "rx1", 100), ("res2", "rx2", 200)]:
-        path = day_dir / f"rollout-{name}.jsonl"
+        path = day_dir / f"rollout-2026-08-22T10-00-1{offset//100}-{tid}.jsonl"
         path.write_text("\n".join([_root_meta(tid, "sess-x"), _command(), _tokens(50)]) + "\n")
         os.utime(path, (base + offset, base + offset))
 
@@ -405,10 +405,10 @@ def test_analyzer_does_not_sum_resume_tokens_into_the_session(sessions_dir):
     """A resume replays prior context, so its tokens are re-sent, not new work."""
     day_dir = sessions_dir / "2026" / "08" / "22"
     base = time.time() - STALE_OFFSET - 500
-    orig = day_dir / "rollout-o.jsonl"
+    orig = day_dir / "rollout-2026-08-22T10-00-08-sess-y.jsonl"
     orig.write_text("\n".join([_root_meta("sess-y", "sess-y"), _tokens(100)]) + "\n")
     os.utime(orig, (base, base))
-    res = day_dir / "rollout-r.jsonl"
+    res = day_dir / "rollout-2026-08-22T10-00-09-ry1.jsonl"
     res.write_text("\n".join([_root_meta("ry1", "sess-y"), _tokens(9000)]) + "\n")
     os.utime(res, (base + 100, base + 100))
 
@@ -424,7 +424,7 @@ def test_analyzer_does_not_sum_resume_tokens_into_the_session(sessions_dir):
 def test_analyzer_explains_why_threads_were_excluded(sessions_dir):
     """Silently analyzing nothing is confusing; say what was skipped."""
     day_dir = sessions_dir / "2026" / "08" / "22"
-    stray = day_dir / "rollout-stray.jsonl"
+    stray = day_dir / "rollout-2026-08-22T10-00-05-stray.jsonl"
     stray.write_text("\n".join([_stray_meta("stray", "other-session"), _tokens(5)]) + "\n")
     stale = time.time() - STALE_OFFSET
     os.utime(stray, (stale, stale))
@@ -439,7 +439,7 @@ def test_analyzer_explains_why_threads_were_excluded(sessions_dir):
 
 def test_metrics_reports_skip_notes(sessions_dir):
     day_dir = sessions_dir / "2026" / "08" / "22"
-    stray = day_dir / "rollout-stray2.jsonl"
+    stray = day_dir / "rollout-2026-08-22T10-00-06-stray2.jsonl"
     stray.write_text("\n".join([_stray_meta("stray2", "other-session-2"), _tokens(5)]) + "\n")
     stale = time.time() - STALE_OFFSET
     os.utime(stray, (stale, stale))
@@ -455,7 +455,7 @@ def test_analyzer_caps_the_failed_command_list(sessions_dir):
     day_dir = sessions_dir / "2026" / "08" / "22"
     lines = [_meta("many-failures")]
     lines += [_command(exit_code=1, command=f"cmd-{i}") for i in range(25)]
-    path = day_dir / "rollout-many.jsonl"
+    path = day_dir / "rollout-2026-08-22T10-00-07-many-failures.jsonl"
     path.write_text("\n".join(lines) + "\n")
     stale = time.time() - STALE_OFFSET
     os.utime(path, (stale, stale))
@@ -467,3 +467,75 @@ def test_analyzer_caps_the_failed_command_list(sessions_dir):
     assert "… and 15 more" in result.stdout
     shown = [ln for ln in result.stdout.splitlines() if ln.strip().startswith("exit 1:")]
     assert len(shown) == 10
+
+
+def test_thread_id_ignores_the_window_entirely(sessions_dir):
+    """Naming a session says which one you want; a date filter can only hide it.
+
+    Digging into a specific session is the skill's primary use, and the session
+    is often older than any window you would pick for a recent-work sweep.
+    """
+    result = _run(
+        ANALYZER, "--sessions-dir", str(sessions_dir),
+        "--thread-id", "root-thread", "--since", "1", "--format", "json",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--since is ignored" in result.stderr
+    assert json.loads(result.stdout)["thread"]["thread_id"] == "root-thread"
+
+
+def test_naming_a_subagent_reports_that_subagent_and_names_its_session(sessions_dir):
+    """Asking for a thread and getting a different one would be surprising."""
+    result = _run(
+        ANALYZER, "--sessions-dir", str(sessions_dir),
+        "--thread-id", "child-thread", "--format", "json",
+    )
+    data = json.loads(result.stdout)
+
+    assert data["thread"]["thread_id"] == "child-thread"
+    assert data["session_id"] == "sess-1"
+
+
+def test_scope_must_be_explicit(sessions_dir):
+    """A silently applied window looks exactly like having done no work."""
+    result = _run(ANALYZER, "--sessions-dir", str(sessions_dir))
+
+    assert result.returncode == 2
+    assert "specify a scope" in result.stderr
+
+    metrics = _run(METRICS, "--sessions-dir", str(sessions_dir))
+    assert metrics.returncode == 2
+    assert "specify a scope" in metrics.stderr
+
+
+def test_metrics_reports_a_single_session_by_id(sessions_dir):
+    result = _run(
+        METRICS, "--sessions-dir", str(sessions_dir),
+        "--thread-id", "root-thread", "--format", "json",
+    )
+    data = json.loads(result.stdout)
+
+    assert sorted(r["thread_id"] for r in data["threads"]) == ["child-thread", "root-thread"]
+
+
+def test_analyzer_caps_subagents_scanned(sessions_dir):
+    """A real session has 621 subagents totalling 11 GB — 85s to scan them all."""
+    day_dir = sessions_dir / "2026" / "08" / "22"
+    stale = time.time() - STALE_OFFSET
+    for i in range(5):
+        tid = f"kid-{i}"
+        path = day_dir / f"rollout-2026-08-22T10-01-0{i}-{tid}.jsonl"
+        path.write_text(
+            "\n".join([_meta(tid, agent_path=f"/root/w{i}", role="worker"), _tokens(10)]) + "\n"
+        )
+        os.utime(path, (stale, stale))
+
+    data = json.loads(
+        _run(ANALYZER, "--sessions-dir", str(sessions_dir), "--thread-id", "root-thread",
+             "--children", "2", "--format", "json").stdout
+    )
+
+    assert data["children_total"] == 6
+    assert len(data["children"]) == 2
+    assert data["children_omitted"] == 4

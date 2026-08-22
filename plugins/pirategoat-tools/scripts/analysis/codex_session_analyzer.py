@@ -74,6 +74,7 @@ def _failed_commands(scan) -> list[dict]:
 
 COMMAND_PREVIEW_CHARS = 120
 MAX_FAILURES_SHOWN = 10
+DEFAULT_CHILDREN_SHOWN = 20
 
 
 def _command_preview(command) -> str:
@@ -95,7 +96,11 @@ def _render_text(report: dict) -> str:
     lines = []
     thread = report["thread"]
     lines.append(f"Session {report['session_id']}")
-    lines.append(f"  main thread: {thread['thread_id']}  [{thread['agent_role']}]")
+    if thread["agent_path"] == "/root":
+        lines.append(f"  main thread: {thread['thread_id']}  [{thread['agent_role']}]")
+    else:
+        lines.append(f"  subagent:    {thread['thread_id']}  [{thread['agent_role']}]  {thread['agent_path']}")
+        lines.append(f"  (analyze the whole session with --thread-id {report['session_id']})")
     lines.append(f"  cwd:       {thread['cwd']}")
     lines.append(f"  model:     {thread['model'] or 'unknown'}")
     lines.append(f"  duration:  {thread['duration_seconds']}s")
@@ -112,6 +117,16 @@ def _render_text(report: dict) -> str:
         remaining = len(report["failures"]) - len(shown)
         if remaining:
             lines.append(f"    … and {remaining} more (use --format json for all of them)")
+
+    if report["children_omitted"]:
+        lines.append("")
+        lines.append(
+            f"  subagents: {report['children_total']} "
+            f"(showing the {len(report['children'])} largest; --children 0 for all)"
+        )
+    elif report["children"]:
+        lines.append("")
+        lines.append(f"  subagents: {report['children_total']}")
 
     for child in report["children"]:
         lines.append("")
@@ -148,13 +163,19 @@ def main() -> None:
         default=str(codex_rollout.DEFAULT_SESSIONS_DIR),
         help="Codex sessions root (default: ~/.codex/sessions)",
     )
-    parser.add_argument("--thread-id", default=None, help="Analyze this thread instead of the newest match")
+    parser.add_argument(
+        "--thread-id",
+        default=None,
+        help="Analyze the session containing this thread id (the session's own id, "
+        "its root, or any subagent). Searches the whole archive; --since does not apply.",
+    )
     parser.add_argument("--cwd", default=None, help="Only threads whose working directory matches exactly")
     parser.add_argument(
         "--since",
         type=int,
-        default=codex_rollout.DEFAULT_SINCE_DAYS,
-        help=f"Days back to scan (default: {codex_rollout.DEFAULT_SINCE_DAYS})",
+        default=None,
+        help="Days back to scan. Required unless --thread-id is given, and never "
+        "applied by default: a too-narrow window looks exactly like having done no work.",
     )
     parser.add_argument("--agent", default=None, help="Comma-separated agent roles to include")
     parser.add_argument(
@@ -164,6 +185,13 @@ def main() -> None:
         help=f"Maximum threads to consider (default: {codex_rollout.DEFAULT_LIMIT})",
     )
     parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format (default: text)")
+    parser.add_argument(
+        "--children",
+        type=int,
+        default=DEFAULT_CHILDREN_SHOWN,
+        help=f"How many subagents to scan and report, largest first "
+        f"(default: {DEFAULT_CHILDREN_SHOWN}; 0 means all, which can be slow on big sessions)",
+    )
     parser.add_argument("--output", default=None, help="Write output to a file instead of stdout")
     parser.add_argument(
         "--include-active",
@@ -178,43 +206,78 @@ def main() -> None:
         print(f"Error: sessions directory not found: {sessions_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # The tree needs every thread in the window, not just the filtered ones,
-    # so children are still reachable when --agent narrows the selection.
     stats = codex_rollout.DiscoveryStats()
-    everything = codex_rollout.discover_threads(
-        sessions_dir,
-        since_days=args.since,
-        limit=None,
-        include_active=args.include_active,
-        stats=stats,
-    )
-    candidates = codex_rollout.discover_threads(
-        sessions_dir,
-        since_days=args.since,
-        cwd=args.cwd,
-        agent=args.agent,
-        limit=args.limit,
-        include_active=args.include_active,
-    )
+
+    if args.thread_id:
+        # Naming a thread already says which session you want, so no window is
+        # applied: bounding the answer by a date could only hide part of it.
+        # The id may be the session's own, its root, or any subagent within it.
+        if args.since is not None:
+            print(
+                f"Note: --since is ignored when --thread-id names a session.",
+                file=sys.stderr,
+            )
+        everything = codex_rollout.discover_session(
+            sessions_dir,
+            args.thread_id,
+            include_active=args.include_active,
+            stats=stats,
+        )
+        if not everything:
+            print(
+                f"Error: no session found containing thread {args.thread_id}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        candidates = everything
+    else:
+        if args.since is None:
+            print(
+                "Error: specify a scope — either --thread-id <id> to analyze one "
+                "session, or --since <days> to search recent sessions.\n"
+                "A window is never applied silently, because a too-narrow one "
+                "looks identical to having done no work.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        # The tree needs every thread in the window, not just the filtered ones,
+        # so children stay reachable when --agent narrows the selection.
+        everything = codex_rollout.discover_threads(
+            sessions_dir,
+            since_days=args.since,
+            limit=None,
+            include_active=args.include_active,
+            stats=stats,
+        )
+        candidates = codex_rollout.discover_threads(
+            sessions_dir,
+            since_days=args.since,
+            cwd=args.cwd,
+            agent=args.agent,
+            limit=args.limit,
+            include_active=args.include_active,
+        )
 
     tree = codex_rollout.build_tree(everything)
     tree_roots = tree.roots
 
     if args.thread_id:
+        # Report the thread that was named, not its session root: asking for a
+        # specific thread and getting a different one is surprising. The whole
+        # session is still loaded, so naming the session id or its root yields
+        # the full tree, and the report always carries session_id so a caller
+        # holding only a subagent id can pivot to the session.
         selected = next((m for m in everything if m.thread_id == args.thread_id), None)
     else:
-        # Prefer the newest root. Picking the newest thread outright often lands
-        # on a subagent, and a leaf has no tree to show. When a filter such as
-        # --agent excludes every root, fall back to the newest match.
-        # Rank sessions by their most recent activity, not by when their root
-        # rollout was written. A root is written at session start, so ordering
-        # by it picks a session opened moments ago over one still running with
-        # hundreds of subagents — which is the opposite of "what was I doing".
+        # Rank sessions by most recent activity, not by when the root rollout
+        # was written. A root is written at session start, so ordering by it
+        # picks a session opened moments ago over one still running with
+        # hundreds of subagents.
         last_activity: dict[str, float] = {}
         for meta in everything:
-            previous = last_activity.get(meta.session_id, 0.0)
-            last_activity[meta.session_id] = max(previous, meta.mtime)
-
+            last_activity[meta.session_id] = max(
+                last_activity.get(meta.session_id, 0.0), meta.mtime
+            )
         session_roots = {m.thread_id for m in tree_roots}
         roots = [m for m in candidates if m.thread_id in session_roots]
         roots.sort(key=lambda m: last_activity.get(m.session_id, m.mtime), reverse=True)
@@ -226,9 +289,18 @@ def main() -> None:
 
     root_scan = codex_rollout.scan_thread(selected.path, keep_items=True)
 
-    children = []
-    for child in tree.children_of(selected):
-        children.append(_thread_report(child, codex_rollout.scan_thread(child.path)))
+    # Reporting a child means reading its whole rollout. One real session has
+    # 621 subagents totalling 11 GB, which is 85 seconds of I/O for a list too
+    # long to read anyway — so deep-scan the largest few and count the rest.
+    # Size is the best cheap proxy for "this subagent did substantial work".
+    all_children = sorted(
+        tree.children_of(selected), key=lambda m: m.path.stat().st_size, reverse=True
+    )
+    shown = all_children if args.children == 0 else all_children[: args.children]
+    children = [
+        _thread_report(child, codex_rollout.scan_thread(child.path)) for child in shown
+    ]
+    children_omitted = len(all_children) - len(shown)
 
     # Resumes are reported, never folded into the session's totals: a resume
     # replays prior context, so its tokens are largely re-sent rather than new.
@@ -241,6 +313,8 @@ def main() -> None:
         "session_id": selected.session_id,
         "thread": _thread_report(selected, root_scan),
         "children": children,
+        "children_total": len(all_children),
+        "children_omitted": children_omitted,
         "resumes": resumes,
         "failures": _failed_commands(root_scan),
         "notes": stats.notes(),

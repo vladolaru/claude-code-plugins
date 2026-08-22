@@ -136,12 +136,19 @@ def main() -> None:
         default=str(codex_rollout.DEFAULT_SESSIONS_DIR),
         help="Codex sessions root (default: ~/.codex/sessions)",
     )
+    parser.add_argument(
+        "--thread-id",
+        default=None,
+        help="Report the session containing this thread id (session, root, or subagent). "
+        "Searches the whole archive: --since, --cwd, and --agent do not apply.",
+    )
     parser.add_argument("--cwd", default=None, help="Only threads whose working directory matches exactly")
     parser.add_argument(
         "--since",
         type=int,
-        default=codex_rollout.DEFAULT_SINCE_DAYS,
-        help=f"Days back to scan (default: {codex_rollout.DEFAULT_SINCE_DAYS})",
+        default=None,
+        help="Days back to scan. Required unless --thread-id is given, and never "
+        "applied by default: a too-narrow window looks exactly like having done no work.",
     )
     parser.add_argument("--agent", default=None, help="Comma-separated agent roles to include")
     parser.add_argument(
@@ -168,15 +175,43 @@ def main() -> None:
         sys.exit(1)
 
     stats = codex_rollout.DiscoveryStats()
-    metas = codex_rollout.discover_threads(
-        sessions_dir,
-        since_days=args.since,
-        cwd=args.cwd,
-        agent=args.agent,
-        limit=args.limit,
-        include_active=args.include_active,
-        stats=stats,
-    )
+    if args.thread_id:
+        # A named thread identifies a session outright, so no window applies.
+        if args.since is not None:
+            print("Note: --since is ignored when --thread-id names a session.", file=sys.stderr)
+        metas = codex_rollout.discover_session(
+            sessions_dir,
+            args.thread_id,
+            include_active=args.include_active,
+            stats=stats,
+        )
+        if not metas:
+            print(
+                f"Error: no session found containing thread {args.thread_id}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if args.limit is not None:
+            metas = metas[: args.limit]
+    else:
+        if args.since is None:
+            print(
+                "Error: specify a scope — either --thread-id <id> to report one "
+                "session, or --since <days> to search recent sessions.\n"
+                "A window is never applied silently, because a too-narrow one "
+                "looks identical to having done no work.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        metas = codex_rollout.discover_threads(
+            sessions_dir,
+            since_days=args.since,
+            cwd=args.cwd,
+            agent=args.agent,
+            limit=args.limit,
+            include_active=args.include_active,
+            stats=stats,
+        )
 
     rows = [_row(meta, codex_rollout.scan_thread(meta.path)) for meta in metas]
     by_role = _roll_up(rows)

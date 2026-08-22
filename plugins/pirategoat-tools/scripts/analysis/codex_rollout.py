@@ -27,6 +27,7 @@ DEFAULT_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 ACTIVE_WINDOW_SECONDS = 300
 
 ROOT_AGENT_PATH = "/root"
+UNKNOWN_AGENT_ROLE = "unknown"
 
 DEFAULT_SINCE_DAYS = 30
 DEFAULT_LIMIT = 20
@@ -93,6 +94,14 @@ def read_thread_meta(path: Path) -> ThreadMeta | None:
         return None
 
     spawn = _thread_spawn(payload)
+    agent_path = spawn.get("agent_path") or ROOT_AGENT_PATH
+    # A spawn block frequently carries agent_role: null — 2812 of 5326 sampled
+    # subagents. Defaulting those to "root" would claim they ARE the session
+    # root, which corrupts role filtering and the by-role rollup, so only a
+    # thread that really sits at /root gets that label.
+    agent_role = spawn.get("agent_role") or (
+        "root" if agent_path == ROOT_AGENT_PATH else UNKNOWN_AGENT_ROLE
+    )
 
     return ThreadMeta(
         thread_id=payload.get("id") or "",
@@ -105,8 +114,8 @@ def read_thread_meta(path: Path) -> ThreadMeta | None:
         spawn_parent_thread_id=spawn.get("parent_thread_id"),
         resumed_from_thread_id=payload.get("parent_thread_id"),
         cwd=payload.get("cwd") or "",
-        agent_role=spawn.get("agent_role") or "root",
-        agent_path=spawn.get("agent_path") or ROOT_AGENT_PATH,
+        agent_role=agent_role,
+        agent_path=agent_path,
         depth=spawn.get("depth") or 0,
         cli_version=payload.get("cli_version") or "",
         path=path,
@@ -465,3 +474,82 @@ def build_tree(metas: list[ThreadMeta]) -> ThreadTree:
         children_by_parent=children_by_parent,
         resumes_by_session=resumes_by_session,
     )
+
+def find_thread(sessions_dir: Path, thread_id: str) -> ThreadMeta | None:
+    """Locate one thread anywhere in the archive by id, ignoring any date window.
+
+    The thread id is part of the rollout filename, so this is a filesystem glob
+    rather than a scan of file contents — a targeted lookup costs no more than
+    listing directories, however far back the session is.
+    """
+    sessions_dir = Path(sessions_dir)
+    if not sessions_dir.is_dir():
+        return None
+    for path in sorted(sessions_dir.glob(f"*/*/*/rollout-*{thread_id}*.jsonl")):
+        meta = read_thread_meta(path)
+        if meta is not None and meta.thread_id == thread_id:
+            return meta
+
+    # The filename convention is a fast path, not a contract. Fall back to
+    # reading line 1 of every rollout so a naming change upstream degrades
+    # performance rather than breaking lookup outright.
+    for path in sorted(sessions_dir.glob("*/*/*/*.jsonl")):
+        meta = read_thread_meta(path)
+        if meta is not None and meta.thread_id == thread_id:
+            return meta
+    return None
+
+
+def discover_session(
+    sessions_dir: Path,
+    thread_id: str,
+    include_active: bool = False,
+    now: float | None = None,
+    stats: DiscoveryStats | None = None,
+) -> list[ThreadMeta]:
+    """Every thread of the session containing `thread_id`, newest first.
+
+    No date window applies. Naming a thread already says which session you
+    want, so bounding the answer by a window could only hide part of it. The
+    id may be the session's own id, its root thread, or any subagent within it.
+
+    Scanning is bounded by the session's own lifetime: the original root shares
+    the session id and so is findable by the same glob, and no subagent is ever
+    dated earlier than it, so only the days from the root onward are read.
+    """
+    sessions_dir = Path(sessions_dir)
+    target = find_thread(sessions_dir, thread_id)
+    if target is None:
+        return []
+
+    session_id = target.session_id
+    origin = find_thread(sessions_dir, session_id) or target
+    now = now if now is not None else time.time()
+    stats = stats if stats is not None else DiscoveryStats()
+
+    # Day directories are named by date, so a lexical compare orders them.
+    first_day = "/".join(origin.path.parts[-4:-1])
+
+    found: list[ThreadMeta] = []
+    for day_dir in sorted(sessions_dir.glob("*/*/*")):
+        if "/".join(day_dir.parts[-3:]) < first_day:
+            continue
+        for path in day_dir.glob("*.jsonl"):
+            stats.scanned += 1
+            meta = read_thread_meta(path)
+            if meta is None:
+                stats.skipped_unreadable += 1
+                continue
+            if meta.session_id != session_id:
+                continue
+            meta.is_active = (now - meta.mtime) < ACTIVE_WINDOW_SECONDS
+            if meta.is_active and not include_active:
+                if meta.agent_path == ROOT_AGENT_PATH:
+                    stats.active_roots_included += 1
+                else:
+                    stats.skipped_active += 1
+                    continue
+            found.append(meta)
+
+    found.sort(key=lambda m: m.mtime, reverse=True)
+    return found
