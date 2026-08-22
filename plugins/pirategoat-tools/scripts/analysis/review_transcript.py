@@ -74,6 +74,16 @@ _BOOTSTRAP_BUILDER_ENV_REQUIRED = frozenset({
 # drop them from the cohort, it lies about them.
 _BOOTSTRAP_BUILDER_ENV_OPTIONAL = frozenset({
     "PIRATEGOAT_PLUGIN_VERSION",
+    # HISTORICAL-ENVELOPE ALLOWANCE ONLY — not live. 1.114.0 briefly carried
+    # the call-budget target on this envelope; a later fix moved the budget
+    # to the deferred-files sidecar and the live envelope never emits this
+    # name again (pinned by test_envelope_never_carries_a_budget_assignment
+    # in test_bootstrap_integration.py). It stays in this recognition set
+    # so run12's own recorded transcripts — which DO carry it — are not
+    # misread as no-save on re-analysis: historical transcripts are
+    # immutable, and a reader that stops recognizing them lies about them,
+    # exactly like the PLUGIN_VERSION case above.
+    "PIRATEGOAT_REVIEW_BUDGET",
 })
 _BOOTSTRAP_BUILDER_ENV = frozenset(
     _BOOTSTRAP_BUILDER_ENV_REQUIRED | _BOOTSTRAP_BUILDER_ENV_OPTIONAL

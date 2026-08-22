@@ -1105,6 +1105,20 @@ class TestAnalyzeSubagent:
         assert is_bootstrap_builder_heredoc(
             stable + "PIRATEGOAT_PLUGIN_VERSION= python3 <<PY\npass\nPY"
         )
+        # HISTORICAL-ENVELOPE ALLOWANCE ONLY — not live. 1.114.0 briefly
+        # carried the call-budget target on this envelope before a later fix
+        # moved it to the deferred-files sidecar (the live envelope never
+        # emits this name again — see
+        # test_envelope_never_carries_a_budget_assignment in
+        # test_bootstrap_integration.py). run12's own recorded transcripts DO
+        # carry it, and historical transcripts are immutable: a reader that
+        # stops recognizing them lies about them, exactly like the
+        # PLUGIN_VERSION case above.
+        assert is_bootstrap_builder_heredoc(
+            stable
+            + "PIRATEGOAT_PLUGIN_VERSION=1.114.0 PIRATEGOAT_REVIEW_BUDGET=80 "
+            "python3 <<PY\npass\nPY"
+        )
 
     @pytest.mark.parametrize(
         "review_budget",
