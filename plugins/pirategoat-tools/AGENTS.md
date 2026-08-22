@@ -614,6 +614,49 @@ python3 scripts/analysis/session_analyzer.py \
 
 General-purpose tool for extracting operational metrics (runtime, model, cache tokens, verdict) from session transcripts. Documented in-file.
 
+#### `scripts/analysis/codex_rollout.py`
+
+Shared primitives for reading Codex CLI rollout files: thread metadata parsing, date-windowed discovery, single-pass thread scan, and tree building. The only module that knows the Codex rollout schema — both Codex CLIs build on it.
+
+Deliberately separate from the Claude Code readers. Consistent with the 2026-08-03 JSONL reader census: the contracts differ (different schema, different discovery model), and the genuinely shared surface is small.
+
+Run `pytest plugins/pirategoat-tools/tests/analysis/test_codex_rollout.py -v` after changing this module.
+
+#### `scripts/analysis/codex_session_analyzer.py`
+
+Traces one Codex thread tree in depth — per-thread model, duration, tokens, commands with exit codes, and file changes.
+
+**Usage:**
+
+```bash
+# Newest thread tree for one project
+python3 scripts/analysis/codex_session_analyzer.py --cwd /path/to/project
+
+# A specific thread as JSON
+python3 scripts/analysis/codex_session_analyzer.py --thread-id <thread-id> --format json
+```
+
+#### `scripts/analysis/codex_session_metrics.py`
+
+One row per Codex thread plus a roll-up by agent role. Metric names match `session_metrics.py` so Codex and Claude Code figures can share a table.
+
+**Usage:**
+
+```bash
+python3 scripts/analysis/codex_session_metrics.py --agent code-reviewer --since 30 --format markdown
+```
+
+Run `pytest plugins/pirategoat-tools/tests/analysis/test_codex_session_scripts.py -v` after changing these scripts.
+
+#### Codex Session Data Locations
+
+```text
+~/.codex/sessions/YYYY/MM/DD/
+└── rollout-{ISO-timestamp}-{thread-id}.jsonl   # one thread per file
+```
+
+There is no per-project partitioning — `cwd` is a field on line 1 — and subagents are sibling rollouts linked by `agent_path`, not files in a subdirectory. Only finished sessions are analyzed; a live rollout grows while being read.
+
 #### Session Data Locations
 
 Claude Code stores session transcripts at:

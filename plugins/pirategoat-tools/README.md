@@ -144,7 +144,7 @@ Lifecycle `agents.incomplete` is a sorted multiset: an agent name repeats once f
 
 There are no human overrides in this flow. Deterministic planning runs first; the main orchestrator may then add or skip agents and supplies the adjustment reasons. Dispatch aggregates retain `adjustment_rate` as the share of changed agents across the full compared-agent union, including unchanged skips, and expose `planner_removal_rate` separately as removed agents divided by planner-dispatched candidates in comparable runs. When two valid plans contain different agent identity sets, adjustment comparison is unavailable, but sorted identity-to-status projections let ingestion rederive and validate each plan's dispatch count before those partial totals enter a cohort. Malformed, contradictory, or out-of-mode projections fail closed for the dispatch family without exposing plan prose. Wall durations above one year are treated as implausible missing data before cohort statistics are calculated.
 
-`scripts/analysis/session_metrics.py` remains the lower-level, general-purpose transcript metrics tool for ad hoc agent-performance and triage investigations. See each script's `--help` for all options.
+`scripts/analysis/session_metrics.py` remains the lower-level, general-purpose transcript metrics tool for ad hoc agent-performance and triage investigations. See each script's `--help` for all options. `scripts/analysis/codex_session_analyzer.py` and `scripts/analysis/codex_session_metrics.py` are the Codex CLI equivalents, covering `~/.codex/sessions` rollouts. See the `analyzing-codex-sessions` skill for the format reference.
 
 ## Installation
 
