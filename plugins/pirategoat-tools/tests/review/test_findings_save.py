@@ -191,7 +191,10 @@ class TestFindingsSave:
 
     @pytest.mark.parametrize(
         "missing_field",
-        ["severity", "title", "file", "description", "recommendation", "id"],
+        [
+            "severity", "title", "file", "description", "recommendation",
+            "id", "category", "confidence",
+        ],
     )
     def test_rejects_issue_missing_required_field(self, tmp_path, missing_field):
         doc = _valid_findings()
@@ -235,6 +238,63 @@ class TestFindingsSave:
 
         assert result.returncode != 0
         assert "REJECTED" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    def test_rejects_clearances_not_a_list(self, tmp_path):
+        """A truthy non-list `clearances` (e.g. an integer) must be
+        rejected here — not merely tolerated by `_echo()` after the
+        ledger is already written. `findings.get("clearances") or []`
+        only normalizes FALSY values; a truthy non-list would otherwise
+        reach `len()`/iteration in `_echo()` post-write."""
+        doc = _valid_findings(clearances=12)
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert "clearances" in result.stdout.lower()
+        assert not (tmp_path / "review-findings.json").exists()
+
+    def test_rejects_clearance_entry_not_an_object(self, tmp_path):
+        doc = _valid_findings(clearances=["not an object"])
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    @pytest.mark.parametrize(
+        "bad_clearance",
+        [
+            {"method": "grep"},  # missing claim
+            {"claim": "no callers"},  # missing method
+            {"claim": "", "method": "grep"},  # blank claim
+            {"claim": "no callers", "method": ""},  # blank method
+            {"claim": "no callers", "method": "grep", "evidence": 5},  # bad evidence type
+        ],
+    )
+    def test_rejects_clearance_wrong_shape(self, tmp_path, bad_clearance):
+        doc = _valid_findings(clearances=[bad_clearance])
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert not (tmp_path / "review-findings.json").exists()
+
+    def test_rejects_narrative_summary_wrong_type(self, tmp_path):
+        doc = _valid_findings(narrative_summary=["not", "a", "string"])
+        findings = self._write_findings(tmp_path, doc)
+
+        result = self._run_save(tmp_path, findings)
+
+        assert result.returncode != 0
+        assert "REJECTED" in result.stdout
+        assert "narrative_summary" in result.stdout.lower()
         assert not (tmp_path / "review-findings.json").exists()
 
     def test_rejects_missing_findings_file(self, tmp_path):

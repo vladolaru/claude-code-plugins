@@ -149,6 +149,50 @@ def validate_findings(payload):
                 f"(allowed: {', '.join(critic_adjustments.VALID_SEVERITIES)})"
             )
 
+    # 'clearances' is null or a list of {claim, method, evidence} dicts —
+    # the exact shape ReviewOutputBuilder.add_clearance() produces (both
+    # claim and method are enforced non-empty strings there; evidence is
+    # a stripped string or None). Validating this here is what keeps
+    # _echo() safe to call unconditionally after a successful write: an
+    # unvalidated non-list (or malformed entry) would len()/iterate and
+    # crash AFTER write_findings() already committed the ledger — exactly
+    # the failure mode this whole module exists to prevent.
+    clearances = payload.get("clearances")
+    if clearances is not None:
+        if not isinstance(clearances, list):
+            problems.append("'clearances' must be null or a list")
+        else:
+            for idx, clearance in enumerate(clearances):
+                label = f"clearances[{idx}]"
+                if not isinstance(clearance, dict):
+                    problems.append(f"{label} must be an object")
+                    continue
+                claim = clearance.get("claim")
+                if not isinstance(claim, str) or not claim.strip():
+                    problems.append(
+                        f"{label}: 'claim' must be a non-empty string"
+                    )
+                method = clearance.get("method")
+                if not isinstance(method, str) or not method.strip():
+                    problems.append(
+                        f"{label}: 'method' must be a non-empty string"
+                    )
+                evidence = clearance.get("evidence")
+                if evidence is not None and not isinstance(evidence, str):
+                    problems.append(
+                        f"{label}: 'evidence' must be a string or null"
+                    )
+
+    # 'narrative_summary' is null or a string (set_narrative_summary()
+    # coerces to exactly one of those). Not a crash risk for _echo() —
+    # its isinstance(narrative, str) check already tolerates any other
+    # type by reading as "absent" — but validated anyway for the same
+    # reason every other field here is: a shape the producer never
+    # writes is a malformed ledger, not a value to silently reinterpret.
+    narrative = payload.get("narrative_summary")
+    if narrative is not None and not isinstance(narrative, str):
+        problems.append("'narrative_summary' must be a string or null")
+
     # Summary consistency only makes sense once issues are well-formed —
     # otherwise the recount itself would raise on the same defect already
     # reported above (a non-object entry, an out-of-vocabulary severity).
