@@ -168,6 +168,26 @@ def _materialize_markdown(
 _FINDINGS_JSON = "review-findings.json"
 _FINDINGS_MD = "review-findings.md"
 
+# The two verdict layers, and the one place they meet. Reviewers, the
+# reconciliator, and critic batches all speak the per-review vocabulary of
+# `schemas/review-output.ts` (`verdict_rules.verdict_for_counts`); the outer
+# pipeline `pipeline-result.json` publishes — and pirategoat-bot maps onto
+# GitHub actions — speaks APPROVE/COMMENT/REQUEST_CHANGES.
+#
+# All FIVE ledger verdicts are here on purpose. `block` is real (any
+# critical finding, or three highs) and maps to REQUEST_CHANGES; omitting it
+# would publish COMMENT for a critical-finding review — the exact failure
+# deriving the verdict from the ledger exists to kill. `not_applicable` is
+# defensive: it belongs to a single reviewer with nothing in scope, and a
+# reconciled ledger should never carry it.
+_LEDGER_TO_REVIEW_VERDICT = {
+    "block": "REQUEST_CHANGES",
+    "request_changes": "REQUEST_CHANGES",
+    "comment": "COMMENT",
+    "approve": "APPROVE",
+    "not_applicable": "COMMENT",
+}
+
 # What the step-10 briefing may point the decision critic at, best first.
 # Existence decides, not a flag: the branch this replaced read a
 # `report_synthesis_failed` key no writer under scripts/ ever set.
@@ -1175,10 +1195,25 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     is_quick = config.get("quick", False)
     recon_verdict = state.get("reconciliation_verdict", "")
     if is_quick and recon_verdict.lower() in ("approve", "comment"):
+        reason = f"quick mode + reconciliation verdict: {recon_verdict}"
         state["step_decisions"]["10"] = {
             "critic_skipped": True,
-            "reason": f"quick mode + reconciliation verdict: {recon_verdict}",
+            "reason": reason,
         }
+        # The PIPELINE records its own skip. This used to be an instruction
+        # in the step-10 briefing — the orchestrator was told to transcribe
+        # a verdict for a decision the pipeline had already made — so a run
+        # whose orchestrator stopped short left no verdict artifact at all,
+        # indistinguishable at finalize from a critic that ran and crashed.
+        # A fact the pipeline knows is a fact the pipeline writes, and that
+        # separation is what lets finalize read a missing artifact beside a
+        # dispatch marker as the real degradation it is.
+        atomic_write_json(
+            os.path.join(
+                output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
+            ),
+            {"verdict": "SKIPPED", "reason": reason},
+        )
     else:
         # Dispatch marker for the critic, written on exactly the branch
         # whose briefing dispatches one. The skip branch writes no marker
@@ -1193,99 +1228,12 @@ def _orchestrate_step_10(mode, config, state, context, output_dir):
     return context
 
 
-def _sync_findings_verdict(output_dir, verdict):
-    """Rule 23: write ``verdict`` into review-findings.json's ``verdict``
-    field, and report exactly what happened instead of swallowing it.
-
-    The assignment creates the ``verdict`` key if the ledger lacks one and
-    overwrites it otherwise — the ledger's other writers (the
-    review-reconciliator agent, critic_adjustments.py) always populate it,
-    so an object-shaped file missing the key is not a case this function
-    treats specially; it is written either way.
-
-    Returns ``(state, reason)``:
-
-    - ``("synced", None)`` — the write landed (or the ledger already
-      carried this verdict; the write still runs either way, since
-      comparing first buys nothing an idempotent atomic replace doesn't
-      already give for free).
-    - ``("skipped_shape_mismatch", reason)`` — the ledger has nothing a
-      verdict can be written into: it is missing, or it parsed to
-      something other than a JSON object. Both are legitimate-but-degraded,
-      not I/O faults — nothing was read or written that then failed.
-    - ``("failed_io", reason)`` — the ledger exists and looks like an
-      object-shaped file on disk, but reading or writing it failed:
-      unparseable JSON (a `json.JSONDecodeError`, reported with a "parse"
-      reason) or an `OSError` on the read or the write (reported with an
-      "io" reason). These are the two outcomes that used to be a bare
-      ``pass`` here — the sync failed and finalize still reported success
-      beside it.
-
-    A missing findings file is folded into "skipped_shape_mismatch" rather
-    than treated as its own state or as "failed_io": step 8's briefing
-    (briefings.py) instructs the orchestrator to dispatch the
-    reconciliator, whose write is the file's first — but that briefing is
-    LLM-followed guidance, not a gate anything in code enforces, so an
-    absent ledger by step 11 is already an abnormal run rather than a
-    contradiction of a guarantee. It is the same "nowhere to carry a
-    verdict" shape hole as a non-object ledger — just discovered a step
-    earlier, before the file can even be opened — so it shares that
-    outcome's vocabulary instead of inventing a fourth one.
-    """
-    # Read through the ledger's one shared reader (critic_adjustments'
-    # read_findings_file), then map its states onto THIS caller's
-    # vocabulary. The states are shared facts; the mapping is local
-    # policy — a non-object or absent ledger has nowhere to carry a
-    # verdict (skipped), while an unreadable or unparseable one is a
-    # fault that happened (failed_io). A non-object ledger in particular
-    # would make the subscript assignment below raise TypeError past this
-    # function and crash finalize outright.
-    read = critic_adjustments.read_findings_file(
-        os.path.join(output_dir, critic_adjustments.FINDINGS_FILENAME)
-    )
-    if read.status == critic_adjustments.FINDINGS_READ_ABSENT:
-        return "skipped_shape_mismatch", "review-findings.json not found"
-    if read.status == critic_adjustments.FINDINGS_READ_NOT_OBJECT:
-        return "skipped_shape_mismatch", "review-findings.json is not an object"
-    if read.status == critic_adjustments.FINDINGS_READ_UNPARSABLE:
-        return (
-            "failed_io",
-            f"could not parse review-findings.json: {read.error}",
-        )
-    if read.status == critic_adjustments.FINDINGS_READ_IO_ERROR:
-        return (
-            "failed_io",
-            f"could not read review-findings.json: {read.error}",
-        )
-
-    findings = read.findings
-    findings["verdict"] = verdict
-    try:
-        # The shared findings writer, not the raw atomic write: this is
-        # an in-channel write, and every write of this ledger goes through
-        # the one sanctioned path so its atomicity and its filename are
-        # decided in exactly one place.
-        critic_adjustments.write_findings(output_dir, findings)
-    except (OSError, UnicodeEncodeError) as err:
-        # UnicodeEncodeError is not hypothetical here and is not an
-        # OSError: the artifact is written as real UTF-8 (atomic_io keeps
-        # `ensure_ascii=False` so the ledger's prose stays readable), and
-        # `json.load` accepts payloads that cannot be encoded back out —
-        # `"\ud800"` parses to a lone surrogate. Only an out-of-channel
-        # edit can put one in this file; what this catch adds is that
-        # finalize survives to record the failure instead of dying on the
-        # write with no pipeline-result.json at all.
-        return "failed_io", f"could not write review-findings.json: {err}"
-
-    return "synced", None
-
-
 def _orchestrate_step_11(mode, config, state, context, output_dir):
     # Synthesis-agent lifecycle, adjudicated FIRST and for a hard ordering
     # reason: finalize itself writes review-findings.json (the critic
-    # adjustments apply, then the Rule 23 verdict sync), and that write
-    # moves the mtime this measurement reads as the reconciliator's
-    # completion. Observing after those writes would report the
+    # adjustments apply), and that write moves the mtime this measurement
+    # reads as the reconciliator's
+    # completion. Observing after that write would report the
     # reconciliator as having finished at finalize time — the run's whole
     # wall clock instead of its synthesis phase.
     #
@@ -1311,7 +1259,8 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # lasted, which is the artifact a hung run previously never produced.
     synthesis_lifecycle.observe(output_dir, finalize=True)
 
-    # Read critic verdict from file (written by LLM at step 10), through
+    # Read critic verdict from file (written by the orchestrator at step 10
+    # when the critic ran, by the pipeline itself on the quick skip), through
     # critic_adjustments.py's own presentation wrapper — one parser and
     # one SKIPPED/missing → "unavailable" mapping, shared with (and kept
     # in sync with) the raw reader apply_adjustments()'s gate uses.
@@ -1319,27 +1268,34 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         output_dir
     )
 
-    verdict_path = os.path.join(output_dir, "review-verdict.json")
-    # Parsed through the same shape-parsing core critic_adjustments.py's
-    # own verdict reader uses (`read_verdict_file()`), rather than a
-    # second, narrower reimplementation: `os.path.isfile` alone answers
-    # "does the file exist", and the shared parser answers "does it hold
-    # a usable verdict string" — two different facts step 11 needs kept
-    # apart below ("not found" vs. "found but unusable"). Reading this
-    # inline used to guard only `(json.JSONDecodeError, OSError)` and
-    # then call `.get()` unconditionally: a valid-JSON, non-object file
-    # (`[1, 2]`, `"hello"`, `5`) escaped that narrower guard, `.get()`
-    # raised `AttributeError` past it, and finalize crashed before
-    # pipeline-result.json was ever written.
-    verdict_found = os.path.isfile(verdict_path)
-    review_verdict_str = critic_adjustments.read_verdict_file(verdict_path)
+    critic_verdict = state["critic_verdict"]
 
     report_path = os.path.join(output_dir, "review-report.md")
     findings_path = os.path.join(output_dir, "review-findings.json")
     degradation_notes = []
 
+    # Critic-absence honesty. `critic_verdict_for_state()` collapses a
+    # missing verdict file and an explicit SKIPPED into "unavailable" — the
+    # right presentation for pirategoat-bot, which shows either as "not
+    # cross-validated" — but it cannot distinguish a critic that was never
+    # dispatched from one that was dispatched and produced nothing. The
+    # dispatch marker is what separates them, and only the second is a
+    # degradation: quick mode skipping the critic is the pipeline working
+    # as designed, while a dispatched critic with no artifact is a run that
+    # lost its stress test. The step-10 quick skip writes the SKIPPED
+    # verdict itself now, so a missing file after a dispatch marker is no
+    # longer an orchestrator that merely forgot to transcribe one.
+    critic_dispatched = os.path.isfile(synthesis_lifecycle.marker_path(
+        output_dir, synthesis_lifecycle.DECISION_CRITIC
+    ))
+    critic_artifact = os.path.join(
+        output_dir, critic_adjustments.CRITIC_VERDICT_FILENAME
+    )
+    if critic_dispatched and not os.path.isfile(critic_artifact):
+        degradation_notes.append("critic produced no verdict artifact")
+
     # Carry any pending critic adjustments into the findings ledger before
-    # the verdict sync — but only under REVISE, the one verdict that
+    # the verdict is derived from it — but only under REVISE, the one that
     # sanctions them. The step-10 REVISE briefing has the orchestrator
     # spot-check each entry and mark the refuted ones `rejected` before
     # running this same apply, so here it is the defensive re-run: any
@@ -1362,7 +1318,6 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # applied_critic_adjustments record in the findings file survives to
     # the final artifact.
     if os.path.isfile(findings_path):
-        critic_verdict = state.get("critic_verdict", "unavailable")
         if critic_verdict == "REVISE":
             try:
                 apply_result = critic_adjustments.apply_adjustments(output_dir)
@@ -1449,20 +1404,6 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     # legacy-normal absence must never spend the `status` field.
     usage_summary = _capture_usage_snapshot(output_dir)
 
-    if not verdict_found:
-        degradation_notes.append("review-verdict.json not found")
-    elif review_verdict_str is None:
-        # Distinct from "not found": the file is there, but its shape
-        # (non-object, non-string `verdict`, or no `verdict` key at all —
-        # including an empty `{}`) means the shared parser has nothing
-        # usable to hand back. Truthiness on the raw parsed value used to
-        # stand in for "found and usable" here, which is wrong for a
-        # non-empty-but-malformed payload (`{"a": 1}`, `{"verdict": null}`,
-        # `42`, `"hello"`) — all truthy, none of them a real verdict.
-        degradation_notes.append(
-            "review-verdict.json is malformed: no usable string "
-            "\"verdict\" field"
-        )
     if not os.path.isfile(report_path):
         degradation_notes.append("review-report.md not found")
         alt = os.path.join(output_dir, _FINDINGS_MD)
@@ -1470,63 +1411,49 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     if not os.path.isfile(findings_path):
         degradation_notes.append("review-findings.json not found")
 
-    verdict = review_verdict_str if review_verdict_str is not None else "COMMENT"
-
-    # Rule 23: update review-findings.json verdict to match. The ledger has
-    # three writers across a run — the review-reconciliator agent's first
-    # write, critic_adjustments.py applying decision-critic adjustments,
-    # and this verdict sync — and all three now go through
-    # critic_adjustments.write_findings(), which wraps atomic_io's atomic
-    # write. The reconciliator reaches it via findings_save.py, a
-    # validating CLI (agents/review-reconciliator.md instructs the agent
-    # to stage the ledger and call that script rather than write_findings
-    # directly).
-    # For this write specifically: a truncating open here would leave the
-    # artifact destroyable by a crash mid-write no matter how carefully
-    # the adjustments path replaced it, and this write is the last one the
-    # run performs.
-    #
-    # The outcome is recorded through exactly one vocabulary —
-    # verdict_sync/verdict_sync_reason, produced by _sync_findings_verdict
-    # — written into pipeline-result.json and documented (field name and
-    # vocabulary, not the run's actual value) in step 11's non-interactive
-    # output listing (briefings.py). This replaces the bare `pass` that
-    # used to swallow a `json.JSONDecodeError` on read or an `OSError` on
-    # read/write: the sync failed and finalize still published
-    # `status: "success"` beside it, one of two silent failure modes left
-    # after the non-object ledger was hardened.
-    verdict_sync_state = None
-    verdict_sync_reason = None
-    findings_present = os.path.isfile(findings_path)
-    if review_verdict_str is not None:
-        verdict_sync_state, verdict_sync_reason = _sync_findings_verdict(
-            output_dir, verdict
-        )
-        if verdict_sync_state != "synced" and findings_present:
-            # A missing ledger is already recorded by the
-            # "review-findings.json not found" note above (added while
-            # `findings_present` was computed) — this branch only adds a
-            # note for a shape or I/O failure discovered while reading or
-            # writing a file that *is* there, so the two checks never
-            # describe the same fact twice.
-            prefix = (
-                "verdict sync skipped"
-                if verdict_sync_state == "skipped_shape_mismatch"
-                else "verdict sync failed"
+    # The published verdict is DERIVED from the findings ledger, not
+    # transcribed. It used to travel LLM → review-verdict.json → here, with
+    # a Rule 23 sync writing it back over the ledger's own verdict; a run
+    # whose orchestrator wrote COMMENT above a ledger holding a critical
+    # finding published COMMENT, and the sync then made the ledger agree
+    # with the transcription rather than the other way round. Deriving
+    # removes the transcription step entirely: the ledger is the only
+    # artifact whose verdict any reviewer, reconciliator, or critic batch
+    # actually computed, and `critic_adjustments.apply_adjustments()`
+    # recomputes it after every applying batch, so it is current by the
+    # time finalize reads it. `_LEDGER_TO_REVIEW_VERDICT` (module scope) is
+    # the one place the two verdict layers meet.
+    ledger_verdict = None
+    if os.path.isfile(findings_path):
+        read = critic_adjustments.read_findings_file(findings_path)
+        raw = (read.findings or {}).get("verdict") if (
+            read.status == critic_adjustments.FINDINGS_READ_OK
+        ) else None
+        if raw:
+            ledger_verdict = _LEDGER_TO_REVIEW_VERDICT.get(
+                str(raw).strip().lower()
             )
-            degradation_notes.append(f"{prefix}: {verdict_sync_reason}")
-    # else: no usable verdict to sync from — either review-verdict.json is
-    # missing or it parsed to something the shared parser could not read a
-    # verdict string out of. Both are already recorded above (the "not
-    # found" and "malformed" notes), so this leaves verdict_sync/
-    # verdict_sync_reason at their null default: the sync was honestly
-    # never attempted with a usable verdict, rather than attempted with a
-    # fabricated one ("COMMENT", the same fallback `verdict` itself uses
-    # below) that would misrepresent what review-verdict.json actually
-    # said.
 
-    # Re-render review-findings.md from the FINAL ledger — after the
-    # critic adjustments landed and after the Rule 23 verdict sync, so the
+    if critic_verdict == "ESCALATE":
+        # The critic's one unilateral power, exercised by the pipeline
+        # rather than asked of the orchestrator: ESCALATE means the review's
+        # conclusions did not survive the stress test, so nothing it
+        # concluded is strong enough to gate a merge.
+        verdict = "COMMENT"
+        verdict_source = "critic ESCALATE override"
+    elif ledger_verdict is not None:
+        verdict = ledger_verdict
+        verdict_source = "findings ledger"
+    else:
+        verdict = "COMMENT"
+        verdict_source = "fallback: no usable ledger verdict"
+        degradation_notes.append(
+            "no usable verdict in review-findings.json — verdict fell "
+            "back to COMMENT"
+        )
+
+    # Re-render review-findings.md from the FINAL ledger — after the critic
+    # adjustments landed, so the
     # rendering describes the artifact the run actually publishes. This is
     # the seam that closes the field-proven staleness: every critic REVISE
     # used to leave the hand-written narrative showing pre-adjustment
@@ -1548,7 +1475,7 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         if os.path.isfile(findings_md_path):
             report_path = findings_md_path
 
-    # Computed after the verdict sync: a degradation the sync discovers has
+    # Computed last: every degradation any of the work above discovered has
     # to reach the status it is reported beside, or the run publishes
     # "success" while carrying a note that says otherwise.
     status = "success" if not degradation_notes else "degraded"
@@ -1558,15 +1485,19 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
         "verdict": verdict,
         "report_path": report_path if report_path and os.path.isfile(report_path) else None,
         "findings_path": findings_path if os.path.isfile(findings_path) else None,
-        "critic_verdict": state.get("critic_verdict", "unavailable"),
+        "critic_verdict": critic_verdict,
         "degradation_notes": degradation_notes,
         "review_baseline_saved": os.path.isfile(
             os.path.join(output_dir, ".branch-review-baseline.json")
         ),
         "worktree_hygiene": hygiene_summary,
         "usage": usage_summary,
-        "verdict_sync": verdict_sync_state,
-        "verdict_sync_reason": verdict_sync_reason,
+        # Which of the three derivation branches produced `verdict`. Not a
+        # closed vocabulary a consumer branches on — it is the audit line
+        # that says whether the published verdict came from the ledger, from
+        # the critic's override, or from the fallback the degradation note
+        # beside it already explains.
+        "verdict_source": verdict_source,
     }
     result_path = os.path.join(output_dir, "pipeline-result.json")
     atomic_write_json(result_path, pipeline_result)
@@ -1574,6 +1505,11 @@ def _orchestrate_step_11(mode, config, state, context, output_dir):
     state["verdict"] = verdict
     state["review_verdict"] = verdict
     state["pipeline_status"] = status
+    # Carried into state so step 11's briefing can render the projection it
+    # just published without re-reading pipeline-result.json — briefings.py
+    # is pure, the same division that already puts `critic_source` here.
+    state["verdict_source"] = verdict_source
+    state["degradation_notes"] = list(degradation_notes)
 
     return context
 

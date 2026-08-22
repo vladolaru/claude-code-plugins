@@ -278,10 +278,9 @@ CLEARANCES: 12 | NARRATIVE: present
 
 and writes `review-findings.json` atomically through
 `critic_adjustments.write_findings()` — the same sanctioned path
-`apply_adjustments()` and the pipeline's Rule 23 verdict sync use. This is
-one of three writers across a run that all go through it; the others are
-`apply_adjustments()` carrying the decision critic's adjustments, and the
-pipeline's end-of-run Rule 23 verdict sync.
+`apply_adjustments()` uses. This is one of two writers across a run that
+both go through it; the other is `apply_adjustments()` carrying the
+decision critic's adjustments.
 
 **3c. On REJECTED, fix and re-save.** Correct the named problem in your
 in-memory `output` dict (or the staged `$TMPDIR/review-findings.json`),

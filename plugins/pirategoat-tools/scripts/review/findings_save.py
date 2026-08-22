@@ -20,10 +20,10 @@ line — this module's failure mode is silence on disk, never a partial
 ledger.
 
 The write itself goes through ``critic_adjustments.write_findings()`` — the
-ONE sanctioned write path for review-findings.json, shared by all three of
-its writers (the reconciliator's first write via this module, the critic
-adjustments applier, and the pipeline's Rule 23 verdict sync). This module
-adds no new writer; it only gates what reaches the existing one.
+ONE sanctioned write path for review-findings.json, shared by both of its
+writers (the reconciliator's first write via this module, and the critic
+adjustments applier). This module adds no new writer; it only gates what
+reaches the existing one.
 """
 
 import argparse

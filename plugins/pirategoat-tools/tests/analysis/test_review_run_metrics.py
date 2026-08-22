@@ -669,26 +669,28 @@ class TestLoadRuns:
         assert "legacy_log_no_manifest" not in runs[0].get("warnings", [])
 
     @pytest.mark.parametrize(
-        "verdict_sync", ["synced", "skipped_shape_mismatch", "failed_io", None],
-        ids=["synced", "skipped_shape_mismatch", "failed_io", "null"],
+        "verdict_source",
+        ["findings ledger", "critic ESCALATE override",
+         "fallback: no usable ledger verdict", None],
+        ids=["ledger", "escalate", "fallback", "null"],
     )
-    def test_verdict_sync_is_measurable_across_a_cohort(
-        self, tmp_path, verdict_sync
+    def test_verdict_source_is_measurable_across_a_cohort(
+        self, tmp_path, verdict_source
     ):
-        """Rule 23's sync outcome used to be a per-run fact only visible
-        by opening one pipeline-result.json at a time. Whitelisting it
-        into the manifest's `outcome` block (telemetry.py) and the
-        cohort loader's sanitizer (review_metrics/sanitize.py) is what
-        makes "how often does the sync fail" answerable across a run
-        directory instead of one run.
+        """Which branch produced a run's published verdict used to be a
+        per-run fact only visible by opening one pipeline-result.json at a
+        time. Whitelisting it into the manifest's `outcome` block
+        (telemetry.py) and the cohort loader's sanitizer
+        (review_metrics/sanitize.py) is what makes "how often does the
+        verdict fall back" answerable across a run directory.
         """
-        manifest = _manifest("verdict-sync-run")
-        manifest["outcome"]["verdict_sync"] = verdict_sync
+        manifest = _manifest("verdict-source-run")
+        manifest["outcome"]["verdict_source"] = verdict_source
         _write_manifest(tmp_path / "review.manifest.json", manifest)
 
         [run] = load_runs(tmp_path)
 
-        assert run["outcome"]["verdict_sync"] == verdict_sync
+        assert run["outcome"]["verdict_source"] == verdict_source
 
     def test_running_sidecar_overlays_fresh_same_run_lifecycle_without_raw_payloads(
         self, tmp_path
@@ -1689,12 +1691,12 @@ class TestLoadRuns:
         self, tmp_path
     ):
         """A manifest actually written under the schema this constant
-        carried before the `verdict_sync` bump (the literal `1` on disk
+        carried before the verdict-provenance bump (the literal `1` on disk
         from every run before this change, not a synthetic "future"
         value) is unsupported now, same as any other mismatched schema —
         read only through the existing unsupported-envelope path, never a
         crash and never a silent read of an `outcome` block whose
-        `verdict_sync` key that older producer never wrote.
+        `verdict_source` key that older producer never wrote.
         """
         manifest = _manifest("pre-bump-run")
         manifest["schema"] = 1
@@ -7875,15 +7877,15 @@ class TestStructuredSidecarValuesFailClosed:
         assert run["run"]["id"] == "critic-run"
         assert "critic_verdict" not in run["outcome"]
 
-    def test_structured_verdict_sync_is_dropped_not_fatal(self, tmp_path):
-        manifest = _manifest("verdict-sync-run")
-        manifest["outcome"]["verdict_sync"] = ["synced"]
+    def test_structured_verdict_source_is_dropped_not_fatal(self, tmp_path):
+        manifest = _manifest("verdict-source-run")
+        manifest["outcome"]["verdict_source"] = ["findings ledger"]
         _write_manifest(tmp_path / "review.manifest.json", manifest)
 
         [run] = load_runs(tmp_path)
 
-        assert run["run"]["id"] == "verdict-sync-run"
-        assert "verdict_sync" not in run["outcome"]
+        assert run["run"]["id"] == "verdict-source-run"
+        assert "verdict_source" not in run["outcome"]
 
     def test_structured_legacy_event_name_is_skipped_not_fatal(self, tmp_path):
         events = _legacy_events("legacy-structured")
@@ -8347,7 +8349,7 @@ class TestSkippedCriticIsNotACritiqueDuration:
 # sections' *availability flags* to `safe_availability`'s generic
 # bool-copy without ever teaching it their *payloads* — "measured: true"
 # with the section itself dropped. `coverage`, `synthesis_agents`, and the
-# `outcome` block's `verdict_sync` had already
+# `outcome` block's verdict-provenance key had already
 # closed this gap by the time this landed; `worktree_hygiene`, `usage`
 # (the durable per-run token snapshot — distinct from the *transcript*
 # usage family under `measured["transcript"]["usage"]`), and

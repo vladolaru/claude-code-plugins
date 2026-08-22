@@ -1516,32 +1516,21 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     skip_critic = is_quick and recon_verdict.lower() in ("approve", "comment")
 
     if skip_critic:
-        # Map reconciliation verdict to review verdict
-        review_verdict = "APPROVE" if recon_verdict.lower() == "approve" else "COMMENT"
-
         situation = [
             _PHASE_TRANSITIONS["VALIDATION"],
             f"Quick mode is active and reconciliation verdict is **{recon_verdict}** — "
             "skipping the decision critic. Low-risk verdicts do not need stress-testing.",
         ]
         actions = [
-            f"Write the critic skip verdict:",
-            f"```json",
-            f'// Save to: {od}/decision-critic-verdict.json',
-            f'{{"verdict": "SKIPPED", "reason": "quick mode, reconciliation verdict: {recon_verdict}"}}',
-            f"```",
-            f"",
-            f"Write the final review verdict:",
-            f"```json",
-            f'// Save to: {od}/review-verdict.json',
-            f'{{"verdict": "{review_verdict}"}}',
-            f"```",
-            f"",
-            f"Before proceeding, verify both files exist and contain valid JSON.",
+            f"Nothing to do here. The pipeline recorded the skip itself in "
+            f"`{od}/decision-critic-verdict.json`, and step 11 derives the "
+            f"published verdict from `{od}/review-findings.json`.",
+            "",
+            "Proceed to the next step.",
         ]
-        handoff = [
-            f"`{od}/decision-critic-verdict.json` and `{od}/review-verdict.json` must both exist with valid JSON.",
-        ]
+        # No handoff: this branch asks the orchestrator for no artifact, and
+        # a gate on a file the pipeline writes would be theatre.
+        handoff = None
 
         return {
             "phase": "VALIDATION",
@@ -1673,7 +1662,10 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
     actions.append("")
     actions.append("Act on the critic's verdict:")
     actions.append("")
-    actions.append("**STAND** — No changes needed. Proceed to writing the final review verdict.")
+    actions.append(
+        "**STAND** — No changes needed. The review stands as reconciled; "
+        "proceed to the next step."
+    )
     actions.append("")
     actions.append(
         "**REVISE** — the machine-readable ledger updates first, the prose second:"
@@ -1753,19 +1745,28 @@ def _step_10_decision_critic(mode, state, context, config, output_dir):
         "exists to prevent. A batch where you checked none of the entries "
         "is reported as N lines of `not checked`."
     )
-    actions.append("5) Write the final review verdict.")
     actions.append("")
-    actions.append("**ESCALATE** — Override review verdict to **COMMENT** regardless of report, "
-                   "then write the final review verdict.")
+    actions.append(
+        "**ESCALATE** — nothing to do here. The pipeline forces the "
+        "published verdict to **COMMENT** at step 11: an ESCALATE means the "
+        "review's conclusions did not survive the stress test, so none of "
+        "them is strong enough to gate a merge."
+    )
     actions.append("")
-    actions.append("Write the final review verdict:")
-    actions.append(f"```json")
-    actions.append(f'// Save to: {od}/review-verdict.json')
-    actions.append(f'{{"verdict": "<APPROVE | REQUEST_CHANGES | COMMENT>"}}')
-    actions.append(f"```")
+    actions.append(
+        "**You do not write a final review verdict.** Step 11 DERIVES it "
+        f"from `{od}/review-findings.json` — the one artifact whose verdict "
+        "was actually computed from findings, and which the adjustments "
+        "command above recomputes for you. Transcribing a verdict by hand "
+        "is how a review holding a critical finding used to publish COMMENT."
+    )
 
     handoff = [
-        f"`{od}/decision-critic-verdict.json` and `{od}/review-verdict.json` must both exist with valid JSON.",
+        f"`{od}/decision-critic-verdict.json` must exist with valid JSON — "
+        f"the critic's own verdict, written verbatim above (or SKIPPED with "
+        f"a reason if it produced none).",
+        f"On REVISE: `{od}/review-findings.json` carries the applied "
+        f"adjustments, and `{od}/review-report.md` agrees with it.",
     ]
 
     return {
@@ -1816,6 +1817,31 @@ def _derived_markdown_status_line(state, output_dir, *, key, label, suffix=None)
     return f"⚠️ {label}: {detail}; regenerate with: `{command}`."
 
 
+def _projection_lines(state):
+    """Render what finalize just published, or None when it never ran.
+
+    Reads the facts step 11's orchestration recorded in state rather than
+    re-opening pipeline-result.json — this module is pure, the same division
+    that already puts `critic_source` in state for step 10.
+
+    A run whose finalize never ran (a briefing fetched on its own, older
+    state) records NO projection rather than a fabricated success line: an
+    unmeasured outcome and a clean one are different facts.
+    """
+    status = state.get("pipeline_status")
+    if not status:
+        return None
+    verdict = state.get("verdict") or "unknown"
+    source = state.get("verdict_source")
+    source_suffix = f" ({source})" if source else ""
+    lines = [f"Projection: status={status}  verdict={verdict}{source_suffix}"]
+    notes = state.get("degradation_notes")
+    if isinstance(notes, list) and notes:
+        lines.append("Degradations:")
+        lines.extend(f"  - {note}" for note in notes)
+    return lines
+
+
 def _step_11_present_results(mode, state, context, config, output_dir):
     """Step 11: Present Results — show review output."""
     od = output_dir or "<OUTPUT_DIR>"
@@ -1859,12 +1885,10 @@ def _step_11_present_results(mode, state, context, config, output_dir):
                        "measured, and each half's availability — subagent "
                        "usage is complete at finalize, orchestrator usage is "
                        "partial because its own session is still open; null "
-                       "when the run never measured usage), verdict_sync "
-                       "(Rule 23's outcome syncing review-findings.json's "
-                       "verdict: \"synced\", \"skipped_shape_mismatch\", "
-                       "\"failed_io\", or null when the sync was never "
-                       "attempted) with verdict_sync_reason for the non-"
-                       "synced states")
+                       "when the run never measured usage), verdict_source "
+                       "(which branch produced the verdict: the findings "
+                       "ledger, the critic's ESCALATE override, or the "
+                       "fallback, whose degradation note says why)")
 
         if mode == "incremental":
             actions.append("Baseline saved. Next run reviews only new commits.")
@@ -1877,12 +1901,26 @@ def _step_11_present_results(mode, state, context, config, output_dir):
         suffix="review-findings.json",
     ))
 
+    # What the run actually published, read back from the projection step
+    # 11's orchestration just wrote. Previously the only thing this briefing
+    # said about the outcome was a `forced_verdict` line no writer set, so a
+    # degraded run printed "✅ PIPELINE COMPLETE" with its degradations
+    # sitting unread in a JSON file.
+    projection = _projection_lines(state)
+    degraded = projection is not None and state.get("pipeline_status") != "success"
+    if projection:
+        actions.append("")
+        actions.extend(projection)
+
     return {
         "phase": "OUTPUT",
         "title": "Present Results",
         "situation": situation,
         "actions": actions,
         "handoff": None,
+        # Read by pipeline.py's format_output for the completion footer: a
+        # run that degraded must not sign off with a green checkmark.
+        "degraded": degraded,
     }
 
 

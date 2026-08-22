@@ -357,7 +357,6 @@ def _seed_step_11(out):
     Every hygiene assertion below is about what step 11 adds to that
     baseline, so the seed has to leave `degradation_notes` empty.
     """
-    (out / "review-verdict.json").write_text(json.dumps({"verdict": "APPROVE"}))
     (out / "review-report.md").write_text("# report")
     # Complete enough for the Markdown renderer step 11 runs over it: a
     # stub would add a render-failure note and defeat the empty-notes

@@ -1742,15 +1742,15 @@ class TestStep10Orchestration:
 
 
 class TestStep11Orchestration:
-    """Step 11 main() reads review-verdict.json and writes pipeline-result.json."""
+    """Step 11 main() derives the verdict from review-findings.json and
+    writes pipeline-result.json."""
 
     def test_step_11_writes_pipeline_result(self, tmp_path):
         """Step 11 should write pipeline-result.json."""
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-verdict.json").write_text('{"verdict": "REQUEST_CHANGES"}')
         (tmp_path / "review-report.md").write_text("# Review Report\nFindings here.")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "COMMENT", "issues": []}')
+        (tmp_path / "review-findings.json").write_text('{"verdict": "request_changes", "issues": []}')
         r = run_pipeline("--step", "11", "--mode", "pr",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
         assert r.returncode == 0
@@ -1758,23 +1758,27 @@ class TestStep11Orchestration:
         assert result_path.is_file(), "pipeline-result.json was not created"
         result = json.loads(result_path.read_text())
         assert result["verdict"] == "REQUEST_CHANGES"
+        assert result["verdict_source"] == "findings ledger"
         assert result["status"] in ("success", "degraded")
         assert "report_path" in result
 
-    def test_step_11_updates_findings_verdict(self, tmp_path):
-        """Step 11 should update review-findings.json verdict to match review-verdict.json (rule 23)."""
+    def test_step_11_leaves_the_findings_verdict_alone(self, tmp_path):
+        """Rule 23's sync is gone end to end: the CLI reads the ledger's
+        verdict and never writes one back over it."""
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        (tmp_path / "review-verdict.json").write_text('{"verdict": "REQUEST_CHANGES"}')
         (tmp_path / "review-report.md").write_text("# Review")
-        (tmp_path / "review-findings.json").write_text('{"verdict": "COMMENT", "issues": []}')
+        (tmp_path / "review-findings.json").write_text('{"verdict": "comment", "issues": []}')
         run_pipeline("--step", "11", "--mode", "pr",
                    "--output-dir", str(tmp_path), cwd=tmp_path)
         findings = json.loads((tmp_path / "review-findings.json").read_text())
-        assert findings["verdict"] == "REQUEST_CHANGES"
+        assert findings["verdict"] == "comment"
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict"] == "COMMENT"
 
-    def test_step_11_handles_missing_verdict(self, tmp_path):
-        """Step 11 should handle missing review-verdict.json gracefully."""
+    def test_step_11_handles_a_missing_ledger_gracefully(self, tmp_path):
+        """No ledger at all: the verdict falls back to COMMENT and the run
+        says why, rather than crashing or publishing a confident value."""
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
         r = run_pipeline("--step", "11", "--mode", "pr",
@@ -1784,13 +1788,14 @@ class TestStep11Orchestration:
         assert result_path.is_file()
         result = json.loads(result_path.read_text())
         assert result["status"] in ("degraded", "failed")
+        assert result["verdict"] == "COMMENT"
+        assert result["verdict_source"] == "fallback: no usable ledger verdict"
 
     def test_step_11_degrades_when_findings_missing(self, tmp_path):
         """Step 11 should report degraded when review-findings.json is missing (partial run)."""
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(tmp_path), "--pr-number", "42", cwd=tmp_path)
-        # Verdict and report exist, but findings do not (reconciliation failed)
-        (tmp_path / "review-verdict.json").write_text('{"verdict": "COMMENT"}')
+        # The report exists, but the findings do not (reconciliation failed)
         (tmp_path / "review-report.md").write_text("# Review\nReport here.")
         r = run_pipeline("--step", "11", "--mode", "pr",
                        "--output-dir", str(tmp_path), cwd=tmp_path)
@@ -1914,7 +1919,6 @@ class TestFullSequenceIntegration:
         assert r.returncode == 0
 
         # Pre-write verdict, report, and findings as if steps 8-10 ran
-        (Path(od) / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (Path(od) / "review-report.md").write_text("# Review\nAll clear.")
         # A complete ledger, the way ReviewOutputBuilder writes it, published
         # through the sanctioned findings writer the way the reconciliator
@@ -2209,9 +2213,6 @@ class TestFindingsMarkdownLockstep:
     ):
         monkeypatch.chdir(tmp_path)
         self._findings(tmp_path)
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         state = {"degradation": {"findings_markdown_incomplete": True}}
 
@@ -2227,9 +2228,6 @@ class TestFindingsMarkdownLockstep:
     ):
         monkeypatch.chdir(tmp_path)
         self._findings(tmp_path)
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         monkeypatch.setitem(
             mod._orchestrate_step_11.__globals__,

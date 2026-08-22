@@ -542,6 +542,30 @@ class TestFormatOutput:
         }
         output = mod.format_output(11, guidance)
         assert "COMPLETE" in output
+        assert "✅" in output
+
+    def test_a_degraded_run_does_not_sign_off_with_a_checkmark(self, mod):
+        """The footer is a claim, and the last thing the reader sees must
+        not contradict the degradations printed above it."""
+        guidance = {
+            "phase": "OUTPUT", "title": "Present Results",
+            "situation": [], "actions": ["Show results."],
+            "handoff": None, "next_step": None,
+            "skip_reason": None,
+            "degraded": True,
+        }
+        output = mod.format_output(11, guidance)
+        assert "PIPELINE COMPLETE (DEGRADED" in output
+        assert "✅" not in output
+
+    def test_a_missing_degraded_flag_reads_as_not_degraded(self, mod):
+        """Every other step's guidance dict omits the key entirely."""
+        guidance = {
+            "phase": "OUTPUT", "title": "Present Results",
+            "situation": [], "actions": ["Show results."],
+            "handoff": None, "next_step": None, "skip_reason": None,
+        }
+        assert "✅ PIPELINE COMPLETE" in mod.format_output(11, guidance)
 
     def test_blocked_step_does_not_show_complete(self, mod):
         guidance = {

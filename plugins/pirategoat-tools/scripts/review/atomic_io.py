@@ -78,10 +78,10 @@ def atomic_write_json(path, payload):
     quotes), and escaping it would turn a routine rewrite into a wall of
     ``\\uXXXX`` runs — lossless, but indistinguishable from corruption to
     whoever reads the artifact next. ``review-findings.json`` alone has
-    three writers across a run (the review-reconciliator agent's first
-    write, critic_adjustments.py applying decision-critic adjustments,
-    and orchestration.py's Rule 23 verdict sync) and all three reach this
-    function through ``critic_adjustments.write_findings()``, so they
+    two writers across a run (the review-reconciliator agent's first
+    write, and critic_adjustments.py applying decision-critic adjustments)
+    and both reach this function through
+    ``critic_adjustments.write_findings()``, so they
     share this encoding and no writer's turn can make the file's prose
     unreadable to the others.
 

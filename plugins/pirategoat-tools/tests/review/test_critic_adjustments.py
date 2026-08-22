@@ -60,7 +60,11 @@ def _write_findings(output_dir, issues, **extra):
         "timestamp": "2026-08-13T10:00:00",
         "plugin_version": None,
         "schema": 1,
-        "verdict": "REQUEST_CHANGES",
+        # Lowercase: this is the per-review ledger vocabulary
+        # (schemas/review-output.ts), not the outer-pipeline
+        # APPROVE/COMMENT/REQUEST_CHANGES values pipeline-result.json
+        # publishes. Step 11 maps between the two layers.
+        "verdict": "request_changes",
         "summary": {"total_issues": len(issues), "by_severity": sev},
         "issues": issues,
         "unreviewed": None,
@@ -1244,328 +1248,184 @@ class TestReadCriticVerdict:
         assert read_critic_verdict(str(tmp_path)) == verdict
 
 
-class TestVerdictSyncHardening:
-    """Step 11's Rule 23 sync is the other writer of review-findings.json.
+class TestDerivedVerdict:
+    """Step 11 DERIVES the published verdict from the findings ledger.
 
-    Crash-safety is a property of the artifact, not of one module: the
-    adjustments apply replaces the ledger atomically, but the verdict sync
-    ran last and wrote it with a truncating open, so a crash there left a
-    truncated ledger regardless. It also assumed the file was an object.
-
-    The sync's outcome is recorded through exactly one vocabulary —
-    ``verdict_sync``/``verdict_sync_reason`` in pipeline-result.json — with
-    three states: "synced", "skipped_shape_mismatch" (a ledger that exists
-    but can't carry a verdict, or doesn't exist at all), and "failed_io"
-    (the ledger looked usable but reading or writing it raised). Every
-    non-synced state also degrades the run and appends a note, so a bare
-    ``pass`` can never publish `status: "success"` beside a sync that
-    didn't happen.
+    The chain this replaced ran LLM -> review-verdict.json -> finalize, with
+    a Rule 23 sync writing the transcription back over the ledger's own
+    verdict: a run whose orchestrator wrote COMMENT above a ledger holding a
+    critical finding published COMMENT, and the sync then made the ledger
+    agree with the transcription rather than the other way round. Nothing
+    reads review-verdict.json any more, and nothing writes it.
     """
 
-    def _write_verdict_and_report(self, tmp_path, verdict="COMMENT"):
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": verdict})
-        )
+    def _seed(self, tmp_path, ledger_verdict, issues=()):
         (tmp_path / "review-report.md").write_text("# report")
+        _write_findings(tmp_path, list(issues), verdict=ledger_verdict)
 
-    def test_verdict_sync_leaves_no_temp_residue(self, tmp_path):
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        self._write_verdict_and_report(tmp_path)
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+    def _finalize(self, tmp_path, state=None):
+        state = {} if state is None else state
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+        return json.loads((tmp_path / "pipeline-result.json").read_text())
 
-        data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["verdict"] == "COMMENT"
-        leftovers = [
-            path.name for path in tmp_path.iterdir()
-            if path.name.startswith("tmp") or path.suffix == ".tmp"
-        ]
-        assert leftovers == [], f"temp files survived the sync: {leftovers}"
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict_sync"] == "synced"
-        assert result["verdict_sync_reason"] is None
+    @pytest.mark.parametrize("ledger,published", [
+        ("block", "REQUEST_CHANGES"),
+        ("request_changes", "REQUEST_CHANGES"),
+        ("comment", "COMMENT"),
+        ("approve", "APPROVE"),
+        ("not_applicable", "COMMENT"),
+    ])
+    def test_every_ledger_verdict_maps(self, tmp_path, ledger, published):
+        """All FIVE, `block` included: it is what any critical finding (or
+        three highs) produces, and omitting it would publish COMMENT for a
+        critical-finding review."""
+        self._seed(tmp_path, ledger)
+        result = self._finalize(tmp_path)
+        assert result["verdict"] == published
+        assert result["verdict_source"] == "findings ledger"
         assert result["status"] == "success"
 
-    def test_list_shaped_ledger_degrades_instead_of_crashing(self, tmp_path):
-        """The subscript assignment used to raise TypeError past the except
-        tuple, taking finalize down with a review that had already run."""
-        (tmp_path / "review-findings.json").write_text(
-            json.dumps([_issue("aaaa1111", "low")])
-        )
-        self._write_verdict_and_report(tmp_path)
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+    @pytest.mark.parametrize("ledger", ["BLOCK", "  Approve  ", "Comment"])
+    def test_casing_and_padding_do_not_break_the_mapping(self, tmp_path, ledger):
+        self._seed(tmp_path, ledger)
+        assert self._finalize(tmp_path)["verdict_source"] == "findings ledger"
 
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert any("verdict sync skipped" in note
-                   for note in result["degradation_notes"])
-        assert result["status"] == "degraded", (
-            "a degradation found during the sync must reach the status "
-            "published beside it"
-        )
-        # The unusable ledger is left exactly as found, not half-rewritten.
-        assert json.loads(
-            (tmp_path / "review-findings.json").read_text()
-        ) == [_issue("aaaa1111", "low")]
+    def test_a_critical_finding_never_publishes_comment(self, tmp_path):
+        """The failure this derivation exists to kill, end to end: the
+        ledger's own verdict is computed from its findings, so a critical
+        one cannot be published as advisory by a transcription slip."""
+        self._seed(tmp_path, "block", [_issue("aaaa1111", "critical")])
+        assert self._finalize(tmp_path)["verdict"] == "REQUEST_CHANGES"
 
-        assert result["verdict_sync"] == "skipped_shape_mismatch"
-        assert "not an object" in result["verdict_sync_reason"]
+    def test_escalate_overrides_the_ledger(self, tmp_path):
+        """The critic's one unilateral power: conclusions that did not
+        survive the stress test cannot gate a merge."""
+        self._seed(tmp_path, "block", [_issue("aaaa1111", "critical")])
+        _write_critic_verdict(tmp_path, "ESCALATE")
+        result = self._finalize(tmp_path)
+        assert result["verdict"] == "COMMENT"
+        assert result["verdict_source"] == "critic ESCALATE override"
 
-    def test_corrupt_findings_json_reports_failed_io(self, tmp_path):
-        """Unparseable JSON used to hit the bare `except: pass` and publish
-        `status: "success"` beside a sync that never happened."""
-        (tmp_path / "review-findings.json").write_text("{not valid json")
-        self._write_verdict_and_report(tmp_path)
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+    def test_stand_does_not_override(self, tmp_path):
+        self._seed(tmp_path, "block")
+        _write_critic_verdict(tmp_path, "STAND")
+        assert self._finalize(tmp_path)["verdict_source"] == "findings ledger"
 
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict_sync"] == "failed_io"
-        assert "parse" in result["verdict_sync_reason"].lower()
-        assert any("verdict sync failed" in note
-                   for note in result["degradation_notes"])
-        assert result["status"] == "degraded"
-        # The unreadable file is left exactly as found.
-        assert (tmp_path / "review-findings.json").read_text() == (
-            "{not valid json"
-        )
-
-    def test_write_failure_reports_failed_io(self, tmp_path, monkeypatch):
-        """An OSError from `os.replace` — the last step inside the atomic
-        writer, after the new content is already staged in a temp file —
-        used to hit the same bare `except: pass` as a parse failure, on
-        the write side instead of the read side.
-
-        Failing `os.replace` itself, rather than swapping out
-        `atomic_write_json` wholesale, exercises the real staging path
-        (temp file written, flushed, then the failed rename) instead of
-        skipping straight to a raise that could never distinguish an
-        atomic writer from a truncating one — and lets this test assert
-        what a truncating `open()` could not promise: the ledger on disk
-        is untouched by a write that never got to replace it.
-        """
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        self._write_verdict_and_report(tmp_path)
-        original_bytes = (tmp_path / "review-findings.json").read_bytes()
-
-        real_os_replace = os.replace
-
-        def flaky_replace(src, dst):
-            if os.path.basename(dst) == "review-findings.json":
-                raise OSError("disk full")
-            return real_os_replace(src, dst)
-
-        monkeypatch.setattr(os, "replace", flaky_replace)
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict_sync"] == "failed_io"
-        assert "disk full" in result["verdict_sync_reason"]
-        assert any("verdict sync failed" in note
-                   for note in result["degradation_notes"])
-        assert result["status"] == "degraded"
-        # The staged write never replaced the ledger.
-        assert (
-            tmp_path / "review-findings.json"
-        ).read_bytes() == original_bytes
-        # Step 11 still completed and published pipeline-result.json —
-        # the failure never propagated out of finalize.
-        assert (tmp_path / "pipeline-result.json").is_file()
-
-    def test_read_failure_reports_failed_io(self, tmp_path, monkeypatch):
-        """An OSError while opening review-findings.json for read — as
-        opposed to a parse failure once it is open — used to hit the same
-        bare `except: pass`.
-
-        Faked via a monkeypatched `builtins.open` (filtered to this one
-        path; every other open passes through to the real one) rather
-        than `chmod`: an unreadable-by-permissions file is a no-op under
-        root, which most CI containers run as, so a chmod-based version of
-        this test would silently pass without ever exercising the OSError
-        branch.
-        """
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        self._write_verdict_and_report(tmp_path)
-        findings_path = str(tmp_path / "review-findings.json")
-
-        real_open = builtins.open
-
-        def flaky_open(file, *args, **kwargs):
-            if str(file) == findings_path:
-                raise OSError("permission denied")
-            return real_open(file, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "open", flaky_open)
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict_sync"] == "failed_io"
-        assert "could not read review-findings.json" in (
-            result["verdict_sync_reason"]
-        )
-        assert any("verdict sync failed" in note
-                   for note in result["degradation_notes"])
-        assert result["status"] == "degraded"
-
-    def test_verdict_sync_is_null_when_never_attempted(self, tmp_path):
-        """No review-verdict.json at all — the sync has no verdict to
-        write, so it is honestly never attempted rather than run with a
-        fabricated fallback. `verdict_sync`/`verdict_sync_reason` both
-        stay null, matching `worktree_hygiene`/`usage`'s null-when-
-        unmeasured convention rather than reading as a measured "nothing
-        to report".
-        """
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        (tmp_path / "review-report.md").write_text("# report")
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict_sync"] is None
-        assert result["verdict_sync_reason"] is None
-        assert any("review-verdict.json not found" in note
-                   for note in result["degradation_notes"])
-        assert result["status"] == "degraded"
-
-    def test_an_unencodable_ledger_does_not_kill_finalize(
-        self, tmp_path, monkeypatch
-    ):
-        """A lone surrogate is only reachable by an out-of-channel edit,
-        and it cannot be written back out as UTF-8 — so the sync's write
-        raises UnicodeEncodeError, which is not an OSError. Finalize has
-        to survive it and record the failure, not die before
-        pipeline-result.json exists.
-        """
-        monkeypatch.chdir(tmp_path)  # keep hygiene off the developer's repo
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        self._write_verdict_and_report(tmp_path, "REQUEST_CHANGES")
-        path = tmp_path / "review-findings.json"
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["issues"][0]["title"] = json.loads('"bad \\ud800 char"')
-        path.write_text(json.dumps(data), encoding="utf-8")
-
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict_sync"] == "failed_io"
-        assert any("verdict sync failed" in note
-                   for note in result["degradation_notes"])
-        assert result["status"] == "degraded"
-
-    def test_missing_findings_file_reports_skipped_shape_mismatch(
-        self, tmp_path
-    ):
-        """No review-findings.json at all — step 8's briefing instructs
-        the orchestrator to dispatch the reconciliator, whose write is
-        this file's first, but that briefing is LLM-followed guidance, not
-        a gate anything in code enforces. An absent ledger by step 11 is
-        already an abnormal run either way. It shares the non-object
-        ledger's vocabulary rather than getting its own state, since both
-        are "nothing a verdict can be written into", not an I/O fault
-        against a file that was there.
-        """
-        self._write_verdict_and_report(tmp_path)
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
-
-        result = json.loads((tmp_path / "pipeline-result.json").read_text())
-        assert result["verdict_sync"] == "skipped_shape_mismatch"
-        assert result["verdict_sync_reason"] == "review-findings.json not found"
-        assert result["degradation_notes"].count(
-            "review-findings.json not found"
-        ) == 1, (
-            "the pre-existing 'findings not found' check and the sync's "
-            "own recording must not both add a note for the same fact"
-        )
-        assert result["status"] == "degraded"
-
-
-class TestReviewVerdictShapeGuard:
-    """review-verdict.json feeds the Rule 23 sync from the other side —
-    the source, not the ledger `TestVerdictSyncHardening` above hardens.
-    Same bug class, one file over: the caller used to hand
-    `verdict_data.get("verdict")` to the sync with no shape check on
-    `verdict_data` itself, so `{"verdict": null}` / `{"a": 1}` / a bare
-    `42` — all truthy, none of them a usable verdict — were written
-    verbatim (`None`, or the silent "COMMENT" default) into the ledger
-    and published as `verdict_sync: "synced"`, `status: "success"`. A
-    non-object payload was worse: `.get()` on it raised `AttributeError`
-    past the narrower `(json.JSONDecodeError, OSError)` guard around the
-    read, crashing finalize before pipeline-result.json was ever written.
-
-    The fix is the same shared parser `read_critic_verdict()` already
-    used for decision-critic-verdict.json (`read_verdict_file()`, in
-    critic_adjustments.py) — one shape guard behind both verdict-file
-    readers, not two independently patched call sites.
-    """
-
-    def _write_findings_and_report(self, tmp_path):
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
-        (tmp_path / "review-report.md").write_text("# report")
-
-    @pytest.mark.parametrize("payload", [
-        '{"verdict": null}',
-        '{"verdict": 42}',
-        "42",
-        '{"a": 1}',
-        '"hello"',
-        "[1, 2]",
-        "{}",
-        "{not valid json",
-    ], ids=[
-        "null-verdict-field",
-        "non-string-verdict-field",
-        "bare-int",
-        "object-missing-verdict-key",
-        "bare-string",
-        "list",
-        "empty-object",
-        "unparseable-json",
+    @pytest.mark.parametrize("payload,label", [
+        (None, "no ledger at all"),
+        ("[1, 2]", "non-object ledger"),
+        ("{not json", "unparseable ledger"),
+        ('{"verdict": null}', "null verdict"),
+        ('{"verdict": "who knows"}', "verdict outside the vocabulary"),
+        ('{"issues": []}', "no verdict key"),
     ])
-    def test_malformed_review_verdict_never_writes_a_bad_ledger(
-        self, tmp_path, payload
+    def test_an_unusable_ledger_falls_back_and_says_so(
+        self, tmp_path, payload, label
     ):
-        """None of these crash finalize, corrupt the ledger with a
-        non-string verdict, or let the sync silently report "synced"."""
-        self._write_findings_and_report(tmp_path)
-        (tmp_path / "review-verdict.json").write_text(payload)
-
-        _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))  # must not raise
-
-        result_path = tmp_path / "pipeline-result.json"
-        assert result_path.is_file(), (
-            "finalize must publish pipeline-result.json even when "
-            "review-verdict.json is malformed"
-        )
-        result = json.loads(result_path.read_text())
-        assert result["verdict_sync"] is None, (
-            "the sync must never be attempted with an unusable verdict"
-        )
-        assert result["verdict_sync_reason"] is None
+        (tmp_path / "review-report.md").write_text("# report")
+        if payload is not None:
+            (tmp_path / "review-findings.json").write_text(payload)
+        result = self._finalize(tmp_path)
+        assert result["verdict"] == "COMMENT", label
+        assert result["verdict_source"] == "fallback: no usable ledger verdict"
         assert result["status"] == "degraded"
-        assert any("malformed" in note
-                   for note in result["degradation_notes"])
+        assert any(
+            "no usable verdict in review-findings.json" in note
+            for note in result["degradation_notes"]
+        ), label
 
-        # The ledger is untouched — no null, no stringified garbage, no
-        # silently substituted "COMMENT" default.
-        findings = json.loads(
-            (tmp_path / "review-findings.json").read_text()
+    def test_a_non_object_ledger_does_not_crash_finalize(self, tmp_path):
+        """The shape that used to raise AttributeError past the guard and
+        kill finalize before pipeline-result.json was ever written."""
+        (tmp_path / "review-findings.json").write_text("[1, 2]")
+        assert self._finalize(tmp_path)["status"] == "degraded"
+
+    def test_a_stale_review_verdict_file_is_ignored_entirely(self, tmp_path):
+        """Nothing reads the artifact any more. A leftover one from an
+        older run — or a hand-written one — must not reach the published
+        verdict, which is the whole point of deleting the chain."""
+        self._seed(tmp_path, "approve")
+        (tmp_path / "review-verdict.json").write_text(
+            json.dumps({"verdict": "REQUEST_CHANGES"})
         )
-        assert findings["verdict"] == "REQUEST_CHANGES"  # _write_findings' own value
+        assert self._finalize(tmp_path)["verdict"] == "APPROVE"
 
-    def test_non_object_review_verdict_does_not_crash_finalize(
+    def test_the_ledger_is_not_rewritten_by_finalize(self, tmp_path):
+        """Rule 23's write is gone: finalize READS the ledger's verdict and
+        never writes one back, so the ledger keeps saying what its own
+        findings say."""
+        self._seed(tmp_path, "approve")
+        before = (tmp_path / "review-findings.json").read_bytes()
+        self._finalize(tmp_path)
+        assert (tmp_path / "review-findings.json").read_bytes() == before
+
+    def test_verdict_source_reaches_state_for_the_step_11_briefing(
         self, tmp_path
     ):
-        """I2's exact crash: a valid-JSON, non-object review-verdict.json
-        used to escape the narrower `(json.JSONDecodeError, OSError)`
-        guard around the read, and `.get()` on the raw parsed value
-        raised `AttributeError` before pipeline-result.json was ever
-        written — the bot-visible symptom was "Pipeline result file was
-        not written" after a full review had actually run.
-        """
-        self._write_findings_and_report(tmp_path)
-        (tmp_path / "review-verdict.json").write_text("[1, 2]")
+        self._seed(tmp_path, "approve")
+        state = {}
+        _orchestrate_step_11("pr", {}, state, {}, str(tmp_path))
+        assert state["verdict_source"] == "findings ledger"
+        assert state["pipeline_status"] == "success"
+        assert state["degradation_notes"] == []
 
-        # The call itself must not raise.
+
+class TestCriticAbsenceHonesty:
+    """A critic that was dispatched and produced nothing is a run that lost
+    its stress test; a critic that was never dispatched is quick mode
+    working as designed. `critic_verdict_for_state()` collapses both into
+    "unavailable" — right for pirategoat-bot, blind for the run's own
+    status — so the dispatch marker is what separates them."""
+
+    def _seed(self, tmp_path):
+        (tmp_path / "review-report.md").write_text("# report")
+        _write_findings(tmp_path, [], verdict="approve")
+
+    def _finalize(self, tmp_path):
         _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
+        return json.loads((tmp_path / "pipeline-result.json").read_text())
 
-        assert (tmp_path / "pipeline-result.json").is_file()
+    def test_a_dispatched_critic_with_no_artifact_degrades(self, tmp_path):
+        from review import synthesis_lifecycle
+        self._seed(tmp_path)
+        synthesis_lifecycle.mark_dispatched(
+            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
+        )
+        result = self._finalize(tmp_path)
+        assert result["status"] == "degraded"
+        assert "critic produced no verdict artifact" in result["degradation_notes"]
+        # Still falls through to the ledger — a missing critique does not
+        # cost the review the verdict its findings earned.
+        assert result["verdict"] == "APPROVE"
+        assert result["critic_verdict"] == "unavailable"
+
+    def test_an_undispatched_critic_is_silent(self, tmp_path):
+        self._seed(tmp_path)
+        result = self._finalize(tmp_path)
+        assert result["status"] == "success"
+        assert result["degradation_notes"] == []
+
+    def test_a_dispatched_critic_that_answered_is_silent(self, tmp_path):
+        from review import synthesis_lifecycle
+        self._seed(tmp_path)
+        synthesis_lifecycle.mark_dispatched(
+            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
+        )
+        _write_critic_verdict(tmp_path, "STAND")
+        assert self._finalize(tmp_path)["degradation_notes"] == []
+
+    def test_an_explicit_skipped_artifact_is_silent(self, tmp_path):
+        """The crashed-critic case the step-10 briefing still asks the
+        orchestrator to record: an artifact that says SKIPPED with a reason
+        is an answer, not an absence."""
+        from review import synthesis_lifecycle
+        self._seed(tmp_path)
+        synthesis_lifecycle.mark_dispatched(
+            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
+        )
+        _write_critic_verdict(tmp_path, "SKIPPED")
+        assert self._finalize(tmp_path)["degradation_notes"] == []
+
 
 
 class TestCriticContextRoundTrip:
@@ -1609,9 +1469,6 @@ class TestCriticContextRoundTrip:
             "rationale": "the exploit path is reachable from the REST route",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "REQUEST_CHANGES"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
 
         _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))
@@ -1659,25 +1516,27 @@ class TestStepElevenAppliesAdjustments:
         """Call the finalize step the way the pipeline facade routes it."""
         return _orchestrate_step_11("pr", {}, {}, {}, str(output_dir))
 
-    def test_pending_adjustments_applied_before_verdict_sync(self, tmp_path):
-        _write_findings(tmp_path, [_issue("aaaa1111", "low")])
+    def test_pending_adjustments_applied_before_the_verdict_is_derived(
+        self, tmp_path
+    ):
+        """Ordering is now load-bearing in one direction only: the apply
+        recomputes the ledger verdict, and finalize READS that verdict a few
+        lines later. Reading first would publish the pre-batch verdict."""
+        _write_findings(tmp_path, [_issue("aaaa1111", "low")],
+                        verdict="approve")
         _write_adjustments(tmp_path, [{
             "action": "promote", "id": "aaaa1111",
-            "fields": {"severity": "medium"}, "rationale": "r",
+            "fields": {"severity": "critical"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "REQUEST_CHANGES"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
         data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["issues"][0]["severity"] == "medium"
-        # Both effects landed — the patch and the Rule 23 verdict sync.
-        # The pair is order-invariant (each write preserves the other's
-        # field); what pins the placement is the sibling test's
-        # `status == "degraded"` assertion.
-        assert data["verdict"] == "REQUEST_CHANGES"
+        assert data["issues"][0]["severity"] == "critical"
+        assert data["verdict"] == "block"
+        result = json.loads((tmp_path / "pipeline-result.json").read_text())
+        assert result["verdict"] == "REQUEST_CHANGES"
+        assert result["verdict_source"] == "findings ledger"
 
     def test_invalid_adjustments_degrade_instead_of_crashing(self, tmp_path):
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
@@ -1686,9 +1545,6 @@ class TestStepElevenAppliesAdjustments:
             "fields": {}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "REQUEST_CHANGES"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
@@ -1717,9 +1573,6 @@ class TestStepElevenAppliesAdjustments:
         """
         _write_findings(tmp_path, [_issue("aaaa1111", "low")])
         _write_critic_verdict(tmp_path, "REVISE")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "REQUEST_CHANGES"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
 
         def fake_apply_adjustments(output_dir):
@@ -1764,9 +1617,6 @@ class TestStepElevenAppliesAdjustments:
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
         _write_critic_verdict(tmp_path, "STAND")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
 
@@ -1792,9 +1642,6 @@ class TestStepElevenAppliesAdjustments:
             "action": "promote", "id": "aaaa1111",
             "fields": {"severity": "critical"}, "rationale": "r",
         }])
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
 
@@ -1823,9 +1670,6 @@ class TestStepElevenAppliesAdjustments:
              "rejected": True, "rejection_reason": "spot-check refuted it"},
         ])
         _write_critic_verdict(tmp_path, "STAND")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
 
@@ -1855,9 +1699,6 @@ class TestStepElevenAppliesAdjustments:
 
         assert pending_count(str(tmp_path)) == 0
 
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
         self._step_11(tmp_path)
         result = json.loads((tmp_path / "pipeline-result.json").read_text())
@@ -1866,9 +1707,9 @@ class TestStepElevenAppliesAdjustments:
     def test_malformed_findings_file_degrades_instead_of_crashing(
         self, tmp_path
     ):
-        """The measured regression: a list-shaped findings file with no
-        review-verdict.json used to survive step 11 — Rule 23's write is
-        gated on verdict_data — so the apply call must not become the
+        """The measured regression: a list-shaped findings file used to
+        survive step 11 only because Rule 23's write was gated on a
+        verdict file being present — so the apply call must not become the
         thing that crashes finalize."""
         (tmp_path / "review-findings.json").write_text(
             json.dumps([_issue("aaaa1111", "low")])
@@ -1909,9 +1750,6 @@ class TestStepElevenRerendersFindingsMarkdown:
         issue["title"] = "Unescaped output"
         _write_findings(tmp_path, [issue])
         _write_critic_verdict(tmp_path, "REVISE")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "REQUEST_CHANGES"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
 
     def test_demoted_severity_reaches_the_markdown(self, tmp_path):
@@ -1932,20 +1770,18 @@ class TestStepElevenRerendersFindingsMarkdown:
         assert "## High Issues" not in rendered
         assert "Unescaped output" in rendered
 
-    def test_rendered_verdict_matches_the_rule_23_sync(self, tmp_path):
-        """The render runs after the verdict sync, so the Markdown carries
-        the verdict the run actually published."""
+    def test_the_rendered_verdict_is_the_ledgers_own(self, tmp_path):
+        """The Markdown renders the ledger, and the ledger's verdict is what
+        finalize publishes — one number, one source. Nothing writes a
+        verdict into this file at finalize any more."""
         self._seed(tmp_path, severity="low")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         _write_critic_verdict(tmp_path, "STAND")
 
         self._step_11(tmp_path)
 
         data = json.loads((tmp_path / "review-findings.json").read_text())
-        assert data["verdict"] == "APPROVE"
-        assert "**Verdict:** APPROVE" in (
+        assert data["verdict"] == "request_changes"
+        assert "**Verdict:** REQUEST_CHANGES" in (
             tmp_path / "review-findings.md"
         ).read_text()
 
@@ -1971,9 +1807,6 @@ class TestStepElevenRerendersFindingsMarkdown:
         self, tmp_path
     ):
         _write_critic_verdict(tmp_path, "STAND")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "APPROVE"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
 
         self._step_11(tmp_path)
@@ -2166,9 +1999,6 @@ class TestStepElevenWithdrawsContradictedProse:
             "fields": {"severity": "low"}, "rationale": "guarded upstream",
         }])
         _write_critic_verdict(tmp_path, "REVISE")
-        (tmp_path / "review-verdict.json").write_text(
-            json.dumps({"verdict": "COMMENT"})
-        )
         (tmp_path / "review-report.md").write_text("# report")
 
         _orchestrate_step_11("pr", {}, {}, {}, str(tmp_path))

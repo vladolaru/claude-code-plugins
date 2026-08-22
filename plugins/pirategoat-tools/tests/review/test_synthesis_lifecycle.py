@@ -607,7 +607,6 @@ class TestStepElevenObservation:
         lifecycle.mark_dispatched(str(out), lifecycle.RECONCILIATOR, now=T0)
         write_findings(str(out), {"verdict": "approve", "issues": []})
         _set_mtime(out / "review-findings.json", T0 + timedelta(seconds=41))
-        (out / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
 
         orchestration_mod._orchestrate_step_11("pr", {}, {}, {}, str(out))
 

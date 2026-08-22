@@ -170,14 +170,18 @@ _SEVERITIES = tuple(_TELEMETRY_CONTRACT._SEVERITY_FIELDS)
 # Lockstep with review/telemetry.py's EVENT_SCHEMA — this is the
 # consumer's expected value for the producer's constant, same pairing as
 # _OBSERVED_READS_SCHEMA below. Bumped 1 -> 2 when the manifest's
-# `outcome` block gained `verdict_sync`. It stayed 2 when the manifest
+# `outcome` block gained a verdict-provenance field. It stayed 2 when the
+# manifest
 # gained the `synthesis_agents` section, and again when `_sanitize_manifest` started
 # actually publishing `dependency_refresh`/`reviewer_markdown`/
 # `findings_markdown` (Task 13 — the sections already existed on disk;
 # only the sanitized, consumer-facing view was dropping two of them and
-# never had the third), each under the Artifact Schemas rule's
+# never had the third), and again when that same verdict-provenance key
+# was renamed `verdict_sync` -> `verdict_source` (step 11 stopped syncing
+# a transcribed verdict into the findings ledger and started deriving the
+# published verdict from it), each under the Artifact Schemas rule's
 # unreleased-version carve-out — see the producer-side comment on
-# EVENT_SCHEMA for the tag evidence.
+# EVENT_SCHEMA for the tag evidence and the rename's reasoning.
 _SUPPORTED_MANIFEST_SCHEMA = 2
 _OBSERVED_READS_SCHEMA = 2
 # The `--format json` report's own schema. It stayed 2 when each run row

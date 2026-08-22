@@ -1506,7 +1506,7 @@ def _sanitize_outcome(value: object) -> dict[str, Any]:
             (
                 "pipeline_status",
                 "verdict",
-                "verdict_sync",
+                "verdict_source",
             ),
         )
     )

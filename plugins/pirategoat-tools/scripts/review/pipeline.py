@@ -521,7 +521,15 @@ def format_output(step, guidance):
         lines.append(_RUN_EXACT_NOTE)
     else:
         lines.append(f"{'─' * 60}")
-        lines.append("✅ PIPELINE COMPLETE")
+        # The checkmark is a claim, and a degraded run must not make it. The
+        # degradations themselves are already printed above (step 11's
+        # projection block); this line is what keeps the last thing the
+        # reader sees from contradicting them.
+        lines.append(
+            "⚠️  PIPELINE COMPLETE (DEGRADED — see notes above)"
+            if guidance.get("degraded")
+            else "✅ PIPELINE COMPLETE"
+        )
 
     return "\n".join(lines)
 

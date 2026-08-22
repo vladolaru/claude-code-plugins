@@ -1,6 +1,7 @@
 """Tests for review/briefings.py through the pipeline.py compatibility facade."""
 
 import json
+import os
 import pathlib
 import re
 import sys
@@ -85,14 +86,16 @@ class TestStructuredDataDiscipline:
         assert "review-report.md" in handoff_text
 
     def test_step_10_has_handoff(self, mod, tmp_path):
-        """Step 10 should gate on both verdict files."""
+        """Step 10 gates on the critic's own verdict — and on nothing
+        verdict-shaped from the orchestrator. A handoff that named a file no
+        instruction creates would strand the run on a gate nobody can pass."""
         state = {"completed_steps": []}
         ctx = {}
         g = mod.get_step_guidance(10, "pr", state, ctx, output_dir=str(tmp_path))
         assert g.get("handoff") is not None
         handoff_text = "\n".join(g["handoff"])
         assert "decision-critic-verdict.json" in handoff_text
-        assert "review-verdict.json" in handoff_text
+        assert "review-verdict.json" not in handoff_text
 
     def test_step_10_uses_schema_not_placeholders(self, mod, tmp_path):
         """Step 10 JSON examples should show options, not copyable defaults."""
@@ -102,7 +105,6 @@ class TestStructuredDataDiscipline:
         text = "\n".join(g["actions"])
         # Should have schema-style options
         assert "STAND" in text and "REVISE" in text and "ESCALATE" in text
-        assert "APPROVE" in text and "REQUEST_CHANGES" in text and "COMMENT" in text
         # Should NOT have a bare {"verdict": "STAND"} (literal copyable value)
         # The schema format like <STAND | REVISE | ESCALATE> is acceptable
         import re
@@ -2130,7 +2132,6 @@ class TestCriticVerdictPersistence:
         out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
-        (out / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (out / "review-report.md").write_text("# Review")
         (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
         (out / "decision-critic-verdict.json").write_text('{"verdict": "STAND"}')
@@ -2145,7 +2146,6 @@ class TestCriticVerdictPersistence:
         out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
-        (out / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (out / "review-report.md").write_text("# Review")
         (out / "review-findings.json").write_text('{"verdict": "APPROVE", "issues": []}')
         r = run_pipeline("--step", "11", "--mode", "pr",
@@ -2159,7 +2159,6 @@ class TestCriticVerdictPersistence:
         out = tmp_path / "out"
         run_pipeline("--step", "1", "--mode", "pr",
                    "--output-dir", str(out), "--pr-number", "42", cwd=tmp_path / "repo")
-        (out / "review-verdict.json").write_text('{"verdict": "APPROVE"}')
         (out / "review-report.md").write_text("# Review")
         (out / "review-findings.json").write_text('{"verdict": "approve", "issues": []}')
         (out / "decision-critic-verdict.json").write_text(
@@ -2521,11 +2520,14 @@ class TestStep11PresentResults:
             "focused", "drill down", "re-invoke", "reconciliator",
         ]), "Interactive mode should offer follow-up analysis option"
 
-    def test_step11_reads_verdict_into_state(self, mod, tmp_path):
-        """Step 11 orchestration must read review-verdict.json into state['verdict']."""
+    def test_step11_derives_the_verdict_into_state(self, mod, tmp_path):
+        """Step 11 orchestration derives state['verdict'] from the findings
+        ledger — the artifact whose verdict was actually computed from
+        findings — not from a verdict the orchestrator transcribed."""
         import json
-        verdict_file = tmp_path / "review-verdict.json"
-        verdict_file.write_text(json.dumps({"verdict": "COMMENT"}))
+        (tmp_path / "review-findings.json").write_text(
+            json.dumps({"verdict": "comment", "issues": []})
+        )
 
         state = {
             "resolved_params": {},
@@ -2539,6 +2541,7 @@ class TestStep11PresentResults:
         mod._orchestrate_step(11, "pr", config, state, context, str(tmp_path))
 
         assert state["verdict"] == "COMMENT"
+        assert state["verdict_source"] == "findings ledger"
 
     def test_incremental_mentions_next_code_review(self, mod, tmp_path):
         """Incremental should mention next /code-review scope."""
@@ -2585,8 +2588,7 @@ class TestDegradedPaths:
         # Schema fields should be referenced or documented
         for field in ("status", "verdict", "report_path", "findings_path",
                       "critic_verdict", "degradation_notes",
-                      "worktree_hygiene", "usage", "verdict_sync",
-                      "verdict_sync_reason"):
+                      "worktree_hygiene", "usage", "verdict_source"):
             assert field in text, f"Step 11 output missing pipeline-result.json field: {field}"
 
     def test_scenario_a_reconciliation_failed(self, mod, tmp_path):
@@ -2645,14 +2647,16 @@ class TestDegradedPaths:
             "Forced verdict must indicate pipeline degradation"
         )
 
-    def test_missing_review_verdict_json(self, mod, tmp_path):
-        """Step 11 should handle gracefully when review-verdict.json not written."""
+    def test_step_11_briefing_without_a_projection(self, mod, tmp_path):
+        """A briefing fetched before finalize ran has no outcome to report.
+        It must render without one rather than fabricating a success line."""
         state = {"completed_steps": [], "review_verdict": None}
         ctx = {}
         config = {"mode": "pr", "interactive": False}
         g = mod.get_step_guidance(11, "pr", state, ctx, config=config)
-        # Should not crash — script handles missing verdict
         assert g is not None
+        assert "Projection:" not in "\n".join(g["actions"])
+        assert g.get("degraded") is False
 
 
 class TestStep10QuickMode:
@@ -2664,22 +2668,23 @@ class TestStep10QuickMode:
         g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
         assert "decision-reviewer" not in text
-        assert "SKIPPED" in text
         assert "decision-critic-verdict.json" in text
 
-    def test_quick_skip_maps_comment_verdict_to_a_comment_review_verdict(
+    def test_quick_skip_asks_the_orchestrator_for_no_verdict(
         self, mod, tmp_path
     ):
-        """briefings.py:1409 maps the reconciliation verdict onto the review
-        verdict the orchestrator is told to write. Only `approve` becomes
-        APPROVE; every other skippable verdict must become COMMENT, or a
-        quick run that reconciled to `comment` would publish an approval."""
+        """The briefing used to hand the orchestrator a reconciliation-to-
+        review verdict mapping to transcribe by hand — the one place a quick
+        run could publish an approval for a `comment` reconciliation. The
+        pipeline writes its own skip verdict now, and step 11 derives the
+        published one from the ledger, so nothing is transcribed here."""
         state = {"completed_steps": [], "reconciliation_verdict": "comment"}
         config = {"quick": True}
         g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
         text = "\n".join(g["actions"])
-        assert '{"verdict": "COMMENT"}' in text
+        assert '{"verdict": "COMMENT"}' not in text
         assert '{"verdict": "APPROVE"}' not in text
+        assert "review-verdict.json" not in text
 
     def test_run_critic_on_request_changes(self, mod, tmp_path):
         state = {"completed_steps": [], "reconciliation_verdict": "request_changes"}
@@ -2702,13 +2707,14 @@ class TestStep10QuickMode:
         text = "\n".join(g["actions"])
         assert "decision-reviewer" in text
 
-    def test_quick_skip_still_requires_verdict_files(self, mod, tmp_path):
+    def test_quick_skip_gates_on_nothing(self, mod, tmp_path):
+        """No artifact is asked of the orchestrator on this branch, so there
+        is nothing to gate — a handoff naming a file the pipeline writes
+        would be theatre."""
         state = {"completed_steps": [], "reconciliation_verdict": "approve"}
         config = {"quick": True}
         g = mod.get_step_guidance(10, "pr", state, {}, config=config, output_dir=str(tmp_path))
-        handoff_text = "\n".join(g["handoff"]) if g["handoff"] else ""
-        assert "decision-critic-verdict.json" in handoff_text
-        assert "review-verdict.json" in handoff_text
+        assert g["handoff"] is None
 
     def test_skip_critic_case_insensitive(self, mod, tmp_path):
         """Verdict casing should not affect critic skip (step 11 uppercases verdicts)."""
@@ -2899,3 +2905,111 @@ class TestStep3DependencyRefresh:
         text = self._text(g)
         assert "Dependency refresh" not in text
         assert "dependency-refresh.json" not in text
+
+
+class TestStep11Projection:
+    """Step 11's briefing reports what finalize just published.
+
+    Before this, the only outcome line the briefing carried was a
+    `forced_verdict` warning no writer under `scripts/` ever set — so a
+    degraded run printed "✅ PIPELINE COMPLETE" with its degradations
+    sitting unread in a JSON file the human never opened.
+    """
+
+    _STATE = {
+        "completed_steps": [],
+        "pipeline_status": "degraded",
+        "verdict": "REQUEST_CHANGES",
+        "verdict_source": "findings ledger",
+        "degradation_notes": ["critic produced no verdict artifact"],
+    }
+
+    def _text(self, mod, **overrides):
+        state = dict(self._STATE)
+        state.update(overrides)
+        g = mod.get_step_guidance(
+            11, "pr", state, {}, config={"mode": "pr", "interactive": True}
+        )
+        return g, "\n".join(g["actions"])
+
+    def test_it_renders_status_verdict_and_source(self, mod):
+        _g, text = self._text(mod)
+        assert (
+            "Projection: status=degraded  verdict=REQUEST_CHANGES "
+            "(findings ledger)" in text
+        )
+
+    def test_it_lists_every_degradation(self, mod):
+        _g, text = self._text(mod)
+        assert "Degradations:" in text
+        assert "  - critic produced no verdict artifact" in text
+
+    def test_a_degraded_run_flags_the_footer(self, mod):
+        g, _text = self._text(mod)
+        assert g["degraded"] is True
+
+    def test_a_clean_run_does_not_flag_the_footer(self, mod):
+        g, text = self._text(
+            mod, pipeline_status="success", degradation_notes=[]
+        )
+        assert g["degraded"] is False
+        assert "Degradations:" not in text
+
+    def test_an_unfinalized_run_reports_no_projection(self, mod):
+        """A briefing fetched before finalize ran has nothing to report.
+        Unmeasured and clean are different facts."""
+        g = mod.get_step_guidance(
+            11, "pr", {"completed_steps": []}, {},
+            config={"mode": "pr", "interactive": True},
+        )
+        assert "Projection:" not in "\n".join(g["actions"])
+        assert g["degraded"] is False
+
+    def test_the_escalate_override_names_itself(self, mod):
+        _g, text = self._text(
+            mod, verdict="COMMENT",
+            verdict_source="critic ESCALATE override",
+        )
+        assert "verdict=COMMENT (critic ESCALATE override)" in text
+
+
+class TestStep10WritesItsOwnSkipVerdict:
+    """The quick-mode skip is the PIPELINE's decision, so the pipeline
+    records it. Asking the orchestrator to transcribe a verdict for a
+    decision it did not make left a run that stopped short with no verdict
+    artifact at all — indistinguishable at finalize from a critic that ran
+    and crashed."""
+
+    def _run_step_10(self, mod, tmp_path, recon_verdict, quick=True):
+        state = {"completed_steps": [], "reconciliation_verdict": recon_verdict}
+        mod._orchestrate_step(
+            10, "pr", {"quick": quick}, state, {}, str(tmp_path)
+        )
+        return state
+
+    @pytest.mark.parametrize("recon", ["approve", "comment", "COMMENT"])
+    def test_the_skip_verdict_lands_on_disk(self, mod, tmp_path, recon):
+        self._run_step_10(mod, tmp_path, recon)
+        written = json.loads(
+            (tmp_path / "decision-critic-verdict.json").read_text()
+        )
+        assert written["verdict"] == "SKIPPED"
+        assert recon in written["reason"]
+
+    def test_a_dispatched_critic_gets_no_pipeline_written_verdict(
+        self, mod, tmp_path
+    ):
+        """The critic's own verdict is the critic's to report; the
+        orchestrator transcribes it verbatim after the critic returns."""
+        self._run_step_10(mod, tmp_path, "request_changes")
+        assert not (tmp_path / "decision-critic-verdict.json").exists()
+
+    def test_the_skip_branch_writes_no_dispatch_marker(self, mod, tmp_path):
+        """A critic that never ran has no duration, and the marker's
+        absence is what keeps finalize from reporting a stall — or, now,
+        the missing-artifact degradation."""
+        from review import synthesis_lifecycle
+        self._run_step_10(mod, tmp_path, "approve")
+        assert not os.path.isfile(synthesis_lifecycle.marker_path(
+            str(tmp_path), synthesis_lifecycle.DECISION_CRITIC
+        ))

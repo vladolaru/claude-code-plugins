@@ -51,9 +51,9 @@ LOG_DIR = os.path.expanduser("~/.pirategoat-tools/logs/reviews")
 MARKER_FILE = ".telemetry-log-path"
 # Bumped 1 -> 2 alongside review_metrics/contracts.py's
 # _SUPPORTED_MANIFEST_SCHEMA (same lockstep the _OBSERVED_READS_SCHEMA
-# pair follows) when the manifest's `outcome` block gained `verdict_sync`
-# — see AGENTS.md's Artifact Schemas rule. A manifest written under
-# schema 1 has no `verdict_sync` key at all, and readers route anything
+# pair follows) when the manifest's `outcome` block gained a verdict-
+# provenance field — see AGENTS.md's Artifact Schemas rule. A manifest
+# written under schema 1 has no such key at all, and readers route anything
 # but the schema they were written against down their existing
 # unsupported path rather than silently reading a field the producer
 # never vouched for.
@@ -84,6 +84,17 @@ MARKER_FILE = ".telemetry-log-path"
 # publication), again WITHOUT a further bump under the same carve-out.
 # The manifest is unaffected either way: `_AGENT_COMPLETE_MANIFEST_FIELDS`
 # deliberately omits the key, so no manifest shape changed at all.
+#
+# The `outcome` block's verdict-provenance key was then RENAMED
+# `verdict_sync` -> `verdict_source`, again WITHOUT a further bump under
+# the same carve-out. That one is a rename rather than an addition, so it
+# is the sharpest test the carve-out gets: schema 2 was introduced in
+# 1.114.0 and no artifact ever shipped claiming schema 2 with the old
+# spelling, so there is no compatibility boundary to publish. The rename
+# followed the field's meaning — step 11 stopped SYNCING a transcribed
+# verdict into the findings ledger and started DERIVING the published
+# verdict from it, so the block now records which derivation branch
+# produced the verdict rather than how a write back onto the ledger went.
 #
 # Bumping to 3 here would publish a compatibility boundary between two
 # shapes that never both existed in the wild. Revisit the moment 1.114.0
@@ -826,7 +837,7 @@ class ReviewTelemetry:
                 "pipeline_status": pipeline_result.get("status"),
                 "verdict": pipeline_result.get("verdict"),
                 "critic_verdict": pipeline_result.get("critic_verdict"),
-                "verdict_sync": pipeline_result.get("verdict_sync"),
+                "verdict_source": pipeline_result.get("verdict_source"),
             },
             "availability": {
                 "pipeline": True,
